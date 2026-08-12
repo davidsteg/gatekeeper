@@ -1,0 +1,80 @@
+# Identitaeten und Rechte (REQUIREMENTS.md §4 und §9).
+#
+# Diese Datei enthaelt NUR Hashes. Der Klartext-Token existiert an genau zwei
+# Stellen: einmalig bei der Erzeugung und in der config.yaml des Agenten
+# (FR-2.6). Damit ist diese Datei nicht secret-kritisch und darf nach
+# Homelab-Regel im Dataset mit chown 568:568 liegen.
+#
+# Hash erzeugen:
+#   docker exec gatekeeper gatekeeper token
+#
+# Kopieren nach identities.yaml und die Platzhalter ersetzen - mit Platzhalter
+# verweigert gatekeeper den Start.
+
+identities:
+  # -- Menschen an der Oberflaeche ---------------------------------------
+  # `admin` darf Ebene 2 aendern (Tools, Identitaeten, Tokens), `viewer` nur
+  # lesen. Ohne mindestens einen der beiden startet der Server mit --ui nicht.
+  # Beide brauchen keine Tool-Rechte: die Oberflaeche ruft nichts auf.
+  - id: root
+    role: admin
+    token_hash: "scrypt$REPLACE_ME"
+    tools: []
+    scopes: []
+
+  - id: watch
+    role: viewer
+    token_hash: "scrypt$REPLACE_ME"
+    tools: []
+    scopes: []
+
+  # -- Agenten am MCP-Endpunkt -------------------------------------------
+  - id: homelab
+    role: agent
+    token_hash: "scrypt$REPLACE_ME"
+    # FR-7.5: Rechte werden auf einzelne Tool-IDs erteilt, nie auf ein Toolkit.
+    # Wildcards sind hier bewusst nicht zulaessig - sonst besaesse diese
+    # Identitaet jedes kuenftig angelegte Tool automatisch mit.
+    tools:
+      - docker.compose_ps
+      - docker.compose_logs
+      - docker.compose_up
+      - docker.compose_down
+      - docker.compose_restart
+      - docker.compose_pull
+      - diag.uptime
+      - diag.memory
+      - diag.disk
+      - diag.loadavg
+    scopes:
+      - "stack:*"
+
+  - id: media
+    role: agent
+    token_hash: "scrypt$REPLACE_ME"
+    tools:
+      - docker.compose_ps
+      - docker.compose_logs
+      - diag.uptime
+      - diag.memory
+      - diag.disk
+    scopes:
+      - "stack:media-*"
+      - "stack:jellyfin*"
+      - "stack:sonarr"
+      - "stack:radarr"
+
+  - id: dev
+    role: agent
+    token_hash: "scrypt$REPLACE_ME"
+    tools:
+      - docker.compose_ps
+      - docker.compose_logs
+      - docker.compose_up
+      - docker.compose_down
+      - docker.compose_restart
+      - diag.uptime
+      - diag.memory
+      - diag.disk
+    scopes:
+      - "stack:dev-*"

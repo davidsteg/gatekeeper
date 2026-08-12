@@ -1,0 +1,4 @@
+# Alles laeuft im Linux-Container. CRLF im Arbeitsverzeichnis ist unter
+# Windows in Ordnung, im Repository nicht -- sonst landet irgendwann eine
+# Datei mit CRLF dort, wo sie zeilenweise gelesen wird.
+* text=auto eol=lf

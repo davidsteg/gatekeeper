@@ -1,0 +1,27 @@
+[project]
+name = "gatekeeper"
+version = "0.1.0"
+description = "Kontrollierter MCP-Server fuer Host-Operationen"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.0.0",
+    "pyyaml>=6.0",
+    "uvicorn>=0.34",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+gatekeeper = "gatekeeper.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

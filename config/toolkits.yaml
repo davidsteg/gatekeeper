@@ -1,0 +1,77 @@
+# Ebene 1 - Deploy-Zeit, zur Laufzeit unveraenderlich (REQUIREMENTS.md §6).
+#
+# Diese Datei wird read-only in den Container gemountet. Aenderungen erfordern
+# einen Redeploy. Die Admin-API (ab Stufe 3) kann Tools anlegen, aber niemals
+# ein Toolkit - sonst waere Ebene 1 zur Laufzeit veraenderbar (FR-4.11).
+
+toolkits:
+  docker:
+    executor: docker
+    binaries:
+      - /usr/bin/docker
+    # FR-4.2: Gesperrte Unterbefehle und Flags. Geprueft wird das *aufgeloeste*
+    # argv - ein Parameterwert, der zu einem dieser Woerter wird, faellt genauso auf.
+    denied_args:
+      - rm
+      - kill
+      - exec
+      - build
+      - push
+      - login
+      - system
+      - prune
+      - cp
+      - --privileged
+      - --force
+      # 'compose down -v' loescht Volumes. Kein Tool braucht das, also gesperrt.
+      - -v
+      - --volumes
+      - --rmi
+    path_roots:
+      - /mnt/raid
+    # FR-4.12: unabhaengig von Rechten und Scopes gesperrt.
+    # 'gatekeeper' beendet sich damit selbst - die Antwort erreicht den Agenten
+    # nie, er wertet es als Zeitlimit, und niemand ist mehr da, der antwortet.
+    # 'dockhand' ist der Deploy-Mechanismus: wer ihn abschaltet, verliert das
+    # Werkzeug, mit dem er ihn wieder anschalten wuerde.
+    protected_resources:
+      - gatekeeper
+      - dockhand
+      - ix-dockhand
+      - traefik
+    max_timeout_seconds: 300
+    max_output_bytes: 262144
+
+  diag:
+    executor: local
+    binaries:
+      - /usr/bin/uptime
+      - /usr/bin/free
+      - /usr/bin/df
+      - /bin/cat
+    denied_args: []
+    # Bewusst leer: kein Diagnose-Tool nimmt einen Pfad vom Agenten entgegen.
+    path_roots: []
+    protected_resources: []
+    max_timeout_seconds: 10
+    max_output_bytes: 16384
+
+# FR-6.8
+rate_limits:
+  read:
+    count: 120
+    window_seconds: 60
+  write:
+    count: 20
+    window_seconds: 60
+  write_external:
+    count: 5
+    window_seconds: 60
+
+max_concurrent: 4
+
+# FR-9.4/9.5 - append-only mit Rotation. Ohne Rotation fuellt das Log das Dataset.
+audit:
+  dir: /mnt/raid/gatekeeper/logs
+  max_bytes: 33554432
+  keep_files: 10
