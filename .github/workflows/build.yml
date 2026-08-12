@@ -49,12 +49,44 @@ jobs:
             --identities /tmp/identities.yaml \
             check
 
+      - name: Check the release is coherent
+        # Nur beim Taggen -- und bewusst vor dem Image-Job: schlaegt es hier
+        # fehl, liegt noch nichts in der Registry, dessen Release dann fehlt.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+
+          declared=$(python -c "import tomllib,pathlib; \
+            print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "$declared" != "$version" ]; then
+            echo "::error::Tag is $GITHUB_REF_NAME but pyproject.toml says $declared." \
+                 "An image would report a version it does not have."
+            exit 1
+          fi
+
+          # Eine Version ohne Notizen wird nicht veroeffentlicht.
+          notes=$(awk -v v="$version" '
+            $0 ~ "^## " v "([[:space:]]|$)" { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' RELEASE.md)
+          if [ -z "$(echo "$notes" | tr -d '[:space:]')" ]; then
+            echo "::error::RELEASE.md has no '## $version' section."
+            exit 1
+          fi
+          echo "Release notes for $version: $(echo "$notes" | wc -l) lines."
+
   image:
     name: image
     needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      # Der Digest wandert ins Release: ein Tag laesst sich ueberschreiben,
+      # ein Digest nicht. Wer danach pinnt, bekommt garantiert dieses Image.
+      digest: ${{ steps.build.outputs.digest }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -88,6 +120,7 @@ jobs:
             type=sha,format=short
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -115,3 +148,82 @@ jobs:
           printf 'identities:\n  - id: ci\n    role: admin\n    token_hash: "%s"\n    tools: []\n    scopes: []\n' \
             "$hash" > /tmp/gk/identities.yaml
           docker run --rm --user 568:568 -v /tmp/gk:/etc/gatekeeper:ro "$tag" check
+
+  release:
+    name: release
+    needs: [test, image]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      # Das Einzige, wofuer dieser Job Schreibrecht braucht.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the deploy bundle
+        # Alles, was auf dem Host gebraucht wird, ohne das Repo zu klonen.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dir="gatekeeper-$version"
+          mkdir -p "bundle/$dir"
+          cp compose.yaml README.md RELEASE.md "bundle/$dir/"
+          cp -r config "bundle/$dir/"
+          tar -C bundle -czf "$dir-deploy.tar.gz" "$dir"
+
+      - name: Compose the notes
+        env:
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+
+          # Denselben Abschnitt wie die Vorpruefung -- sie hat bereits belegt,
+          # dass er existiert und nicht leer ist.
+          awk -v v="$version" '
+            $0 ~ "^## " v "([[:space:]]|$)" { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' RELEASE.md > notes.md
+
+          # Zitierter Heredoc: im Text wird nichts expandiert, Backticks und
+          # Dollarzeichen bleiben, wie sie dastehen. Die Werte kommen danach
+          # ueber Platzhalter herein.
+          cat >> notes.md <<'EOF'
+
+          ---
+
+          ## Image
+
+          ```bash
+          docker pull __IMAGE__:__VERSION__
+          ```
+
+          Im Betrieb den Digest pinnen statt des Tags -- ein Tag laesst sich
+          ueberschreiben, ein Digest nicht:
+
+          ```
+          __IMAGE__@__DIGEST__
+          ```
+
+          Gebaut fuer `linux/amd64` und `linux/arm64`. Das Buendel unten
+          enthaelt `compose.yaml` und die Beispielkonfigurationen.
+          EOF
+
+          sed -i "s|__IMAGE__|$IMAGE|g; s|__VERSION__|$version|g; s|__DIGEST__|$DIGEST|g" notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Ein Tag wie v0.2.0-rc1 ist eine Vorabversion und wird nicht als
+          # neueste Fassung angeboten.
+          case "$version" in
+            *-*) prerelease="--prerelease" ;;
+            *)   prerelease="" ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            --title "gatekeeper $version" \
+            --notes-file notes.md \
+            --verify-tag \
+            $prerelease \
+            "gatekeeper-$version-deploy.tar.gz"
