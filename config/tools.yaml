@@ -1,0 +1,258 @@
+# Seed-Katalog (REQUIREMENTS.md §7).
+#
+# In Stufe 1 ist der Katalog statisch. Ab Stufe 3 uebernimmt die Admin-API -
+# das Definitionsmodell hier bleibt dabei unveraendert, es aendert sich nur,
+# wer schreibt.
+#
+# Grundregel fuer jede Definition: argv ist eine LISTE. Jedes Element wird zu
+# genau einem Argument aufgeloest. Ein Parameterwert kann strukturell kein
+# zweites Argument erzeugen (FR-5.4).
+
+tools:
+  # -- Docker: lesend ----------------------------------------------------
+
+  - id: docker.compose_ps
+    toolkit: docker
+    binary: /usr/bin/docker
+    version: 1
+    title: Stack status
+    description: >-
+      Shows the state of a compose stack's containers
+      ('docker compose ps'). Read-only.
+    category: read
+    idempotent: true
+    enabled: true
+    argv: ["compose", "-p", "{stack}", "-f", "{compose_path}", "ps"]
+    parameters:
+      stack:
+        type: string
+        required: true
+        pattern: "^[a-z0-9][a-z0-9_-]{0,62}$"
+        description: Stack name; matches the directory under /mnt/raid.
+      compose_path:
+        type: path
+        derived: "/mnt/raid/{stack}/compose.yaml"
+        must_resolve_under: /mnt/raid
+        description: Built by the server from the stack name.
+    required_scopes: ["stack:{stack}"]
+    timeout_seconds: 30
+    max_output_bytes: 65536
+
+  - id: docker.compose_logs
+    toolkit: docker
+    binary: /usr/bin/docker
+    version: 1
+    title: Stack logs
+    description: >-
+      Reads the most recent log lines of a compose stack. The line count is
+      required and bounded - without it the output can grow without limit.
+      Note: container logs frequently contain environment variables.
+    category: read
+    idempotent: true
+    enabled: true
+    argv:
+      - compose
+      - "-p"
+      - "{stack}"
+      - "-f"
+      - "{compose_path}"
+      - logs
+      - "--no-color"
+      - "--tail"
+      - "{tail}"
+    parameters:
+      stack:
+        type: string
+        required: true
+        pattern: "^[a-z0-9][a-z0-9_-]{0,62}$"
+        description: Stack name.
+      tail:
+        type: integer
+        required: true
+        minimum: 1
+        maximum: 1000
+        description: Number of trailing lines (1 to 1000).
+      compose_path:
+        type: path
+        derived: "/mnt/raid/{stack}/compose.yaml"
+        must_resolve_under: /mnt/raid
+        description: Built by the server.
+    required_scopes: ["stack:{stack}"]
+    timeout_seconds: 60
+    max_output_bytes: 262144
+
+  # -- Docker: schreibend ------------------------------------------------
+
+  - id: docker.compose_up
+    toolkit: docker
+    binary: /usr/bin/docker
+    version: 1
+    title: Start stack
+    description: >-
+      Starts or updates a compose stack ('docker compose up -d').
+      Idempotent - calling it again on a running stack has no effect.
+    category: write
+    idempotent: true
+    enabled: true
+    argv: ["compose", "-p", "{stack}", "-f", "{compose_path}", "up", "-d"]
+    parameters:
+      stack:
+        type: string
+        required: true
+        pattern: "^[a-z0-9][a-z0-9_-]{0,62}$"
+        description: Stack name.
+      compose_path:
+        type: path
+        derived: "/mnt/raid/{stack}/compose.yaml"
+        must_resolve_under: /mnt/raid
+        description: Built by the server.
+    required_scopes: ["stack:{stack}"]
+    timeout_seconds: 180
+    max_output_bytes: 65536
+
+  - id: docker.compose_down
+    toolkit: docker
+    binary: /usr/bin/docker
+    version: 1
+    title: Stop stack
+    description: >-
+      Stops a compose stack and removes its containers
+      ('docker compose down'). Volumes are preserved.
+    category: write
+    idempotent: true
+    enabled: true
+    argv: ["compose", "-p", "{stack}", "-f", "{compose_path}", "down"]
+    parameters:
+      stack:
+        type: string
+        required: true
+        pattern: "^[a-z0-9][a-z0-9_-]{0,62}$"
+        description: Stack name.
+      compose_path:
+        type: path
+        derived: "/mnt/raid/{stack}/compose.yaml"
+        must_resolve_under: /mnt/raid
+        description: Built by the server.
+    required_scopes: ["stack:{stack}"]
+    timeout_seconds: 120
+    max_output_bytes: 65536
+
+  - id: docker.compose_restart
+    toolkit: docker
+    binary: /usr/bin/docker
+    version: 1
+    title: Restart stack
+    description: Restarts the containers of a compose stack.
+    category: write
+    idempotent: true
+    enabled: true
+    argv: ["compose", "-p", "{stack}", "-f", "{compose_path}", "restart"]
+    parameters:
+      stack:
+        type: string
+        required: true
+        pattern: "^[a-z0-9][a-z0-9_-]{0,62}$"
+        description: Stack name.
+      compose_path:
+        type: path
+        derived: "/mnt/raid/{stack}/compose.yaml"
+        must_resolve_under: /mnt/raid
+        description: Built by the server.
+    required_scopes: ["stack:{stack}"]
+    timeout_seconds: 120
+    max_output_bytes: 65536
+
+  - id: docker.compose_pull
+    toolkit: docker
+    binary: /usr/bin/docker
+    version: 1
+    title: Pull images
+    description: >-
+      Pulls the images of a compose stack. Starts nothing - call
+      docker.compose_up afterwards for that.
+    category: write
+    idempotent: true
+    enabled: true
+    argv: ["compose", "-p", "{stack}", "-f", "{compose_path}", "pull"]
+    parameters:
+      stack:
+        type: string
+        required: true
+        pattern: "^[a-z0-9][a-z0-9_-]{0,62}$"
+        description: Stack name.
+      compose_path:
+        type: path
+        derived: "/mnt/raid/{stack}/compose.yaml"
+        must_resolve_under: /mnt/raid
+        description: Built by the server.
+    required_scopes: ["stack:{stack}"]
+    timeout_seconds: 300
+    max_output_bytes: 65536
+
+  # -- Diagnose ----------------------------------------------------------
+  # FR-8.4: Diese Werte kommen teils aus dem Container, teils vom Host.
+  # Die Beschreibungen sagen das, damit der Agent sie nicht falsch deutet.
+
+  - id: diag.uptime
+    toolkit: diag
+    binary: /usr/bin/uptime
+    version: 1
+    title: Uptime and load
+    description: >-
+      Uptime and load average. Values come from the host, since /proc is shared.
+    category: read
+    idempotent: true
+    enabled: true
+    argv: []
+    parameters: {}
+    required_scopes: []
+    timeout_seconds: 5
+    max_output_bytes: 4096
+
+  - id: diag.memory
+    toolkit: diag
+    binary: /usr/bin/free
+    version: 1
+    title: Memory usage
+    description: >-
+      Memory usage. Values come from the host, since /proc/meminfo is shared.
+    category: read
+    idempotent: true
+    enabled: true
+    argv: ["-h"]
+    parameters: {}
+    required_scopes: []
+    timeout_seconds: 5
+    max_output_bytes: 8192
+
+  - id: diag.disk
+    toolkit: diag
+    binary: /usr/bin/df
+    version: 1
+    title: Filesystem usage
+    description: >-
+      Usage of the mounts visible inside the container - NOT of every host
+      filesystem. Pool usage needs the TrueNAS access coming in stage 2.
+    category: read
+    idempotent: true
+    enabled: true
+    argv: ["-h"]
+    parameters: {}
+    required_scopes: []
+    timeout_seconds: 5
+    max_output_bytes: 16384
+
+  - id: diag.loadavg
+    toolkit: diag
+    binary: /bin/cat
+    version: 1
+    title: Raw load average
+    description: Contents of /proc/loadavg. Host values, since /proc is shared.
+    category: read
+    idempotent: true
+    enabled: true
+    argv: ["/proc/loadavg"]
+    parameters: {}
+    required_scopes: []
+    timeout_seconds: 5
+    max_output_bytes: 1024

@@ -1,0 +1,84 @@
+# Deployment via Dockhand (REQUIREMENTS.md §14).
+#
+#   docker exec ix-dockhand-dockhand-1 \
+#     docker compose -p gatekeeper -f /mnt/raid/gatekeeper/compose.yaml up -d
+
+services:
+  gatekeeper:
+    # Tag gepinnt, kein :latest (NFR-5).
+    image: davidsteg/gatekeeper:0.1.0
+    container_name: gatekeeper
+    restart: unless-stopped
+
+    # NFR-1: unprivilegiert. 568:568 ist die Homelab-Konvention.
+    user: "568:568"
+    # Der Docker-Socket gehoert auf dem Host root:docker. Damit der
+    # unprivilegierte Benutzer ihn nutzen kann, braucht der Container die GID
+    # dieser Gruppe. Auf dem Ziel-Host pruefen:
+    #   stat -c '%g' /var/run/docker.sock
+    group_add:
+      - "999"
+
+    # Oberflaeche unter /ui. Standardmaessig aus; verlangt eine Identitaet mit
+    # role: viewer oder role: admin. Ein admin darf Ebene 2 aendern, ein viewer
+    # nur lesen. Mit --ui-read-only bleibt die Oberflaeche auch fuer Admins
+    # schreibgeschuetzt.
+    # command: ["serve", "--ui"]
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      # FR-8.2: root-aequivalenter Zugriff auf den Host. Bewusst akzeptiert,
+      # weil gatekeeper genau die Whitelist ist, die ihn einschraenkt - aber
+      # es heisst: ein Fehler in gatekeeper ist ein Root-Fehler.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Ebene 2 beschreibbar: tools.yaml und identities.yaml aendert die
+      # Admin-Oberflaeche zur Laufzeit.
+      - /mnt/raid/gatekeeper/config:/etc/gatekeeper
+
+      # Ebene 1 read-only -- dieser Mount ueberdeckt die Datei aus dem
+      # Verzeichnis darueber. Binary-Allowlist, gesperrte Argumente,
+      # Pfad-Wurzeln und geschuetzte Ressourcen duerfen zur Laufzeit von
+      # niemandem veraendert werden, auch nicht vom eigenen Prozess (FR-4.11).
+      # Das ist der Grund, warum ein Admin per Formular gefahrlos Tools
+      # anlegen darf: er kann sich nur innerhalb dieser Grenzen bewegen.
+      - /mnt/raid/gatekeeper/config/toolkits.yaml:/etc/gatekeeper/toolkits.yaml:ro
+
+      # Compose-Dateien der verwalteten Stacks. Die Pfad-Wurzel aus
+      # toolkits.yaml muss hierauf passen.
+      - /mnt/raid:/mnt/raid
+
+      # Audit-Log, beschreibbar.
+      - /mnt/raid/gatekeeper/logs:/mnt/raid/gatekeeper/logs
+
+    environment:
+      GATEKEEPER_CONFIG_DIR: /etc/gatekeeper
+      GATEKEEPER_PORT: "8080"
+      GATEKEEPER_LOG_LEVEL: INFO
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health/live', timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

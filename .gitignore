@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Werkzeuge
+.preview/
+.claude/
+
+# Ebene 2 zur Laufzeit: enthaelt echte Token-Hashes und wird von der
+# Oberflaeche geschrieben. Gehoert auf den Host, nicht ins Repo.
+config/identities.yaml
