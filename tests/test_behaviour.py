@@ -433,3 +433,40 @@ def test_example_compose_ps_asks_for_json(repo_config_dir):
     # Das Format darf nicht aus einem Parameter kommen -- sonst koennte ein
     # Agent es umlenken.
     assert "{" not in "".join(argv[-2:])
+
+
+def test_directory_instead_of_file_says_what_happened(tmp_path):
+    """Die Docker-Falle: gemountete Datei fehlt auf dem Host -> Verzeichnis.
+
+    Ohne eigene Behandlung schlaegt das als roher IsADirectoryError durch --
+    eine Meldung ueber eine Datei, die scheinbar vorhanden ist. Die Ursache
+    liegt aber im Mount, und genau das muss dastehen.
+    """
+    from gatekeeper.errors import ConfigError
+
+    (tmp_path / "toolkits.yaml").mkdir()
+    with pytest.raises(ConfigError) as exc:
+        load_tier1(str(tmp_path / "toolkits.yaml"))
+    message = str(exc.value)
+    assert "is a directory" in message
+    assert "bind-mounted file does not exist" in message
+
+    (tmp_path / "identities.yaml").mkdir()
+    with pytest.raises(ConfigError) as exc:
+        load_identities(str(tmp_path / "identities.yaml"))
+    assert "is a directory" in str(exc.value)
+
+
+def test_state_dir_separates_the_two_tiers(tmp_path, monkeypatch):
+    """Ebene 1 und Ebene 2 duerfen in getrennten Mounts liegen."""
+    from gatekeeper.__main__ import _config_path
+
+    monkeypatch.setenv("GATEKEEPER_CONFIG_DIR", str(tmp_path / "conf"))
+    monkeypatch.setenv("GATEKEEPER_STATE_DIR", str(tmp_path / "state"))
+    assert _config_path("toolkits.yaml", None).startswith(str(tmp_path / "conf"))
+    assert _config_path("tools.yaml", None).startswith(str(tmp_path / "state"))
+    assert _config_path("identities.yaml", None).startswith(str(tmp_path / "state"))
+
+    # Ohne STATE_DIR liegt alles beisammen -- ein Mount genuegt.
+    monkeypatch.delenv("GATEKEEPER_STATE_DIR")
+    assert _config_path("tools.yaml", None).startswith(str(tmp_path / "conf"))

@@ -9,6 +9,7 @@ nicht unterscheiden lassen, sonst wird `tools/call` zum Katalog-Orakel.
 from __future__ import annotations
 
 import enum
+import os
 
 
 class DenialReason(str, enum.Enum):
@@ -58,6 +59,38 @@ class GatekeeperError(Exception):
 
 class ConfigError(GatekeeperError):
     """Konfiguration ist ungueltig - fuehrt zum Startabbruch."""
+
+
+def read_config_file(path: str, hint: str = "") -> str:
+    """Liest eine Konfigurationsdatei und uebersetzt OS-Fehler in Klartext.
+
+    Ohne das schlaegt ein Fehlmount als roher `IsADirectoryError` durch. Genau
+    dieser Fall passiert bei Docker haeufig und ist von aussen unverstaendlich:
+    Wer eine *Datei* per Bind-Mount einhaengt, die auf dem Host nicht existiert,
+    bekommt von Docker ein *Verzeichnis* angelegt -- und danach eine
+    Fehlermeldung ueber eine Datei, die scheinbar da ist.
+    """
+    # Vor dem Oeffnen pruefen, nicht ueber die Ausnahme: Linux meldet
+    # IsADirectoryError, Windows PermissionError. Ein Test, der nur den einen
+    # Fall kennt, gruent auf der falschen Plattform.
+    if os.path.isdir(path):
+        raise ConfigError(
+            f"{path} is a directory, not a file. Docker creates a directory "
+            "when a bind-mounted file does not exist on the host. Remove it "
+            "on the host, mount the containing directory instead of the "
+            "single file, and create the file before starting."
+            + (f" {hint}" if hint else "")
+        )
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except PermissionError:
+        raise ConfigError(
+            f"{path} cannot be read. Check the owner -- the container runs as "
+            "568:568." + (f" {hint}" if hint else "")
+        ) from None
+    except OSError as exc:
+        raise ConfigError(f"{path} cannot be read: {exc}") from None
 
 
 class Tier1Violation(ConfigError):

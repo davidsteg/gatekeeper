@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from .errors import ConfigError, Tier1Violation
+from .errors import ConfigError, Tier1Violation, read_config_file
 from .tier1 import Tier1, Toolkit
 
 #: Platzhalter in argv-, derived- und scope-Templates.
@@ -343,8 +343,7 @@ def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
     if not os.path.exists(path):
         return Catalog(tools={}, disabled_by_tier1=[], raw=[], rejected=[])
 
-    with open(path, encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
+    raw = yaml.safe_load(read_config_file(path)) or {}
 
     entries = raw.get("tools")
     if entries is None:

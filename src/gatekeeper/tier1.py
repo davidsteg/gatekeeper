@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-from .errors import ConfigError
+from .errors import ConfigError, read_config_file
 
 #: In Stufe 1 implementierte Executor-Typen. `truenas`/`http`/`ssh` folgen in
 #: Stufe 2 -- ein Toolkit, das sie referenziert, wird jetzt abgelehnt (FR-8.1).
@@ -153,8 +153,9 @@ def load_tier1(path: str) -> Tier1:
             "no safe default -- create it before starting. A starting point "
             "sits in config/examples/toolkits.yaml, or run 'gatekeeper init'."
         )
-    with open(path, encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
+    raw = yaml.safe_load(
+        read_config_file(path, "A starting point sits in config/examples/toolkits.yaml.")
+    ) or {}
 
     # Ein leerer Abschnitt ist zulaessig und der Zustand nach `init`: dann ist
     # nichts moeglich. Das ist eine gueltige Aussage, keine fehlende -- und die
