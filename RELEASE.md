@@ -20,9 +20,12 @@ nicht veröffentlicht.
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-Danach läuft: Tests → Image nach Docker Hub (`0.2.0`, `0.2`, `sha-…`) →
+Danach läuft: Tests → Image nach Docker Hub (`0.2.0`, `0.2` und `latest`) →
 GitHub-Release mit dem Abschnitt von hier, dem Image-Digest und einem
 Deploy-Bündel aus `compose.yaml` und den Beispielkonfigurationen.
+
+Bauten von `main` heißen `<version>-dev`. `latest` zeigt nur auf Releases,
+nie auf `main` und nie auf eine Vorabversion.
 
 ## Versionierung
 
@@ -91,9 +94,9 @@ heißt: lesen, anpassen, ausrollen.
   bei niemandem automatisch.
 - **Ablehnungen verraten nichts.** Fehlendes Recht und unbekanntes Tool ergeben
   für den Agenten dieselbe Antwort.
-- **Geschützte Ressourcen.** `gatekeeper`, `dockhand` und `traefik` sind für
-  kein Tool erreichbar — sonst könnte ein Agent den Kanal abschalten, über den
-  er spricht.
+- **Geschützte Ressourcen.** Was in `protected_resources` steht, ist für kein
+  Tool erreichbar — sonst könnte ein Agent den Kanal abschalten, über den er
+  spricht. Die Namen sind deployment-spezifisch; gatekeeper rät sie nicht.
 - **Zeitlimit ≠ Fehler.** Läuft ein nicht-idempotentes Tool in sein Zeitlimit,
   meldet der Server „Ausgang unbekannt" statt „fehlgeschlagen". Ein als Fehler
   gemeldetes Zeitlimit provoziert genau die Wiederholung, die bei einem bereits
