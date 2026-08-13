@@ -12,6 +12,7 @@ import dataclasses
 import fnmatch
 import hashlib
 import hmac
+import os
 import secrets
 from typing import Any
 
@@ -130,6 +131,11 @@ class IdentityStore:
 
 
 def load_identities(path: str) -> IdentityStore:
+    if not os.path.exists(path):
+        raise ConfigError(
+            f"{path} not found. Without identities nobody can authenticate -- "
+            "run 'gatekeeper init' to create one administrator."
+        )
     with open(path, encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
 

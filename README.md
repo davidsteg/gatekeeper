@@ -14,7 +14,7 @@ Umgesetzt sind zwei der vier Stufen (REQUIREMENTS.md §14):
 
 | | Inhalt | Status |
 |---|---|---|
-| **1** | MCP + Auth + Audit + `docker` + `diag`, statischer Katalog | **fertig** |
+| **1** | MCP + Auth + Audit, Executoren `docker` und `local` | **fertig** |
 | **3** | Katalog zur Laufzeit änderbar, Admin-Oberfläche unter `/ui` | **fertig** |
 | 2 | Credential-Store, `truenas`, `http` (nur lesend) | offen |
 | 4 | `write_external` | offen |
@@ -54,8 +54,12 @@ Kommentare, Docstrings und diese Datei sind deutsch.
   bei niemandem automatisch.
 - **Ablehnungen verraten nichts.** Fehlendes Recht und unbekanntes Tool ergeben
   für den Agenten dieselbe Antwort; das Audit-Log kennt den echten Grund.
-- **Geschützte Ressourcen.** `gatekeeper` und `dockhand` sind für kein Tool
-  erreichbar — sonst könnte ein Agent den Kanal abschalten, über den er spricht.
+- **Geschützte Ressourcen.** Was in `protected_resources` steht, ist für kein
+  Tool erreichbar — sonst könnte ein Agent den Kanal abschalten, über den er
+  spricht. Die Namen sind deployment-spezifisch und müssen gesetzt werden.
+- **Leer nach der Installation.** gatekeeper bringt keinen Katalog mit. Direkt
+  nach `init` kann es nichts; jede Fähigkeit ist danach eine Entscheidung, die
+  im Audit-Log einen Urheber hat.
 
 ## Aufbau
 
@@ -72,9 +76,10 @@ src/gatekeeper/
   store.py      Schreibzugriff auf Ebene 2                <- sicherheitskritisch
   ui.py         Oberflaeche, eigene Sitzung, CSRF
 config/
-  toolkits.yaml            Ebene 1
-  tools.yaml               Seed-Katalog
-  identities.example.yaml  Vorlage — Tokens selbst erzeugen
+  examples/                Vorlagen zum Abschauen, keine Voreinstellung
+    toolkits.yaml            Ebene-1-Beispiel mit docker und diag
+    tools.yaml               optionaler Startvorrat an Tools
+    identities.yaml          Beispiel-Rechteprofile
 tests/
   test_negative_corpus.py  Angriffe, die fehlschlagen MÜSSEN (NFR-8)
   test_behaviour.py        was funktionieren muss
@@ -96,7 +101,7 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 Konfiguration prüfen, ohne zu starten — gehört vor jeden Deploy:
 
 ```bash
-gatekeeper --toolkits config/toolkits.yaml --tools config/tools.yaml --identities config/identities.yaml check
+gatekeeper --toolkits <dir>/toolkits.yaml --tools <dir>/tools.yaml --identities <dir>/identities.yaml check
 ```
 
 ## Deployment
@@ -113,23 +118,27 @@ zfs create <pool>/raid/gatekeeper
 mkdir -p /mnt/raid/gatekeeper/config /mnt/raid/gatekeeper/logs && chown -R 568:568 /mnt/raid/gatekeeper
 ```
 
-**3. Konfiguration ablegen.** `toolkits.yaml` und `tools.yaml` nach
-`/mnt/raid/gatekeeper/config/`. Die Pfad-Wurzeln in `toolkits.yaml` müssen zu
-den tatsächlichen Compose-Verzeichnissen passen.
+**3. Leerzustand anlegen.** gatekeeper liefert keine Konfiguration mit:
+
+```bash
+docker run --rm -v /mnt/raid/gatekeeper/config:/etc/gatekeeper davidsteg/gatekeeper:0.1.0 init
+```
+
+Das erzeugt eine minimale `toolkits.yaml` (nur `diag`, lesend), eine leere
+`tools.yaml` und eine `identities.yaml` mit **einem** Administrator, dessen
+Token einmalig ausgegeben wird. Danach kann der Server starten und kann nichts
+— jede Fähigkeit ab hier ist eine bewusste Entscheidung mit Eintrag im
+Audit-Log.
+
+**4. Ebene 1 erweitern.** Für Docker-Zugriff das `docker`-Toolkit aus
+[config/examples/toolkits.yaml](config/examples/toolkits.yaml) übernehmen und
+anpassen — insbesondere `path_roots` und `protected_resources`. Das ist
+Deploy-Zeit: nach der Änderung neu ausrollen.
 
 Die `compose.yaml` mountet das Verzeichnis **beschreibbar** und legt
 `toolkits.yaml` als eigenen `:ro`-Mount darüber. Damit bildet das Deployment
 die zwei Ebenen ab: die Oberfläche darf `tools.yaml` und `identities.yaml`
 ändern, an Ebene 1 kommt auch der eigene Prozess nicht heran.
-
-**4. Tokens erzeugen** — je Agent einen:
-
-```bash
-docker run --rm davidsteg/gatekeeper:0.1.0 token
-```
-
-Der Klartext-Token geht in die `config.yaml` des Agenten, der Hash nach
-`identities.yaml`. Der Klartext erscheint genau einmal.
 
 **5. GID des Docker-Sockets ermitteln** und in `compose.yaml` unter `group_add`
 eintragen — sonst erreicht der unprivilegierte Benutzer den Socket nicht:
@@ -149,6 +158,10 @@ docker exec ix-dockhand-dockhand-1 docker compose -p gatekeeper -f /mnt/raid/gat
 ```bash
 curl -s localhost:8080/health/ready
 ```
+
+**8. Tools anlegen** unter `/ui` mit dem Administrator-Token aus Schritt 3.
+Vorlagen zum Abschauen stehen in
+[config/examples/tools.yaml](config/examples/tools.yaml).
 
 ## Agent anbinden
 
@@ -231,19 +244,14 @@ Aktivitätsdiagramm auch, denn im Browser läuft kein Skript.
 
 ### Ersten Admin anlegen
 
-Vor dem ersten Start von Hand — danach geht alles über die Oberfläche:
+Erledigt `gatekeeper init` (Deployment, Schritt 3) — es legt genau einen
+Administrator an und gibt den Token einmalig aus. Weitere Identitäten entstehen
+danach in der Oberfläche.
+
+Einen zusätzlichen Hash von Hand erzeugen:
 
 ```bash
-docker run --rm davidsteg/gatekeeper:0.1.0 token
-```
-
-```yaml
-identities:
-  - id: root
-    role: admin
-    token_hash: scrypt$...
-    tools: []      # ein Admin braucht keine Tool-Rechte
-    scopes: []
+docker exec gatekeeper gatekeeper token
 ```
 
 **Warum die Sitzung nicht für `/mcp` gilt.** Der MCP-Endpunkt authentifiziert

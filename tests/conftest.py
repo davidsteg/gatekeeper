@@ -188,7 +188,14 @@ def service(tier1, catalog, tmp_path):
 
 @pytest.fixture
 def repo_config_dir():
-    return os.path.join(os.path.dirname(__file__), "..", "config")
+    """Die Beispielkonfiguration.
+
+    gatekeeper liefert keine aktive Konfiguration mehr mit -- `config/` enthaelt
+    nur noch `examples/`. Die Beispiele muessen trotzdem laden: sie sind das,
+    wovon jemand abschreibt, und ein Tippfehler darin faellt sonst erst auf dem
+    fremden Host auf.
+    """
+    return os.path.join(os.path.dirname(__file__), "..", "config", "examples")
 
 
 __all__ = ["make_catalog", "textwrap", "PYTHON"]
