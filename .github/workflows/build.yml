@@ -1,9 +1,14 @@
 name: build
 
-# Getrennte Jobs mit Abhaengigkeit: ein Image wird nur veroeffentlicht, wenn
-# die Tests vorher durchgelaufen sind. gatekeeper haelt root-aequivalenten
-# Zugriff auf den Host -- ein Image mit rotem Negativkorpus darf nicht in die
-# Registry gelangen.
+# Jede Aenderung ist ein Release. Ausgeloest wird es nicht von einem
+# handgesetzten Tag, sondern von der Version in pyproject.toml: steht dort eine
+# Fassung, zu der es noch kein Tag gibt, wird sie veroeffentlicht. Ein Release
+# entsteht damit im selben Commit wie die Aenderung -- und wer die Version
+# vergisst, merkt es daran, dass nichts erscheint.
+#
+# Getrennte Jobs mit Abhaengigkeit: veroeffentlicht wird nur, wenn die Tests
+# vorher durchgelaufen sind. gatekeeper haelt root-aequivalenten Zugriff auf
+# den Host; ein Image mit rotem Negativkorpus darf nicht in die Registry.
 
 on:
   push:
@@ -19,13 +24,60 @@ jobs:
   test:
     name: tests
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      series: ${{ steps.version.outputs.series }}
+      release: ${{ steps.version.outputs.release }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Tags werden gebraucht, um zu erkennen, ob diese Version schon
+          # veroeffentlicht wurde.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+
+      - name: Decide whether this is a release
+        id: version
+        run: |
+          version=$(python -c "import tomllib,pathlib; \
+            print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # '1.2' zeigt auf die neueste 1.2.x -- wer die Reihe pinnen will,
+          # bekommt Fehlerbehebungen, aber keine neuen Funktionen.
+          echo "series=${version%.*}" >> "$GITHUB_OUTPUT"
+          echo "Package version: $version"
+
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pyproject.toml ($version)." \
+                 "An image would report a version it does not have."
+            exit 1
+          fi
+
+          if git rev-parse "v$version" >/dev/null 2>&1; then
+            echo "v$version is already released -- building a dev image only."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Eine Version ohne Notizen wird nicht veroeffentlicht. Die Pruefung
+          # steht hier, vor dem Image-Job: schlaegt sie fehl, liegt noch nichts
+          # in der Registry, dessen Release dann fehlt.
+          notes=$(awk -v v="$version" '
+            $0 ~ "^## " v "([[:space:]]|$)" { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' RELEASE.md)
+          if [ -z "$(echo "$notes" | tr -d '[:space:]')" ]; then
+            echo "::error::RELEASE.md has no '## $version' section." \
+                 "Every change gets a release, and every release gets notes."
+            exit 1
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "Will release v$version ($(echo "$notes" | wc -l) lines of notes)."
 
       - name: Install
         run: pip install -e ".[dev]"
@@ -62,33 +114,6 @@ jobs:
             --identities /tmp/identities.yaml \
             check
 
-      - name: Check the release is coherent
-        # Nur beim Taggen -- und bewusst vor dem Image-Job: schlaegt es hier
-        # fehl, liegt noch nichts in der Registry, dessen Release dann fehlt.
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-
-          declared=$(python -c "import tomllib,pathlib; \
-            print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
-          if [ "$declared" != "$version" ]; then
-            echo "::error::Tag is $GITHUB_REF_NAME but pyproject.toml says $declared." \
-                 "An image would report a version it does not have."
-            exit 1
-          fi
-
-          # Eine Version ohne Notizen wird nicht veroeffentlicht.
-          notes=$(awk -v v="$version" '
-            $0 ~ "^## " v "([[:space:]]|$)" { found = 1; next }
-            found && /^## / { exit }
-            found { print }
-          ' RELEASE.md)
-          if [ -z "$(echo "$notes" | tr -d '[:space:]')" ]; then
-            echo "::error::RELEASE.md has no '## $version' section."
-            exit 1
-          fi
-          echo "Release notes for $version: $(echo "$notes" | wc -l) lines."
-
   image:
     name: image
     needs: test
@@ -99,7 +124,6 @@ jobs:
       # Der Digest wandert ins Release: ein Tag laesst sich ueberschreiben,
       # ein Digest nicht. Wer danach pinnt, bekommt garantiert dieses Image.
       digest: ${{ steps.build.outputs.digest }}
-      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -116,36 +140,30 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Read the package version
-        id: pkg
-        run: |
-          python -c "import tomllib,pathlib; \
-            print('version=' + tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])" \
-            >> "$GITHUB_OUTPUT"
-
       - name: Derive tags
         id: meta
         uses: docker/metadata-action@v5
+        env:
+          VERSION: ${{ needs.test.outputs.version }}
+          RELEASING: ${{ needs.test.outputs.release }}
         with:
           images: ${{ env.IMAGE }}
-          # 'latest' wird unten gezielt gesetzt, nicht automatisch.
           flavor: latest=false
-          # Nur Versionen, keine Zweig- oder Commit-Namen. Ein Tag wie
-          # 'sha-c8598dc' sagt nicht, was drin ist; er waere nur nachzuschlagen.
-          # Aus einem Git-Tag v1.2.3 werden '1.2.3' und '1.2'. Ein Bau von main
-          # heisst '<pyproject-version>-dev' -- erkennbar unfertig und trotzdem
-          # eine Version, keine Zufallsfolge.
+          # Nur Versionen, keine Zweig- oder Commit-Namen: ein Tag wie
+          # 'sha-c8598dc' sagt nicht, was drin ist.
           #
-          # 'latest' zeigt ausschliesslich auf ein Release, nie auf main: sonst
-          # bekaeme ein 'docker pull' ohne Tag einen Zwischenstand. Vorabtags
-          # (v1.0.0-rc1, am Bindestrich erkennbar) sind ebenfalls ausgenommen.
-          # Fuer das Deployment bleibt eine feste Version richtig (NFR-5) --
-          # 'latest' ist zum Ausprobieren da, nicht zum Betreiben.
+          # Ist die Version neu, entstehen '1.2.3', '1.2' und 'latest'. Ist sie
+          # schon veroeffentlicht, gibt es nur '1.2.3-dev' -- erkennbar
+          # unfertig und trotzdem eine Version.
+          #
+          # 'latest' zeigt ausschliesslich auf ein Release, nie auf einen
+          # Zwischenstand und nie auf eine Vorabversion. Fuer den Betrieb
+          # bleibt eine feste Version richtig (NFR-5).
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=${{ steps.pkg.outputs.version }}-dev,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+            type=raw,value=${{ env.VERSION }},enable=${{ env.RELEASING == 'true' }}
+            type=raw,value=${{ needs.test.outputs.series }},enable=${{ env.RELEASING == 'true' }}
+            type=raw,value=latest,enable=${{ env.RELEASING == 'true' && !contains(env.VERSION, '-') }}
+            type=raw,value=${{ env.VERSION }}-dev,enable=${{ env.RELEASING != 'true' }}
 
       - name: Build and push
         id: build
@@ -160,19 +178,13 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke test the published image
-        # Das Image erzeugt sich seinen eigenen Token und prueft damit die
-        # mitgelieferte Konfiguration -- unprivilegiert und ohne Docker-Socket.
-        # Beweist, dass Interpreter, Abhaengigkeiten, Binaries an den in
-        # toolkits.yaml genannten Pfaden und das Compose-Plugin zusammenpassen.
+        # Erstinstallation im Container nachstellen: 'init' schreibt den
+        # Leerzustand, 'check' liest ihn zurueck. Beides unprivilegiert.
         if: github.event_name != 'pull_request'
         run: |
           tag=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
           docker pull "$tag"
-          docker run --rm "$tag" --help > /dev/null
           docker run --rm --entrypoint docker "$tag" compose version
-
-          # Erstinstallation im Container nachstellen: 'init' schreibt den
-          # Leerzustand, 'check' liest ihn zurueck. Beides unprivilegiert.
           mkdir -p /tmp/gk && chmod 777 /tmp/gk
           docker run --rm --user 568:568 -v /tmp/gk:/etc/gatekeeper "$tag" init
           docker run --rm --user 568:568 -v /tmp/gk:/etc/gatekeeper:ro "$tag" check
@@ -180,19 +192,20 @@ jobs:
   release:
     name: release
     needs: [test, image]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.test.outputs.release == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       # Das Einzige, wofuer dieser Job Schreibrecht braucht.
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Assemble the deploy bundle
         # Alles, was auf dem Host gebraucht wird, ohne das Repo zu klonen.
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          dir="gatekeeper-$version"
+          dir="gatekeeper-${{ needs.test.outputs.version }}"
           mkdir -p "bundle/$dir"
           cp compose.yaml README.md RELEASE.md "bundle/$dir/"
           cp -r config "bundle/$dir/"
@@ -200,13 +213,10 @@ jobs:
 
       - name: Compose the notes
         env:
+          VERSION: ${{ needs.test.outputs.version }}
           DIGEST: ${{ needs.image.outputs.digest }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-
-          # Denselben Abschnitt wie die Vorpruefung -- sie hat bereits belegt,
-          # dass er existiert und nicht leer ist.
-          awk -v v="$version" '
+          awk -v v="$VERSION" '
             $0 ~ "^## " v "([[:space:]]|$)" { found = 1; next }
             found && /^## / { exit }
             found { print }
@@ -236,22 +246,27 @@ jobs:
           enthaelt `compose.yaml` und die Beispielkonfigurationen.
           EOF
 
-          sed -i "s|__IMAGE__|$IMAGE|g; s|__VERSION__|$version|g; s|__DIGEST__|$DIGEST|g" notes.md
+          sed -i "s|__IMAGE__|$IMAGE|g; s|__VERSION__|$VERSION|g; s|__DIGEST__|$DIGEST|g" notes.md
 
-      - name: Create the release
+      - name: Tag and release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.test.outputs.version }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          # Ein Tag wie v0.2.0-rc1 ist eine Vorabversion und wird nicht als
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "gatekeeper $VERSION"
+          git push origin "v$VERSION"
+
+          # Ein Tag wie v1.0.0-rc1 ist eine Vorabversion und wird nicht als
           # neueste Fassung angeboten.
-          case "$version" in
+          case "$VERSION" in
             *-*) prerelease="--prerelease" ;;
             *)   prerelease="" ;;
           esac
-          gh release create "$GITHUB_REF_NAME" \
-            --title "gatekeeper $version" \
+          gh release create "v$VERSION" \
+            --title "gatekeeper $VERSION" \
             --notes-file notes.md \
             --verify-tag \
             $prerelease \
-            "gatekeeper-$version-deploy.tar.gz"
+            "gatekeeper-$VERSION-deploy.tar.gz"

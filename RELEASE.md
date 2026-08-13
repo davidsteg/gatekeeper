@@ -4,28 +4,44 @@ Die Notizen stehen hier, nicht in einem Webformular. Sie durchlaufen damit
 denselben Review wie der Code, und der Workflow liest sie beim Taggen aus —
 was veröffentlicht wird, ist vorher gelesen worden.
 
+## Die Regel: jede Änderung ist ein Release
+
+**Was auf `main` landet, wird veröffentlicht.** Keine angesammelten,
+unveröffentlichten Änderungen; kein „das nehmen wir beim nächsten Mal mit".
+
+Der Grund ist nicht Ordnungsliebe. gatekeeper vermittelt root-äquivalenten
+Zugriff auf einen Host. Läuft irgendwo eine Fassung, muss man sagen können,
+*welche* — und das geht nur, wenn jeder Stand eine Version mit Notizen hat.
+Ein Sammel-Release nach fünf Änderungen macht aus fünf nachvollziehbaren
+Schritten einen unteilbaren Klumpen, und im Störungsfall weiß niemand, welcher
+davon es war.
+
+**Der Tag wird nicht von Hand gesetzt.** Ausgelöst wird das Release von der
+Version in `pyproject.toml`: steht dort eine Fassung, zu der es noch kein Tag
+gibt, veröffentlicht der Workflow sie. Damit gehört die Versionsanhebung in
+denselben Commit wie die Änderung — und wer sie vergisst, merkt es daran, dass
+nichts erscheint.
+
 ## Vorgehen
 
-**1. Version in `pyproject.toml` setzen.** Der Workflow bricht ab, wenn Tag und
-Paketversion auseinanderlaufen — `v0.2.0` mit `version = "0.1.0"` im Paket wäre
-sonst ein Image, das über sich selbst falsche Auskunft gibt.
+Zwei Dateien im selben Commit wie die Änderung:
 
-**2. Abschnitt hier ergänzen.** Überschrift exakt `## <version>`, ohne `v`.
-Fehlt der Abschnitt, bricht der Workflow ab: eine Version ohne Notizen wird
-nicht veröffentlicht.
+**1. `pyproject.toml`** — Version anheben.
 
-**3. Taggen und schieben:**
+**2. `RELEASE.md`** — Abschnitt ergänzen, Überschrift exakt `## <version>`,
+ohne `v`. Fehlt er, bricht der Workflow ab, *bevor* ein Image in die Registry
+gelangt: eine Version ohne Notizen wird nicht veröffentlicht.
 
-```bash
-git tag v0.2.0 && git push origin v0.2.0
-```
+Dann `git push`. Danach läuft von selbst: Tests → Image nach Docker Hub
+(`0.2.0`, `0.2`, `latest`) → Git-Tag `v0.2.0` → GitHub-Release mit dem
+Abschnitt von hier, dem Image-Digest und einem Deploy-Bündel.
 
-Danach läuft: Tests → Image nach Docker Hub (`0.2.0`, `0.2` und `latest`) →
-GitHub-Release mit dem Abschnitt von hier, dem Image-Digest und einem
-Deploy-Bündel aus `compose.yaml` und den Beispielkonfigurationen.
+Ein Push ohne neue Version baut nur `<version>-dev` und veröffentlicht nichts.
+Das ist der Weg für Zwischenstände und für Änderungen, die nichts am Verhalten
+ändern — er ist die Ausnahme, nicht der Normalfall.
 
-Bauten von `main` heißen `<version>-dev`. `latest` zeigt nur auf Releases,
-nie auf `main` und nie auf eine Vorabversion.
+`latest` zeigt ausschließlich auf Releases, nie auf einen Zwischenstand und nie
+auf eine Vorabversion.
 
 ## Versionierung
 
@@ -33,11 +49,77 @@ nie auf `main` und nie auf eine Vorabversion.
 
 - **MAJOR** — Ebene 1 ändert ihre Bedeutung, oder ein bestehendes Deployment
   startet ohne Anpassung nicht mehr.
-- **MINOR** — neue Toolkits, Executoren oder Oberflächenfunktionen.
+- **MINOR** — neue Toolkits, Executoren, Oberflächenfunktionen oder neues
+  Verhalten im Betrieb.
 - **PATCH** — Fehlerbehebungen, auch sicherheitsrelevante.
 
 **Nach dem Deploy den Digest pinnen.** Ein Tag lässt sich überschreiben, ein
 Digest nicht. Er steht in jedem Release.
+
+---
+
+## 0.2.0
+
+Behebt einen Fehler, der jede Erstinstallation von 0.1.0 in eine
+Neustartschleife schickte, und macht den ersten Start selbsttragend.
+
+### Behoben
+
+**Die `compose.yaml` von 0.1.0 war kaputt.** Sie hängte `toolkits.yaml` als
+einzelne Datei per Bind-Mount ein, um Ebene 1 read-only zu halten. Docker legt
+in dem Fall ein **Verzeichnis** an, wenn die Quelldatei auf dem Host fehlt — bei
+einer Erstinstallation also immer. Der Container startete daraufhin endlos neu
+mit `IsADirectoryError`, und auf dem Host blieb ein Ordner namens
+`toolkits.yaml` zurück.
+
+Wer 0.1.0 ausgerollt hat, räumt ihn einmalig weg:
+
+```bash
+rm -rf <config>/toolkits.yaml
+```
+
+Jetzt genügt **ein** Verzeichnis-Mount, der diesen Fehler nicht kennt. Ebene 1
+bleibt geschützt, aber durch Code statt durch den Mount: es schreibt niemand
+`toolkits.yaml`, und ein Test hält das fest.
+
+**Konfigurationsfehler nennen die Ursache statt des Symptoms.** Ein Verzeichnis
+an Stelle einer Datei erklärt jetzt, dass Docker es angelegt hat und warum.
+Geprüft wird vor dem Öffnen, nicht über die Ausnahme — Linux meldet dort
+`IsADirectoryError`, Windows `PermissionError`.
+
+### Neu
+
+- **Der erste Start legt die Konfiguration selbst an.** Ein leeres,
+  beschreibbares Verzeichnis mounten und starten genügt; `init` von Hand
+  entfällt. Der Administrator-Token erscheint einmalig im Containerlog — nach
+  dem ersten Anmelden in `/ui` rotieren.
+
+  Geschrieben wird nur, wenn **keine** der drei Dateien existiert. Ein
+  verrutschter Mount sieht sonst aus wie eine Erstinstallation, und eine frische
+  Konfiguration darüber würde den Fehler verdecken. `GATEKEEPER_NO_BOOTSTRAP=1`
+  schaltet das ab.
+
+- **`GATEKEEPER_STATE_DIR`** trennt Ebene 1 und Ebene 2 in getrennte
+  Verzeichnisse. Damit kann der Konfigurations-Mount `:ro` sein, während die
+  Oberfläche weiterhin schreibt — beides Verzeichnis-Mounts, die Falle von oben
+  tritt nicht auf.
+
+### Geändert
+
+`docker.compose_ps` im Beispielkatalog liefert JSON statt einer Textabelle. Ein
+Agent, der Spalten abzählt, verliest sich beim ersten langen Containernamen.
+`--format json` steht fest im Template; ein Parameterwert kann es nicht
+umlenken.
+
+### Sonstiges
+
+Releases entstehen ab jetzt aus der Version in `pyproject.toml`, nicht aus
+einem handgesetzten Tag. Jede Änderung auf `main` bekommt eine Version und
+Notizen — siehe [Die Regel](#die-regel-jede-änderung-ist-ein-release) oben.
+
+### Prüfstand
+
+127 Tests unter Linux.
 
 ---
 
