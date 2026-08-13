@@ -416,3 +416,20 @@ def test_init_token_appears_once_and_only_as_hash_on_disk(tmp_path):
     assert token.startswith("gk_")
     assert out.count(token) == 1
     assert token not in (tmp_path / "identities.yaml").read_text(encoding="utf-8")
+
+
+def test_example_compose_ps_asks_for_json(repo_config_dir):
+    """`docker compose ps` soll strukturiert antworten, nicht als Textabelle.
+
+    Ein Agent, der Spalten abzaehlt, verliest sich beim ersten langen
+    Containernamen. '--format json' steht fest im Template und ist damit kein
+    Einfallstor -- ein Parameterwert kann es nicht erzeugen (FR-5.4).
+    """
+    tier1 = load_tier1(os.path.join(repo_config_dir, "toolkits.yaml"))
+    catalog = load_catalog(os.path.join(repo_config_dir, "tools.yaml"), tier1, strict=True)
+    argv = catalog.tools["docker.compose_ps"].argv
+    assert argv[-2:] == ("--format", "json")
+
+    # Das Format darf nicht aus einem Parameter kommen -- sonst koennte ein
+    # Agent es umlenken.
+    assert "{" not in "".join(argv[-2:])
