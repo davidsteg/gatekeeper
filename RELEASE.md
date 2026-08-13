@@ -52,9 +52,8 @@ Rechten und vollständigem Audit.
 - **MCP über Streamable HTTP** unter `/mcp`, Bearer-Token je Identität.
   `tools/list` ist pro Identität gefiltert; nicht erteilte Tools existieren für
   den Agenten nicht.
-- **Toolkits `docker` und `diag`** mit zehn Tools: Compose-Stacks abfragen,
-  starten, stoppen, neu starten, Images ziehen, Logs lesen; Laufzeit,
-  Speicher, Dateisysteme, Lastdurchschnitt.
+- **Executoren `local` und `docker`.** Was damit erreichbar ist, entscheidet
+  ausschließlich die eigene `toolkits.yaml`.
 - **Audit-Log** als JSON Lines mit Rotation. Der wahre Ablehnungsgrund steht
   dort auch dann, wenn der Agent nur eine nichtssagende Antwort bekam.
 - **Betriebs- und Verwaltungsoberfläche** unter `/ui`, standardmäßig aus.
@@ -62,6 +61,21 @@ Rechten und vollständigem Audit.
   Filtern — und für Admins Schreibzugriff auf Ebene 2.
 - **Health-Proben** (`/health/live`, `/health/ready`, `/health/startup`) und
   Prometheus-Metriken unter `/metrics`.
+
+### Leer nach der Installation
+
+`gatekeeper init` legt eine **leere** Ebene 1 (`toolkits: {}`), einen leeren
+Katalog und genau einen Administrator an. Direkt danach kann gatekeeper
+nichts — nicht ein einziges Kommando.
+
+Das ist Absicht. Ein Werkzeug, das root-äquivalenten Zugriff auf einen Host
+vermittelt, sollte keine Fähigkeit mitbringen, die niemand entschieden hat:
+ein vorbelegter Katalog hätte im Audit-Log keinen Urheber. Welche Binaries
+ein Agent erreichen können soll, weiß ohnehin nur, wer das System kennt.
+
+Fertige Vorlagen zum Abschauen — ein Docker-Toolkit und zehn Compose- und
+Diagnose-Tools — stehen in [config/examples/](config/examples/). Übernehmen
+heißt: lesen, anpassen, ausrollen.
 
 ### Was es garantiert
 
@@ -107,13 +121,16 @@ Rechten und vollständigem Audit.
 - **Die Oberfläche spricht HTTP.** Ohne TLS läuft das Sitzungs-Cookie ohne
   `Secure`-Flag. Hinter einem HTTPS-Proxy setzt gatekeeper es automatisch. Der
   Port gehört nicht ins offene Netz.
+- **Ebene 1 ändert man nur per Redeploy.** Ein Toolkit gewährt Zugriff auf
+  echte Binaries; das bleibt eine Deploy-Zeit-Entscheidung (FR-4.11). Die
+  Oberfläche legt Tools an, aber niemals ein Toolkit.
 - **Noch nicht enthalten:** ZFS und TrueNAS-API (brauchen den
   `truenas`-Executor), Dienst-APIs wie Sonarr/Radarr/Jellyfin (brauchen `http`
   und den Credential-Store), `write_external`.
 
 ### Prüfstand
 
-113 Tests unter Linux, davon 49 im Negativkorpus (NFR-8): Metazeichen,
+121 Tests unter Linux, davon 49 im Negativkorpus (NFR-8): Metazeichen,
 Steuerzeichen, argv-Expansion, Pfad-Traversal, Symlink-Ausbruch,
 Geschwister-Verzeichnis mit gleichem Präfix, Ebene-1-Verstöße, überschriebene
 abgeleitete Parameter, geschützte Ressourcen, Undurchsichtigkeit von
