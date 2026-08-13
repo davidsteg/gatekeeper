@@ -995,7 +995,9 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
                 f"definitions were not loaded:<ul>{rows}</ul>"
             )
         )
-    if not catalog.tools:
+    if not service.tier1.toolkits:
+        parts.append(_no_toolkits_note())
+    elif not catalog.tools:
         parts.append(
             _note(
                 "<strong>The catalog is empty, which is the state after "
@@ -1172,6 +1174,9 @@ def _view_tools(
             + (f'<td class="ops">{ops}</td>' if session.can_write else "")
             + "</tr>"
         )
+
+    if not rows and not service.tier1.toolkits:
+        return _no_toolkits_note()
 
     if not rows:
         # Der Normalzustand nach der Installation. Eine leere Tabelle waere
@@ -1368,31 +1373,68 @@ def _view_audit(service: Service, request: Request) -> str:
 
 # -- Views: schreiben ------------------------------------------------------
 
-_TOOL_TEMPLATE = """id: docker.compose_ps
-toolkit: docker
-binary: /usr/bin/docker
-version: 1
-title: Stack status
-description: Shows the state of a compose stack's containers.
-category: read
-idempotent: true
-enabled: true
-argv: ["compose", "-p", "{stack}", "-f", "{compose_path}", "ps"]
-parameters:
-  stack:
-    type: string
-    required: true
-    pattern: "^[a-z0-9][a-z0-9_-]{0,62}$"
-    description: Stack name.
-  compose_path:
-    type: path
-    derived: "/mnt/raid/{stack}/compose.yaml"
-    must_resolve_under: /mnt/raid
-    description: Built by the server.
-required_scopes: ["stack:{stack}"]
-timeout_seconds: 30
-max_output_bytes: 65536
-"""
+def _tool_scaffold(service: Service) -> str:
+    """Geruest fuer eine neue Definition, aus der echten Ebene 1 gebaut.
+
+    Frueher stand hier ein fertiges Docker-Tool mit fremden Pfaden. Das war
+    doppelt falsch: es sah aus wie eine Voreinstellung, und auf einem System
+    ohne dieses Toolkit liess es sich nicht einmal speichern. Das Geruest nimmt
+    jetzt das erste konfigurierte Toolkit und dessen tatsaechliche Werte -- es
+    ist damit auf jedem Deployment ein gueltiger Ausgangspunkt.
+    """
+    name, toolkit = next(iter(sorted(service.tier1.toolkits.items())))
+    binary = toolkit.binaries[0]
+    lines = [
+        f"id: {name}.CHANGEME",
+        f"toolkit: {name}",
+        f"binary: {binary}",
+        "version: 1",
+        "title: CHANGEME",
+        "description: What this does, in one sentence for the agent.",
+        "category: read            # read | write | write_external",
+        "idempotent: true",
+        "enabled: true",
+        "",
+        "# Every element becomes exactly one argument. A parameter value can",
+        "# never produce a second one (FR-5.4).",
+        'argv: ["--help"]',
+        "",
+        "# Every string parameter needs a pattern -- unvalidated free text is",
+        "# not permitted (FR-5.7). Paths are derived by the server, never",
+        "# supplied by the agent.",
+        "parameters: {}",
+        "",
+        "required_scopes: []",
+        f"timeout_seconds: {min(30, toolkit.max_timeout_seconds)}",
+        f"max_output_bytes: {min(65536, toolkit.max_output_bytes)}",
+    ]
+    if toolkit.path_roots:
+        lines.insert(
+            -3,
+            "# This toolkit allows derived paths under: "
+            + ", ".join(toolkit.path_roots),
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _no_toolkits_note() -> str:
+    """Was zu tun ist, wenn Ebene 1 leer ist.
+
+    Der Zustand nach `init`. Er ist erklaerungsbeduerftig, weil er sich nicht
+    hier beheben laesst -- und das ist keine Luecke, sondern der Kern des
+    Entwurfs: was moeglich sein soll, entscheidet der Deploy, nicht die
+    laufende Oberflaeche.
+    """
+    return _note(
+        "<strong>No toolkits configured.</strong> A tool always binds to a "
+        "toolkit from Tier 1, and Tier 1 is empty &ndash; the state right "
+        "after <code>gatekeeper init</code>. Nothing can be executed yet."
+        "<p>This cannot be fixed here, and deliberately so: a toolkit grants "
+        "access to real binaries on the host, so it is a deploy-time decision "
+        "(FR-4.11). Edit <code>toolkits.yaml</code> and redeploy. There is a "
+        "worked example in <code>config/examples/toolkits.yaml</code>.</p>",
+        icon="lock",
+    )
 
 
 def _tier1_reference(service: Service) -> str:
@@ -1756,9 +1798,17 @@ def build_ui_routes(
             return _to_login()
         if store is None or not session.can_write:
             return RedirectResponse(f"{UI_PREFIX}/tools", status_code=303)
+        if not service.tier1.toolkits:
+            # Ohne Toolkit gibt es nichts, worauf sich ein Tool stuetzen
+            # koennte. Ein leeres Formular anzubieten waere eine Einladung in
+            # eine Fehlermeldung.
+            return _shell(
+                request, "New tool", _no_toolkits_note(), session,
+                icon="plus", active="/tools",
+            )
         return _shell(
             request, "New tool",
-            _tool_editor(service, session, yaml_text=_TOOL_TEMPLATE,
+            _tool_editor(service, session, yaml_text=_tool_scaffold(service),
                          rev=store.tools_revision(), replaces=None),
             session, icon="plus", active="/tools",
             subtitle="The definition is checked against Tier 1 before it is stored.",

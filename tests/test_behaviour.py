@@ -336,8 +336,10 @@ def _run_init(tmp_path, *extra):
 def test_init_creates_a_runnable_but_empty_state(tmp_path):
     """Nach `init` startet der Server -- und kann nichts.
 
-    Genau das ist gewollt: Ebene 1 beschreibt eine Grenze, keine Faehigkeit.
-    Solange kein Tool angelegt ist, gibt es nichts aufzurufen.
+    Genau das ist gewollt. gatekeeper trifft keine Annahme darueber, welche
+    Binaries ein Agent erreichen koennen soll: das weiss nur, wer das System
+    kennt. Ein mitgeliefertes Toolkit waere eine Faehigkeit, die niemand
+    entschieden hat.
     """
     code, out, _ = _run_init(tmp_path)
     assert code == 0
@@ -346,17 +348,53 @@ def test_init_creates_a_runnable_but_empty_state(tmp_path):
     catalog = load_catalog(str(tmp_path / "tools.yaml"), tier1, strict=True)
     identities = load_identities(str(tmp_path / "identities.yaml"))
 
+    assert tier1.toolkits == {}, "Ebene 1 darf nichts vorgeben"
     assert catalog.tools == {}, "der Auslieferungszustand darf kein Tool kennen"
     assert list(identities.identities) == ["admin"]
     assert identities.identities["admin"].role == "admin"
     assert identities.identities["admin"].tools == frozenset()
 
-    # Kein Docker-Toolkit: der Socket ist root-aequivalent und gehoert nicht in
-    # eine Voreinstellung.
-    assert set(tier1.toolkits) == {"diag"}
+    # Betriebsparameter darf init setzen -- sie erlauben nichts, sie begrenzen.
+    assert tier1.rate_limits["read"].count > 0
+    assert tier1.audit_dir
 
     token = out.split("shown once):")[1].strip()
     assert identities.authenticate(token).id == "admin"
+
+
+def test_empty_tier1_is_valid(tmp_path):
+    """Ebene 1 ohne Toolkits ist eine gueltige Aussage: nichts ist moeglich."""
+    path = tmp_path / "toolkits.yaml"
+    for body in ("toolkits: {}\n", "toolkits:\n"):
+        path.write_text(body + "audit:\n  dir: /tmp/x\n", encoding="utf-8")
+        assert load_tier1(str(path)).toolkits == {}
+
+
+def test_tool_for_a_removed_toolkit_is_disabled_not_fatal(tmp_path, tier1, tool_specs):
+    """FR-4.7: verschwindet ein Toolkit, faellt sein Tool weg -- nicht der Start.
+
+    Sonst waere das Entfernen eines Toolkits ein Weg, den Dienst lahmzulegen:
+    der naechste Start braeche ab, und zwar bevor jemand die Oberflaeche
+    erreichen koennte, um den Katalog zu reparieren.
+    """
+    import yaml as _yaml
+
+    from gatekeeper.errors import Tier1Violation
+
+    empty_path = tmp_path / "empty-tier1.yaml"
+    empty_path.write_text("toolkits: {}\n", encoding="utf-8")
+    empty = load_tier1(str(empty_path))
+
+    tools_path = tmp_path / "orphaned.yaml"
+    tools_path.write_text(_yaml.safe_dump({"tools": tool_specs}), encoding="utf-8")
+
+    catalog = load_catalog(str(tools_path), empty)
+    assert catalog.tools == {}
+    assert len(catalog.disabled_by_tier1) == len(tool_specs)
+    assert "Unknown toolkit" in catalog.disabled_by_tier1[0]
+
+    with pytest.raises(Tier1Violation):
+        load_catalog(str(tools_path), empty, strict=True)
 
 
 def test_init_refuses_to_clobber(tmp_path):

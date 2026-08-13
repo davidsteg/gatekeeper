@@ -133,32 +133,33 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
-#: Kleinstmoegliche Ebene 1, die startet. `local` mit Lesebefehlen, keine
-#: Pfad-Wurzeln, keine Schreibrechte, kein Docker-Socket. Sie definiert eine
-#: Grenze, keine Faehigkeit: solange kein Tool angelegt ist, kann darueber
-#: nichts aufgerufen werden. Docker und alles Weitere gehoert bewusst
-#: hinzugefuegt, nicht vorgefunden.
+#: Ebene 1, leer. gatekeeper trifft keine Annahme darueber, was ein Agent
+#: erreichen koennen soll -- das weiss nur, wer das System kennt. Nach `init`
+#: ist nichts moeglich; jedes Toolkit ist eine bewusste Entscheidung, die einen
+#: Redeploy kostet und damit nicht nebenbei passiert.
 _INIT_TOOLKITS = """\
 # Ebene 1 - Deploy-Zeit, zur Laufzeit unveraenderlich (REQUIREMENTS.md §6).
 #
-# Von 'gatekeeper init' angelegt: das Kleinste, was startet. Erweitern heisst
-# redeployen - die Oberflaeche kann Tools anlegen, aber niemals ein Toolkit.
-# Ein Beispiel mit Docker steht in config/examples/toolkits.yaml.
+# Von 'gatekeeper init' leer angelegt. Solange hier kein Toolkit steht, kann
+# gatekeeper nichts ausfuehren - auch kein Administrator kann daran etwas
+# aendern, denn die Oberflaeche legt Tools an, aber niemals ein Toolkit
+# (FR-4.11). Erweitern heisst: diese Datei bearbeiten und neu ausrollen.
+#
+# Ein Toolkit sieht so aus. Die Werte sind Beispiele und muessen zum Host
+# passen - vollstaendiger Vorrat in config/examples/toolkits.yaml:
+#
+# toolkits:
+#   diag:
+#     executor: local          # local | docker
+#     binaries:                # absolute Pfade, exakte Allowlist (FR-4.1)
+#       - /usr/bin/uptime
+#     denied_args: []          # gesperrte Unterbefehle und Flags (FR-4.2)
+#     path_roots: []           # Wurzeln fuer abgeleitete Pfade (FR-4.3)
+#     protected_resources: []  # fuer kein Tool erreichbar (FR-4.12)
+#     max_timeout_seconds: 10
+#     max_output_bytes: 16384
 
-toolkits:
-  diag:
-    executor: local
-    binaries:
-      - /usr/bin/uptime
-      - /usr/bin/free
-      - /usr/bin/df
-      - /bin/cat
-    denied_args: []
-    # Leer: kein Diagnose-Tool nimmt einen Pfad vom Agenten entgegen.
-    path_roots: []
-    protected_resources: []
-    max_timeout_seconds: 10
-    max_output_bytes: 16384
+toolkits: {{}}
 
 # FR-6.8
 rate_limits:

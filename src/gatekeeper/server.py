@@ -222,7 +222,10 @@ def build_app(
 
     async def health_ready(_request: Request) -> Response:
         ready = await service.probe_executors()
-        ok = all(ready.values()) if ready else False
+        # Ohne Toolkits gibt es nichts zu pruefen. Das ist der Zustand nach
+        # `init` und kein Mangel -- ihn als 'degraded' zu melden wuerde eine
+        # frische Installation als Stoerung ausweisen.
+        ok = all(ready.values()) if ready else not service.tier1.toolkits
         return JSONResponse(
             {"status": "ready" if ok else "degraded", "executors": ready},
             status_code=200 if ok else 503,
