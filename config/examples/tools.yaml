@@ -22,12 +22,15 @@ tools:
     version: 1
     title: Stack status
     description: >-
-      Shows the state of a compose stack's containers
+      State of a compose stack's containers as JSON records
       ('docker compose ps'). Read-only.
     category: read
     idempotent: true
     enabled: true
-    argv: ["compose", "-p", "{stack}", "-f", "{compose_path}", "ps"]
+    # --format json statt der Textabelle: ein Agent liest Felder, statt
+    # Spaltenausrichtung zu raten. Sicherheitsneutral, weil das Element fest im
+    # Template steht und kein Parameterwert ist.
+    argv: ["compose", "-p", "{stack}", "-f", "{compose_path}", "ps", "--format", "json"]
     parameters:
       stack:
         type: string
