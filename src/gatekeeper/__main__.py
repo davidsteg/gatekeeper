@@ -71,12 +71,26 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
 
-    audit = AuditLog(
-        tier1.audit_dir,
-        max_bytes=tier1.audit_max_bytes,
-        keep_files=tier1.audit_keep_files,
-        redactor=Redactor(),
-    )
+    try:
+        audit = AuditLog(
+            tier1.audit_dir,
+            max_bytes=tier1.audit_max_bytes,
+            keep_files=tier1.audit_keep_files,
+            redactor=Redactor(),
+        )
+    except OSError as exc:
+        # Ohne Audit-Log wird nicht gestartet. Ein Dienst, der Host-Operationen
+        # vermittelt und dabei nicht mitschreiben kann, ist schlimmer als
+        # keiner: die Aufrufe finden statt, nur weiss hinterher niemand welche.
+        print(
+            f"Configuration error: cannot use the audit directory "
+            f"{tier1.audit_dir!r}: {exc}\n"
+            f"This process runs as {_whoami()}. Either mount a directory it "
+            "owns there, or point 'audit.dir' in toolkits.yaml at one:\n"
+            f"  chown -R {_whoami()} <the directory mounted at {tier1.audit_dir}>",
+            file=sys.stderr,
+        )
+        return 2
     service = Service(
         tier1=tier1,
         catalog=catalog,

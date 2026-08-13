@@ -543,3 +543,31 @@ def test_first_start_leaves_a_complete_configuration_alone(tmp_path):
 
     assert (directory / "identities.yaml").read_text(encoding="utf-8") == before
     assert load_identities(str(directory / "identities.yaml")).authenticate(token)
+
+
+def test_unwritable_audit_directory_refuses_to_start(tmp_path, capsys):
+    """Ohne Audit-Log wird nicht gestartet.
+
+    Ein Dienst, der Host-Operationen vermittelt und dabei nicht mitschreiben
+    kann, ist schlimmer als keiner: die Aufrufe finden statt, nur weiss
+    hinterher niemand welche. Vorher schlug das als roher OSError durch.
+    """
+    from gatekeeper import __main__ as cli
+
+    cli.bootstrap(str(tmp_path), str(tmp_path))
+    argv = [
+        "gatekeeper",
+        "--toolkits", str(tmp_path / "toolkits.yaml"),
+        "--tools", str(tmp_path / "tools.yaml"),
+        "--identities", str(tmp_path / "identities.yaml"),
+        "serve", "--no-bootstrap",
+    ]
+    with mock.patch.object(sys, "argv", argv), mock.patch.object(
+        cli, "AuditLog", side_effect=PermissionError(13, "Permission denied")
+    ):
+        code = cli.main()
+
+    assert code == 2
+    message = capsys.readouterr().err
+    assert "audit directory" in message
+    assert "chown" in message
