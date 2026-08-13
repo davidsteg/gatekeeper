@@ -118,17 +118,27 @@ zfs create <pool>/raid/gatekeeper
 mkdir -p /mnt/raid/gatekeeper/config /mnt/raid/gatekeeper/logs && chown -R 568:568 /mnt/raid/gatekeeper
 ```
 
-**3. Leerzustand anlegen.** gatekeeper liefert keine Konfiguration mit:
+**3. Starten.** Ein leeres, beschreibbares Verzeichnis mounten genügt — der
+erste Start legt alles Nötige selbst an:
 
 ```bash
-docker run --rm -v /mnt/raid/gatekeeper/config:/etc/gatekeeper davidsteg/gatekeeper:0.1.0 init
+docker compose up -d && docker compose logs gatekeeper | grep 'Administrator token'
 ```
 
-Das erzeugt eine **leere** `toolkits.yaml` (`toolkits: {}`), eine leere
-`tools.yaml` und eine `identities.yaml` mit **einem** Administrator, dessen
-Token einmalig ausgegeben wird. Der Server startet danach und kann nichts —
-gatekeeper trifft keine Annahme darüber, welche Binaries ein Agent erreichen
-können soll. Das weiß nur, wer das System kennt.
+Erzeugt wird eine **leere** `toolkits.yaml` (`toolkits: {}`), eine leere
+`tools.yaml` und eine `identities.yaml` mit **einem** Administrator. Dessen
+Token steht genau einmal im Containerlog — nach dem ersten Anmelden in `/ui`
+rotieren, damit er dort nicht liegen bleibt.
+
+Angelegt wird nur, wenn **keine** der drei Dateien existiert. Liegt schon eine
+da, passiert nichts: ein verrutschter Mount sieht sonst aus wie eine
+Erstinstallation, und eine frische Konfiguration darüber würde den Fehler
+verdecken. Wer gar nichts automatisch angelegt haben will, setzt
+`GATEKEEPER_NO_BOOTSTRAP=1` und ruft `gatekeeper init` selbst auf.
+
+Danach kann der Server — nichts. gatekeeper trifft keine Annahme darüber,
+welche Binaries ein Agent erreichen können soll. Das weiß nur, wer das System
+kennt.
 
 **4. Ebene 1 schreiben.** Erst hier entsteht eine Fähigkeit. Für Docker-Zugriff
 das `docker`-Toolkit aus

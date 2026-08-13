@@ -44,8 +44,15 @@ services:
       # es heisst: ein Fehler in gatekeeper ist ein Root-Fehler.
       - /var/run/docker.sock:/var/run/docker.sock
 
-      # Konfiguration und Zustand in EINEM beschreibbaren Verzeichnis:
-      # toolkits.yaml (Ebene 1), tools.yaml und identities.yaml (Ebene 2).
+      # EIN beschreibbares Verzeichnis genuegt. Ist es leer, legt der erste
+      # Start toolkits.yaml, tools.yaml und identities.yaml selbst an und
+      # schreibt den Administrator-Token EINMALIG ins Containerlog:
+      #
+      #   docker compose logs gatekeeper | grep 'Administrator token'
+      #
+      # Nach dem ersten Anmelden in /ui rotieren, damit er nicht im Log bleibt.
+      # Wer nichts automatisch angelegt haben will: GATEKEEPER_NO_BOOTSTRAP=1
+      # setzen und 'gatekeeper init' von Hand aufrufen.
       #
       # Bewusst KEIN Einzeldatei-Mount fuer toolkits.yaml. Docker legt ein
       # Verzeichnis an, wenn die gemountete Datei auf dem Host nicht existiert
