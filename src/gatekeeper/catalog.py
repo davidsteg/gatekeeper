@@ -231,7 +231,14 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         raise ConfigError(
             f"{where}: ID prefix does not match toolkit {toolkit_name!r}"
         )
-    toolkit = tier1.toolkit(toolkit_name)
+    try:
+        toolkit = tier1.toolkit(toolkit_name)
+    except ConfigError as exc:
+        # Als Ebene-1-Verstoss behandeln, nicht als Syntaxfehler: wird ein
+        # Toolkit beim Redeploy entfernt, sollen seine Tools deaktiviert werden
+        # (FR-4.7) und nicht den Start verhindern. Sonst waere das Entfernen
+        # eines Toolkits ein Weg, den Dienst lahmzulegen.
+        raise Tier1Violation(f"{where}: {exc}") from exc
 
     category = spec.get("category")
     if category not in CATEGORIES:

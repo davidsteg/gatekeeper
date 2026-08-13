@@ -156,9 +156,15 @@ def load_tier1(path: str) -> Tier1:
     with open(path, encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
 
+    # Ein leerer Abschnitt ist zulaessig und der Zustand nach `init`: dann ist
+    # nichts moeglich. Das ist eine gueltige Aussage, keine fehlende -- und die
+    # einzige, die gatekeeper von sich aus treffen darf. Welche Binaries ein
+    # Agent erreichen koennen soll, weiss nur, wer das System kennt.
     toolkit_section = raw.get("toolkits")
-    if not isinstance(toolkit_section, dict) or not toolkit_section:
-        raise ConfigError("toolkits.yaml: section 'toolkits' is missing or empty")
+    if toolkit_section is None:
+        toolkit_section = {}
+    if not isinstance(toolkit_section, dict):
+        raise ConfigError("toolkits.yaml: section 'toolkits' must be a mapping")
 
     toolkits: dict[str, Toolkit] = {}
     for name, spec in toolkit_section.items():

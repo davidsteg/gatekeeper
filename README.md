@@ -124,16 +124,18 @@ mkdir -p /mnt/raid/gatekeeper/config /mnt/raid/gatekeeper/logs && chown -R 568:5
 docker run --rm -v /mnt/raid/gatekeeper/config:/etc/gatekeeper davidsteg/gatekeeper:0.1.0 init
 ```
 
-Das erzeugt eine minimale `toolkits.yaml` (nur `diag`, lesend), eine leere
+Das erzeugt eine **leere** `toolkits.yaml` (`toolkits: {}`), eine leere
 `tools.yaml` und eine `identities.yaml` mit **einem** Administrator, dessen
-Token einmalig ausgegeben wird. Danach kann der Server starten und kann nichts
-— jede Fähigkeit ab hier ist eine bewusste Entscheidung mit Eintrag im
-Audit-Log.
+Token einmalig ausgegeben wird. Der Server startet danach und kann nichts —
+gatekeeper trifft keine Annahme darüber, welche Binaries ein Agent erreichen
+können soll. Das weiß nur, wer das System kennt.
 
-**4. Ebene 1 erweitern.** Für Docker-Zugriff das `docker`-Toolkit aus
+**4. Ebene 1 schreiben.** Erst hier entsteht eine Fähigkeit. Für Docker-Zugriff
+das `docker`-Toolkit aus
 [config/examples/toolkits.yaml](config/examples/toolkits.yaml) übernehmen und
 anpassen — insbesondere `path_roots` und `protected_resources`. Das ist
-Deploy-Zeit: nach der Änderung neu ausrollen.
+Deploy-Zeit: nach der Änderung neu ausrollen. Die Oberfläche kann das nicht,
+und zwar mit Absicht (FR-4.11).
 
 Die `compose.yaml` mountet das Verzeichnis **beschreibbar** und legt
 `toolkits.yaml` als eigenen `:ro`-Mount darüber. Damit bildet das Deployment

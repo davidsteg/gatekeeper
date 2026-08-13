@@ -5,7 +5,9 @@
 
 services:
   gatekeeper:
-    # Tag gepinnt, kein :latest (NFR-5).
+    # Feste Version, nicht :latest (NFR-5). Ein bewegliches Tag zoege bei einem
+    # Redeploy unbemerkt eine andere Fassung -- und dieser Dienst haelt
+    # root-aequivalenten Zugriff auf den Host.
     image: davidsteg/gatekeeper:0.1.0
     container_name: gatekeeper
     restart: unless-stopped
