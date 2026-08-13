@@ -133,6 +133,126 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Kleinstmoegliche Ebene 1, die startet. `local` mit Lesebefehlen, keine
+#: Pfad-Wurzeln, keine Schreibrechte, kein Docker-Socket. Sie definiert eine
+#: Grenze, keine Faehigkeit: solange kein Tool angelegt ist, kann darueber
+#: nichts aufgerufen werden. Docker und alles Weitere gehoert bewusst
+#: hinzugefuegt, nicht vorgefunden.
+_INIT_TOOLKITS = """\
+# Ebene 1 - Deploy-Zeit, zur Laufzeit unveraenderlich (REQUIREMENTS.md §6).
+#
+# Von 'gatekeeper init' angelegt: das Kleinste, was startet. Erweitern heisst
+# redeployen - die Oberflaeche kann Tools anlegen, aber niemals ein Toolkit.
+# Ein Beispiel mit Docker steht in config/examples/toolkits.yaml.
+
+toolkits:
+  diag:
+    executor: local
+    binaries:
+      - /usr/bin/uptime
+      - /usr/bin/free
+      - /usr/bin/df
+      - /bin/cat
+    denied_args: []
+    # Leer: kein Diagnose-Tool nimmt einen Pfad vom Agenten entgegen.
+    path_roots: []
+    protected_resources: []
+    max_timeout_seconds: 10
+    max_output_bytes: 16384
+
+# FR-6.8
+rate_limits:
+  read:
+    count: 120
+    window_seconds: 60
+  write:
+    count: 20
+    window_seconds: 60
+  write_external:
+    count: 5
+    window_seconds: 60
+
+max_concurrent: 4
+
+# FR-9.4/9.5 - append-only mit Rotation. Ohne Rotation fuellt das Log das Dataset.
+audit:
+  dir: {audit_dir}
+  max_bytes: 33554432
+  keep_files: 10
+"""
+
+_INIT_TOOLS = """\
+# Katalog (REQUIREMENTS.md §7). Leer angelegt - so ist es gemeint.
+#
+# Tools legt man in der Oberflaeche unter /ui an; sie schreibt diese Datei.
+# Vorlagen zum Abschauen stehen in config/examples/tools.yaml.
+
+tools: []
+"""
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Legt einen lauffaehigen Leerzustand an: keine Tools, ein Administrator.
+
+    gatekeeper liefert bewusst keinen Katalog mit. Ein Werkzeug, das
+    root-aequivalenten Zugriff vermittelt, soll nach der Installation nichts
+    koennen -- jede Faehigkeit ist danach eine bewusste Entscheidung, die im
+    Audit-Log steht.
+    """
+    base = args.config_dir or os.environ.get("GATEKEEPER_CONFIG_DIR", "/etc/gatekeeper")
+    paths = {name: os.path.join(base, f"{name}.yaml") for name in
+             ("toolkits", "tools", "identities")}
+
+    existing = [p for p in paths.values() if os.path.exists(p)]
+    if existing and not args.force:
+        print(
+            "Refusing to overwrite:\n  " + "\n  ".join(existing)
+            + "\nPass --force to replace them. Note that this discards the "
+            "current catalog and every identity, including their tokens.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        os.makedirs(base, exist_ok=True)
+    except OSError as exc:
+        print(f"Cannot create {base}: {exc}", file=sys.stderr)
+        return 2
+
+    token = generate_token()
+    audit_dir = args.audit_dir or os.path.join(base, "logs")
+    files = {
+        paths["toolkits"]: _INIT_TOOLKITS.format(audit_dir=audit_dir),
+        paths["tools"]: _INIT_TOOLS,
+        paths["identities"]: (
+            "# Identitaeten und Rechte (REQUIREMENTS.md §4 und §9).\n"
+            "#\n"
+            "# Enthaelt nur Hashes. Weitere Identitaeten legt die Oberflaeche an.\n\n"
+            "identities:\n"
+            "  - id: admin\n"
+            "    role: admin\n"
+            f'    token_hash: "{hash_token(token)}"\n'
+            "    # Ein Administrator braucht keine Tool-Rechte: die Oberflaeche\n"
+            "    # ruft nichts auf.\n"
+            "    tools: []\n"
+            "    scopes: []\n"
+        ),
+    }
+    for path, content in files.items():
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+
+    print(f"Created in {base}:")
+    for name in ("toolkits", "tools", "identities"):
+        print(f"  {name}.yaml")
+    print(
+        "\nNo tools, no agents. Start with --ui and create what you need;\n"
+        "every capability from here on is a deliberate, audited decision."
+    )
+    print(f"\nAdministrator token (shown once):\n  {token}")
+    return 0
+
+
 def cmd_token(args: argparse.Namespace) -> int:
     """Erzeugt einen Token und gibt Klartext plus Hash aus.
 
@@ -176,6 +296,16 @@ def main() -> int:
 
     check = sub.add_parser("check", help="Validate the configuration")
     check.set_defaults(func=cmd_check)
+
+    init = sub.add_parser(
+        "init", help="Create an empty, runnable configuration and one administrator"
+    )
+    init.add_argument("--config-dir", help="Target directory (default: GATEKEEPER_CONFIG_DIR)")
+    init.add_argument("--audit-dir", help="Where the audit log goes (default: <config-dir>/logs)")
+    init.add_argument(
+        "--force", action="store_true", help="Overwrite existing files"
+    )
+    init.set_defaults(func=cmd_init)
 
     token = sub.add_parser("token", help="Generate a token")
     token.add_argument("--token", help="Hash an existing token instead of generating one")

@@ -8,6 +8,8 @@ Absicherung, die alles ablehnt, waere trivial und nutzlos.
 from __future__ import annotations
 
 import os
+import sys
+from unittest import mock
 
 import pytest
 
@@ -15,6 +17,7 @@ from conftest import PYTHON, make_catalog
 from gatekeeper import execute
 from gatekeeper.catalog import load_catalog
 from gatekeeper.errors import Denied, DenialReason
+from gatekeeper.identity import load_identities
 from gatekeeper.tier1 import load_tier1
 from gatekeeper.validate import build_argv, resolve_parameters, resolve_scopes
 
@@ -220,13 +223,54 @@ def test_audit_rotates(tmp_path):
     assert os.path.exists(str(tmp_path / "rot" / "audit.jsonl.1"))
 
 
-# -- Die ausgelieferte Konfiguration ---------------------------------------
+# -- Auslieferungszustand und Beispiele ------------------------------------
+
+
+def test_nothing_active_is_shipped():
+    """gatekeeper bringt keine Konfiguration mit -- nur Beispiele.
+
+    Eine mitgelieferte `tools.yaml` waere eine Faehigkeit, die niemand
+    entschieden hat: nach der Installation stuenden Tools bereit, die im
+    Audit-Log keinen Urheber haben. Der Auslieferungszustand ist deshalb leer.
+    """
+    config = os.path.join(os.path.dirname(__file__), "..", "config")
+    present = sorted(
+        name for name in os.listdir(config) if name.endswith((".yaml", ".yml"))
+    )
+    assert present == [], f"aktive Konfiguration im Repo: {present}"
+    assert os.path.isdir(os.path.join(config, "examples"))
+
+
+def test_missing_catalog_is_an_empty_catalog(tier1, tmp_path):
+    """Der Normalzustand nach `init`, kein Fehlerfall."""
+    catalog = load_catalog(str(tmp_path / "gibt-es-nicht.yaml"), tier1)
+    assert catalog.tools == {}
+    assert catalog.raw == []
+
+
+def test_empty_catalog_file_loads(tier1, tmp_path):
+    path = tmp_path / "leer.yaml"
+    path.write_text("tools: []\n", encoding="utf-8")
+    assert load_catalog(str(path), tier1).tools == {}
+    # Auch der Fall, in dem der Schluessel ohne Inhalt dasteht.
+    path.write_text("tools:\n", encoding="utf-8")
+    assert load_catalog(str(path), tier1).tools == {}
+
+
+def test_missing_tier1_names_the_way_out(tmp_path):
+    """Ebene 1 hat keinen Leerzustand -- die Meldung muss weiterhelfen."""
+    from gatekeeper.errors import ConfigError
+
+    with pytest.raises(ConfigError) as exc:
+        load_tier1(str(tmp_path / "fehlt.yaml"))
+    assert "gatekeeper init" in str(exc.value)
 
 
 def test_shipped_config_is_valid(repo_config_dir):
-    """Die Dateien im Repo muessen streng laden -- inklusive Ebene-1-Pruefung.
+    """Die Beispiele muessen streng laden -- inklusive Ebene-1-Pruefung.
 
-    Faengt Tippfehler in tools.yaml ab, bevor sie auf dem Host auffallen.
+    Sie sind das, wovon jemand abschreibt. Ein Tippfehler darin faellt sonst
+    erst auf einem fremden Host auf.
     """
     tier1 = load_tier1(os.path.join(repo_config_dir, "toolkits.yaml"))
     catalog = load_catalog(
@@ -267,3 +311,70 @@ async def test_local_executor_probe_does_not_execute(service):
     """
     ready = await service.probe_executors()
     assert ready == {"local": True}
+
+
+# -- init ------------------------------------------------------------------
+
+
+def _run_init(tmp_path, *extra):
+    """Ruft das CLI wie ein Mensch auf -- inklusive Argument-Parsing."""
+    import contextlib
+    import io
+
+    from gatekeeper.__main__ import main
+
+    argv = ["gatekeeper", "init", "--config-dir", str(tmp_path), *extra]
+    out = io.StringIO()
+    err = io.StringIO()
+    with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(
+        out
+    ), contextlib.redirect_stderr(err):
+        code = main()
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_init_creates_a_runnable_but_empty_state(tmp_path):
+    """Nach `init` startet der Server -- und kann nichts.
+
+    Genau das ist gewollt: Ebene 1 beschreibt eine Grenze, keine Faehigkeit.
+    Solange kein Tool angelegt ist, gibt es nichts aufzurufen.
+    """
+    code, out, _ = _run_init(tmp_path)
+    assert code == 0
+
+    tier1 = load_tier1(str(tmp_path / "toolkits.yaml"))
+    catalog = load_catalog(str(tmp_path / "tools.yaml"), tier1, strict=True)
+    identities = load_identities(str(tmp_path / "identities.yaml"))
+
+    assert catalog.tools == {}, "der Auslieferungszustand darf kein Tool kennen"
+    assert list(identities.identities) == ["admin"]
+    assert identities.identities["admin"].role == "admin"
+    assert identities.identities["admin"].tools == frozenset()
+
+    # Kein Docker-Toolkit: der Socket ist root-aequivalent und gehoert nicht in
+    # eine Voreinstellung.
+    assert set(tier1.toolkits) == {"diag"}
+
+    token = out.split("shown once):")[1].strip()
+    assert identities.authenticate(token).id == "admin"
+
+
+def test_init_refuses_to_clobber(tmp_path):
+    assert _run_init(tmp_path)[0] == 0
+    before = (tmp_path / "identities.yaml").read_text(encoding="utf-8")
+
+    code, _, err = _run_init(tmp_path)
+    assert code == 1
+    assert "Refusing to overwrite" in err
+    assert (tmp_path / "identities.yaml").read_text(encoding="utf-8") == before
+
+    assert _run_init(tmp_path, "--force")[0] == 0
+    assert (tmp_path / "identities.yaml").read_text(encoding="utf-8") != before
+
+
+def test_init_token_appears_once_and_only_as_hash_on_disk(tmp_path):
+    _, out, _ = _run_init(tmp_path)
+    token = out.split("shown once):")[1].strip()
+    assert token.startswith("gk_")
+    assert out.count(token) == 1
+    assert token not in (tmp_path / "identities.yaml").read_text(encoding="utf-8")

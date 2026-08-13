@@ -8,6 +8,7 @@ unveraendert, es aendert sich nur, wer schreibt.
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
 from typing import Any
 
@@ -326,11 +327,22 @@ def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
     FR-4.7: Definitionen, die gegen die aktuelle Ebene 1 verstossen, werden
     protokolliert und deaktiviert -- nicht stillschweigend toleriert. Mit
     `strict=True` bricht der Start stattdessen ab (fuer CI).
+
+    Eine fehlende Datei ist kein Fehler, sondern der Zustand nach der
+    Installation: gatekeeper liefert keinen Katalog mit, Tools legt man in der
+    Oberflaeche an. Der Aufrufer protokolliert das -- ein vertippter Pfad soll
+    nicht als "leerer Katalog" durchgehen, ohne dass es jemand sieht.
     """
+    if not os.path.exists(path):
+        return Catalog(tools={}, disabled_by_tier1=[], raw=[], rejected=[])
+
     with open(path, encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
 
     entries = raw.get("tools")
+    if entries is None:
+        # `tools:` ohne Inhalt ist ein leerer Katalog, kein Syntaxfehler.
+        entries = []
     if not isinstance(entries, list):
         raise ConfigError("tools.yaml: section 'tools' is missing or not a list")
 

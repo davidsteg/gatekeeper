@@ -1,8 +1,21 @@
-# Ebene 1 - Deploy-Zeit, zur Laufzeit unveraenderlich (REQUIREMENTS.md §6).
+# BEISPIEL - nicht die ausgelieferte Konfiguration.
 #
+# Ebene 1, Deploy-Zeit, zur Laufzeit unveraenderlich (REQUIREMENTS.md §6).
 # Diese Datei wird read-only in den Container gemountet. Aenderungen erfordern
-# einen Redeploy. Die Admin-API (ab Stufe 3) kann Tools anlegen, aber niemals
-# ein Toolkit - sonst waere Ebene 1 zur Laufzeit veraenderbar (FR-4.11).
+# einen Redeploy. Die Oberflaeche kann Tools anlegen, aber niemals ein Toolkit
+# - sonst waere Ebene 1 zur Laufzeit veraenderbar (FR-4.11).
+#
+# Ebene 1 legt fest, was hoechstens moeglich ist. Sie ist die einzige Stelle,
+# an der ein Fehler nicht mehr eingefangen wird - hier gehoert Zeit hinein.
+# Nichts davon ist ein sinnvoller Standard fuer ein fremdes System:
+#
+#   - Die Binary-Pfade muessen im Image existieren.
+#   - Die Pfad-Wurzeln muessen zu den echten Compose-Verzeichnissen passen.
+#   - Die geschuetzten Ressourcen muessen die Namen DEINER kritischen Stacks
+#     tragen. 'traefik' unten ist geraten; wenn dein Reverse Proxy anders
+#     heisst, schuetzt der Eintrag nichts.
+#
+# Uebernehmen heisst also: lesen, anpassen, verstehen - nicht kopieren.
 
 toolkits:
   docker:

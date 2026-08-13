@@ -995,6 +995,18 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
                 f"definitions were not loaded:<ul>{rows}</ul>"
             )
         )
+    if not catalog.tools:
+        parts.append(
+            _note(
+                "<strong>The catalog is empty, which is the state after "
+                "installation.</strong> gatekeeper can currently do nothing at "
+                "all. The Tier 1 boundaries below say what would be possible; "
+                f'a tool has to be created before any of it is &ndash; <a href="{UI_PREFIX}'
+                '/tools">start here</a>.',
+                icon="sliders",
+                tone="good",
+            )
+        )
 
     parts.append(
         '<div class="grid">'
@@ -1159,6 +1171,30 @@ def _view_tools(
             + "</td>"
             + (f'<td class="ops">{ops}</td>' if session.can_write else "")
             + "</tr>"
+        )
+
+    if not rows:
+        # Der Normalzustand nach der Installation. Eine leere Tabelle waere
+        # hier eine Sackgasse -- sie sagt nicht, ob etwas fehlt oder ob so
+        # gedacht ist.
+        hint = (
+            f'<p><a class="btn primary" href="{UI_PREFIX}/tools/new">'
+            f'{_icon("plus", 14)}Create the first tool</a></p>'
+            if session.can_write and store is not None
+            else '<p class="muted">An identity with <code>role: admin</code> '
+            "can create tools here.</p>"
+        )
+        return (
+            '<div class="card"><div class="pad">'
+            "<p><strong>No tools yet.</strong> gatekeeper ships an empty "
+            "catalog on purpose: after installation it can do nothing at all, "
+            "and every capability from here on is a deliberate decision that "
+            "lands in the audit log.</p>"
+            "<p class='muted'>A tool binds one fixed action to a toolkit from "
+            "Tier 1. It stays invisible to every agent until an identity is "
+            "granted the right to it &ndash; defining and granting are two "
+            "separate steps.</p>"
+            f"{hint}</div></div>"
         )
 
     head_ops = "<th>Actions</th>" if session.can_write else ""

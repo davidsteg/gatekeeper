@@ -1,15 +1,21 @@
+# BEISPIEL - `gatekeeper init` legt eine echte identities.yaml mit genau einem
+# Administrator an. Diese Datei zeigt nur, wie Rechteprofile aussehen koennen.
+#
 # Identitaeten und Rechte (REQUIREMENTS.md §4 und §9).
 #
-# Diese Datei enthaelt NUR Hashes. Der Klartext-Token existiert an genau zwei
-# Stellen: einmalig bei der Erzeugung und in der config.yaml des Agenten
-# (FR-2.6). Damit ist diese Datei nicht secret-kritisch und darf nach
-# Homelab-Regel im Dataset mit chown 568:568 liegen.
+# Sie enthaelt NUR Hashes. Der Klartext-Token existiert an genau zwei Stellen:
+# einmalig bei der Erzeugung und in der config.yaml des Agenten (FR-2.6).
+# Damit ist die Datei nicht secret-kritisch und darf nach Homelab-Regel im
+# Dataset mit chown 568:568 liegen.
 #
 # Hash erzeugen:
 #   docker exec gatekeeper gatekeeper token
 #
-# Kopieren nach identities.yaml und die Platzhalter ersetzen - mit Platzhalter
-# verweigert gatekeeper den Start.
+# Die Platzhalter muessen ersetzt werden - mit REPLACE_ME verweigert
+# gatekeeper den Start, statt zu laufen und jeden Token abzulehnen.
+#
+# Die Agenten unten verweisen auf Tools aus examples/tools.yaml. Existieren
+# die nicht, laufen die Rechte ins Leere; die Oberflaeche zeigt das an.
 
 identities:
   # -- Menschen an der Oberflaeche ---------------------------------------

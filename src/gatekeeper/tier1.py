@@ -141,7 +141,18 @@ def _str_tuple(value: Any, where: str) -> tuple[str, ...]:
 
 
 def load_tier1(path: str) -> Tier1:
-    """Laedt und validiert `toolkits.yaml`. Fehler hier brechen den Start ab."""
+    """Laedt und validiert `toolkits.yaml`. Fehler hier brechen den Start ab.
+
+    Anders als der Katalog hat Ebene 1 keinen sinnvollen Leerzustand: sie ist
+    die Grenze, innerhalb derer alles andere stattfindet. Fehlt sie, ist nicht
+    entschieden, was erlaubt waere -- und Raten waere hier der falsche Reflex.
+    """
+    if not os.path.exists(path):
+        raise ConfigError(
+            f"{path} not found. Tier 1 defines what is possible at all and has "
+            "no safe default -- create it before starting. A starting point "
+            "sits in config/examples/toolkits.yaml, or run 'gatekeeper init'."
+        )
     with open(path, encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
 

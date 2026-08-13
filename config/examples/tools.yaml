@@ -1,8 +1,13 @@
-# Seed-Katalog (REQUIREMENTS.md §7).
+# BEISPIEL - gatekeeper startet mit einem leeren Katalog.
 #
-# In Stufe 1 ist der Katalog statisch. Ab Stufe 3 uebernimmt die Admin-API -
-# das Definitionsmodell hier bleibt dabei unveraendert, es aendert sich nur,
-# wer schreibt.
+# Diese Datei ist ein Vorrat zum Abschauen, keine Voreinstellung. Tools legt
+# man in der Oberflaeche an; wer lieber mit etwas Fertigem beginnt, kopiert
+# einzelne Eintraege von hier nach tools.yaml oder in den Editor.
+#
+# Sie setzt das Toolkit-Beispiel nebenan voraus: den 'docker'- und den
+# 'diag'-Eintrag aus examples/toolkits.yaml, insbesondere die Pfad-Wurzel
+# /mnt/raid. Ohne die passende Ebene 1 werden die Definitionen abgelehnt -
+# was der Sinn der Sache ist.
 #
 # Grundregel fuer jede Definition: argv ist eine LISTE. Jedes Element wird zu
 # genau einem Argument aufgeloest. Ein Parameterwert kann strukturell kein
