@@ -54,7 +54,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # der drei Dateien existiert -- siehe `_bootstrap_on_first_start`.
     if not (args.no_bootstrap or os.environ.get("GATEKEEPER_NO_BOOTSTRAP", "")
             in ("1", "true", "yes")):
-        _bootstrap_on_first_start(_config_dir(), _state_dir())
+        problem = _bootstrap_on_first_start(_config_dir(), _state_dir())
+        if problem:
+            # Nicht weiterlaufen lassen: der Loader wuerde gleich darauf
+            # "not found" melden und damit die falsche Ursache nennen.
+            print(problem, file=sys.stderr)
+            return 2
 
     try:
         tier1 = load_tier1(_config_path("toolkits.yaml", args.toolkits))
@@ -258,7 +263,15 @@ def bootstrap(config_dir: str, state_dir: str, audit_dir: str | None = None) -> 
     return token
 
 
-def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> None:
+def _whoami() -> str:
+    """uid:gid des laufenden Prozesses, fuer eine brauchbare chown-Empfehlung."""
+    try:
+        return f"{os.getuid()}:{os.getgid()}"  # type: ignore[attr-defined]
+    except AttributeError:
+        return "the container user"
+
+
+def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> str | None:
     """Erststart: fehlt alles, wird alles angelegt. Fehlt etwas, nicht.
 
     Damit genuegt es, ein Verzeichnis zu mounten und den Container zu starten.
@@ -269,20 +282,28 @@ def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> None:
     Mount etwa. Dann eine frische Konfiguration mit neuem Administrator
     darueberzulegen wuerde den Fehler verdecken und saehe aus, als sei der
     Katalog verschwunden. Lieber laut scheitern.
+
+    Gibt `None` zurueck, wenn nichts zu tun war oder es geklappt hat, sonst
+    eine Meldung fuer Menschen. Geschrieben wird auf Verdacht statt vorher mit
+    `os.access` zu fragen: die Vorabfrage kann irren, und vor allem war ihr
+    stiller Ausstieg die schlechtere Diagnose -- der Loader meldete danach
+    "not found", obwohl das Verzeichnis da war und nur niemandem gehoerte.
     """
     paths = _paths(config_dir, state_dir)
-    present = [p for p in paths.values() if os.path.exists(p)]
-    if present:
-        return
+    if any(os.path.exists(p) for p in paths.values()):
+        return None
 
-    for directory in (config_dir, state_dir):
-        parent = directory if os.path.isdir(directory) else os.path.dirname(directory)
-        if not os.access(parent or ".", os.W_OK):
-            # Nicht anlegen koennen ist ein Mount-Problem. Die Meldung der
-            # Loader ist dafuer die richtige, nicht eine halbe Datei.
-            return
-
-    token = bootstrap(config_dir, state_dir)
+    try:
+        token = bootstrap(config_dir, state_dir)
+    except OSError as exc:
+        return (
+            f"Cannot create the configuration in {config_dir}: {exc}\n"
+            f"This process runs as {_whoami()}. Docker creates a missing "
+            "bind-mount source as root, which that user cannot write to.\n"
+            "On the host, give the directory to the container user, then "
+            "start again:\n"
+            f"  chown -R {_whoami()} <the directory mounted at {config_dir}>"
+        )
     logger.warning(
         "First start: created an empty configuration in %s. No toolkits, no "
         "tools, no agents -- gatekeeper can do nothing until you say what it "
@@ -297,6 +318,7 @@ def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> None:
         "/ui, then rotate it there so it no longer lives in this log.",
         token,
     )
+    return None
 
 
 def cmd_init(args: argparse.Namespace) -> int:

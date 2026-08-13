@@ -490,6 +490,26 @@ def test_first_start_creates_everything_from_an_empty_directory(tmp_path):
     assert [i.role for i in identities.identities.values()] == ["admin"]
 
 
+def test_unwritable_directory_names_the_real_cause(tmp_path, monkeypatch):
+    """Der Fall, der im Betrieb wirklich auftrat.
+
+    Docker legt eine fehlende Bind-Mount-Quelle als root an; der Container
+    laeuft als 568 und darf nicht hinein. Vorher stieg der Erststart hier
+    still aus, und der Loader meldete danach 'not found' -- die falsche
+    Ursache, denn das Verzeichnis war da. Es gehoerte nur niemandem.
+    """
+    from gatekeeper import __main__ as cli
+
+    monkeypatch.setattr(
+        cli, "bootstrap", mock.Mock(side_effect=PermissionError(13, "Permission denied"))
+    )
+    message = cli._bootstrap_on_first_start(str(tmp_path), str(tmp_path))
+    assert message is not None
+    assert "Cannot create the configuration" in message
+    assert "chown" in message
+    assert "root" in message
+
+
 def test_first_start_does_not_touch_a_partial_configuration(tmp_path):
     """Der wichtige Fall: liegt schon etwas da, wird nichts angelegt.
 
