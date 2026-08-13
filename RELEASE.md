@@ -61,6 +61,23 @@ Digest nicht. Er steht in jedem Release.
 
 ---
 
+## 0.2.3
+
+Ein nicht beschreibbares Audit-Verzeichnis brach den Start bisher mit einem
+rohen `OSError` ab. Jetzt kommt dieselbe Behandlung wie beim
+Konfigurationsverzeichnis: Ursache, laufender Benutzer und der Befehl, der es
+richtet.
+
+Gestartet wird ohne Audit-Log weiterhin nicht. Ein Dienst, der
+Host-Operationen vermittelt und dabei nicht mitschreiben kann, ist schlimmer
+als keiner — die Aufrufe finden statt, nur weiß hinterher niemand, welche.
+
+Betrifft vor allem Installationen, deren `audit.dir` in ein eigenes Volume
+zeigt: das gehört Docker beim Anlegen root, und der unprivilegierte Benutzer
+kommt nicht hinein.
+
+---
+
 ## 0.2.2
 
 Behebt, dass der Erststart aus 0.2.0/0.2.1 stillschweigend nichts tat, wenn das
