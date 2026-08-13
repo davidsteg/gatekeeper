@@ -61,7 +61,29 @@ Digest nicht. Er steht in jedem Release.
 
 ---
 
-## 0.2.1
+## 0.2.2
+
+Behebt, dass der Erststart aus 0.2.0/0.2.1 stillschweigend nichts tat, wenn das
+gemountete Verzeichnis dem Container nicht gehört — und der Server danach
+`toolkits.yaml not found` meldete, obwohl das Verzeichnis vorhanden war.
+
+Ursache war eine Vorabprüfung mit `os.access`: fehlte das Schreibrecht, stieg
+der Erststart aus, ohne etwas zu sagen. Die Meldung des Loaders nannte danach
+die falsche Ursache. Jetzt wird geschrieben und der Fehlerfall ausgewertet:
+
+```
+Cannot create the configuration in /etc/gatekeeper: [Errno 13] Permission denied
+This process runs as 568:568. Docker creates a missing bind-mount source as
+root, which that user cannot write to.
+On the host, give the directory to the container user, then start again:
+  chown -R 568:568 <the directory mounted at /etc/gatekeeper>
+```
+
+**Wer das trifft:** Docker legt eine fehlende Bind-Mount-Quelle als `root` an.
+Existiert `./gatekeeper/config` auf dem Host nicht, gehört es danach root, und
+der unprivilegierte Benutzer im Container kommt nicht hinein. Ein Container
+ohne `CAP_CHOWN` kann das nicht selbst richten — die Meldung nennt deshalb den
+einen Befehl, der es tut.
 
 `latest` folgt jetzt ausnahmslos dem neuesten Bau, nicht nur dem neuesten
 Release. Da nach der Regel oben ohnehin jede Änderung ein Release ist, fallen
