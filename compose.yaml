@@ -44,17 +44,21 @@ services:
       # es heisst: ein Fehler in gatekeeper ist ein Root-Fehler.
       - /var/run/docker.sock:/var/run/docker.sock
 
-      # Ebene 2 beschreibbar: tools.yaml und identities.yaml aendert die
-      # Admin-Oberflaeche zur Laufzeit.
+      # Konfiguration und Zustand in EINEM beschreibbaren Verzeichnis:
+      # toolkits.yaml (Ebene 1), tools.yaml und identities.yaml (Ebene 2).
+      #
+      # Bewusst KEIN Einzeldatei-Mount fuer toolkits.yaml. Docker legt ein
+      # Verzeichnis an, wenn die gemountete Datei auf dem Host nicht existiert
+      # - bei einer Erstinstallation also immer. Der Container startet dann in
+      # einer Schleife mit "Is a directory", und auf dem Host bleibt ein
+      # Ordner namens toolkits.yaml zurueck. Ein Verzeichnis-Mount kennt das
+      # Problem nicht.
+      #
+      # Ebene 1 ist hier durch Code geschuetzt, nicht durch den Mount: es gibt
+      # keine Funktion und keine Route, die toolkits.yaml schreibt (FR-4.11),
+      # und ein Test haelt das fest. Wer den Mount zusaetzlich als Riegel will,
+      # trennt die Verzeichnisse - siehe unten.
       - /mnt/raid/gatekeeper/config:/etc/gatekeeper
-
-      # Ebene 1 read-only -- dieser Mount ueberdeckt die Datei aus dem
-      # Verzeichnis darueber. Binary-Allowlist, gesperrte Argumente,
-      # Pfad-Wurzeln und geschuetzte Ressourcen duerfen zur Laufzeit von
-      # niemandem veraendert werden, auch nicht vom eigenen Prozess (FR-4.11).
-      # Das ist der Grund, warum ein Admin per Formular gefahrlos Tools
-      # anlegen darf: er kann sich nur innerhalb dieser Grenzen bewegen.
-      - /mnt/raid/gatekeeper/config/toolkits.yaml:/etc/gatekeeper/toolkits.yaml:ro
 
       # Compose-Dateien der verwalteten Stacks. Die Pfad-Wurzel aus
       # toolkits.yaml muss hierauf passen.
@@ -67,6 +71,17 @@ services:
       GATEKEEPER_CONFIG_DIR: /etc/gatekeeper
       GATEKEEPER_PORT: "8080"
       GATEKEEPER_LOG_LEVEL: INFO
+
+      # Optionale Haertung: Ebene 1 und Ebene 2 in getrennte Verzeichnisse.
+      # Dann kann der Konfigurations-Mount :ro sein, waehrend die Oberflaeche
+      # weiterhin schreibt. Beides sind Verzeichnisse -- die Docker-Falle von
+      # oben tritt dabei nicht auf.
+      #
+      #   GATEKEEPER_STATE_DIR: /var/lib/gatekeeper
+      #
+      # volumes:
+      #   - /mnt/raid/gatekeeper/config:/etc/gatekeeper:ro      # toolkits.yaml
+      #   - /mnt/raid/gatekeeper/state:/var/lib/gatekeeper      # tools + identities
 
     healthcheck:
       test:

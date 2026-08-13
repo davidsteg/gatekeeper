@@ -22,10 +22,26 @@ from .ui import has_ui_identity
 logger = logging.getLogger("gatekeeper")
 
 
+def _config_dir() -> str:
+    """Ebene 1. Darf read-only gemountet sein."""
+    return os.environ.get("GATEKEEPER_CONFIG_DIR", "/etc/gatekeeper")
+
+
+def _state_dir() -> str:
+    """Ebene 2. Muss beschreibbar sein, wenn die Oberflaeche schreiben soll.
+
+    Faellt ohne gesetzte Variable auf das Konfigurationsverzeichnis zurueck --
+    dann liegt alles in einem Mount, was fuer einfache Installationen genuegt.
+    Die mitgelieferte compose.yaml trennt beides, damit Ebene 1 tatsaechlich
+    read-only sein kann.
+    """
+    return os.environ.get("GATEKEEPER_STATE_DIR") or _config_dir()
+
+
 def _config_path(name: str, args_value: str | None) -> str:
     if args_value:
         return args_value
-    base = os.environ.get("GATEKEEPER_CONFIG_DIR", "/etc/gatekeeper")
+    base = _state_dir() if name in ("tools.yaml", "identities.yaml") else _config_dir()
     return os.path.join(base, name)
 
 
@@ -200,9 +216,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     koennen -- jede Faehigkeit ist danach eine bewusste Entscheidung, die im
     Audit-Log steht.
     """
-    base = args.config_dir or os.environ.get("GATEKEEPER_CONFIG_DIR", "/etc/gatekeeper")
-    paths = {name: os.path.join(base, f"{name}.yaml") for name in
-             ("toolkits", "tools", "identities")}
+    base = args.config_dir or _config_dir()
+    state = args.state_dir or (_state_dir() if not args.config_dir else base)
+    paths = {
+        "toolkits": os.path.join(base, "toolkits.yaml"),
+        "tools": os.path.join(state, "tools.yaml"),
+        "identities": os.path.join(state, "identities.yaml"),
+    }
 
     existing = [p for p in paths.values() if os.path.exists(p)]
     if existing and not args.force:
@@ -214,14 +234,15 @@ def cmd_init(args: argparse.Namespace) -> int:
         )
         return 1
 
-    try:
-        os.makedirs(base, exist_ok=True)
-    except OSError as exc:
-        print(f"Cannot create {base}: {exc}", file=sys.stderr)
-        return 2
+    for directory in {base, state}:
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except OSError as exc:
+            print(f"Cannot create {directory}: {exc}", file=sys.stderr)
+            return 2
 
     token = generate_token()
-    audit_dir = args.audit_dir or os.path.join(base, "logs")
+    audit_dir = args.audit_dir or os.path.join(state, "logs")
     files = {
         paths["toolkits"]: _INIT_TOOLKITS.format(audit_dir=audit_dir),
         paths["tools"]: _INIT_TOOLS,
@@ -243,9 +264,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
 
-    print(f"Created in {base}:")
+    print("Created:")
     for name in ("toolkits", "tools", "identities"):
-        print(f"  {name}.yaml")
+        print(f"  {paths[name]}")
     print(
         "\nNo tools, no agents. Start with --ui and create what you need;\n"
         "every capability from here on is a deliberate, audited decision."
@@ -301,8 +322,15 @@ def main() -> int:
     init = sub.add_parser(
         "init", help="Create an empty, runnable configuration and one administrator"
     )
-    init.add_argument("--config-dir", help="Target directory (default: GATEKEEPER_CONFIG_DIR)")
-    init.add_argument("--audit-dir", help="Where the audit log goes (default: <config-dir>/logs)")
+    init.add_argument(
+        "--config-dir", help="Where toolkits.yaml goes (default: GATEKEEPER_CONFIG_DIR)"
+    )
+    init.add_argument(
+        "--state-dir",
+        help="Where tools.yaml and identities.yaml go, must be writable "
+        "(default: GATEKEEPER_STATE_DIR, else the config directory)",
+    )
+    init.add_argument("--audit-dir", help="Where the audit log goes (default: <state-dir>/logs)")
     init.add_argument(
         "--force", action="store_true", help="Overwrite existing files"
     )

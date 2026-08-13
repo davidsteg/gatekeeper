@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from .errors import ConfigError
+from .errors import ConfigError, read_config_file
 
 #: scrypt-Parameter. n=2**15 kostet rund 32 MB und ~50 ms -- fuer eine
 #: Handvoll Tokens pro Sekunde reichlich, fuer Brute-Force teuer genug.
@@ -136,8 +136,9 @@ def load_identities(path: str) -> IdentityStore:
             f"{path} not found. Without identities nobody can authenticate -- "
             "run 'gatekeeper init' to create one administrator."
         )
-    with open(path, encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
+    raw = yaml.safe_load(
+        read_config_file(path, "Run 'gatekeeper init' to create one.")
+    ) or {}
 
     entries = raw.get("identities")
     if not isinstance(entries, list) or not entries:
