@@ -40,8 +40,11 @@ Ein Push ohne neue Version baut nur `<version>-dev` und veröffentlicht nichts.
 Das ist der Weg für Zwischenstände und für Änderungen, die nichts am Verhalten
 ändern — er ist die Ausnahme, nicht der Normalfall.
 
-`latest` zeigt ausschließlich auf Releases, nie auf einen Zwischenstand und nie
-auf eine Vorabversion.
+`latest` zeigt immer auf den neuesten Bau. Da nach der Regel oben jede Änderung
+ein Release ist, ist das in aller Regel auch das neueste Release. Für den
+**Betrieb** bleibt trotzdem eine feste Version richtig (NFR-5): `latest` bewegt
+sich, und ein Redeploy zöge sonst eine andere Fassung, ohne dass jemand es
+entschieden hätte.
 
 ## Versionierung
 
@@ -55,6 +58,21 @@ auf eine Vorabversion.
 
 **Nach dem Deploy den Digest pinnen.** Ein Tag lässt sich überschreiben, ein
 Digest nicht. Er steht in jedem Release.
+
+---
+
+## 0.2.1
+
+`latest` folgt jetzt ausnahmslos dem neuesten Bau, nicht nur dem neuesten
+Release. Da nach der Regel oben ohnehin jede Änderung ein Release ist, fallen
+beide fast immer zusammen; der Unterschied betraf nur Pushes ohne
+Versionsanhebung, die nun ebenfalls `latest` bewegen.
+
+Der Smoke-Test des Images greift dafür gezielt auf `latest` zu, statt sich auf
+die Reihenfolge der erzeugten Tags zu verlassen.
+
+Für den Betrieb bleibt die Empfehlung unverändert: feste Version oder Digest
+pinnen. `latest` ist zum Ausprobieren da, nicht zum Betreiben.
 
 ---
 
