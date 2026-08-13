@@ -35,17 +35,30 @@ jobs:
         # werden -- allen voran der Symlink-Ausbruch aus dem Negativkorpus.
         run: pytest -q
 
-      - name: Validate the shipped configuration
-        # Prueft toolkits.yaml und tools.yaml streng gegen Ebene 1 und uebt
-        # zugleich CLI und Token-Erzeugung. Ein Tippfehler in der
-        # ausgelieferten Konfiguration faellt hier auf, nicht auf dem Host.
+      - name: Validate the empty state
+        # Der Weg, den jede Erstinstallation nimmt. Er muss zu einer Lage
+        # fuehren, die laedt -- ohne dass irgendetwas vorkonfiguriert waere.
+        run: |
+          gatekeeper init --config-dir /tmp/blank | tee /tmp/init.log
+          grep -q 'toolkits: {}' /tmp/blank/toolkits.yaml
+          grep -q 'tools: \[\]' /tmp/blank/tools.yaml
+          gatekeeper \
+            --toolkits /tmp/blank/toolkits.yaml \
+            --tools /tmp/blank/tools.yaml \
+            --identities /tmp/blank/identities.yaml \
+            check | tee /tmp/check.log
+          grep -q '0 toolkits, 0 tools, 1 identities' /tmp/check.log
+
+      - name: Validate the examples
+        # Die Beispiele sind das, wovon jemand abschreibt. Ein Tippfehler darin
+        # faellt sonst erst auf einem fremden Host auf.
         run: |
           hash=$(gatekeeper token | grep -oE 'scrypt\$[^[:space:]]+')
           printf 'identities:\n  - id: ci\n    role: admin\n    token_hash: "%s"\n    tools: []\n    scopes: []\n' \
             "$hash" > /tmp/identities.yaml
           gatekeeper \
-            --toolkits config/toolkits.yaml \
-            --tools config/tools.yaml \
+            --toolkits config/examples/toolkits.yaml \
+            --tools config/examples/tools.yaml \
             --identities /tmp/identities.yaml \
             check
 
@@ -158,10 +171,10 @@ jobs:
           docker run --rm "$tag" --help > /dev/null
           docker run --rm --entrypoint docker "$tag" compose version
 
-          mkdir -p /tmp/gk && cp config/toolkits.yaml config/tools.yaml /tmp/gk/
-          hash=$(docker run --rm "$tag" token | grep -oE 'scrypt\$[^[:space:]]+')
-          printf 'identities:\n  - id: ci\n    role: admin\n    token_hash: "%s"\n    tools: []\n    scopes: []\n' \
-            "$hash" > /tmp/gk/identities.yaml
+          # Erstinstallation im Container nachstellen: 'init' schreibt den
+          # Leerzustand, 'check' liest ihn zurueck. Beides unprivilegiert.
+          mkdir -p /tmp/gk && chmod 777 /tmp/gk
+          docker run --rm --user 568:568 -v /tmp/gk:/etc/gatekeeper "$tag" init
           docker run --rm --user 568:568 -v /tmp/gk:/etc/gatekeeper:ro "$tag" check
 
   release:
