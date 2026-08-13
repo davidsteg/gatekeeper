@@ -470,3 +470,56 @@ def test_state_dir_separates_the_two_tiers(tmp_path, monkeypatch):
     # Ohne STATE_DIR liegt alles beisammen -- ein Mount genuegt.
     monkeypatch.delenv("GATEKEEPER_STATE_DIR")
     assert _config_path("tools.yaml", None).startswith(str(tmp_path / "conf"))
+
+
+# -- Erststart -------------------------------------------------------------
+
+
+def test_first_start_creates_everything_from_an_empty_directory(tmp_path):
+    """Ordner mounten, starten -- mehr soll es nicht brauchen."""
+    from gatekeeper.__main__ import _bootstrap_on_first_start
+
+    empty = tmp_path / "config"
+    empty.mkdir()
+    _bootstrap_on_first_start(str(empty), str(empty))
+
+    tier1 = load_tier1(str(empty / "toolkits.yaml"))
+    identities = load_identities(str(empty / "identities.yaml"))
+    assert tier1.toolkits == {}
+    assert load_catalog(str(empty / "tools.yaml"), tier1).tools == {}
+    assert [i.role for i in identities.identities.values()] == ["admin"]
+
+
+def test_first_start_does_not_touch_a_partial_configuration(tmp_path):
+    """Der wichtige Fall: liegt schon etwas da, wird nichts angelegt.
+
+    Ein verrutschter Mount sieht sonst aus wie eine Erstinstallation. Eine
+    frische Konfiguration darueberzulegen wuerde den Fehler verdecken und den
+    Eindruck erwecken, der Katalog sei verschwunden -- mitsamt neuem
+    Administrator-Token, das niemand angefordert hat.
+    """
+    from gatekeeper.__main__ import _bootstrap_on_first_start
+
+    partial = tmp_path / "config"
+    partial.mkdir()
+    (partial / "toolkits.yaml").write_text("toolkits: {}\n", encoding="utf-8")
+
+    _bootstrap_on_first_start(str(partial), str(partial))
+
+    assert not (partial / "identities.yaml").exists()
+    assert not (partial / "tools.yaml").exists()
+    assert (partial / "toolkits.yaml").read_text(encoding="utf-8") == "toolkits: {}\n"
+
+
+def test_first_start_leaves_a_complete_configuration_alone(tmp_path):
+    from gatekeeper.__main__ import _bootstrap_on_first_start, bootstrap
+
+    directory = tmp_path / "config"
+    directory.mkdir()
+    token = bootstrap(str(directory), str(directory))
+    before = (directory / "identities.yaml").read_text(encoding="utf-8")
+
+    _bootstrap_on_first_start(str(directory), str(directory))
+
+    assert (directory / "identities.yaml").read_text(encoding="utf-8") == before
+    assert load_identities(str(directory / "identities.yaml")).authenticate(token)

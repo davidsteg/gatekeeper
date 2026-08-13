@@ -50,6 +50,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
         level=os.environ.get("GATEKEEPER_LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # Erststart: ein gemountetes, leeres Verzeichnis genuegt. Nur wenn keine
+    # der drei Dateien existiert -- siehe `_bootstrap_on_first_start`.
+    if not (args.no_bootstrap or os.environ.get("GATEKEEPER_NO_BOOTSTRAP", "")
+            in ("1", "true", "yes")):
+        _bootstrap_on_first_start(_config_dir(), _state_dir())
+
     try:
         tier1 = load_tier1(_config_path("toolkits.yaml", args.toolkits))
         catalog = load_catalog(
@@ -208,43 +214,29 @@ tools: []
 """
 
 
-def cmd_init(args: argparse.Namespace) -> int:
-    """Legt einen lauffaehigen Leerzustand an: keine Tools, ein Administrator.
-
-    gatekeeper liefert bewusst keinen Katalog mit. Ein Werkzeug, das
-    root-aequivalenten Zugriff vermittelt, soll nach der Installation nichts
-    koennen -- jede Faehigkeit ist danach eine bewusste Entscheidung, die im
-    Audit-Log steht.
-    """
-    base = args.config_dir or _config_dir()
-    state = args.state_dir or (_state_dir() if not args.config_dir else base)
-    paths = {
-        "toolkits": os.path.join(base, "toolkits.yaml"),
-        "tools": os.path.join(state, "tools.yaml"),
-        "identities": os.path.join(state, "identities.yaml"),
+def _paths(config_dir: str, state_dir: str) -> dict[str, str]:
+    return {
+        "toolkits": os.path.join(config_dir, "toolkits.yaml"),
+        "tools": os.path.join(state_dir, "tools.yaml"),
+        "identities": os.path.join(state_dir, "identities.yaml"),
     }
 
-    existing = [p for p in paths.values() if os.path.exists(p)]
-    if existing and not args.force:
-        print(
-            "Refusing to overwrite:\n  " + "\n  ".join(existing)
-            + "\nPass --force to replace them. Note that this discards the "
-            "current catalog and every identity, including their tokens.",
-            file=sys.stderr,
-        )
-        return 1
 
-    for directory in {base, state}:
-        try:
-            os.makedirs(directory, exist_ok=True)
-        except OSError as exc:
-            print(f"Cannot create {directory}: {exc}", file=sys.stderr)
-            return 2
+def bootstrap(config_dir: str, state_dir: str, audit_dir: str | None = None) -> str:
+    """Schreibt den Leerzustand und gibt den Klartext-Token zurueck.
 
+    Gemeinsamer Kern von `init` und dem Erststart. Es gibt bewusst nur eine
+    Fassung: zwei Wege, die eine Anfangskonfiguration erzeugen, laufen sonst
+    irgendwann auseinander -- und der seltener benutzte ist dann der kaputte.
+    """
+    for directory in {config_dir, state_dir}:
+        os.makedirs(directory, exist_ok=True)
+
+    paths = _paths(config_dir, state_dir)
     token = generate_token()
-    audit_dir = args.audit_dir or os.path.join(state, "logs")
+    audit = audit_dir or os.path.join(state_dir, "logs")
     files = {
-        paths["toolkits"]: _INIT_TOOLKITS.format(audit_dir=audit_dir),
+        paths["toolkits"]: _INIT_TOOLKITS.format(audit_dir=audit),
         paths["tools"]: _INIT_TOOLS,
         paths["identities"]: (
             "# Identitaeten und Rechte (REQUIREMENTS.md §4 und §9).\n"
@@ -263,6 +255,77 @@ def cmd_init(args: argparse.Namespace) -> int:
     for path, content in files.items():
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
+    return token
+
+
+def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> None:
+    """Erststart: fehlt alles, wird alles angelegt. Fehlt etwas, nicht.
+
+    Damit genuegt es, ein Verzeichnis zu mounten und den Container zu starten.
+
+    Die Bedingung ist eng gefasst, und das ist der Punkt: angelegt wird nur,
+    wenn *keine* der drei Dateien existiert. Waere schon eine da, spraeche das
+    fuer eine bestehende Installation mit einem Problem -- ein verrutschter
+    Mount etwa. Dann eine frische Konfiguration mit neuem Administrator
+    darueberzulegen wuerde den Fehler verdecken und saehe aus, als sei der
+    Katalog verschwunden. Lieber laut scheitern.
+    """
+    paths = _paths(config_dir, state_dir)
+    present = [p for p in paths.values() if os.path.exists(p)]
+    if present:
+        return
+
+    for directory in (config_dir, state_dir):
+        parent = directory if os.path.isdir(directory) else os.path.dirname(directory)
+        if not os.access(parent or ".", os.W_OK):
+            # Nicht anlegen koennen ist ein Mount-Problem. Die Meldung der
+            # Loader ist dafuer die richtige, nicht eine halbe Datei.
+            return
+
+    token = bootstrap(config_dir, state_dir)
+    logger.warning(
+        "First start: created an empty configuration in %s. No toolkits, no "
+        "tools, no agents -- gatekeeper can do nothing until you say what it "
+        "may do.",
+        config_dir,
+    )
+    # Der Token steht damit im Containerlog. Das ist der Preis dafuer, dass ein
+    # Erststart ohne zweiten Befehl auskommt; wer das nicht will, nutzt
+    # `gatekeeper init` und GATEKEEPER_NO_BOOTSTRAP=1.
+    logger.warning(
+        "Administrator token (shown once, and only here): %s -- sign in at "
+        "/ui, then rotate it there so it no longer lives in this log.",
+        token,
+    )
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Legt einen lauffaehigen Leerzustand an: keine Tools, ein Administrator.
+
+    gatekeeper liefert bewusst keinen Katalog mit. Ein Werkzeug, das
+    root-aequivalenten Zugriff vermittelt, soll nach der Installation nichts
+    koennen -- jede Faehigkeit ist danach eine bewusste Entscheidung, die im
+    Audit-Log steht.
+    """
+    base = args.config_dir or _config_dir()
+    state = args.state_dir or (_state_dir() if not args.config_dir else base)
+    paths = _paths(base, state)
+
+    existing = [p for p in paths.values() if os.path.exists(p)]
+    if existing and not args.force:
+        print(
+            "Refusing to overwrite:\n  " + "\n  ".join(existing)
+            + "\nPass --force to replace them. Note that this discards the "
+            "current catalog and every identity, including their tokens.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        token = bootstrap(base, state, args.audit_dir)
+    except OSError as exc:
+        print(f"Cannot write the configuration: {exc}", file=sys.stderr)
+        return 2
 
     print("Created:")
     for name in ("toolkits", "tools", "identities"):
@@ -313,6 +376,11 @@ def main() -> int:
         "--ui-read-only",
         action="store_true",
         help="Serve the console without any write functions, whatever the roles say",
+    )
+    serve.add_argument(
+        "--no-bootstrap",
+        action="store_true",
+        help="Never create configuration on start; fail if it is missing",
     )
     serve.set_defaults(func=cmd_serve)
 
