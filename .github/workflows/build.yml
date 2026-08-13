@@ -152,18 +152,21 @@ jobs:
           # Nur Versionen, keine Zweig- oder Commit-Namen: ein Tag wie
           # 'sha-c8598dc' sagt nicht, was drin ist.
           #
-          # Ist die Version neu, entstehen '1.2.3', '1.2' und 'latest'. Ist sie
-          # schon veroeffentlicht, gibt es nur '1.2.3-dev' -- erkennbar
-          # unfertig und trotzdem eine Version.
+          # Ist die Version neu, entstehen '1.2.3' und '1.2'. Ist sie schon
+          # veroeffentlicht, gibt es '1.2.3-dev' -- erkennbar unfertig und
+          # trotzdem eine Version.
           #
-          # 'latest' zeigt ausschliesslich auf ein Release, nie auf einen
-          # Zwischenstand und nie auf eine Vorabversion. Fuer den Betrieb
-          # bleibt eine feste Version richtig (NFR-5).
+          # 'latest' zeigt immer auf den neuesten Bau, ohne Ausnahme. Da nach
+          # der Regel in RELEASE.md jede Aenderung ein Release ist, ist das in
+          # aller Regel auch das neueste Release; ein '-dev' dazwischen ist der
+          # Ausnahmefall. Fuer den Betrieb bleibt eine feste Version richtig
+          # (NFR-5) -- 'latest' bewegt sich, und ein Redeploy zieht dann eine
+          # andere Fassung, ohne dass jemand es entschieden haette.
           tags: |
             type=raw,value=${{ env.VERSION }},enable=${{ env.RELEASING == 'true' }}
             type=raw,value=${{ needs.test.outputs.series }},enable=${{ env.RELEASING == 'true' }}
-            type=raw,value=latest,enable=${{ env.RELEASING == 'true' && !contains(env.VERSION, '-') }}
             type=raw,value=${{ env.VERSION }}-dev,enable=${{ env.RELEASING != 'true' }}
+            type=raw,value=latest
 
       - name: Build and push
         id: build
@@ -182,7 +185,9 @@ jobs:
         # Leerzustand, 'check' liest ihn zurueck. Beides unprivilegiert.
         if: github.event_name != 'pull_request'
         run: |
-          tag=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          # Gezielt 'latest': es zeigt nach jedem Push auf genau diesen Bau,
+          # unabhaengig davon, in welcher Reihenfolge die Tags erzeugt wurden.
+          tag="${IMAGE}:latest"
           docker pull "$tag"
           docker run --rm --entrypoint docker "$tag" compose version
           mkdir -p /tmp/gk && chmod 777 /tmp/gk
