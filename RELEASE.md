@@ -61,6 +61,24 @@ Digest nicht. Er steht in jedem Release.
 
 ---
 
+## 0.2.5
+
+**Zwei neue Diagramme auf der Übersichtsseite.** Die Aufruf-Pipeline zeigt
+die 8 Schichten, die jeder Request durchläuft; die Tool-Matrix listet jedes
+Tool mit Status, Kategorie, Idempotenz und den berechtigten Identitäten.
+
+### Added
+
+- **Aufruf-Pipeline** (`_call_flow_pipeline`): horizontales SVG mit den
+  8 Schichten MCP → Auth → Authorize → Registry → Validate → argv-build →
+  Executor → Audit. Jede Schicht mit Namen und Kurzbeschreibung.
+- **Tool-Matrix** (`_tool_matrix`): jedes Tool als Tabellenzeile mit
+  Status-Pill (enabled/disabled), Kategorie (read/write/write_external),
+  Idempotenz (yes/no) und einer Spalte pro Identität, die anzeigt, wer
+  das Tool aufrufen darf.
+
+---
+
 ## 0.2.4
 
 **SIGHUP lädt die Konfiguration neu.** `kill -HUP <pid>` oder
