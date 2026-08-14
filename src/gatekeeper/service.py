@@ -14,11 +14,11 @@ from typing import Any
 
 from . import execute, validate
 from .audit import AuditLog
-from .catalog import Catalog, ToolDef
+from .catalog import Catalog, ToolDef, load_catalog
 from .errors import Denied, DenialReason
-from .identity import Identity
+from .identity import Identity, load_identities
 from .ratelimit import RateLimiter
-from .tier1 import Tier1
+from .tier1 import Tier1, load_tier1
 
 
 @dataclasses.dataclass(slots=True)
@@ -231,3 +231,56 @@ class Service:
                 f'gatekeeper_executor_ready{{executor="{executor}"}} {1 if ready else 0}'
             )
         return "\n".join(lines) + "\n"
+
+    # -- Reload -------------------------------------------------------------
+
+    def reload_config(
+        self,
+        *,
+        toolkits_path: str,
+        tools_path: str,
+        identities_path: str,
+    ) -> str | None:
+        """Lädt alle drei Konfigurationsdateien neu. Gibt None bei Erfolg,
+        sonst eine Fehlermeldung. Der alte Zustand bleibt bei Fehlern erhalten.
+
+        Nur Ebene 1 (toolkits.yaml) braucht das: Ebene 2 (tools.yaml,
+        identities.yaml) lädt die Oberfläche beim Schreiben selbst nach.
+        Aber ein SIGHUP soll alles auf einmal neu laden, damit ein
+        handeditierter Stand ohne Neustart wirksam wird.
+        """
+        import logging
+        logger = logging.getLogger("gatekeeper")
+
+        # Alles laden, bevor irgendetwas ausgetauscht wird. Schlägt eine Datei
+        # fehl, bleibt der alte Zustand unangetastet.
+        try:
+            tier1 = load_tier1(toolkits_path)
+        except Exception as exc:
+            return f"toolkits.yaml: {exc}"
+
+        try:
+            catalog = load_catalog(tools_path, tier1)
+        except Exception as exc:
+            return f"tools.yaml: {exc}"
+
+        try:
+            identities = load_identities(identities_path)
+        except Exception as exc:
+            return f"identities.yaml: {exc}"
+
+        # Atomar tauschen. Der Limiter wird neu aufgesetzt, damit geänderte
+        # Rate-Limits sofort greifen und alte Fenster nicht mitgeschleppt werden.
+        self.tier1 = tier1
+        self.catalog = catalog
+        self.limiter = RateLimiter(tier1.rate_limits)
+
+        logger.info(
+            "Configuration reloaded: %d toolkits, %d tools, %d identities",
+            len(tier1.toolkits),
+            len(catalog.tools),
+            len(identities.identities),
+        )
+        for violation in catalog.disabled_by_tier1:
+            logger.warning("Definition disabled by Tier 1 violation: %s", violation)
+        return None
