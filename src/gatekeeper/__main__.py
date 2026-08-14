@@ -99,6 +99,24 @@ def cmd_serve(args: argparse.Namespace) -> int:
     )
     log_startup(service, identities)
 
+    # SIGHUP laedt alle drei Konfigurationsdateien neu, ohne den Prozess
+    # neu zu starten. Nur Ebene 1 (toolkits.yaml) braucht das wirklich --
+    # Ebene 2 laedt die Oberflaeche beim Schreiben selbst nach. Aber ein
+    # handeditierter Stand soll ohne Neustart wirksam werden.
+    import signal as _signal
+
+    def _on_sighup(_signum: int, _frame: object) -> None:
+        error = service.reload_config(
+            toolkits_path=_config_path("toolkits.yaml", args.toolkits),
+            tools_path=_config_path("tools.yaml", args.tools),
+            identities_path=_config_path("identities.yaml", args.identities),
+        )
+        if error:
+            logger.error("SIGHUP reload failed: %s", error)
+        # Bei Erfolg hat reload_config selbst geloggt.
+
+    _signal.signal(_signal.SIGHUP, _on_sighup)
+
     ui_enabled = args.ui or os.environ.get("GATEKEEPER_UI", "") in ("1", "true", "yes")
     if ui_enabled and not has_ui_identity(identities):
         # Fail closed: eine Oberflaeche ohne anmeldefaehige Identitaet waere eine

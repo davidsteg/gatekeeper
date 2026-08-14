@@ -61,6 +61,28 @@ Digest nicht. Er steht in jedem Release.
 
 ---
 
+## 0.2.4
+
+**SIGHUP lädt die Konfiguration neu.** `kill -HUP <pid>` oder
+`docker kill -s HUP gatekeeper` lädt alle drei Dateien (`toolkits.yaml`,
+`tools.yaml`, `identities.yaml`) atomar neu — ohne Neustart, ohne
+Verbindungsabbruch.
+
+### Added
+
+- **`Service.reload_config()`** lädt Tier 1, Katalog und Identitäten in
+  einem Durchlauf. Schlägt eine Datei fehl, bleibt der alte Zustand
+  unangetastet.
+- **SIGHUP-Handler** in `cmd_serve`. Bei Erfolg loggt er die neue
+  Anzahl Toolkits/Tools/Identitäten; bei Fehler den Grund.
+
+### Changed
+
+- **Rate-Limiter** wird beim Reload neu aufgesetzt, damit geänderte
+  Limits sofort greifen und alte Fenster nicht mitgeschleppt werden.
+
+---
+
 ## 0.2.3
 
 Ein nicht beschreibbares Audit-Verzeichnis brach den Start bisher mit einem
