@@ -965,6 +965,124 @@ def _feed(records: list[dict[str, Any]], limit: int = 7) -> str:
 
 # -- Views: lesen ----------------------------------------------------------
 
+# -- Aufruf-Pipeline -------------------------------------------------------
+
+
+def _call_flow_pipeline() -> str:
+    """Die 8 Schichten, die jeder Aufruf durchlaeuft -- als horizontales SVG.
+
+    Jede Schicht ist ein Knoten mit Namen und kurzer Erklaerung. Die Pfeile
+    zeigen den Weg vom Agenten bis zur Ausfuehrung. Das Diagramm beantwortet
+    die Frage, die sonst nur der Code beantwortet: in welcher Reihenfolge
+    greifen die Schutzmechanismen, und was tut jede Schicht.
+    """
+    layers = [
+        ("MCP", "JSON-RPC 2.0, tools/list, tools/call"),
+        ("Auth", "Bearer token → identity"),
+        ("Authorize", "May this identity call this tool?"),
+        ("Registry", "Look up the active definition"),
+        ("Validate", "Type, regex, path resolution"),
+        ("argv-build", "Structured args, never a shell"),
+        ("Executor", "docker or local, timeouts, caps"),
+        ("Audit", "JSON Lines, rotation, redaction"),
+    ]
+    n = len(layers)
+    bw, bh, gap = 120.0, 52.0, 10.0
+    arrow = 14.0
+    total_w = n * bw + (n - 1) * (gap + arrow)
+    height = bh + 36.0
+    y = 8.0
+
+    nodes = []
+    edges = []
+    for i, (name, desc) in enumerate(layers):
+        x = i * (bw + gap + arrow)
+        rx = x + bw
+        cy = y + bh / 2
+        nodes.append(
+            f'<rect class="g-box" x="{x:.0f}" y="{y:.0f}" width="{bw:.0f}" '
+            f'height="{bh:.0f}" rx="7"/>'
+            f'<text class="g-t" x="{x + bw / 2:.0f}" y="{y + bh / 2 - 4:.0f}" '
+            f'text-anchor="middle">{_e(name)}</text>'
+            f'<text class="g-s" x="{x + bw / 2:.0f}" y="{y + bh / 2 + 12:.0f}" '
+            f'text-anchor="middle">{_e(desc)}</text>'
+        )
+        if i < n - 1:
+            ax = rx + 2
+            ax2 = ax + arrow
+            edges.append(
+                f'<line x1="{ax:.0f}" y1="{cy:.0f}" x2="{ax2:.0f}" y2="{cy:.0f}" '
+                f'class="g-e"/>'
+                f'<polygon class="g-e" points="{ax2:.0f},{cy - 4:.0f} '
+                f'{ax2 + 4:.0f},{cy:.0f} {ax2:.0f},{cy + 4:.0f}"/>'
+            )
+
+    return (
+        f'<svg class="graph" viewBox="0 0 {total_w:.0f} {height:.0f}" '
+        f'role="img" aria-label="Call flow pipeline">'
+        f'{"".join(edges)}{"".join(nodes)}'
+        "</svg>"
+    )
+
+
+# -- Tool-Matrix -----------------------------------------------------------
+
+
+def _tool_matrix(service: Service, identities: IdentityStore) -> str:
+    """Jedes Tool als Zeile: Status, Kategorie, Idempotenz, wer darf es.
+
+    Die Matrix beantwortet auf einen Blick: welche Tools gibt es, sind sie
+    aktiv, sind sie idempotent, und welche Identitaeten duerfen sie aufrufen.
+    """
+    tools = sorted(service.catalog.tools.values(), key=lambda t: t.id)
+    if not tools:
+        return '<p class="muted">No tools defined yet.</p>'
+
+    idents = sorted(
+        (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
+        key=lambda i: i.id,
+    ) or sorted(identities.identities.values(), key=lambda i: i.id)
+
+    rows = []
+    for tool in tools:
+        status = (
+            '<span class="pill ok">enabled</span>' if tool.enabled
+            else '<span class="pill deny">disabled</span>'
+        )
+        cat_tone = {"read": "", "write": "warn", "write_external": "deny"}
+        category = (
+            f'<span class="pill {cat_tone.get(tool.category, "")}">{_e(tool.category)}</span>'
+        )
+        idem = (
+            '<span class="pill ok">yes</span>' if tool.idempotent
+            else '<span class="pill warn">no</span>'
+        )
+        grants = "".join(
+            '<span class="pill ok">' if tool.id in i.tools else '<span class="pill">-</span>'
+            for i in idents
+        )
+        rows.append(
+            f"<tr>"
+            f'<td><code class="tool-id">{_e(tool.id)}</code></td>'
+            f"<td>{status}</td>"
+            f"<td>{category}</td>"
+            f"<td>{idem}</td>"
+            f'<td class="pills">{grants}</td>'
+            "</tr>"
+        )
+
+    id_cols = "".join(
+        f'<th class="mono" title="{_e(i.id)}">{_e(i.id[:8])}</th>' for i in idents
+    )
+    return (
+        '<div class="wrap"><table>'
+        "<thead><tr>"
+        "<th>Tool</th><th>Status</th><th>Category</th><th>Idempotent</th>"
+        f"<th>{id_cols}</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
 
 def _view_overview(service: Service, identities: IdentityStore, store: ConfigStore | None) -> str:
     ready = service.executor_ready
@@ -1019,6 +1137,14 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
         + "</div>"
     )
 
+    # Aufruf-Pipeline: die 8 Schichten, die jeder Aufruf durchlaeuft.
+    parts.append(
+        '<div class="card">'
+        f'<div class="card-head"><h3>{_icon("layers", 14)}Call flow &ndash; 8 layers every request passes</h3></div>'
+        f'<div class="pad">{_call_flow_pipeline()}</div>'
+        "</div>"
+    )
+
     if ready:
         exec_cells = '<div class="pills">' + "".join(
             f'<span class="pill {"ok" if ok else "deny"}">'
@@ -1052,6 +1178,18 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
         f'<div class="pad">{exec_cells}</div></div>'
         "</div></div>"
     )
+
+    # Tool-Matrix: jedes Tool als Zeile mit Status, Kategorie, Idempotenz
+    # und wer es aufrufen darf. Beantwortet die Frage, die die Zugriffskarte
+    # nur aggregiert zeigt: welches konkrete Tool ist fuer wen freigegeben.
+    if catalog.tools:
+        parts.append(
+            '<div class="card">'
+            f'<div class="card-head"><h3>{_icon("sliders", 14)}Tool matrix &ndash; '
+            f'{len(catalog.tools)} tools</h3></div>'
+            f'<div class="pad">{_tool_matrix(service, identities)}</div>'
+            "</div>"
+        )
 
     parts.append(
         f'<h2>{_icon("lock", 14)}Tier 1 &ndash; immutable at runtime</h2>'
