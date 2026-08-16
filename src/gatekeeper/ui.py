@@ -543,20 +543,31 @@ td.ops form { display: inline; }
 /* -- Zugriffskarte -- */
 .graph { width: 100%; height: auto; display: block; }
 .graph text { font-family: inherit; }
-.g-box { fill: var(--sunken); stroke: var(--line); }
+.g-box { fill: var(--sunken); stroke: var(--line); transition: fill .18s, stroke .18s, stroke-width .18s; }
 .g-box.hub { fill: var(--accent-soft); stroke: var(--accent); }
 .g-box.deny { fill: var(--deny-soft); stroke: var(--deny); }
 .g-box.ok { fill: var(--ok-soft); stroke: var(--ok); }
-.g-t { fill: var(--fg); font-size: 11.5px; font-weight: 600; }
-.g-s { fill: var(--muted); font-size: 9.5px; }
-.g-e { fill: none; stroke: var(--ok); stroke-width: 1.5; opacity: .7; }
-.g-e.deny { stroke: var(--deny); stroke-dasharray: 5 4; opacity: .85; }
-.g-e.none { stroke: var(--line); stroke-dasharray: 2 3; }
-.g-n { fill: var(--muted); font-size: 9px; }
+.g-t { fill: var(--fg); font-size: 11.5px; font-weight: 600; pointer-events: none; }
+.g-s { fill: var(--muted); font-size: 9.5px; pointer-events: none; }
+.g-count { fill: var(--accent); font-size: 10px; font-weight: 700; pointer-events: none; }
+.g-e { fill: none; stroke: var(--ok); stroke-width: 1.5; opacity: .55; transition: opacity .18s, stroke-width .18s; }
+.g-e.deny { stroke: var(--deny); stroke-dasharray: 5 4; opacity: .7; }
+.g-e.none { stroke: var(--line); stroke-dasharray: 2 3; opacity: .5; }
+.g-e.hot { stroke-width: 2.8; opacity: .9; }
+.g-n { fill: var(--muted); font-size: 9px; pointer-events: none; }
+.g-bg { fill: transparent; }
+.g-node { cursor: help; }
+.g-node:hover .g-box { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+.g-node:hover .g-box.deny { fill: var(--deny-soft); stroke: var(--deny); stroke-width: 2; }
+.g-node:hover .g-box.ok { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 2; }
+.g-node:hover .g-t { fill: var(--accent); }
+.g-edge-group { cursor: help; }
+.g-edge-group:hover .g-e { opacity: 1; stroke-width: 3; }
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); }
 .legend i { display: inline-block; width: 14px; height: 0; margin-right: .3rem; vertical-align: middle; }
 .legend .l-ok i { border-top: 2px solid var(--ok); }
 .legend .l-deny i { border-top: 2px dashed var(--deny); }
+.legend .l-hot i { border-top: 3px solid var(--accent); }
 
 /* -- Aktivitaet -- */
 .chart { width: 100%; height: auto; display: block; }
@@ -793,7 +804,23 @@ def _respond(request: Request, html_text: str, nonce: str, status: int = 200) ->
 # -- Zugriffskarte ---------------------------------------------------------
 
 
-def _svg_node(x: float, y: float, w: float, h: float, label: str, sub: str, css: str) -> str:
+def _svg_node(
+    x: float, y: float, w: float, h: float, label: str, sub: str, css: str,
+    *, tooltip: str = "", count_text: str = "",
+) -> str:
+    """Ein Knoten der Zugriffskarte mit optionalem Tooltip und Zaehler.
+
+    Der Tooltip laeuft ueber ein natives SVG-``<title>``-Element: der Browser
+    zeigt ihn beim Darueberfahren an, ohne dass Skripte noetig waeren. Der
+    Zaehler erscheint als dritte Textzeile, wenn ``count_text`` nicht leer ist.
+    """
+    title = f"<title>{_e(tooltip)}</title>" if tooltip else ""
+    count = (
+        f'<text class="g-count" x="{x + w / 2:.0f}" y="{y + h / 2 + 22:.0f}" '
+        f'text-anchor="middle">{_e(count_text)}</text>'
+        if count_text
+        else ""
+    )
     return (
         f'<rect class="g-box {css}" x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" '
         f'height="{h:.0f}" rx="8"/>'
@@ -801,10 +828,66 @@ def _svg_node(x: float, y: float, w: float, h: float, label: str, sub: str, css:
         f'text-anchor="middle">{_e(label)}</text>'
         f'<text class="g-s" x="{x + w / 2:.0f}" y="{y + h / 2 + 11:.0f}" '
         f'text-anchor="middle">{_e(sub)}</text>'
+        f"{count}"
+        f"{title}"
     )
 
 
-def _access_graph(service: Service, identities: IdentityStore) -> str:
+def _call_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Zaehlt Aufrufe je Identitaet: {id: {ok, denied, failed, total}}."""
+    stats: dict[str, dict[str, int]] = {}
+    for record in records:
+        if record.get("kind") != "call":
+            continue
+        ident = record.get("identity") or ""
+        if not ident:
+            continue
+        bucket = stats.setdefault(ident, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
+        outcome = record.get("outcome") or "unknown"
+        if outcome == "ok":
+            bucket["ok"] += 1
+        elif outcome == "denied":
+            bucket["denied"] += 1
+        elif outcome == "failed":
+            bucket["failed"] += 1
+        bucket["total"] += 1
+    return stats
+
+
+def _tool_call_stats(
+    records: list[dict[str, Any]], tools_by_kit: dict[str, set[str]],
+) -> dict[str, dict[str, int]]:
+    """Zaehlt Aufrufe je Toolkit durch Aufloesen der Tool-ID.
+
+    ``{toolkit: {ok, denied, failed, total}}``. Ein Aufruf, dessen Tool in
+    keinem bekannten Toolkit liegt, wird unter ``_unknown`` zusammengefasst.
+    """
+    tool_to_kit: dict[str, str] = {}
+    for kit, tool_ids in tools_by_kit.items():
+        for tid in tool_ids:
+            tool_to_kit[tid] = kit
+    stats: dict[str, dict[str, int]] = {}
+    for record in records:
+        if record.get("kind") != "call":
+            continue
+        tool_id = record.get("tool") or ""
+        kit = tool_to_kit.get(tool_id, "_unknown")
+        bucket = stats.setdefault(kit, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
+        outcome = record.get("outcome") or "unknown"
+        if outcome == "ok":
+            bucket["ok"] += 1
+        elif outcome == "denied":
+            bucket["denied"] += 1
+        elif outcome == "failed":
+            bucket["failed"] += 1
+        bucket["total"] += 1
+    return stats
+
+
+def _access_graph(
+    service: Service, identities: IdentityStore,
+    records: list[dict[str, Any]] | None = None,
+) -> str:
     """Wer erreicht was -- als serverseitig berechnetes SVG.
 
     Die Karte beantwortet die Frage, fuer die es sonst drei Dateien
@@ -812,6 +895,10 @@ def _access_graph(service: Service, identities: IdentityStore) -> str:
     welche Ressource, und was ist fuer alle gesperrt. Kanten sind aggregiert;
     einzeln gezeichnet waeren es bei zehn Tools und vier Identitaeten vierzig
     Linien und keine Aussage mehr.
+
+    Mit ``records`` (Audit-Log) werden zusaetzlich gezeigt: Aufrufzaehler je
+    Identitaet und je Toolkit, Erfolgs-/Abweisungs-/Fehleraufschluesselung im
+    Tooltip, und hervorgehobene Kanten fuer viel frequentierte Wege.
     """
     idents = sorted(
         (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
@@ -826,7 +913,22 @@ def _access_graph(service: Service, identities: IdentityStore) -> str:
     for tool in service.catalog.tools.values():
         tools_by_kit.setdefault(tool.toolkit, set()).add(tool.id)
 
-    nw, nh, gap = 132.0, 40.0, 14.0
+    audit_records = records or []
+    ident_stats = _call_stats(audit_records)
+    kit_stats = _tool_call_stats(audit_records, tools_by_kit)
+
+    # Schwellenwert fuer "heisse" Kanten: das 75. Perzentil der Gesamtzahl,
+    # mindestens aber 3 Aufrufe -- sonst gibt es bei wenig Traffic kein
+    # Hervorheben, was richtig ist, weil nichts hervorzuheben ist.
+    all_totals = [s["total"] for s in ident_stats.values()] + [
+        s["total"] for s in kit_stats.values()
+    ]
+    hot_threshold = max(
+        sorted(all_totals)[int(len(all_totals) * 0.75)] if all_totals else 0,
+        3,
+    )
+
+    nw, nh, gap = 132.0, 52.0, 14.0
     right_items = len(toolkits) + len(protected)
     lanes = max(len(idents), right_items, 1)
     height = max(lanes * (nh + gap) + 30, 210.0)
@@ -838,6 +940,9 @@ def _access_graph(service: Service, identities: IdentityStore) -> str:
         span = count * nh + max(count - 1, 0) * gap
         return (height - span) / 2 + index * (nh + gap)
 
+    def _tooltip_line(label: str, value: int) -> str:
+        return f"  {label}: {value}\n" if value else ""
+
     edges, nodes = [], []
     hub_y = height / 2 - nh / 2
     hub_cy = height / 2
@@ -845,40 +950,107 @@ def _access_graph(service: Service, identities: IdentityStore) -> str:
     for index, identity in enumerate(idents):
         y = lane_y(index, len(idents))
         granted = len(identity.tools)
+        stats = ident_stats.get(identity.id, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
+        total = stats["total"]
+        sub = f"{granted} tools" if granted else "no tool rights"
+        count_text = f"{total} calls" if total else ""
+        tooltip = identity.id
+        if granted:
+            tooltip += f"\n  tools: {granted}"
+        tooltip += "\n  calls:"
+        tooltip += _tooltip_line("ok", stats["ok"])
+        tooltip += _tooltip_line("denied", stats["denied"])
+        tooltip += _tooltip_line("failed", stats["failed"])
+        if not total:
+            tooltip += "  (none in log)"
         nodes.append(
-            _svg_node(
-                lx, y, nw, nh, identity.id,
-                f"{granted} tools" if granted else "no tool rights",
+            f'<g class="g-node">'
+            + _svg_node(
+                lx, y, nw, nh, identity.id, sub,
                 "ok" if granted else "",
+                tooltip=tooltip, count_text=count_text,
             )
+            + "</g>"
         )
         x1, y1 = lx + nw, y + nh / 2
+        edge_css = "g-e" if granted else "g-e none"
+        if total >= hot_threshold and total > 0:
+            edge_css += " hot"
+        edge_tooltip = f"{identity.id} -> gatekeeper\n  {total} calls"
+        if stats["denied"]:
+            edge_tooltip += f"  ({stats['denied']} denied)"
         edges.append(
-            f'<path class="g-e{"" if granted else " none"}" d="M{x1:.0f} {y1:.0f} '
-            f"C{x1 + 60:.0f} {y1:.0f} {cx - 60:.0f} {hub_cy:.0f} {cx:.0f} {hub_cy:.0f}\"/>"
+            f'<g class="g-edge-group"><path class="{edge_css}" '
+            f'd="M{x1:.0f} {y1:.0f} '
+            f"C{x1 + 60:.0f} {y1:.0f} {cx - 60:.0f} {hub_cy:.0f} "
+            f'{cx:.0f} {hub_cy:.0f}"/>'
+            f"<title>{_e(edge_tooltip)}</title></g>"
         )
 
     for index, (name, _tk) in enumerate(toolkits):
         y = lane_y(index, right_items)
+        tool_count = len(tools_by_kit.get(name, ()))
+        stats = kit_stats.get(name, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
+        total = stats["total"]
+        sub = f"{tool_count} tools"
+        count_text = f"{total} calls" if total else ""
+        tooltip = f"{name}\n  tools: {tool_count}\n  calls:"
+        tooltip += _tooltip_line("ok", stats["ok"])
+        tooltip += _tooltip_line("denied", stats["denied"])
+        tooltip += _tooltip_line("failed", stats["failed"])
+        if not total:
+            tooltip += "  (none in log)"
         nodes.append(
-            _svg_node(rx, y, nw, nh, name, f"{len(tools_by_kit.get(name, ()))} tools", "")
+            f'<g class="g-node">'
+            + _svg_node(
+                rx, y, nw, nh, name, sub, "",
+                tooltip=tooltip, count_text=count_text,
+            )
+            + "</g>"
         )
         y2 = y + nh / 2
+        edge_css = "g-e"
+        if total >= hot_threshold and total > 0:
+            edge_css += " hot"
+        edge_tooltip = f"gatekeeper -> {name}\n  {total} calls"
+        if stats["denied"]:
+            edge_tooltip += f"  ({stats['denied']} denied)"
         edges.append(
-            f'<path class="g-e" d="M{cx + cw:.0f} {hub_cy:.0f} '
-            f"C{cx + cw + 60:.0f} {hub_cy:.0f} {rx - 60:.0f} {y2:.0f} {rx:.0f} {y2:.0f}\"/>"
+            f'<g class="g-edge-group"><path class="{edge_css}" '
+            f'd="M{cx + cw:.0f} {hub_cy:.0f} '
+            f"C{cx + cw + 60:.0f} {hub_cy:.0f} {rx - 60:.0f} {y2:.0f} "
+            f'{rx:.0f} {y2:.0f}"/>'
+            f"<title>{_e(edge_tooltip)}</title></g>"
         )
 
     for index, resource in enumerate(protected):
         y = lane_y(len(toolkits) + index, right_items)
-        nodes.append(_svg_node(rx, y, nw, nh, resource, "blocked", "deny"))
+        nodes.append(
+            f'<g class="g-node">'
+            + _svg_node(
+                rx, y, nw, nh, resource, "blocked", "deny",
+                tooltip=f"{resource}\n  protected for all identities (FR-4.12)",
+            )
+            + "</g>"
+        )
         y2 = y + nh / 2
         edges.append(
-            f'<path class="g-e deny" d="M{cx + cw:.0f} {hub_cy:.0f} '
-            f"C{cx + cw + 60:.0f} {hub_cy:.0f} {rx - 60:.0f} {y2:.0f} {rx:.0f} {y2:.0f}\"/>"
+            f'<g class="g-edge-group"><path class="g-e deny" '
+            f'd="M{cx + cw:.0f} {hub_cy:.0f} '
+            f"C{cx + cw + 60:.0f} {hub_cy:.0f} {rx - 60:.0f} {y2:.0f} "
+            f'{rx:.0f} {y2:.0f}"/>'
+            f"<title>{_e(resource + ' — blocked for all')}</title></g>"
         )
 
-    hub = _svg_node(cx, hub_y, cw, nh, "gatekeeper", "the only path", "hub")
+    total_calls = sum(s["total"] for s in ident_stats.values())
+    hub_tooltip = "gatekeeper\n  the only path\n  "
+    hub_tooltip += f"{total_calls} total calls"
+    hub = (
+        f'<g class="g-node">'
+        + _svg_node(cx, hub_y, cw, nh, "gatekeeper", "the only path", "hub",
+                    tooltip=hub_tooltip)
+        + "</g>"
+    )
     return (
         f'<svg class="graph" viewBox="0 0 {width:.0f} {height:.0f}" '
         f'role="img" aria-label="Access map">'
@@ -1193,10 +1365,11 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
         '<div class="split"><div>'
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("share", 14)}Access map</h3></div>'
-        f'<div class="pad">{_access_graph(service, identities)}'
+        f'<div class="pad">{_access_graph(service, identities, records)}'
         '<div class="legend" style="margin-top:.6rem">'
         '<span class="l-ok"><i></i>granted</span>'
         '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
+        '<span class="l-hot"><i></i>high traffic</span>'
         "</div></div></div>"
         "</div><div>"
         '<div class="card">'
