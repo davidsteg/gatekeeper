@@ -1,4 +1,4 @@
-"""Rate-Limiting je Identitaet und Kategorie (FR-6.8)."""
+"""Rate limiting per identity and category (FR-6.8)."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from .tier1 import RateLimit
 
 
 class RateLimiter:
-    """Gleitendes Fenster, im Speicher.
+    """Sliding window, in memory.
 
-    Ausreichend fuer eine Handvoll Agenten in einem Container. Bei mehreren
-    Instanzen muesste der Zaehler geteilt werden -- gatekeeper laeuft nach
-    §14 als einzelne Instanz.
+    Sufficient for a handful of agents in a single container. With multiple
+    instances the counter would need to be shared -- gatekeeper runs as a
+    single instance per §14.
     """
 
     def __init__(self, limits: dict[str, RateLimit]) -> None:
@@ -21,7 +21,7 @@ class RateLimiter:
         self._events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
     def check(self, identity: str, category: str) -> bool:
-        """Registriert einen Aufruf. False = Limit erreicht."""
+        """Registers a call. False = limit reached."""
         limit = self._limits.get(category)
         if limit is None:
             return True

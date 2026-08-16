@@ -1,8 +1,8 @@
-"""Testkonfiguration.
+"""Test configuration.
 
-Die Fixtures bauen eine echte Ebene-1- und Katalogkonfiguration aus YAML auf,
-statt Objekte direkt zu konstruieren -- so laufen die Loader mit durch die
-Tests und ein Fehler in der Konfigurationspruefung faellt hier auf.
+The fixtures build a real Tier 1 and catalog configuration from YAML,
+instead of constructing objects directly -- this way the loaders run
+through the tests and an error in the configuration check surfaces here.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from gatekeeper.identity import (  # noqa: E402
 )
 from gatekeeper.tier1 import load_tier1  # noqa: E402
 
-#: Ein garantiert vorhandenes, harmloses Programm - der Python-Interpreter.
+#: A guaranteed-present, harmless program - the Python interpreter.
 PYTHON = os.path.realpath(sys.executable)
 
 
@@ -37,7 +37,7 @@ def _write(path: str, content: str) -> str:
 
 @pytest.fixture
 def sandbox(tmp_path):
-    """Verzeichnis, das als Pfad-Wurzel dient."""
+    """Directory that serves as the path root."""
     root = tmp_path / "raid"
     root.mkdir()
     (root / "media-jellyfin").mkdir()
@@ -80,15 +80,15 @@ def make_catalog(tmp_path, tier1, tools, *, strict=True):
 
 @pytest.fixture
 def tool_specs(sandbox):
-    """Ein lesendes Tool mit Pfadableitung und Scope, plus ein freies Tool."""
+    """A read tool with path derivation and scope, plus a free-form tool."""
     return [
         {
             "id": "demo.show",
             "toolkit": "demo",
             "binary": PYTHON,
             "version": 1,
-            "title": "Compose-Datei anzeigen",
-            "description": "Gibt den Pfad der Compose-Datei aus.",
+            "title": "Show compose file",
+            "description": "Outputs the path of the compose file.",
             "category": "read",
             "idempotent": True,
             "enabled": True,
@@ -98,13 +98,13 @@ def tool_specs(sandbox):
                     "type": "string",
                     "required": True,
                     "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
-                    "description": "Stack-Name",
+                    "description": "Stack name",
                 },
                 "compose_path": {
                     "type": "path",
                     "derived": os.path.join(str(sandbox), "{stack}", "compose.yaml"),
                     "must_resolve_under": str(sandbox),
-                    "description": "abgeleitet",
+                    "description": "derived",
                 },
             },
             "required_scopes": ["stack:{stack}"],
@@ -112,15 +112,15 @@ def tool_specs(sandbox):
             "max_output_bytes": 4096,
         },
         {
-            # Bewusst freizuegiges Pattern: dient dem Nachweis, dass die
-            # Sicherheit NICHT vom Pattern abhaengt, sondern von der Struktur
-            # des argv-Baus (FR-5.4).
+            # Deliberately permissive pattern: serves to prove that
+            # security does NOT depend on the pattern, but on the structure
+            # of the argv construction (FR-5.4).
             "id": "demo.echo",
             "toolkit": "demo",
             "binary": PYTHON,
             "version": 1,
             "title": "Echo",
-            "description": "Gibt den uebergebenen Text aus.",
+            "description": "Outputs the given text.",
             "category": "read",
             "idempotent": True,
             "enabled": True,
@@ -130,7 +130,7 @@ def tool_specs(sandbox):
                     "type": "string",
                     "required": True,
                     "pattern": "^.+$",
-                    "description": "beliebiger Text",
+                    "description": "arbitrary text",
                 }
             },
             "required_scopes": [],
@@ -147,7 +147,7 @@ def catalog(tmp_path, tier1, tool_specs):
 
 @pytest.fixture
 def identities(tmp_path):
-    """Zwei Identitaeten: eine mit Rechten, eine ohne."""
+    """Two identities: one with permissions, one without."""
     tokens = {"full": generate_token(), "narrow": generate_token()}
     path = tmp_path / "identities.yaml"
     path.write_text(
@@ -188,12 +188,12 @@ def service(tier1, catalog, tmp_path):
 
 @pytest.fixture
 def repo_config_dir():
-    """Die Beispielkonfiguration.
+    """The example configuration.
 
-    gatekeeper liefert keine aktive Konfiguration mehr mit -- `config/` enthaelt
-    nur noch `examples/`. Die Beispiele muessen trotzdem laden: sie sind das,
-    wovon jemand abschreibt, und ein Tippfehler darin faellt sonst erst auf dem
-    fremden Host auf.
+    gatekeeper no longer ships an active configuration -- `config/` contains
+    only `examples/`. The examples must still load: they are what
+    someone copies from, and a typo in them would otherwise only surface
+    on the foreign host.
     """
     return os.path.join(os.path.dirname(__file__), "..", "config", "examples")
 

@@ -1,20 +1,20 @@
-# BEISPIEL - gatekeeper startet mit einem leeren Katalog.
+# EXAMPLE - gatekeeper starts with an empty catalog.
 #
-# Diese Datei ist ein Vorrat zum Abschauen, keine Voreinstellung. Tools legt
-# man in der Oberflaeche an; wer lieber mit etwas Fertigem beginnt, kopiert
-# einzelne Eintraege von hier nach tools.yaml oder in den Editor.
+# This file is a supply for copying, not a preset. Tools are
+# created in the UI; whoever prefers to start with something ready copies
+# individual entries from here to tools.yaml or into the editor.
 #
-# Sie setzt das Toolkit-Beispiel nebenan voraus: den 'docker'- und den
-# 'diag'-Eintrag aus examples/toolkits.yaml, insbesondere die Pfad-Wurzel
-# /mnt/raid. Ohne die passende Ebene 1 werden die Definitionen abgelehnt -
-# was der Sinn der Sache ist.
+# It assumes the toolkit example next door: the 'docker' and
+# 'diag' entries from examples/toolkits.yaml, in particular the path root
+# /mnt/raid. Without the matching Tier 1 the definitions are rejected -
+# which is the point.
 #
-# Grundregel fuer jede Definition: argv ist eine LISTE. Jedes Element wird zu
-# genau einem Argument aufgeloest. Ein Parameterwert kann strukturell kein
-# zweites Argument erzeugen (FR-5.4).
+# Basic rule for every definition: argv is a LIST. Each element resolves to
+# exactly one argument. A parameter value structurally cannot
+# produce a second argument (FR-5.4).
 
 tools:
-  # -- Docker: lesend ----------------------------------------------------
+  # -- Docker: read-only ----------------------------------------------------
 
   - id: docker.compose_ps
     toolkit: docker
@@ -27,9 +27,9 @@ tools:
     category: read
     idempotent: true
     enabled: true
-    # --format json statt der Textabelle: ein Agent liest Felder, statt
-    # Spaltenausrichtung zu raten. Sicherheitsneutral, weil das Element fest im
-    # Template steht und kein Parameterwert ist.
+    # --format json instead of the text table: an agent reads fields instead
+    # of guessing column alignment. Security-neutral, because the element is
+    # fixed in the template and is not a parameter value.
     argv: ["compose", "-p", "{stack}", "-f", "{compose_path}", "ps", "--format", "json"]
     parameters:
       stack:
@@ -89,7 +89,7 @@ tools:
     timeout_seconds: 60
     max_output_bytes: 262144
 
-  # -- Docker: schreibend ------------------------------------------------
+  # -- Docker: write --------------------------------------------------------
 
   - id: docker.compose_up
     toolkit: docker
@@ -197,9 +197,9 @@ tools:
     timeout_seconds: 300
     max_output_bytes: 65536
 
-  # -- Diagnose ----------------------------------------------------------
-  # FR-8.4: Diese Werte kommen teils aus dem Container, teils vom Host.
-  # Die Beschreibungen sagen das, damit der Agent sie nicht falsch deutet.
+  # -- Diagnostics ----------------------------------------------------------
+  # FR-8.4: These values come partly from the container, partly from the host.
+  # The descriptions say so, so the agent does not misinterpret them.
 
   - id: diag.uptime
     toolkit: diag

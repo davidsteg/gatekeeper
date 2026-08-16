@@ -1,29 +1,29 @@
-# BEISPIEL - nicht die ausgelieferte Konfiguration.
+# EXAMPLE - not the shipped configuration.
 #
-# Ebene 1, Deploy-Zeit, zur Laufzeit unveraenderlich (REQUIREMENTS.md §6).
-# Diese Datei wird read-only in den Container gemountet. Aenderungen erfordern
-# einen Redeploy. Die Oberflaeche kann Tools anlegen, aber niemals ein Toolkit
-# - sonst waere Ebene 1 zur Laufzeit veraenderbar (FR-4.11).
+# Tier 1, deploy-time, immutable at runtime (REQUIREMENTS.md §6).
+# This file is mounted read-only into the container. Changes require
+# a redeploy. The UI can create tools, but never a toolkit
+# - otherwise Tier 1 would be mutable at runtime (FR-4.11).
 #
-# Ebene 1 legt fest, was hoechstens moeglich ist. Sie ist die einzige Stelle,
-# an der ein Fehler nicht mehr eingefangen wird - hier gehoert Zeit hinein.
-# Nichts davon ist ein sinnvoller Standard fuer ein fremdes System:
+# Tier 1 defines what is at most possible. It is the only place
+# where an error is no longer caught - time belongs here.
+# None of this is a sensible default for a foreign system:
 #
-#   - Die Binary-Pfade muessen im Image existieren.
-#   - Die Pfad-Wurzeln muessen zu den echten Compose-Verzeichnissen passen.
-#   - Die geschuetzten Ressourcen muessen die Namen DEINER kritischen Stacks
-#     tragen. 'traefik' unten ist geraten; wenn dein Reverse Proxy anders
-#     heisst, schuetzt der Eintrag nichts.
+#   - The binary paths must exist in the image.
+#   - The path roots must match the real compose directories.
+#   - The protected resources must carry the names of YOUR critical stacks.
+#     'traefik' below is a guess; if your reverse proxy is named
+#     differently, the entry protects nothing.
 #
-# Uebernehmen heisst also: lesen, anpassen, verstehen - nicht kopieren.
+# Adopting means: read, adapt, understand - not copy.
 
 toolkits:
   docker:
     executor: docker
     binaries:
       - /usr/bin/docker
-    # FR-4.2: Gesperrte Unterbefehle und Flags. Geprueft wird das *aufgeloeste*
-    # argv - ein Parameterwert, der zu einem dieser Woerter wird, faellt genauso auf.
+    # FR-4.2: blocked subcommands and flags. The *resolved* argv is checked
+    # - a parameter value that becomes one of these words is caught just the same.
     denied_args:
       - rm
       - kill
@@ -36,17 +36,17 @@ toolkits:
       - cp
       - --privileged
       - --force
-      # 'compose down -v' loescht Volumes. Kein Tool braucht das, also gesperrt.
+      # 'compose down -v' deletes volumes. No tool needs that, so blocked.
       - -v
       - --volumes
       - --rmi
     path_roots:
       - /mnt/raid
-    # FR-4.12: unabhaengig von Rechten und Scopes gesperrt.
-    # 'gatekeeper' beendet sich damit selbst - die Antwort erreicht den Agenten
-    # nie, er wertet es als Zeitlimit, und niemand ist mehr da, der antwortet.
-    # 'dockhand' ist der Deploy-Mechanismus: wer ihn abschaltet, verliert das
-    # Werkzeug, mit dem er ihn wieder anschalten wuerde.
+    # FR-4.12: blocked independent of permissions and scopes.
+    # 'gatekeeper' terminates itself with this - the response never reaches
+    # the agent, it evaluates it as a timeout, and nobody is left to answer.
+    # 'dockhand' is the deployment mechanism: whoever shuts it down loses the
+    # tool with which they would turn it back on.
     protected_resources:
       - gatekeeper
       - dockhand
@@ -63,7 +63,7 @@ toolkits:
       - /usr/bin/df
       - /bin/cat
     denied_args: []
-    # Bewusst leer: kein Diagnose-Tool nimmt einen Pfad vom Agenten entgegen.
+    # Deliberately empty: no diagnostic tool takes a path from the agent.
     path_roots: []
     protected_resources: []
     max_timeout_seconds: 10
@@ -83,7 +83,7 @@ rate_limits:
 
 max_concurrent: 4
 
-# FR-9.4/9.5 - append-only mit Rotation. Ohne Rotation fuellt das Log das Dataset.
+# FR-9.4/9.5 - append-only with rotation. Without rotation the log fills the dataset.
 audit:
   dir: /mnt/raid/gatekeeper/logs
   max_bytes: 33554432

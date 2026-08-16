@@ -1,50 +1,50 @@
 # AGENTS.md — gatekeeper
 
-> **MCP-Server für kontrollierte Host-Operationen.** Agenten bekommen keine Shell,
-> sondern eine feste Menge geprüfter Aktionen — jede mit eigenem Token, eigenen
-> Rechten und vollständigem Audit. Zwei Sicherheitsebenen: Tier 1 (immutable
-> Deploy-Grenzen) und Tier 2 (laufzeitveränderlicher Katalog + Identitäten).
+> **MCP server for controlled host operations.** Agents do not get a shell,
+> but a fixed set of validated actions — each with its own token, own
+> permissions, and full audit. Two security tiers: Tier 1 (immutable
+> deploy-time boundaries) and Tier 2 (runtime-mutable catalog + identities).
 
 ## Quick Facts
 
 | | |
 |---|---|
 | **Repo** | `davidsteg/gatekeeper` |
-| **Version** | 0.3.2 (siehe `pyproject.toml` + `src/gatekeeper/__init__.py`) |
-| **Sprache** | Python 3.12+, keine optionalen Abhängigkeiten im Betrieb |
-| **Tests** | 156 pytest, 1 skipped — alle müssen grün vor Push |
-| **Lokaler Klone** | `/opt/data/gatekeeper` |
-| **Container** | `gatekeeper`, Port `30221→8080`, Image `davidsteg/gatekeeper:latest` |
-| **Deploy-Mounts** | `/mnt/raid/dev/gatekeeper/config → /etc/gatekeeper`, `/mnt/raid/dev/gatekeeper/logs`, `/var/run/docker.sock` |
-| **Config-Host** | `10.10.200.90`, UI unter `http://10.10.200.90:30221/ui/` |
-| **Container-User** | `568:568` (unprivilegiert), `group_add: 999` (docker.sock GID) |
+| **Version** | 0.3.2 (see `pyproject.toml` + `src/gatekeeper/__init__.py`) |
+| **Language** | Python 3.12+, no optional dependencies at runtime |
+| **Tests** | 156 pytest, 1 skipped — all must pass before push |
+| **Local clone** | `/opt/data/gatekeeper` |
+| **Container** | `gatekeeper`, port `30221→8080`, image `davidsteg/gatekeeper:latest` |
+| **Deploy mounts** | `/mnt/raid/dev/gatekeeper/config → /etc/gatekeeper`, `/mnt/raid/dev/gatekeeper/logs`, `/var/run/docker.sock` |
+| **Config host** | `10.10.200.90`, UI at `http://10.10.200.90:30221/ui/` |
+| **Container user** | `568:568` (unprivileged), `group_add: 999` (docker.sock GID) |
 
-## Release-Workflow (verbindlich)
+## Release Workflow (mandatory)
 
-**Jede Änderung auf `main` ist ein Release.** Keine Sammel-Releases.
+**Every change on `main` is a release.** No batch releases.
 
-1. **Version bump** — `pyproject.toml` + `src/gatekeeper/__init__.py` (beide im selben Commit)
-2. **RELEASE.md** — Abschnitt `## <version>` (ohne `v`-Präfix), newest first
+1. **Version bump** — `pyproject.toml` + `src/gatekeeper/__init__.py` (both in the same commit)
+2. **RELEASE.md** — add section `## <version>` (without `v` prefix), newest first
 3. **Commit** — `git commit -m "description (vX.Y.Z)"`
 4. **Push** — `git push origin main`
-5. **GitHub Action** baut Image → push nach Docker Hub → tag `vX.Y.Z` → GitHub Release
+5. **GitHub Action** builds image → push to Docker Hub → tag `vX.Y.Z` → GitHub Release
 
-### Versionierung
+### Versioning
 
-- **MAJOR** — Tier 1 ändert Bedeutung, oder bestehendes Deployment startet nicht mehr
-- **MINOR** — neue Toolkits, Executoren, UI-Features, neues Verhalten
-- **PATCH** — Bugfixes, auch sicherheitsrelevante
+- **MAJOR** — Tier 1 changes meaning, or existing deployment does not start anymore
+- **MINOR** — new toolkits, executors, UI features, new behavior
+- **PATCH** — bug fixes, including security-relevant ones
 
-### Git-Remote (Token)
+### Git Remote (Token)
 
-Der GitHub PAT ist in der git remote URL eingebettet. Vor dem Push setzen:
+The GitHub PAT is embedded in the git remote URL. Set it before pushing:
 
 ```bash
-# Token aus Memory oder bestehender remote URL extrahieren
+# Extract token from memory or existing remote URL
 git remote set-url origin "https://<PAT>@github.com/davidsteg/gatekeeper.git"
 ```
 
-Kein `gh` CLI nötig. Token NICHT in Dateien speichern — nur in der remote URL.
+No `gh` CLI needed. Do NOT store the token in files — only in the remote URL.
 
 ## Testing
 
@@ -53,15 +53,15 @@ cd /opt/data/gatekeeper
 uv run python -m pytest tests/ -q
 ```
 
-- 156 Tests, ~45s Laufzeit
-- Keine System-pip — immer `uv run`
-- Target: alle grün vor Push
+- 156 tests, ~45s runtime
+- No system pip — always use `uv run`
+- Target: all green before push
 
-## Projektstruktur
+## Project Structure
 
 ```
 src/gatekeeper/
-  __init__.py      __version__ — IMMER mit pyproject.toml synchron halten
+  __init__.py      __version__ — ALWAYS keep in sync with pyproject.toml
   __main__.py      Entry point: CLI (serve/check/token/init/password), SIGHUP handler
   server.py        MCP protocol, ASGI middleware, health/metrics routes, CSP headers
   service.py       Call pipeline: auth→authorize→registry→validate→argv→exec→audit
@@ -79,49 +79,49 @@ config/
   toolkits.yaml    Tier 1 — immutable at runtime (binary allowlist, denied args, path roots, protected resources, ceilings)
   tools.yaml       Seed catalog — mutable via UI
   identities.example.yaml
-  examples/        Fertige Vorlagen: identities.yaml, toolkits.yaml, tools.yaml
+  examples/        Ready-made templates: identities.yaml, toolkits.yaml, tools.yaml
 tests/
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_ui.py, test_ui_admin.py, conftest.py
 ```
 
-## Zwei-Ebenen-Sicherheitsmodell
+## Two-Tier Security Model
 
 | Tier | File | Mutable at runtime | Changed via |
 |------|------|:--:|-------------|
 | 1 | `toolkits.yaml` | ✗ | Redeploy only (FR-4.11) |
 | 2 | `tools.yaml`, `identities.yaml` | ✓ | Admin UI at `/ui` |
 
-**Key invariant:** `store.py` hat KEINE Funktion die `toolkits.yaml` schreibt. Die UI kann Tools anlegen aber niemals Toolkits.
+**Key invariant:** `store.py` has NO function that writes `toolkits.yaml`. The UI can create tools but never toolkits.
 
-Tier 1 definiert: binary allowlist, denied args, path roots, protected resources, ceilings.
-Tier 2 definiert: tool catalog, identities, grants, scopes.
+Tier 1 defines: binary allowlist, denied args, path roots, protected resources, ceilings.
+Tier 2 defines: tool catalog, identities, grants, scopes.
 
-## Rollen
+## Roles
 
-| Rolle | MCP (`/mcp`) | Konsole (`/ui`) lesen | Tier 2 ändern |
+| Role | MCP (`/mcp`) | Console (`/ui`) read | Tier 2 write |
 |---|:--:|:--:|:--:|
 | `agent` | ✓ | — | — |
 | `viewer` | — | ✓ | — |
 | `admin` | — | ✓ | ✓ |
 
-Login: Console-Password (nicht API-Token). Token gehört zu `/mcp`, Passwort zu `/ui`.
+Login: console password (not API token). Token belongs to `/mcp`, password to `/ui`.
 
-## UI-Architektur (`ui.py`)
+## UI Architecture (`ui.py`)
 
-**Kein JavaScript.** CSP: `default-src 'none'; style-src 'nonce-...'; img-src 'self' data:; form-action 'self'`.
+**No JavaScript.** CSP: `default-src 'none'; style-src 'nonce-...'; img-src 'self' data:; form-action 'self'`.
 
-Alle Diagramme sind server-rendered SVG:
-- **Access map** — `_access_graph()`: Identitäten → Hub → Toolkits/Blocked, mit Call-Counts aus Audit-Log, Hover-Tooltips via `<title>`, hot-edge highlighting
-- **Call flow pipeline** — `_call_flow_pipeline()`: 8 Schichten als horizontales SVG
-- **Tool matrix** — `_tool_matrix()`: HTML-Tabelle, ein Tool pro Zeile
-- **Activity chart** — `_activity_chart()`: Calls/Stunde als gestapelte Balken (ok/denied)
-- **Activity feed** — `_feed()`: Letzte Aufrufe als Timeline
+All diagrams are server-rendered SVG:
+- **Access map** — `_access_graph()`: identities → hub → toolkits/blocked, with call counts from audit log, hover tooltips via `<title>`, hot-edge highlighting
+- **Call flow pipeline** — `_call_flow_pipeline()`: 8 layers as horizontal SVG
+- **Tool matrix** — `_tool_matrix()`: HTML table, one tool per row
+- **Activity chart** — `_activity_chart()`: calls/hour as stacked bars (ok/denied)
+- **Activity feed** — `_feed()`: recent calls as timeline
 
-CSS-Klassen für Graph: `.graph`, `.g-box`, `.g-t`, `.g-s`, `.g-e`, `.g-node`, `.g-edge-group`, `.g-count`, `.g-n`, `.legend`
-CSS-Klassen für Chart: `.chart`, `.c-ok`, `.c-deny`, `.c-base`, `.c-ax`
+CSS classes for graph: `.graph`, `.g-box`, `.g-t`, `.g-s`, `.g-e`, `.g-node`, `.g-edge-group`, `.g-count`, `.g-n`, `.legend`
+CSS classes for chart: `.chart`, `.c-ok`, `.c-deny`, `.c-base`, `.c-ax`
 
-Version wird in Sidebar und Login-Seite angezeigt: `<span class="ver">vX.Y.Z</span>`.
+Version is shown in sidebar and login page: `<span class="ver">vX.Y.Z</span>`.
 
 ## SIGHUP Reload
 
@@ -129,9 +129,9 @@ Version wird in Sidebar und Login-Seite angezeigt: `<span class="ver">vX.Y.Z</sp
 docker kill -s HUP gatekeeper
 ```
 
-Lädt alle drei Config-Dateien atomar neu. Bei Fehler bleibt alter Zustand. Rate-Limiter wird zurückgesetzt.
+Reloads all three config files atomically. On failure, previous state remains. Rate limiter is reset.
 
-## Deploy (lokaler Container)
+## Deploy (local container)
 
 ```bash
 # Pull + recreate
@@ -151,39 +151,39 @@ docker run -d \
   davidsteg/gatekeeper:latest serve --ui
 ```
 
-## Bekannte Pitfalls
+## Known Pitfalls
 
-- **`__init__.py` version drift** — beide Files (`pyproject.toml` + `__init__.py`) im selben Commit bumpen
-- **RELEASE.md merge conflicts** — `git pull --rebase`, beide Sektionen in chronologischer Reihenfolge halten (newest first)
-- **Kein `v`-Präfix in RELEASE.md** — Sektion headers sind `## 0.3.2`, nicht `## v0.3.2`
-- **Stale local clone** — `git fetch origin && git log --oneline origin/main -5` vor Arbeitsbeginn
-- **Docker Hub Secrets** — `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` müssen in GitHub Repo Settings → Secrets gesetzt sein, sonst schlägt Image-Push fehl
-- **`latest` tag bewegt sich** — für Betrieb feste Version pinnen (NFR-5)
-- **`/mnt/raid/misc` ist read-only** — `write_file`/`patch` blockiert. `terminal` + Python `open().write()` nutzen
+- **`__init__.py` version drift** — bump both files (`pyproject.toml` + `__init__.py`) in the same commit
+- **RELEASE.md merge conflicts** — `git pull --rebase`, keep both sections in chronological order (newest first)
+- **No `v` prefix in RELEASE.md** — section headers are `## 0.3.2`, not `## v0.3.2`
+- **Stale local clone** — `git fetch origin && git log --oneline origin/main -5` before starting work
+- **Docker Hub Secrets** — `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` must be set in GitHub Repo Settings → Secrets, otherwise image push fails
+- **`latest` tag moves** — pin a fixed version for production (NFR-5)
+- **`/mnt/raid/misc` is read-only** — `write_file`/`patch` is blocked. Use `terminal` + Python `open().write()`
 
-## Docker Hub Secrets (Status: fehlend)
+## Docker Hub Secrets (status: missing)
 
-| Name | Wert |
+| Name | Value |
 |------|-------|
 | `DOCKERHUB_USERNAME` | `davidsteg` |
-| `DOCKERHUB_TOKEN` | Docker Hub access token (muss gesetzt werden) |
+| `DOCKERHUB_TOKEN` | Docker Hub access token (must be set) |
 
-Ohne diese schlägt der `image` Job bei "Log in to Docker Hub" fehl.
+Without these, the `image` job fails at "Log in to Docker Hub".
 
-## Audit-Log Format
+## Audit Log Format
 
-JSON Lines, ein Record pro Zeile:
+JSON Lines, one record per line:
 ```json
 {"kind": "call", "identity": "dev", "tool": "docker_ps", "tool_version": 1, "parameters": {}, "scopes": [], "outcome": "ok", "exit_code": 0, "duration_ms": 42, "ts": "2026-08-16T10:00:00+0000"}
 ```
 
 Kinds: `call`, `auth_failure`, `startup`, `admin_change`, `ui_login`.
-Outcomes für `call`: `ok`, `denied`, `failed`, `unknown` (timeout bei nicht-idempotent).
+Outcomes for `call`: `ok`, `denied`, `failed`, `unknown` (timeout on non-idempotent).
 
-## Was als nächstes ansteht
+## What's Next
 
-- **Stage 2+4 offen** — siehe REQUIREMENTS.md §14
-- **ZFS und TrueNAS-API** — brauchen `truenas`-Executor
-- **Dienst-APIs** (Sonarr/Radarr/Jellyfin) — brauchen `http`-Executor + Credential-Store
-- **`write_external`** — noch nicht implementiert
-- **Credential-Store** — für Secret-Masking in Container-Logs
+- **Stage 2+4 open** — see REQUIREMENTS.md §14
+- **ZFS and TrueNAS API** — need `truenas` executor
+- **Service APIs** (Sonarr/Radarr/Jellyfin) — need `http` executor + credential store
+- **`write_external`** — not yet implemented
+- **Credential store** — for secret masking in container logs

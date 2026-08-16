@@ -1,9 +1,9 @@
-"""Ende-zu-Ende ueber echtes MCP.
+"""End-to-end over real MCP.
 
-Faehrt die vollstaendige ASGI-Anwendung in-process hoch und spricht sie mit dem
-offiziellen MCP-Client an -- inklusive Auth-Middleware, Streamable-HTTP-Transport
-und Protokoll-Handshake. Die Unit-Tests pruefen die Regeln; dieser Test prueft,
-dass ein Agent sie ueberhaupt erreicht.
+Brings up the complete ASGI application in-process and talks to it with the
+official MCP client -- including auth middleware, Streamable HTTP transport
+and protocol handshake. The unit tests check the rules; this test checks
+that an agent can reach them at all.
 """
 
 from __future__ import annotations
@@ -23,11 +23,11 @@ BASE = "http://gatekeeper.test"
 
 @pytest.fixture
 def make_app(tier1, catalog, identities, tmp_path):
-    """Erzeugt jeweils eine frische Anwendung.
+    """Creates a fresh application each time.
 
-    Der Streamable-HTTP-Session-Manager laesst sich pro Instanz nur einmal
-    starten. Fuer den Betrieb ist das folgenlos -- uvicorn startet genau eine
-    Instanz --, ein Test mit zwei Verbindungen braucht aber zwei Anwendungen.
+    The Streamable HTTP session manager can only be started once per
+    instance. For operation this is irrelevant -- uvicorn starts exactly one
+    instance -- but a test with two connections needs two applications.
     """
 
     def _build():
@@ -56,12 +56,12 @@ def _http(app, token: str | None) -> httpx2.AsyncClient:
 
 @contextlib.asynccontextmanager
 async def connected(app, token: str):
-    """Ein verbundener MCP-Client mit Bearer-Token.
+    """A connected MCP client with bearer token.
 
-    Der Lifespan wird hier und nicht in einer Fixture betreten: `ASGITransport`
-    loest Start- und Stop-Ereignisse nicht selbst aus, und eine async-Fixture
-    wuerde Auf- und Abbau in verschiedenen Tasks ausfuehren -- was die
-    anyio-Cancel-Scopes des Session-Managers nicht zulassen.
+    The lifespan is entered here and not in a fixture: `ASGITransport`
+    does not trigger start and stop events itself, and an async fixture
+    would run setup and teardown in different tasks -- which the
+    anyio cancel scopes of the session manager do not allow.
     """
     async with app.router.lifespan_context(app):
         async with _http(app, token) as http:
@@ -70,18 +70,18 @@ async def connected(app, token: str):
                 yield client
 
 
-# -- Health und Authentifizierung ------------------------------------------
+# -- Health and authentication ------------------------------------------
 
 
 async def test_health_needs_no_token(app):
-    """NFR-3: Health-Probes sind oeffentlich, verraten aber nichts."""
+    """NFR-3: health probes are public but reveal nothing."""
     async with _http(app, None) as http:
         live = await http.get("/health/live")
         startup = await http.get("/health/startup")
     assert live.status_code == 200
     assert live.json() == {"status": "live"}
     assert startup.status_code == 200
-    # Keine Tool-Namen, keine Identitaeten - nur Zahlen.
+    # No tool names, no identities - only numbers.
     assert set(startup.json()) == {"status", "tools", "disabled_by_tier1"}
 
 
@@ -96,7 +96,7 @@ async def test_mcp_without_token_is_401(app):
 
 
 async def test_mcp_with_wrong_token_is_401(app):
-    async with _http(app, "gk_voellig_falsch") as http:
+    async with _http(app, "gk_completely_wrong") as http:
         response = await http.post(
             "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}
         )
@@ -104,7 +104,7 @@ async def test_mcp_with_wrong_token_is_401(app):
 
 
 async def test_metrics_requires_token(app, identities):
-    """NFR-3a: /metrics ist nicht oeffentlich erreichbar."""
+    """NFR-3a: /metrics is not publicly reachable."""
     _store, tokens = identities
     async with _http(app, None) as http:
         assert (await http.get("/metrics")).status_code == 401
@@ -114,11 +114,11 @@ async def test_metrics_requires_token(app, identities):
     assert "gatekeeper_tool_calls_total" in response.text
 
 
-# -- Protokoll --------------------------------------------------------------
+# -- Protocol --------------------------------------------------------------
 
 
 async def test_tools_list_is_filtered_per_identity(make_app, identities):
-    """FR-1.4 ueber das echte Protokoll, nicht nur ueber die Service-Schicht."""
+    """FR-1.4 over the real protocol, not just via the service layer."""
     _store, tokens = identities
 
     async with connected(make_app(), tokens["full"]) as client:
@@ -130,7 +130,7 @@ async def test_tools_list_is_filtered_per_identity(make_app, identities):
 
     assert full == {"demo.show", "demo.echo"}
     assert narrow == {"demo.show"}
-    # Die Liste unterscheidet sich pro Identitaet und darf nicht geteilt werden.
+    # The list differs per identity and must not be shared.
     assert narrow_result.cache_scope == "private"
 
 
@@ -143,31 +143,31 @@ async def test_call_tool_succeeds(app, identities):
 
 
 async def test_call_tool_denial_is_opaque_over_protocol(app, identities):
-    """FR-7.7 im Zusammenspiel: der Agent kann den Katalog nicht abtasten."""
+    """FR-7.7 in combination: the agent cannot probe the catalog."""
     _store, tokens = identities
     async with connected(app, tokens["narrow"]) as client:
         forbidden = await client.call_tool("demo.echo", {"text": "x"})
-        nonexistent = await client.call_tool("demo.gibt_es_nicht", {})
+        nonexistent = await client.call_tool("demo.does_not_exist", {})
 
     assert forbidden.is_error and nonexistent.is_error
     assert forbidden.content[0].text == nonexistent.content[0].text
 
 
 async def test_invalid_parameter_is_reported_concretely(app, identities):
-    """Validierungsfehler duerfen konkret sein.
+    """Validation errors may be specific.
 
-    Sie verraten nichts ueber den Katalog, sondern nur ueber die vom Agenten
-    selbst gesendeten Werte -- anders als die Ablehnungen aus FR-7.7.
+    They reveal nothing about the catalog, only about the values
+    sent by the agent itself -- unlike the denials from FR-7.7.
     """
     _store, tokens = identities
     async with connected(app, tokens["full"]) as client:
-        result = await client.call_tool("demo.show", {"stack": "UNGUELTIG; rm -rf /"})
+        result = await client.call_tool("demo.show", {"stack": "INVALID; rm -rf /"})
     assert result.is_error
     assert "stack" in result.content[0].text
 
 
 async def test_annotations_reach_the_agent(app, identities):
-    """Der Agent soll wissen, was lesend und was idempotent ist."""
+    """The agent should know what is read-only and what is idempotent."""
     _store, tokens = identities
     async with connected(app, tokens["full"]) as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
@@ -175,5 +175,5 @@ async def test_annotations_reach_the_agent(app, identities):
     show = tools["demo.show"]
     assert show.annotations.read_only_hint is True
     assert show.annotations.idempotent_hint is True
-    # Abgeleitete Parameter tauchen im Schema des Agenten nicht auf.
+    # Derived parameters do not appear in the agent's schema.
     assert set(show.input_schema["properties"]) == {"stack"}

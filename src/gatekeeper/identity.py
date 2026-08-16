@@ -1,23 +1,22 @@
-"""Identitaeten, Tokens, Passwoerter und Rechte (REQUIREMENTS.md §4 und §9).
+"""Identities, tokens, passwords and permissions (REQUIREMENTS.md §4 and §9).
 
-Eine Identitaet traegt zwei getrennte Nachweise, und die Trennung ist
-Absicht (FR-11.5):
+An identity carries two separate credentials, and the separation is
+intentional (FR-11.5):
 
-* **Token** -- fuer die API. Geht als `Authorization: Bearer` an `/mcp` und
-  gehoert in die Konfiguration eines Agenten, nicht in einen Browser.
-* **Passwort** -- fuer die Konsole unter `/ui`. Nur `viewer` und `admin`
-  haben eines; ein Agent bekommt keines, weil er sich nirgends anmeldet.
+* **Token** -- for the API. Goes as `Authorization: ***` to `/mcp` and
+  belongs in an agent's configuration, not in a browser.
+* **Password** -- for the console at `/ui`. Only `viewer` and `admin`
+  have one; an agent gets none, because it never logs in anywhere.
 
-Der Grund fuer zwei Nachweise statt einem: ein Token, das jemand in ein
-Anmeldeformular tippt, liegt danach in der Zwischenablage, im Passwortspeicher
-des Browsers und mit etwas Pech im Verlauf -- und dasselbe Geheimnis oeffnet
-dann auch noch `/mcp`. Wer eines von beiden verliert, soll nicht beides
-verlieren: ein gestohlenes Konsolenpasswort ruft keine Tools auf, ein
-gestohlener Token oeffnet keine Oberflaeche.
+The reason for two credentials instead of one: a token typed into a
+login form then sits in the clipboard, the browser's password store,
+and with bad luck in the history -- and the same secret opens `/mcp`
+too. Whoever loses one should not lose both: a stolen console password
+cannot invoke tools, a stolen token cannot open the UI.
 
-Beides liegt ausschliesslich als scrypt-Hash vor (FR-2.4). Damit ist
-`identities.yaml` nicht secret-kritisch und darf nach Homelab-Regel im
-Dataset mit chown 568:568 liegen.
+Both are stored exclusively as scrypt hashes (FR-2.4). This means
+`identities.yaml` is not secret-critical and may sit in the dataset
+with chown 568:568 per homelab convention.
 """
 
 from __future__ import annotations
@@ -36,8 +35,8 @@ import yaml
 
 from .errors import ConfigError, read_config_file
 
-#: scrypt-Parameter. n=2**15 kostet rund 32 MB und ~50 ms -- fuer eine
-#: Handvoll Tokens pro Sekunde reichlich, fuer Brute-Force teuer genug.
+#: scrypt parameters. n=2**15 costs about 32 MB and ~50 ms -- plenty for a
+#: handful of tokens per second, expensive enough for brute force.
 SCRYPT_N = 2**15
 SCRYPT_R = 8
 SCRYPT_P = 1
@@ -45,30 +44,30 @@ SCRYPT_DKLEN = 32
 
 _PREFIX = "scrypt"
 
-#: `viewer` und `admin` unterscheiden Lesen und Schreiben im Betriebs-UI.
-#: Ohne diese Trennung haette jeder, der das Audit-Log ansehen darf, zugleich
-#: das Recht, Tools anzulegen und Rechte zu vergeben.
+#: `viewer` and `admin` distinguish reading and writing in the operations UI.
+#: Without this separation, anyone allowed to view the audit log would also
+#: have the right to create tools and grant permissions.
 ROLES = ("agent", "viewer", "admin")
 
-#: Rollen, die sich am UI anmelden duerfen. `agent` gehoert nicht dazu: ein
-#: Agenten-Token ist fuer `/mcp` gedacht und oeffnet keine Oberflaeche.
+#: Roles that may sign in to the UI. `agent` is not among them: an
+#: agent token is meant for `/mcp` and does not open the console.
 UI_ROLES = ("viewer", "admin")
 
-#: Nur diese Rolle darf schreiben.
+#: Only this role may write.
 ADMIN_ROLE = "admin"
 
-#: Mindestlaenge eines Konsolenpassworts. Kein Zeichenklassen-Zwang: Laenge
-#: traegt hier mehr als ein Grossbuchstabe an Position drei, und die Anmeldung
-#: ist zusaetzlich gedrosselt (`LoginThrottle`) sowie durch scrypt gebremst.
+#: Minimum length of a console password. No character-class requirement: length
+#: matters more here than an uppercase letter in position three, and sign-in
+#: is additionally rate-limited (`LoginThrottle`) and slowed by scrypt.
 MIN_PASSWORD_LENGTH = 12
 
 
 def hash_token(token: str, *, salt: bytes | None = None) -> str:
-    """Erzeugt `scrypt$n$r$p$salt$hash`.
+    """Produces `scrypt$n$r$p$salt$hash`.
 
-    Dieselbe Funktion hasht Tokens und Passwoerter -- es gibt keinen Grund,
-    zwei Verfahren zu pflegen, und das schwaechere waere dann das, das man
-    vergisst.
+    The same function hashes tokens and passwords -- there is no reason
+    to maintain two methods, and the weaker one would be the one
+    forgotten.
     """
     salt = salt or secrets.token_bytes(16)
     derived = hashlib.scrypt(
@@ -93,7 +92,7 @@ def hash_token(token: str, *, salt: bytes | None = None) -> str:
 
 
 def verify_token(token: str, encoded: str) -> bool:
-    """Prueft einen Token gegen seinen Hash -- in konstanter Zeit (FR-2.5)."""
+    """Verifies a token against its hash -- in constant time (FR-2.5)."""
     try:
         prefix, n_s, r_s, p_s, salt_b64, hash_b64 = encoded.split("$")
         if prefix != _PREFIX:
@@ -113,27 +112,27 @@ def verify_token(token: str, encoded: str) -> bool:
 
 
 def generate_token() -> str:
-    """Erzeugt einen neuen Agenten-Token."""
+    """Generates a new agent token."""
     return "gk_" + secrets.token_urlsafe(32)
 
 
 def generate_password() -> str:
-    """Erzeugt ein Konsolenpasswort.
+    """Generates a console password.
 
-    Ohne `gk_`-Praefix: das Praefix markiert einen API-Token, und die beiden
-    sollen sich auch im Klartext auseinanderhalten lassen.
+    Without the `gk_` prefix: the prefix marks an API token, and the two
+    should be distinguishable even in plaintext.
     """
     return secrets.token_urlsafe(18)
 
 
 @functools.cache
 def _decoy_hash() -> str:
-    """Ein Hash, gegen den kein Passwort passt.
+    """A hash that no password matches.
 
-    Gebraucht wird er, damit eine Anmeldung mit unbekannter Kennung genauso
-    lange dauert wie eine mit bekannter. Ohne ihn waere die Antwortzeit ein
-    Verzeichnis aller Konsolenkennungen. Erst bei Bedarf berechnet -- scrypt
-    kostet rund 50 ms, und die will kein Importvorgang bezahlen.
+    Needed so that a sign-in with an unknown ID takes just as
+    long as one with a known ID. Without it, the response time would be a
+    directory of all console IDs. Computed only on demand -- scrypt
+    costs about 50 ms, and no import operation should pay that.
     """
     return hash_token(secrets.token_urlsafe(32))
 
@@ -145,31 +144,31 @@ class Identity:
     token_hash: str
     tools: frozenset[str]
     scopes: tuple[str, ...]
-    #: Leer heisst: diese Identitaet kann sich an der Konsole nicht anmelden.
-    #: Bei `agent` ist das der Normalfall.
+    #: Empty means: this identity cannot sign in to the console.
+    #: For `agent` this is the normal case.
     password_hash: str = ""
 
     @property
     def can_sign_in(self) -> bool:
-        """Darf und kann sich diese Identitaet an der Konsole anmelden?
+        """May and can this identity sign in to the console?
 
-        Beides muss stimmen: die Rolle erlaubt es, und ein Passwort ist
-        gesetzt. Eine Rolle ohne Passwort ist kein Zugang, sondern eine
-        Zeile in einer Datei.
+        Both must be true: the role allows it, and a password is
+        set. A role without a password is not access, but a
+        line in a file.
         """
         return self.role in UI_ROLES and bool(self.password_hash)
 
     def may_call(self, tool_id: str) -> bool:
-        """FR-7.5: Rechte haengen an Tool-IDs, nie an einem ganzen Toolkit.
+        """FR-7.5: Rights attach to tool IDs, never to a whole toolkit.
 
-        Bewusst kein Praefix- oder Wildcard-Abgleich auf Toolkit-Ebene: sonst
-        besaesse diese Identitaet jedes kuenftig im Toolkit angelegte Tool
-        automatisch mit.
+        Deliberately no prefix or wildcard matching at the toolkit level: otherwise
+        this identity would automatically possess every tool created in the toolkit
+        in the future.
         """
         return tool_id in self.tools
 
     def covers_scope(self, scope: str) -> bool:
-        """Prueft einen aufgeloesten Scope gegen die Muster des Profils."""
+        """Checks a resolved scope against the profile patterns."""
         return any(fnmatch.fnmatchcase(scope, pattern) for pattern in self.scopes)
 
 
@@ -178,13 +177,13 @@ class IdentityStore:
     identities: dict[str, Identity]
 
     def authenticate(self, token: str) -> Identity | None:
-        """Loest einen API-Token zu einer Identitaet auf.
+        """Resolves an API token to an identity.
 
-        Prueft gegen alle Hashes, ohne beim ersten Treffer abzukuerzen, damit
-        die Laufzeit nicht verraet, welche Identitaet getroffen wurde.
+        Checks against all hashes, without short-circuiting on the first match, so
+        that the runtime does not reveal which identity was matched.
 
-        Gilt ausschliesslich fuer `/mcp`. Die Konsole benutzt
-        `authenticate_console` -- ein Token oeffnet dort nichts.
+        Applies exclusively to `/mcp`. The console uses
+        `authenticate_console` -- a token opens nothing there.
         """
         found: Identity | None = None
         for identity in self.identities.values():
@@ -193,13 +192,13 @@ class IdentityStore:
         return found
 
     def authenticate_console(self, identity_id: str, password: str) -> Identity | None:
-        """Prueft Kennung und Passwort fuer die Anmeldung an `/ui`.
+        """Checks ID and password for sign-in at `/ui`.
 
-        Anders als beim Token wird hier zuerst nachgeschlagen und dann genau
-        ein Hash geprueft -- die Kennung steht ja im Formular. Fuer jeden
-        Fehlschlag wird trotzdem einmal scrypt gerechnet: sonst antwortete
-        eine unbekannte Kennung sofort und eine bekannte nach 50 ms, und die
-        Anmeldemaske waere ein Verzeichnis aller Konsolenkonten.
+        Unlike with the token, a lookup happens first and then exactly
+        one hash is checked -- the ID is in the form after all. For every
+        failed attempt, scrypt is still computed once: otherwise an
+        unknown ID would respond immediately and a known one after 50 ms,
+        and the login form would be a directory of all console accounts.
         """
         identity = self.identities.get(identity_id)
         if identity is None or not identity.can_sign_in:
@@ -244,17 +243,17 @@ def load_identities(path: str) -> IdentityStore:
                 "Plaintext tokens do not belong in this file."
             )
         if "REPLACE_ME" in token_hash:
-            # Fail closed: ein Platzhalter wuerde sonst einen Server ergeben,
-            # der zwar startet, aber jeden Token ablehnt - schwer zu deuten.
+            # Fail closed: a placeholder would otherwise produce a server
+            # that starts but rejects every token - hard to diagnose.
             raise ConfigError(
                 f"{where}: token_hash is still the placeholder from the example "
                 "file. Generate a real hash with: gatekeeper token"
             )
 
-        # Optional: eine Datei aus einer Fassung vor der Konsolenanmeldung hat
-        # kein Passwort, und sie muss weiter laden. Was fehlt, ist kein Fehler
-        # in dieser Datei, sondern ein fehlender Konsolenzugang - darueber
-        # entscheidet der Start mit --ui, nicht der Loader.
+        # Optional: a file from a version before console sign-in has
+        # no password, and it must still load. What is missing is not an error
+        # in this file, but a missing console access -- that is
+        # decided by the start with --ui, not by the loader.
         password_hash = spec.get("password_hash") or ""
         if not isinstance(password_hash, str):
             raise ConfigError(f"{where}: 'password_hash' must be a string")
@@ -271,9 +270,9 @@ def load_identities(path: str) -> IdentityStore:
                 f"--identity {identity_id}"
             )
         if password_hash and role not in UI_ROLES:
-            # Ein Agent meldet sich nirgends an. Ein Passwort auf einem
-            # Agenten sieht nach einem Zugang aus, den es nicht gibt -- und
-            # deutet meist auf eine falsch gesetzte Rolle hin.
+            # An agent never signs in anywhere. A password on an
+            # agent looks like an access that does not exist -- and
+            # usually indicates a wrongly set role.
             raise ConfigError(
                 f"{where}: role={role!r} has a password_hash, but only "
                 f"{' and '.join(UI_ROLES)} can sign in to the console."
@@ -311,7 +310,7 @@ def load_identities(path: str) -> IdentityStore:
 
 
 def summarize(store: IdentityStore) -> list[dict[str, Any]]:
-    """Fuer das Startlog (NFR-7) -- ohne Hashes."""
+    """For the startup log (NFR-7) -- without hashes."""
     return [
         {
             "id": i.id,
@@ -325,10 +324,10 @@ def summarize(store: IdentityStore) -> list[dict[str, Any]]:
 
 
 def to_spec(identity: Identity) -> dict[str, Any]:
-    """Serialisiert eine Identitaet zurueck nach YAML-Form.
+    """Serializes an identity back to YAML form.
 
-    Enthaelt die Hashes, aber niemals einen Klartext -- Token wie Passwort
-    gibt es nur im Moment der Ausstellung (FR-2.6).
+    Contains the hashes, but never a plaintext -- token and password
+    exist only at the moment of issuance (FR-2.6).
     """
     spec = {
         "id": identity.id,
@@ -337,8 +336,8 @@ def to_spec(identity: Identity) -> dict[str, Any]:
         "tools": sorted(identity.tools),
         "scopes": list(identity.scopes),
     }
-    # Nur schreiben, was es gibt: eine Datei ohne Konsolenkonten soll auch
-    # nach einem Schreibvorgang keine leeren Passwortfelder tragen.
+    # Only write what exists: a file without console accounts should
+    # not carry empty password fields after a write operation either.
     if identity.password_hash:
         spec["password_hash"] = identity.password_hash
     return spec

@@ -1,19 +1,19 @@
-"""Parametervalidierung und argv-Bau (REQUIREMENTS.md §8).
+"""Parameter validation and argv construction (REQUIREMENTS.md §8).
 
-Das Herzstueck. Die tragende Zusicherung ist FR-5.4:
+The core. The fundamental guarantee is FR-5.4:
 
-    Ein Parameter expandiert immer zu genau einem argv-Element.
+    A parameter always expands to exactly one argv element.
 
-Das ist keine Frage der Sorgfalt beim Escapen, sondern eine Struktureigenschaft:
-jedes argv-Template-Element wird zu genau einem String aufgeloest und als ein
-Listenelement an `execve` uebergeben. Es gibt keinen Shell-Interpreter, der einen
-Wert nachtraeglich in mehrere Woerter zerlegen koennte. Ein Parameterwert kann
-deshalb strukturell kein zusaetzliches Argument erzeugen -- unabhaengig davon,
-welche Zeichen er enthaelt.
+This is not a question of careful escaping, but a structural property:
+each argv template element resolves to exactly one string and is passed as a
+single list element to `execve`. There is no shell interpreter that could
+subsequently split a value into multiple words. A parameter value therefore
+cannot structurally produce an additional argument -- regardless of
+which characters it contains.
 
-Die Zeichenpruefung in `_reject_control_characters` ist Defense-in-Depth
-(FR-6.3), nicht der Primaerschutz. Der Primaerschutz ist die Allowlist pro
-Parameter (FR-6.2).
+The character check in `_reject_control_characters` is defense-in-depth
+(FR-6.3), not the primary protection. The primary protection is the per-
+parameter allowlist (FR-6.2).
 """
 
 from __future__ import annotations
@@ -28,10 +28,10 @@ from .tier1 import Toolkit
 
 
 def _reject_control_characters(name: str, value: str) -> None:
-    """FR-6.3: Steuerzeichen und Nullbytes sind ein Angriffsindikator.
+    """FR-6.3: Control characters and null bytes are an attack indicator.
 
-    Wird vor der Pattern-Pruefung ausgefuehrt, weil ein nachlaessiges Pattern
-    (etwa mit `.`) sie sonst durchlassen koennte.
+    Executed before the pattern check, because a permissive pattern
+    (e.g. using `.`) could otherwise let them through.
     """
     for char in value:
         codepoint = ord(char)
@@ -43,7 +43,7 @@ def _reject_control_characters(name: str, value: str) -> None:
 
 
 def _validate_scalar(param: Parameter, value: Any) -> str:
-    """Prueft einen vom Agenten gelieferten Wert und gibt ihn als String zurueck."""
+    """Validates a value supplied by the agent and returns it as a string."""
     name = param.name
 
     if param.type == "boolean":
@@ -90,9 +90,9 @@ def _validate_scalar(param: Parameter, value: Any) -> str:
             )
         return value
 
-    # string -- Allowlist per Pattern, vollstaendige Uebereinstimmung.
-    # `fullmatch` statt `match`, weil `match` nur den Anfang prueft und damit
-    # jeden Suffix durchliesse.
+    # string -- allowlist via pattern, full match.
+    # `fullmatch` instead of `match`, because `match` only checks the start
+    # and would thus allow any suffix.
     if param.pattern is not None and not param.pattern.fullmatch(value):
         raise Denied(
             DenialReason.PARAM_INVALID,
@@ -102,7 +102,7 @@ def _validate_scalar(param: Parameter, value: Any) -> str:
 
 
 def _substitute(template: str, values: dict[str, str]) -> str:
-    """Ersetzt Platzhalter. Das Ergebnis ist immer genau ein String."""
+    """Replaces placeholders. The result is always exactly one string."""
 
     def replace(match: re.Match[str]) -> str:
         return values[match.group(1)]
@@ -111,17 +111,17 @@ def _substitute(template: str, values: dict[str, str]) -> str:
 
 
 def _resolve_path(param: Parameter, raw: str) -> str:
-    """Loest einen abgeleiteten Pfad auf und prueft ihn gegen seine Wurzel.
+    """Resolves a derived path and checks it against its root.
 
-    `realpath` loest Symlinks auf -- damit faellt der Ausbruch ueber einen
-    praeparierten Symlink innerhalb der erlaubten Wurzel auf (FR-4.3).
-    Der Vergleich laeuft ueber `commonpath` statt ueber einen String-Praefix,
-    weil `/mnt/raid-evil` sonst als unterhalb von `/mnt/raid` gelten wuerde.
+    `realpath` resolves symlinks -- this catches an escape via a
+    prepared symlink within the allowed root (FR-4.3).
+    The comparison uses `commonpath` rather than a string prefix,
+    because `/mnt/raid-evil` would otherwise be considered below `/mnt/raid`.
     """
     root = param.must_resolve_under or ""
 
-    # Die Bausteine sind bereits Allowlist-geprueft und koennen weder '/' noch
-    # '..' enthalten. Die Pruefung hier faengt ein fehlerhaftes derived-Template ab.
+    # The components are already allowlist-checked and can contain neither '/' nor
+    # '..'. The check here catches a faulty derived template.
     if ".." in re.split(r"[\\/]", raw):
         raise Denied(
             DenialReason.PATH_ESCAPE,
@@ -133,7 +133,7 @@ def _resolve_path(param: Parameter, raw: str) -> str:
     try:
         common = os.path.commonpath([real, real_root])
     except ValueError:
-        # Unterschiedliche Laufwerke (Windows) -- kann nie unterhalb liegen.
+        # Different drives (Windows) -- can never be below the root.
         raise Denied(
             DenialReason.PATH_ESCAPE,
             f"Parameter {param.name!r}: path resolves outside {root!r}.",
@@ -147,7 +147,7 @@ def _resolve_path(param: Parameter, raw: str) -> str:
 
 
 def resolve_parameters(tool: ToolDef, arguments: dict[str, Any]) -> dict[str, str]:
-    """Validiert die Agenten-Eingabe und ergaenzt die abgeleiteten Werte."""
+    """Validates the agent input and adds the derived values."""
     agent_params = tool.agent_parameters
 
     for name in arguments:
@@ -158,8 +158,8 @@ def resolve_parameters(tool: ToolDef, arguments: dict[str, Any]) -> dict[str, st
                 f"Unknown parameter {name!r}.",
             )
         if param.is_derived:
-            # FR-5.5: Abgeleitete Werte berechnet der Server. Wer sie mitschickt,
-            # versucht, die Ableitung zu umgehen.
+            # FR-5.5: Derived values are computed by the server. Sending them
+            # attempts to bypass the derivation.
             raise Denied(
                 DenialReason.PARAM_DERIVED_SUPPLIED,
                 f"Parameter {name!r} is determined by the server and must not "
@@ -177,8 +177,8 @@ def resolve_parameters(tool: ToolDef, arguments: dict[str, Any]) -> dict[str, st
             continue
         resolved[name] = _validate_scalar(param, arguments[name])
 
-    # Abgeleitete Parameter nach den Agenten-Parametern, damit sie auf ihnen
-    # aufbauen koennen.
+    # Derived parameters after the agent parameters, so they can
+    # build on them.
     for name, param in tool.parameters.items():
         if not param.is_derived:
             continue
@@ -199,11 +199,11 @@ def _placeholders_missing(template: str, values: dict[str, str]) -> set[str]:
 
 
 def build_argv(tool: ToolDef, values: dict[str, str], toolkit: Toolkit) -> list[str]:
-    """Baut die Argumentliste und prueft sie erneut gegen Ebene 1.
+    """Builds the argument list and checks it again against Tier 1.
 
-    Die zweite Pruefung ist kein Ritual: sie greift auf das *aufgeloeste* argv.
-    Ein Parameterwert, der zu einem gesperrten Unterbefehl aufloest, wird hier
-    gefangen -- die Pruefung beim Laden sah nur das Template.
+    The second check is not a ritual: it operates on the *resolved* argv.
+    A parameter value that resolves to a blocked subcommand is caught here --
+    the check at load time only saw the template.
     """
     argv = [tool.binary]
     for element in tool.argv:
@@ -213,7 +213,7 @@ def build_argv(tool: ToolDef, values: dict[str, str], toolkit: Toolkit) -> list[
                 DenialReason.PARAM_MISSING,
                 f"Argument template needs {sorted(missing)}.",
             )
-        # Genau ein Listenelement pro Template-Element -- das ist FR-5.4.
+        # Exactly one list element per template element -- that is FR-5.4.
         argv.append(_substitute(element, values))
 
     toolkit.check_binary(tool.binary)
@@ -226,7 +226,7 @@ def build_argv(tool: ToolDef, values: dict[str, str], toolkit: Toolkit) -> list[
 
 
 def resolve_scopes(tool: ToolDef, values: dict[str, str]) -> list[str]:
-    """Loest `required_scopes` mit den geprueften Parameterwerten auf."""
+    """Resolves `required_scopes` with the validated parameter values."""
     scopes = []
     for template in tool.required_scopes:
         missing = _placeholders_missing(template, values)
@@ -240,11 +240,11 @@ def resolve_scopes(tool: ToolDef, values: dict[str, str]) -> list[str]:
 
 
 def check_protected(scopes: list[str], toolkit: Toolkit) -> None:
-    """FR-4.12: geschuetzte Ressourcen, unabhaengig von Rechten und Scopes.
+    """FR-4.12: protected resources, independent of rights and scopes.
 
-    Ein `docker.compose_down` auf den eigenen Stack besteht jede andere
-    Pruefung: erlaubtes Binary, gueltiger Name, Pfad unterhalb der Wurzel.
-    Nur diese Liste weiss, dass gatekeeper sich damit selbst beendet.
+    A `docker.compose_down` on its own stack passes every other
+    check: allowed binary, valid name, path below the root.
+    Only this list knows that gatekeeper would terminate itself with it.
     """
     for scope in scopes:
         _, _, resource = scope.partition(":")

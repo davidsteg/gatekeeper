@@ -1,8 +1,8 @@
-"""Tool-Definitionen und ihre Pruefung gegen Ebene 1 (REQUIREMENTS.md §7).
+"""Tool definitions and their validation against Tier 1 (REQUIREMENTS.md §7).
 
-In Stufe 1 ist der Katalog eine statische Datei. Ab Stufe 3 kommt die
-Admin-API dazu -- das Definitionsmodell und die Pruefungen hier bleiben dann
-unveraendert, es aendert sich nur, wer schreibt.
+In stage 1 the catalog is a static file. From stage 3 the admin API is
+added -- the definition model and the checks here remain unchanged,
+only who writes changes.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ import yaml
 from .errors import ConfigError, Tier1Violation, read_config_file
 from .tier1 import Tier1, Toolkit
 
-#: Platzhalter in argv-, derived- und scope-Templates.
+#: Placeholders in argv, derived and scope templates.
 PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
-#: Tool-IDs folgen `<toolkit>.<aktion>` (FR-5.1b).
+#: Tool IDs follow `<toolkit>.<action>` (FR-5.1b).
 TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 
 CATEGORIES = frozenset({"read", "write", "write_external"})
@@ -43,11 +43,11 @@ class Parameter:
 
     @property
     def is_derived(self) -> bool:
-        """Vom Server berechnet, vom Agenten nicht setzbar (FR-5.5)."""
+        """Computed by the server, not settable by the agent (FR-5.5)."""
         return self.derived is not None
 
     def json_schema(self) -> dict[str, Any]:
-        """Schema-Fragment fuer `tools/list`."""
+        """Schema fragment for `tools/list`."""
         if self.type == "integer":
             schema: dict[str, Any] = {"type": "integer"}
             if self.minimum is not None:
@@ -85,7 +85,7 @@ class ToolDef:
 
     @property
     def agent_parameters(self) -> dict[str, Parameter]:
-        """Nur die vom Agenten setzbaren Parameter."""
+        """Only the parameters settable by the agent."""
         return {n: p for n, p in self.parameters.items() if not p.is_derived}
 
     def input_schema(self) -> dict[str, Any]:
@@ -98,10 +98,10 @@ class ToolDef:
         }
 
     def agent_description(self) -> str:
-        """Beschreibung fuer den Agenten.
+        """Description for the agent.
 
-        Nicht-idempotente Tools werden ausdruecklich gekennzeichnet (FR-6.10):
-        ein Modell, das das weiss, wiederholt seltener blind nach einem Timeout.
+        Non-idempotent tools are explicitly marked (FR-6.10):
+        a model that knows this repeats less blindly after a timeout.
         """
         parts = [self.description]
         if not self.idempotent:
@@ -141,8 +141,8 @@ def _parse_parameter(name: str, spec: dict[str, Any], where: str) -> Parameter:
 
     derived = spec.get("derived")
 
-    # FR-5.7: Es gibt keinen unvalidierten Freitext-Parameter. Nur abgeleitete
-    # Werte duerfen ohne Pattern auskommen, weil der Server sie selbst baut.
+    # FR-5.7: There is no unvalidated free-text parameter. Only derived
+    # values may go without a pattern, because the server builds them itself.
     if ptype == "string" and pattern is None and derived is None:
         raise ConfigError(
             f"{where}: parameter {name!r} is a string without 'pattern'. "
@@ -177,10 +177,10 @@ def _parse_parameter(name: str, spec: dict[str, Any], where: str) -> Parameter:
 
 
 def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
-    """FR-4.6: Pruefung gegen Ebene 1 -- beim Laden und erneut bei Ausfuehrung.
+    """FR-4.6: validation against Tier 1 -- at load time and again at execution time.
 
-    Doppelt, weil sich Ebene 1 durch einen Redeploy verschaerft haben kann,
-    waehrend im Katalog noch aeltere Definitionen liegen.
+    Doubled, because Tier 1 may have been tightened by a redeploy,
+    while older definitions still sit in the catalog.
     """
     where = f"tool {tool.id!r}"
     try:
@@ -200,7 +200,7 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
             except ConfigError as exc:
                 raise Tier1Violation(f"{where}: {exc}") from exc
 
-    # FR-4.5: Ein Tool darf die Toolkit-Grenzen unterschreiten, nie ueberschreiten.
+    # FR-4.5: A tool may stay below the toolkit limits, never exceed them.
     if tool.timeout_seconds > toolkit.max_timeout_seconds:
         raise Tier1Violation(
             f"{where}: timeout_seconds={tool.timeout_seconds} exceeds the "
@@ -234,10 +234,10 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     try:
         toolkit = tier1.toolkit(toolkit_name)
     except ConfigError as exc:
-        # Als Ebene-1-Verstoss behandeln, nicht als Syntaxfehler: wird ein
-        # Toolkit beim Redeploy entfernt, sollen seine Tools deaktiviert werden
-        # (FR-4.7) und nicht den Start verhindern. Sonst waere das Entfernen
-        # eines Toolkits ein Weg, den Dienst lahmzulegen.
+        # Treat as a Tier 1 violation, not a syntax error: if a toolkit
+        # is removed during redeploy, its tools should be disabled
+        # (FR-4.7) and not prevent startup. Otherwise, removing a
+        # toolkit would be a way to bring the service down.
         raise Tier1Violation(f"{where}: {exc}") from exc
 
     category = spec.get("category")
@@ -261,9 +261,9 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
 
     scopes = tuple(str(s) for s in (spec.get("required_scopes") or ()))
 
-    # Jeder Platzhalter muss auf einen deklarierten Parameter zeigen. Ein Tippfehler
-    # im Template wuerde sonst erst zur Laufzeit auffallen -- und dann als
-    # unaufloesbarer Platzhalter im Befehl landen.
+    # Every placeholder must point to a declared parameter. A typo
+    # in the template would otherwise only surface at runtime -- and
+    # then land as an unresolvable placeholder in the command.
     declared = set(parameters)
     for template in (*raw_argv, *scopes, *(p.derived or "" for p in parameters.values())):
         for placeholder in _placeholders(template):
@@ -294,11 +294,11 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
 
 
 def parse_tool_spec(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
-    """Oeffentlicher Einstieg fuer eine einzelne Definition.
+    """Public entry point for a single definition.
 
-    Die Admin-API (Stufe 3) und das UI muessen exakt denselben Weg nehmen wie
-    der Start: dieselbe Syntaxpruefung, dieselbe Ebene-1-Pruefung. Gaebe es
-    einen zweiten, milderen Pfad, waere die Grenze nur noch eine Empfehlung.
+    The admin API (stage 3) and the UI must take exactly the same path as
+    startup: the same syntax check, the same Tier 1 check. If there were
+    a second, more lenient path, the boundary would be merely a recommendation.
     """
     return _parse_tool(spec, tier1)
 
@@ -307,12 +307,12 @@ def parse_tool_spec(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
 class Catalog:
     tools: dict[str, ToolDef]
     disabled_by_tier1: list[str]
-    #: Die unveraenderten YAML-Abschnitte in Dateireihenfolge. Notwendig, um
-    #: beim Speichern nicht ueber `ToolDef` zurueckzuschreiben -- das waere
-    #: verlustbehaftet (Kommentare, Feldreihenfolge, unbekannte Felder).
+    #: The unmodified YAML sections in file order. Necessary to avoid
+    #: writing back through `ToolDef` on save -- that would be
+    #: lossy (comments, field order, unknown fields).
     raw: list[dict[str, Any]] = dataclasses.field(default_factory=list)
-    #: Definitionen, die Ebene 1 verletzen: Rohfassung plus Grund. Sie bleiben
-    #: sichtbar, damit man sie im UI reparieren kann statt sie zu verlieren.
+    #: Definitions that violate Tier 1: raw version plus reason. They remain
+    #: visible so they can be repaired in the UI instead of being lost.
     rejected: list[tuple[dict[str, Any], str]] = dataclasses.field(default_factory=list)
 
     def get(self, tool_id: str) -> ToolDef | None:
@@ -329,16 +329,16 @@ class Catalog:
 
 
 def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
-    """Laedt den Seed-Katalog.
+    """Loads the seed catalog.
 
-    FR-4.7: Definitionen, die gegen die aktuelle Ebene 1 verstossen, werden
-    protokolliert und deaktiviert -- nicht stillschweigend toleriert. Mit
-    `strict=True` bricht der Start stattdessen ab (fuer CI).
+    FR-4.7: definitions that violate the current Tier 1 are
+    logged and disabled -- not silently tolerated. With
+    `strict=True` startup aborts instead (for CI).
 
-    Eine fehlende Datei ist kein Fehler, sondern der Zustand nach der
-    Installation: gatekeeper liefert keinen Katalog mit, Tools legt man in der
-    Oberflaeche an. Der Aufrufer protokolliert das -- ein vertippter Pfad soll
-    nicht als "leerer Katalog" durchgehen, ohne dass es jemand sieht.
+    A missing file is not an error but the state after
+    installation: gatekeeper ships no catalog; tools are created in the
+    UI. The caller logs this -- a mistyped path should
+    not pass as an "empty catalog" without anyone noticing.
     """
     if not os.path.exists(path):
         return Catalog(tools={}, disabled_by_tier1=[], raw=[], rejected=[])
@@ -347,7 +347,7 @@ def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
 
     entries = raw.get("tools")
     if entries is None:
-        # `tools:` ohne Inhalt ist ein leerer Katalog, kein Syntaxfehler.
+        # `tools:` without content is an empty catalog, not a syntax error.
         entries = []
     if not isinstance(entries, list):
         raise ConfigError("tools.yaml: section 'tools' is missing or not a list")

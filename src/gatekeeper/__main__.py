@@ -1,4 +1,4 @@
-"""Einstiegspunkt, Token- und Passwortwerkzeug."""
+"""Entry point, token and password tool."""
 
 from __future__ import annotations
 
@@ -30,17 +30,17 @@ logger = logging.getLogger("gatekeeper")
 
 
 def _config_dir() -> str:
-    """Ebene 1. Darf read-only gemountet sein."""
+    """Tier 1. May be mounted read-only."""
     return os.environ.get("GATEKEEPER_CONFIG_DIR", "/etc/gatekeeper")
 
 
 def _state_dir() -> str:
-    """Ebene 2. Muss beschreibbar sein, wenn die Oberflaeche schreiben soll.
+    """Tier 2. Must be writable if the console is to write.
 
-    Faellt ohne gesetzte Variable auf das Konfigurationsverzeichnis zurueck --
-    dann liegt alles in einem Mount, was fuer einfache Installationen genuegt.
-    Die mitgelieferte compose.yaml trennt beides, damit Ebene 1 tatsaechlich
-    read-only sein kann.
+    Falls back to the configuration directory when the variable is not set --
+    then everything sits in one mount, which suffices for simple setups.
+    The bundled compose.yaml separates the two so that Tier 1 can actually
+    be read-only.
     """
     return os.environ.get("GATEKEEPER_STATE_DIR") or _config_dir()
 
@@ -57,14 +57,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
         level=os.environ.get("GATEKEEPER_LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    # Erststart: ein gemountetes, leeres Verzeichnis genuegt. Nur wenn keine
-    # der drei Dateien existiert -- siehe `_bootstrap_on_first_start`.
+    # First start: a mounted, empty directory suffices. Only when none
+    # of the three files exist -- see `_bootstrap_on_first_start`.
     if not (args.no_bootstrap or os.environ.get("GATEKEEPER_NO_BOOTSTRAP", "")
             in ("1", "true", "yes")):
         problem = _bootstrap_on_first_start(_config_dir(), _state_dir())
         if problem:
-            # Nicht weiterlaufen lassen: der Loader wuerde gleich darauf
-            # "not found" melden und damit die falsche Ursache nennen.
+            # Do not continue: the loader would immediately
+            # report "not found" and name the wrong cause.
             print(problem, file=sys.stderr)
             return 2
 
@@ -86,9 +86,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
             redactor=Redactor(),
         )
     except OSError as exc:
-        # Ohne Audit-Log wird nicht gestartet. Ein Dienst, der Host-Operationen
-        # vermittelt und dabei nicht mitschreiben kann, ist schlimmer als
-        # keiner: die Aufrufe finden statt, nur weiss hinterher niemand welche.
+        # Without an audit log, startup is refused. A service that brokers
+        # host operations and cannot record them is worse than
+        # none: the calls happen, but nobody knows which afterwards.
         print(
             f"Configuration error: cannot use the audit directory "
             f"{tier1.audit_dir!r}: {exc}\n"
@@ -106,10 +106,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     )
     log_startup(service, identities)
 
-    # SIGHUP laedt alle drei Konfigurationsdateien neu, ohne den Prozess
-    # neu zu starten. Nur Ebene 1 (toolkits.yaml) braucht das wirklich --
-    # Ebene 2 laedt die Oberflaeche beim Schreiben selbst nach. Aber ein
-    # handeditierter Stand soll ohne Neustart wirksam werden.
+    # SIGHUP reloads all three configuration files without restarting
+    # the process. Only Tier 1 (toolkits.yaml) truly needs this --
+    # Tier 2 is reloaded by the console on write. But a
+    # hand-edited state should take effect without a restart.
     import signal as _signal
 
     def _on_sighup(_signum: int, _frame: object) -> None:
@@ -120,7 +120,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         )
         if error:
             logger.error("SIGHUP reload failed: %s", error)
-        # Bei Erfolg hat reload_config selbst geloggt.
+        # On success, reload_config has already logged.
 
     _signal.signal(_signal.SIGHUP, _on_sighup)
 
@@ -128,17 +128,17 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if ui_enabled:
         identities_path = _config_path("identities.yaml", args.identities)
         if not any(i.role in UI_ROLES for i in identities.identities.values()):
-            # Fail closed: eine Oberflaeche ohne anmeldefaehige Identitaet waere
-            # eine offene Flaeche ohne Nutzen. Lieber gar nicht starten als eine
-            # Anmeldemaske anbieten, hinter die niemand kommt.
+            # Fail closed: a console without a sign-in-capable identity would
+            # be an open surface with no use. Better not to start at all than
+            # to offer a login form that nobody can get past.
             print(
                 "Configuration error: --ui requires at least one identity with "
                 "role: viewer or role: admin in identities.yaml.",
                 file=sys.stderr,
             )
             return 2
-        # Danach hat jede Konsolenrolle ein Passwort -- oder es steht in
-        # `problem`, warum nicht, und dann wird nicht gestartet.
+        # After that, every console role has a password -- or
+        # `problem` says why not, and then startup is refused.
         problem = _ensure_console_passwords(identities_path, identities)
         if problem:
             print(problem, file=sys.stderr)
@@ -162,8 +162,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
             )
             stuck = sorted(n for n, ok in store.writability().items() if not ok)
             if stuck:
-                # Kein Startabbruch: lesen bleibt nuetzlich. Aber es muss im Log
-                # stehen, sonst sucht jemand den Fehler im Formular.
+                # No startup abort: reading remains useful. But it must be in
+                # the log, otherwise someone will look for the error in the form.
                 logger.warning(
                     "Console writes will be refused: %s not writable (read-only mount?)",
                     ", ".join(f"{n}.yaml" for n in stuck),
@@ -186,7 +186,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """Konfiguration streng pruefen, ohne zu starten -- fuer CI und Deploy."""
+    """Validate the configuration strictly, without starting -- for CI and deploy."""
     try:
         tier1 = load_tier1(_config_path("toolkits.yaml", args.toolkits))
         catalog = load_catalog(_config_path("tools.yaml", args.tools), tier1, strict=True)
@@ -208,29 +208,29 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
-#: Ebene 1, leer. gatekeeper trifft keine Annahme darueber, was ein Agent
-#: erreichen koennen soll -- das weiss nur, wer das System kennt. Nach `init`
-#: ist nichts moeglich; jedes Toolkit ist eine bewusste Entscheidung, die einen
-#: Redeploy kostet und damit nicht nebenbei passiert.
+#: Tier 1, empty. gatekeeper makes no assumption about what an agent
+#: should be able to reach -- only someone who knows the system knows that.
+#: After `init`, nothing is possible; every toolkit is a deliberate decision
+#: that costs a redeploy and therefore does not happen by the way.
 _INIT_TOOLKITS = """\
-# Ebene 1 - Deploy-Zeit, zur Laufzeit unveraenderlich (REQUIREMENTS.md §6).
+# Tier 1 - deploy-time, immutable at runtime (REQUIREMENTS.md §6).
 #
-# Von 'gatekeeper init' leer angelegt. Solange hier kein Toolkit steht, kann
-# gatekeeper nichts ausfuehren - auch kein Administrator kann daran etwas
-# aendern, denn die Oberflaeche legt Tools an, aber niemals ein Toolkit
-# (FR-4.11). Erweitern heisst: diese Datei bearbeiten und neu ausrollen.
+# Created empty by 'gatekeeper init'. As long as no toolkit is defined here,
+# gatekeeper cannot execute anything - no administrator can change this,
+# because the console creates tools but never a toolkit
+# (FR-4.11). Extending means: edit this file and redeploy.
 #
-# Ein Toolkit sieht so aus. Die Werte sind Beispiele und muessen zum Host
-# passen - vollstaendiger Vorrat in config/examples/toolkits.yaml:
+# A toolkit looks like this. The values are examples and must match
+# the host - a complete set is in config/examples/toolkits.yaml:
 #
 # toolkits:
 #   diag:
 #     executor: local          # local | docker
-#     binaries:                # absolute Pfade, exakte Allowlist (FR-4.1)
+#     binaries:                # absolute paths, exact allowlist (FR-4.1)
 #       - /usr/bin/uptime
-#     denied_args: []          # gesperrte Unterbefehle und Flags (FR-4.2)
-#     path_roots: []           # Wurzeln fuer abgeleitete Pfade (FR-4.3)
-#     protected_resources: []  # fuer kein Tool erreichbar (FR-4.12)
+#     denied_args: []          # blocked subcommands and flags (FR-4.2)
+#     path_roots: []           # roots for derived paths (FR-4.3)
+#     protected_resources: []  # reachable by no tool (FR-4.12)
 #     max_timeout_seconds: 10
 #     max_output_bytes: 16384
 
@@ -250,7 +250,7 @@ rate_limits:
 
 max_concurrent: 4
 
-# FR-9.4/9.5 - append-only mit Rotation. Ohne Rotation fuellt das Log das Dataset.
+# FR-9.4/9.5 - append-only with rotation. Without rotation, the log fills the dataset.
 audit:
   dir: {audit_dir}
   max_bytes: 33554432
@@ -258,10 +258,10 @@ audit:
 """
 
 _INIT_TOOLS = """\
-# Katalog (REQUIREMENTS.md §7). Leer angelegt - so ist es gemeint.
+# Catalog (REQUIREMENTS.md §7). Created empty - this is by design.
 #
-# Tools legt man in der Oberflaeche unter /ui an; sie schreibt diese Datei.
-# Vorlagen zum Abschauen stehen in config/examples/tools.yaml.
+# Tools are created in the console at /ui; it writes this file.
+# Examples to learn from are in config/examples/tools.yaml.
 
 tools: []
 """
@@ -278,15 +278,15 @@ def _paths(config_dir: str, state_dir: str) -> dict[str, str]:
 def bootstrap(
     config_dir: str, state_dir: str, audit_dir: str | None = None
 ) -> tuple[str, str]:
-    """Schreibt den Leerzustand, gibt Token und Konsolenpasswort zurueck.
+    """Writes the empty state, returns token and console password.
 
-    Der Administrator bekommt beides, weil er beides braucht und weil es zwei
-    verschiedene Dinge sind: der Token spricht `/mcp` an, das Passwort oeffnet
-    die Konsole. Beide erscheinen genau einmal (FR-2.6).
+    The administrator gets both, because both are needed and because they are two
+    different things: the token addresses `/mcp`, the password opens
+    the console. Both appear exactly once (FR-2.6).
 
-    Gemeinsamer Kern von `init` und dem Erststart. Es gibt bewusst nur eine
-    Fassung: zwei Wege, die eine Anfangskonfiguration erzeugen, laufen sonst
-    irgendwann auseinander -- und der seltener benutzte ist dann der kaputte.
+    Shared core of `init` and first start. There is deliberately only one
+    version: two paths that produce an initial configuration would eventually
+    diverge -- and the less frequently used one would be the broken one.
     """
     for directory in {config_dir, state_dir}:
         os.makedirs(directory, exist_ok=True)
@@ -299,20 +299,20 @@ def bootstrap(
         paths["toolkits"]: _INIT_TOOLKITS.format(audit_dir=audit),
         paths["tools"]: _INIT_TOOLS,
         paths["identities"]: (
-            "# Identitaeten und Rechte (REQUIREMENTS.md §4 und §9).\n"
+            "# Identities and permissions (REQUIREMENTS.md §4 and §9).\n"
             "#\n"
-            "# Enthaelt nur Hashes. Weitere Identitaeten legt die Oberflaeche an.\n"
+            "# Contains only hashes. The console creates further identities.\n"
             "#\n"
-            "# Zwei getrennte Nachweise: 'token_hash' gehoert zur API (/mcp),\n"
-            "# 'password_hash' zur Anmeldung an der Konsole (/ui). Wer eines\n"
-            "# verliert, verliert nicht beides.\n\n"
+            "# Two separate credentials: 'token_hash' belongs to the API (/mcp),\n"
+            "# 'password_hash' for signing in to the console (/ui). Losing one\n"
+            "# does not mean losing both.\n\n"
             "identities:\n"
             "  - id: admin\n"
             "    role: admin\n"
             f'    token_hash: "{hash_token(token)}"\n'
             f'    password_hash: "{hash_token(password)}"\n'
-            "    # Ein Administrator braucht keine Tool-Rechte: die Oberflaeche\n"
-            "    # ruft nichts auf.\n"
+            "    # An administrator needs no tool rights: the console\n"
+            "    # calls nothing.\n"
             "    tools: []\n"
             "    scopes: []\n"
         ),
@@ -324,7 +324,7 @@ def bootstrap(
 
 
 def _whoami() -> str:
-    """uid:gid des laufenden Prozesses, fuer eine brauchbare chown-Empfehlung."""
+    """uid:gid of the running process, for a usable chown recommendation."""
     try:
         return f"{os.getuid()}:{os.getgid()}"  # type: ignore[attr-defined]
     except AttributeError:
@@ -332,22 +332,22 @@ def _whoami() -> str:
 
 
 def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> str | None:
-    """Erststart: fehlt alles, wird alles angelegt. Fehlt etwas, nicht.
+    """First start: if everything is missing, everything is created. If something is missing, not.
 
-    Damit genuegt es, ein Verzeichnis zu mounten und den Container zu starten.
+    This makes it sufficient to mount a directory and start the container.
 
-    Die Bedingung ist eng gefasst, und das ist der Punkt: angelegt wird nur,
-    wenn *keine* der drei Dateien existiert. Waere schon eine da, spraeche das
-    fuer eine bestehende Installation mit einem Problem -- ein verrutschter
-    Mount etwa. Dann eine frische Konfiguration mit neuem Administrator
-    darueberzulegen wuerde den Fehler verdecken und saehe aus, als sei der
-    Katalog verschwunden. Lieber laut scheitern.
+    The condition is narrowly scoped, and that is the point: creation happens
+    only when *none* of the three files exist. If even one were present, that
+    would indicate an existing installation with a problem -- a slipped
+    mount, perhaps. Overwriting that with a fresh configuration and a new
+    administrator would hide the error and look like the catalog
+    disappeared. Better to fail loudly.
 
-    Gibt `None` zurueck, wenn nichts zu tun war oder es geklappt hat, sonst
-    eine Meldung fuer Menschen. Geschrieben wird auf Verdacht statt vorher mit
-    `os.access` zu fragen: die Vorabfrage kann irren, und vor allem war ihr
-    stiller Ausstieg die schlechtere Diagnose -- der Loader meldete danach
-    "not found", obwohl das Verzeichnis da war und nur niemandem gehoerte.
+    Returns `None` if there was nothing to do or it succeeded, otherwise
+    a human-readable message. Writing is done optimistically rather than
+    asking with `os.access` first: the pre-check can be wrong, and above all
+    its silent exit was the worse diagnosis -- the loader would then report
+    "not found" even though the directory was there and just owned by nobody.
     """
     paths = _paths(config_dir, state_dir)
     if any(os.path.exists(p) for p in paths.values()):
@@ -370,9 +370,9 @@ def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> str | None:
         "may do.",
         config_dir,
     )
-    # Beide Geheimnisse stehen damit im Containerlog. Das ist der Preis dafuer,
-    # dass ein Erststart ohne zweiten Befehl auskommt; wer das nicht will,
-    # nutzt `gatekeeper init` und GATEKEEPER_NO_BOOTSTRAP=1.
+    # Both secrets are now in the container log. That is the price for
+    # a first start without a second command; anyone who does not want this
+    # uses `gatekeeper init` and GATEKEEPER_NO_BOOTSTRAP=1.
     logger.warning(
         "Administrator console password (shown once, and only here): %s -- "
         "sign in at /ui as 'admin', then change it there so it no longer "
@@ -388,19 +388,19 @@ def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> str | None:
 
 
 def _ensure_console_passwords(path: str, identities: IdentityStore) -> str | None:
-    """Gibt Konsolenkonten ohne Passwort eines -- einmalig, ins Log.
+    """Gives console accounts without a password one -- once, into the log.
 
-    Der Aufstiegsweg. Eine `identities.yaml` aus einer Fassung vor der
-    Konsolenanmeldung kennt nur Tokens; nach dem Aufstieg koennte sich
-    niemand mehr anmelden. Drei Auswege waeren denkbar gewesen: den Token
-    weiter als Passwort gelten lassen (dann waere die Trennung eine
-    Behauptung), den Start verweigern (dann steht ein laufendes Deployment
-    nach einem Image-Wechsel still), oder ein Passwort erzeugen und es genau
-    einmal ins Log schreiben -- so wie es der Erststart mit dem Token
-    ohnehin haelt. Der dritte Weg gewinnt.
+    The upgrade path. An `identities.yaml` from a version before
+    console sign-in knows only tokens; after the upgrade nobody
+    could sign in anymore. Three ways out were conceivable: let the token
+    continue to count as a password (then the separation would be a
+    mere claim), refuse to start (then a running deployment
+    would stand still after an image change), or generate a password and write
+    it to the log exactly once -- just as the first start does with the token
+    anyway. The third way wins.
 
-    Gibt `None` zurueck, wenn nichts zu tun war oder es geklappt hat, sonst
-    eine Meldung fuer Menschen.
+    Returns `None` if there was nothing to do or it succeeded, otherwise
+    a human-readable message.
     """
     missing = [
         i.id
@@ -432,17 +432,17 @@ def _ensure_console_passwords(path: str, identities: IdentityStore) -> str | Non
             password,
         )
 
-    # Aus der Datei nachladen, nicht im Speicher flicken: nur so ist belegt,
-    # dass der laufende Zustand dem entspricht, was ein Neustart ergaebe.
+    # Reload from the file, not patched in memory: only this proves
+    # that the running state matches what a restart would produce.
     identities.identities = load_identities(path).identities
     return None
 
 
 def cmd_password(args: argparse.Namespace) -> int:
-    """Setzt das Konsolenpasswort einer Identitaet in `identities.yaml`.
+    """Sets the console password of an identity in `identities.yaml`.
 
-    Der Weg zurueck, wenn niemand mehr hineinkommt -- und der Weg hinein fuer
-    einen Bestand, der noch keine Passwoerter kennt.
+    The way back in when nobody can get in anymore -- and the way in for
+    a stock that does not yet know passwords.
     """
     path = _config_path("identities.yaml", args.identities)
     password = args.password or generate_password()
@@ -465,12 +465,12 @@ def cmd_password(args: argparse.Namespace) -> int:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    """Legt einen lauffaehigen Leerzustand an: keine Tools, ein Administrator.
+    """Creates a runnable empty state: no tools, one administrator.
 
-    gatekeeper liefert bewusst keinen Katalog mit. Ein Werkzeug, das
-    root-aequivalenten Zugriff vermittelt, soll nach der Installation nichts
-    koennen -- jede Faehigkeit ist danach eine bewusste Entscheidung, die im
-    Audit-Log steht.
+    gatekeeper deliberately ships without a catalog. A tool that
+    brokers root-equivalent access should be able to do nothing after
+    installation -- every capability from here on is a deliberate decision
+    that is recorded in the audit log.
     """
     base = args.config_dir or _config_dir()
     state = args.state_dir or (_state_dir() if not args.config_dir else base)
@@ -499,8 +499,8 @@ def cmd_init(args: argparse.Namespace) -> int:
         "\nNo tools, no agents. Start with --ui and create what you need;\n"
         "every capability from here on is a deliberate, audited decision."
     )
-    # Zwei Zeilen, weil es zwei Nachweise sind. Sie zu einem zusammenzuziehen
-    # waere genau das Missverstaendnis, das die Trennung aufloesen soll.
+    # Two lines, because there are two credentials. Collapsing them into one
+    # would be exactly the misunderstanding that the separation is meant to resolve.
     print(
         f"\nAdministrator console password for /ui (shown once):\n  {password}"
         f"\n\nAdministrator API token for /mcp (shown once):\n  {token}"
@@ -509,10 +509,10 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_token(args: argparse.Namespace) -> int:
-    """Erzeugt einen Token und gibt Klartext plus Hash aus.
+    """Generates a token and outputs plaintext plus hash.
 
-    Der Klartext erscheint hier genau einmal (FR-2.6) -- in die Konfiguration
-    gehoert ausschliesslich der Hash.
+    The plaintext appears here exactly once (FR-2.6) -- only the hash
+    belongs in the configuration.
     """
     token = args.token or generate_token()
     print(f"Token (shown once, goes into the agent config.yaml):\n  {token}\n")
