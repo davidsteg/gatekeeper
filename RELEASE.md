@@ -156,6 +156,19 @@ map renders as before, only with tooltips.
 
 ---
 
+## 0.3.1
+
+Neu: [AGENTS.md](AGENTS.md) — was jemand wissen muss, der diesen Code ändert.
+
+Enthält die Zusicherungen, die nicht brechen dürfen, die Konventionen, die
+Release-Regel, die Architektur und eine Liste der Fallen, die dieses Projekt
+bereits gekostet hat — damit künftige Arbeiten sie nicht erneut zahlen.
+
+Außerdem: Passwort-Rotation für die Oberfläche über `/ui/account` (neben der
+bisherigen Token-Rotation in der Identitätsverwaltung).
+
+---
+
 ## 0.3.0
 
 **The console has its own login.** `/ui` now asks for identity and
