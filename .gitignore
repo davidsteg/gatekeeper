@@ -14,3 +14,4 @@ dist/
 # Ebene 2 zur Laufzeit: enthaelt echte Token-Hashes und wird von der
 # Oberflaeche geschrieben. Gehoert auf den Host, nicht ins Repo.
 config/identities.yaml
+uv.lock
