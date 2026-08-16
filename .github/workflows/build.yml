@@ -1,14 +1,14 @@
 name: build
 
-# Jede Aenderung ist ein Release. Ausgeloest wird es nicht von einem
-# handgesetzten Tag, sondern von der Version in pyproject.toml: steht dort eine
-# Fassung, zu der es noch kein Tag gibt, wird sie veroeffentlicht. Ein Release
-# entsteht damit im selben Commit wie die Aenderung -- und wer die Version
-# vergisst, merkt es daran, dass nichts erscheint.
+# Every change is a release. It is not triggered by a hand-set tag but by
+# the version in pyproject.toml: if it names a version that has no tag yet,
+# that version gets released. A release is therefore born in the same commit
+# as the change -- and forgetting to bump the version shows up as nothing
+# appearing.
 #
-# Getrennte Jobs mit Abhaengigkeit: veroeffentlicht wird nur, wenn die Tests
-# vorher durchgelaufen sind. gatekeeper haelt root-aequivalenten Zugriff auf
-# den Host; ein Image mit rotem Negativkorpus darf nicht in die Registry.
+# Separate jobs with a dependency: release happens only once the tests have
+# passed. gatekeeper holds root-equivalent access to the host; an image with
+# a red negative corpus must not reach the registry.
 
 on:
   push:
@@ -31,8 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Tags werden gebraucht, um zu erkennen, ob diese Version schon
-          # veroeffentlicht wurde.
+          # Tags are needed to detect whether this version has already been
+          # released.
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -46,8 +46,8 @@ jobs:
           version=$(python -c "import tomllib,pathlib; \
             print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          # '1.2' zeigt auf die neueste 1.2.x -- wer die Reihe pinnen will,
-          # bekommt Fehlerbehebungen, aber keine neuen Funktionen.
+          # '1.2' points at the newest 1.2.x -- whoever pins the series gets
+          # bug fixes but no new features.
           echo "series=${version%.*}" >> "$GITHUB_OUTPUT"
           echo "Package version: $version"
 
@@ -63,9 +63,9 @@ jobs:
             exit 0
           fi
 
-          # Eine Version ohne Notizen wird nicht veroeffentlicht. Die Pruefung
-          # steht hier, vor dem Image-Job: schlaegt sie fehl, liegt noch nichts
-          # in der Registry, dessen Release dann fehlt.
+          # A version without notes does not get released. The check sits
+          # here, ahead of the image job: if it fails, nothing has landed in
+          # the registry yet that would then be missing its release.
           notes=$(awk -v v="$version" '
             $0 ~ "^## " v "([[:space:]]|$)" { found = 1; next }
             found && /^## / { exit }
@@ -83,13 +83,13 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Test suite
-        # Unter Linux laufen auch die Faelle, die unter Windows uebersprungen
-        # werden -- allen voran der Symlink-Ausbruch aus dem Negativkorpus.
+        # On Linux the cases skipped on Windows also run -- most notably the
+        # symlink escape from the negative corpus.
         run: pytest -q
 
       - name: Validate the empty state
-        # Der Weg, den jede Erstinstallation nimmt. Er muss zu einer Lage
-        # fuehren, die laedt -- ohne dass irgendetwas vorkonfiguriert waere.
+        # The path every fresh install takes. It has to lead to a state that
+        # loads -- without anything being preconfigured.
         run: |
           gatekeeper init --config-dir /tmp/blank | tee /tmp/init.log
           grep -q 'toolkits: {}' /tmp/blank/toolkits.yaml
@@ -102,8 +102,8 @@ jobs:
           grep -q '0 toolkits, 0 tools, 1 identities' /tmp/check.log
 
       - name: Validate the examples
-        # Die Beispiele sind das, wovon jemand abschreibt. Ein Tippfehler darin
-        # faellt sonst erst auf einem fremden Host auf.
+        # The examples are what somebody copies from. A typo in them would
+        # otherwise surface for the first time on somebody else's host.
         run: |
           hash=$(gatekeeper token | grep -oE 'scrypt\$[^[:space:]]+')
           printf 'identities:\n  - id: ci\n    role: admin\n    token_hash: "%s"\n    tools: []\n    scopes: []\n' \
@@ -121,19 +121,19 @@ jobs:
     permissions:
       contents: read
     outputs:
-      # Der Digest wandert ins Release: ein Tag laesst sich ueberschreiben,
-      # ein Digest nicht. Wer danach pinnt, bekommt garantiert dieses Image.
+      # The digest travels into the release: a tag can be overwritten, a
+      # digest cannot. Whoever pins to it afterwards is guaranteed this image.
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
-      # Fuer linux/arm64 auf einem amd64-Runner.
+      # For linux/arm64 on an amd64 runner.
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        # Bei Pull Requests wird nur gebaut, nicht veroeffentlicht: ein Fork
-        # duerfte sonst ueber einen PR ein Image unter unserem Namen schieben.
+        # On pull requests only building happens, not publishing: a fork
+        # would otherwise be able to push an image under our name via a PR.
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
@@ -149,19 +149,19 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           flavor: latest=false
-          # Nur Versionen, keine Zweig- oder Commit-Namen: ein Tag wie
-          # 'sha-c8598dc' sagt nicht, was drin ist.
+          # Versions only, no branch or commit names: a tag like
+          # 'sha-c8598dc' says nothing about what is inside.
           #
-          # Ist die Version neu, entstehen '1.2.3' und '1.2'. Ist sie schon
-          # veroeffentlicht, gibt es '1.2.3-dev' -- erkennbar unfertig und
-          # trotzdem eine Version.
+          # If the version is new, '1.2.3' and '1.2' are produced. If it is
+          # already released, '1.2.3-dev' appears instead -- recognizably
+          # unfinished and still a version.
           #
-          # 'latest' zeigt immer auf den neuesten Bau, ohne Ausnahme. Da nach
-          # der Regel in RELEASE.md jede Aenderung ein Release ist, ist das in
-          # aller Regel auch das neueste Release; ein '-dev' dazwischen ist der
-          # Ausnahmefall. Fuer den Betrieb bleibt eine feste Version richtig
-          # (NFR-5) -- 'latest' bewegt sich, und ein Redeploy zieht dann eine
-          # andere Fassung, ohne dass jemand es entschieden haette.
+          # 'latest' always points at the newest build, without exception.
+          # Since the rule in RELEASE.md makes every change a release, that is
+          # as a rule also the newest release; a '-dev' in between is the
+          # exception. For operation a pinned version stays correct
+          # (NFR-5) -- 'latest' moves, and a redeploy then pulls a different
+          # build without anyone having decided that.
           tags: |
             type=raw,value=${{ env.VERSION }},enable=${{ env.RELEASING == 'true' }}
             type=raw,value=${{ needs.test.outputs.series }},enable=${{ env.RELEASING == 'true' }}
@@ -181,12 +181,12 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke test the published image
-        # Erstinstallation im Container nachstellen: 'init' schreibt den
-        # Leerzustand, 'check' liest ihn zurueck. Beides unprivilegiert.
+        # Reproduces a fresh install inside the container: 'init' writes the
+        # empty state, 'check' reads it back. Both unprivileged.
         if: github.event_name != 'pull_request'
         run: |
-          # Gezielt 'latest': es zeigt nach jedem Push auf genau diesen Bau,
-          # unabhaengig davon, in welcher Reihenfolge die Tags erzeugt wurden.
+          # Deliberately 'latest': after every push it points at exactly this
+          # build, regardless of the order the tags were produced in.
           tag="${IMAGE}:latest"
           docker pull "$tag"
           docker run --rm --entrypoint docker "$tag" compose version
@@ -200,7 +200,7 @@ jobs:
     if: needs.test.outputs.release == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      # Das Einzige, wofuer dieser Job Schreibrecht braucht.
+      # The only thing this job needs write access for.
       contents: write
     steps:
       - uses: actions/checkout@v4
@@ -208,7 +208,7 @@ jobs:
           fetch-depth: 0
 
       - name: Assemble the deploy bundle
-        # Alles, was auf dem Host gebraucht wird, ohne das Repo zu klonen.
+        # Everything needed on the host, without cloning the repo.
         run: |
           dir="gatekeeper-${{ needs.test.outputs.version }}"
           mkdir -p "bundle/$dir"
@@ -227,9 +227,9 @@ jobs:
             found { print }
           ' RELEASE.md > notes.md
 
-          # Zitierter Heredoc: im Text wird nichts expandiert, Backticks und
-          # Dollarzeichen bleiben, wie sie dastehen. Die Werte kommen danach
-          # ueber Platzhalter herein.
+          # Quoted heredoc: nothing in the text gets expanded, backticks and
+          # dollar signs stay exactly as written. The values come in
+          # afterwards through placeholders.
           cat >> notes.md <<'EOF'
 
           ---
@@ -240,15 +240,15 @@ jobs:
           docker pull __IMAGE__:__VERSION__
           ```
 
-          Im Betrieb den Digest pinnen statt des Tags -- ein Tag laesst sich
-          ueberschreiben, ein Digest nicht:
+          In production, pin the digest instead of the tag -- a tag can be
+          overwritten, a digest cannot:
 
           ```
           __IMAGE__@__DIGEST__
           ```
 
-          Gebaut fuer `linux/amd64` und `linux/arm64`. Das Buendel unten
-          enthaelt `compose.yaml` und die Beispielkonfigurationen.
+          Built for `linux/amd64` and `linux/arm64`. The bundle below
+          contains `compose.yaml` and the example configurations.
           EOF
 
           sed -i "s|__IMAGE__|$IMAGE|g; s|__VERSION__|$VERSION|g; s|__DIGEST__|$DIGEST|g" notes.md
@@ -263,8 +263,8 @@ jobs:
           git tag -a "v$VERSION" -m "gatekeeper $VERSION"
           git push origin "v$VERSION"
 
-          # Ein Tag wie v1.0.0-rc1 ist eine Vorabversion und wird nicht als
-          # neueste Fassung angeboten.
+          # A tag like v1.0.0-rc1 is a pre-release and is not offered as the
+          # latest build.
           case "$VERSION" in
             *-*) prerelease="--prerelease" ;;
             *)   prerelease="" ;;
