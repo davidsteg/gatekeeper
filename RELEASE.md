@@ -60,6 +60,45 @@ cannot. It is in every release.
 
 ---
 
+## 0.3.7
+
+**Console UI review fixes + access map filter.**
+
+- **Entity escaping bug fixed** — the Tier 1 ceiling text in the tool
+  editor was built with the literal string `&le;`, then passed through
+  the same escaping helper as every other value, which printed the
+  entity name (`&le;`) instead of `≤` on the page.
+- **Layout overflow fixed** — a long path root, scope pattern, or other
+  unbounded value in a `.row` card could widen the whole page past the
+  viewport, dragging the sidebar and topbar sideways with it. Also fixed
+  a 17px mobile overflow caused by the sidebar grid track not shrinking
+  below its content width.
+- **Audit table header actually sticks** — `position: sticky` had no
+  effect because the scroll container's height was unbounded; the table
+  wrapper is now height-bounded so the header stays visible while
+  scrolling a long audit log.
+- **Dark-mode button contrast fixed** — white text on the dark-mode
+  accent color measured 2.5:1 on Save/Sign in/New tool/New identity.
+  Ink now switches per theme via a `--on-solid` token (7.5–8:1 in both
+  themes).
+- **Access map tooltips list actual tool IDs** — hovering an identity or
+  toolkit node used to show only a tool *count*; it now lists the tool
+  IDs themselves (capped at 8, with a "+N more" tail).
+- **Access map filter** — a GET-based search field above the map
+  (`?q=`, same pattern as the audit page's own filters, no script
+  required) dims every identity/toolkit/protected-resource node that
+  doesn't match, keeping the map's shape legible instead of removing
+  the context around a single hit.
+- **Call flow diagram collapsed by default** — it's static documentation
+  that looks the same on every visit; it's now a native `<details>`
+  disclosure instead of always occupying the top of the page.
+- **"Calls, last 12 h" no longer mislabels the feed below it** — that
+  card also shows sign-ins and admin changes, not just calls. Split into
+  two headed sections: "Calls, last 12 h" (the chart) and "Recent
+  events" (the feed).
+
+---
+
 ## 0.3.6
 
 **Tools page redesigned — card grid grouped by toolkit.**
