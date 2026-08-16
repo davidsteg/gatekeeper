@@ -512,6 +512,24 @@ async def test_invalid_definition_returns_to_the_editor(admin_env):
         assert "demo.bad" in response.text, "the input must be preserved"
 
 
+async def test_tier1_ceilings_render_as_symbols_not_entities(admin_env):
+    """The Tier 1 sidebar next to the tool editor shows a literal '<=' sign.
+
+    The ceiling text used to be built with the HTML entity '&le;' and then
+    passed through the same escaping helper as every other value in
+    _pills() -- which turned the entity's own ampersand into '&amp;le;'
+    and printed the entity name on the page instead of the symbol.
+    """
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _signed_in(client)
+        page = await client.get(f"{UI_PREFIX}/tools/new")
+
+    assert page.status_code == 200
+    assert "&le;" not in page.text
+    assert "≤" in page.text  # '<=' -- rendered next to the editor
+
+
 async def test_agent_token_cannot_reach_the_console(admin_env):
     """Neither as a password nor otherwise: an agent has no console account."""
     app, tokens = admin_env["app"], admin_env["tokens"]
