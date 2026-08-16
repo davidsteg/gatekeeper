@@ -61,6 +61,25 @@ Digest nicht. Er steht in jedem Release.
 
 ---
 
+## 0.2.6
+
+**Scope-Wildcard-Grenze per Test festgeschrieben.** Der `-` in
+`stack:dev-*` ist literal, kein naiver Präfix — `devtools` oder `dev_x`
+dürfen für eine `dev-*`-Identität nicht durchgehen. Zwei neue Tests
+halten das fest, damit eine künftige Umstellung auf einen Präfixvergleich
+die Grenze nicht stillschweigend öffnet.
+
+### Added
+
+- **`test_scope_wildcard_requires_dash_boundary`**: prüft `covers_scope`
+  direkt gegen `dev-argus` (erlaubt) und `devtools`/`dev_x`/`dev`
+  (abgelehnt).
+- **`test_scope_mismatch_rejects_sibling_prefix`**: der Negativfall im
+  echten Aufrufpfad — `mediatools` wird für eine `media-*`-Identität
+  mit `SCOPE_MISMATCH` abgelehnt.
+
+---
+
 ## 0.2.5
 
 **Zwei neue Diagramme auf der Übersichtsseite.** Die Aufruf-Pipeline zeigt
