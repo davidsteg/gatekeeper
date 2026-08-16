@@ -1,8 +1,8 @@
-"""Audit-Log (REQUIREMENTS.md §12).
+"""Audit log (REQUIREMENTS.md §12).
 
-Append-only, JSON Lines, mit Rotation. Die Rotation ist keine Kuer: ein
-append-only-Log ohne Begrenzung fuellt irgendwann das Dataset, und dann steht
-nicht nur gatekeeper (FR-9.5).
+Append-only, JSON Lines, with rotation. Rotation is not cosmetic: an
+append-only log without a limit eventually fills the dataset, and then
+not only gatekeeper stops (FR-9.5).
 """
 
 from __future__ import annotations
@@ -14,19 +14,19 @@ import threading
 import time
 from typing import Any
 
-#: Feldnamen, deren Werte nie ins Log gelangen -- unabhaengig davon, wo sie
-#: auftauchen. Ab Stufe 2 kommen die Credential-Werte aus §11 dazu.
+#: Field names whose values never enter the log -- regardless of where
+#: they appear. From Stage 2, credential values from §11 are added.
 _NEVER_LOG = frozenset({"token", "authorization", "password", "api_key", "secret"})
 
 
 @dataclasses.dataclass(slots=True)
 class Redactor:
-    """Maskiert bekannte Geheimnisse in Ausgaben (FR-10.6).
+    """Masks known secrets in outputs (FR-10.6).
 
-    In Stufe 1 ist die Liste leer -- es gibt noch keinen Credential-Store. Die
-    Stelle existiert trotzdem, weil `docker compose logs` regelmaessig
-    Env-Variablen des Zielcontainers enthaelt und die Maskierung sonst spaeter
-    an zehn Stellen nachgeruestet werden muesste.
+    In Stage 1 the list is empty -- there is no credential store yet. The
+    hook exists anyway because `docker compose logs` regularly contains
+    environment variables of the target container, and masking would
+    otherwise need to be retrofitted in ten places later.
     """
 
     secrets: tuple[str, ...] = ()
@@ -39,7 +39,7 @@ class Redactor:
 
 
 class AuditLog:
-    """Schreibt strukturierte Eintraege, rotiert nach Groesse."""
+    """Writes structured records, rotates by size."""
 
     def __init__(
         self,
@@ -95,11 +95,11 @@ class AuditLog:
         detail: str | None = None,
         credential_names: list[str] | None = None,
     ) -> None:
-        """Ein Aufruf -- erfolgreich, abgelehnt oder mit unklarem Ausgang.
+        """A call -- successful, denied, or with unclear outcome.
 
-        `denial_reason` haelt den *echten* Grund fest, auch wenn der Agent nach
-        FR-7.7 nur eine nichtssagende Antwort bekommen hat. Genau diese
-        Asymmetrie macht das Log auswertbar.
+        `denial_reason` records the *true* reason, even if the agent
+        received only a non-descriptive response per FR-7.7. This
+        asymmetry is what makes the log analyzable.
         """
         self.write(
             {
@@ -115,7 +115,7 @@ class AuditLog:
                 "output_truncated": truncated,
                 "denial_reason": denial_reason,
                 "detail": detail,
-                # FR-10.7: Namen der verwendeten Credentials, nie deren Werte.
+                # FR-10.7: names of used credentials, never their values.
                 "credentials": credential_names or [],
             }
         )
@@ -128,7 +128,7 @@ class AuditLog:
 
 
 def _scrub(value: Any, redact: Redactor) -> Any:
-    """Entfernt offensichtliche Geheimnisse und maskiert bekannte Werte."""
+    """Removes obvious secrets and masks known values."""
     if isinstance(value, dict):
         return {
             key: ("***" if key.lower() in _NEVER_LOG else _scrub(item, redact))

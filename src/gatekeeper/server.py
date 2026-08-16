@@ -1,8 +1,8 @@
-"""MCP-Protokoll und HTTP-Schicht (REQUIREMENTS.md §3).
+"""MCP protocol and HTTP layer (REQUIREMENTS.md §3).
 
-Die Authentifizierung sitzt als reine ASGI-Middleware davor -- nicht als
-Starlette-`BaseHTTPMiddleware`, weil die den Streaming-Antworten des
-Streamable-HTTP-Transports im Weg steht.
+Authentication sits in front as pure ASGI middleware -- not as
+Starlette `BaseHTTPMiddleware`, because that gets in the way of the
+streaming responses of the Streamable HTTP transport.
 """
 
 from __future__ import annotations
@@ -28,27 +28,26 @@ from .ui import UI_COMPANION_PATHS, UI_PREFIX, build_ui_routes
 
 logger = logging.getLogger("gatekeeper")
 
-#: Nur diese Pfade sind ohne Token erreichbar (NFR-3). Sie geben nichts ueber
-#: Katalog oder Identitaeten preis.
+#: Only these paths are reachable without a token (NFR-3). They disclose
+#: nothing about catalog or identities.
 PUBLIC_PATHS = frozenset({"/health/live", "/health/ready", "/health/startup"})
 
-#: Schluessel, unter dem die Identitaet im ASGI-Scope liegt. Der Scope ist das
-#: einzige Objekt, das zuverlaessig von der Middleware bis zum MCP-Handler
-#: durchgereicht wird -- Contextvars ueberleben den Taskwechsel des Transports
-#: nicht verlaesslich.
+#: Key under which the identity sits in the ASGI scope. The scope is the
+#: only object that is reliably passed through from the middleware to the
+#: MCP handler -- contextvars do not reliably survive the task switch of
+#: the transport.
 SCOPE_IDENTITY = "gatekeeper.identity"
 
 
 class AuthMiddleware:
-    """Bearer-Token pruefen, sonst 401 (FR-2.3).
+    """Check bearer token, otherwise 401 (FR-2.3).
 
-    Diese Middleware liest ausschliesslich den `Authorization`-Header und
-    niemals ein Cookie. Das ist der Grund, warum `/mcp` gegen CSRF immun ist:
-    ein Browser haengt einen solchen Header nicht von sich aus an, eine fremde
-    Seite kann ihn also nicht erzeugen. Die Sitzung des Betriebs-UIs (`ui.py`)
-    ist bewusst ein davon getrennter Mechanismus -- wuerde sie hier gelten,
-    koennte jede beliebige Webseite im Hintergrund Tools auf dem Host
-    ausfuehren lassen.
+    This middleware reads exclusively the `Authorization` header and
+    never a cookie. That is the reason why `/mcp` is immune to CSRF:
+    a browser does not attach such a header on its own, so a foreign
+    site cannot produce it. The session of the operations UI (`ui.py`)
+    is deliberately a separate mechanism -- if it applied here,
+    any arbitrary website could execute tools on the host in the background.
     """
 
     def __init__(
@@ -65,12 +64,12 @@ class AuthMiddleware:
         self.ui_enabled = ui_enabled
 
     def _is_ui_path(self, path: str) -> bool:
-        # Exakter Praefixvergleich: '/uixyz' darf nicht mitgemeint sein.
+        # Exact prefix comparison: '/uixyz' must not be included.
         if path == UI_PREFIX or path.startswith(UI_PREFIX + "/"):
             return True
-        # '/' und '/favicon.ico' fragt der Browser von sich aus ab. Sie hier
-        # durchzulassen haelt das Audit-Log frei von Rauschen, das sonst jeden
-        # echten Fehlversuch zudecken wuerde.
+        # '/' and '/favicon.ico' are requested by the browser on its own.
+        # Letting them through keeps the audit log free of noise that
+        # would otherwise cover up every real failed attempt.
         return path in UI_COMPANION_PATHS
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -83,8 +82,8 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Die UI-Routen bringen ihre eigene Pruefung mit (Sitzung statt Token).
-        # Ist das UI abgeschaltet, greift hier weiterhin die Token-Pflicht.
+        # The UI routes bring their own check (session instead of token).
+        # If the UI is disabled, the token requirement still applies here.
         if self.ui_enabled and self._is_ui_path(path):
             await self.app(scope, receive, send)
             return
@@ -123,8 +122,8 @@ def _identity_from(ctx: Any) -> Identity:
     scope = getattr(request, "scope", None)
     identity = (scope or {}).get(SCOPE_IDENTITY)
     if identity is None:
-        # Kann nur eintreten, wenn die Middleware umgangen wurde. Dann ist der
-        # sichere Ausgang, gar nichts zu zeigen.
+        # Can only occur if the middleware was bypassed. Then the
+        # safe outcome is to show nothing at all.
         raise Denied(DenialReason.UNKNOWN_TOKEN, "No identity in the request scope")
     return identity
 
@@ -148,8 +147,8 @@ def build_mcp_server(service: Service) -> Server[None]:
             )
             for view in service.visible_tools(identity)
         ]
-        # cacheScope private: die Liste ist pro Identitaet verschieden und darf
-        # zwischen Agenten nicht geteilt werden.
+        # cacheScope private: the list differs per identity and must
+        # not be shared between agents.
         return types.ListToolsResult(tools=tools, cacheScope="private")
 
     async def on_call_tool(
@@ -205,15 +204,14 @@ def build_app(
     ui: bool = False,
     store: Any = None,
 ) -> Starlette:
-    """Baut die vollstaendige ASGI-Anwendung.
+    """Builds the complete ASGI application.
 
-    `ui=False` ist Absicht: die Oberflaeche ist die einzige browserseitige
-    Flaeche des Servers und waechst einem bestehenden Deployment nicht
-    stillschweigend zu. Sie wird ueber `--ui` bzw. `GATEKEEPER_UI=1`
-    eingeschaltet.
+    `ui=False` is intentional: the UI is the only browser-facing
+    surface of the server and does not silently grow on an existing
+    deployment. It is enabled via `--ui` or `GATEKEEPER_UI=1`.
 
-    `store=None` heisst: nur lesen. Erst ein `ConfigStore` schaltet die
-    Schreibfunktionen frei -- und auch dann nur fuer `role: admin`.
+    `store=None` means: read only. Only a `ConfigStore` enables the
+    write functions -- and even then only for `role: admin`.
     """
     mcp_server = build_mcp_server(service)
 
@@ -222,9 +220,9 @@ def build_app(
 
     async def health_ready(_request: Request) -> Response:
         ready = await service.probe_executors()
-        # Ohne Toolkits gibt es nichts zu pruefen. Das ist der Zustand nach
-        # `init` und kein Mangel -- ihn als 'degraded' zu melden wuerde eine
-        # frische Installation als Stoerung ausweisen.
+        # Without toolkits there is nothing to check. This is the state after
+        # `init` and not a deficiency -- reporting it as 'degraded' would
+        # flag a fresh installation as a malfunction.
         ok = all(ready.values()) if ready else not service.tier1.toolkits
         return JSONResponse(
             {"status": "ready" if ok else "degraded", "executors": ready},
@@ -271,7 +269,7 @@ def build_app(
 
 
 def log_startup(service: Service, identities: IdentityStore) -> dict[str, Any]:
-    """NFR-7: beim Start festhalten, was tatsaechlich gilt."""
+    """NFR-7: record at startup what actually applies."""
     from .identity import summarize
 
     payload = {

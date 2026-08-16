@@ -14,13 +14,13 @@ RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip install --upgrade pip \
  && /opt/venv/bin/pip install .
 
-# --- Docker-CLI + Compose-Plugin ------------------------------------------
-# Nur der Client, kein Daemon. gatekeeper spricht ueber den gemounteten Socket
-# mit dem Docker-Daemon des Hosts.
+# --- Docker CLI + Compose plugin ------------------------------------------
+# Only the client, no daemon. gatekeeper talks to the host's Docker daemon
+# via the mounted socket.
 #
-# Das statische Docker-Tarball enthaelt NUR das docker-Binary. `docker compose`
-# ist ein CLI-Plugin und muss getrennt installiert werden -- ohne das scheitert
-# jedes compose-Tool zur Laufzeit mit "unknown shorthand flag: 'p'".
+# The static Docker tarball contains ONLY the docker binary. `docker compose`
+# is a CLI plugin and must be installed separately -- without it, every
+# compose tool fails at runtime with "unknown shorthand flag: 'p'".
 FROM debian:bookworm-slim AS docker-cli
 
 ARG DOCKER_VERSION=27.3.1
@@ -33,7 +33,7 @@ RUN apt-get update \
  && case "${TARGETARCH}" in \
       amd64) DOCKER_ARCH=x86_64 ;; \
       arm64) DOCKER_ARCH=aarch64 ;; \
-      *) echo "nicht unterstuetzte Architektur: ${TARGETARCH}" >&2; exit 1 ;; \
+      *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
  && curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz" \
     -o /tmp/docker.tgz \
@@ -45,12 +45,12 @@ RUN apt-get update \
     -o /usr/local/lib/docker/cli-plugins/docker-compose \
  && chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose
 
-# --- Laufzeit -------------------------------------------------------------
+# --- Runtime --------------------------------------------------------------
 FROM python:3.12-slim
 
-# procps liefert /usr/bin/free, coreutils /usr/bin/df und /bin/cat.
-# Die Binaries muessen exakt an den in toolkits.yaml gelisteten Pfaden liegen -
-# gatekeeper laesst PATH nicht entscheiden (FR-4.1).
+# procps provides /usr/bin/free, coreutils provides /usr/bin/df and /bin/cat.
+# Binaries must be at the exact paths listed in toolkits.yaml --
+# gatekeeper does not rely on PATH resolution (FR-4.1).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends procps \
  && rm -rf /var/lib/apt/lists/* \
@@ -61,11 +61,11 @@ COPY --from=docker-cli /usr/bin/docker /usr/bin/docker
 COPY --from=docker-cli /usr/local/lib/docker/cli-plugins /usr/local/lib/docker/cli-plugins
 COPY --from=build /opt/venv /opt/venv
 
-# Beim Bau nachweisen, dass 'docker compose' tatsaechlich aufloest. Ohne diese
-# Pruefung faellt ein fehlendes Plugin erst beim ersten Agentenaufruf auf.
+# Verify at build time that 'docker compose' actually resolves. Without this
+# check, a missing plugin would only surface on the first agent call.
 RUN docker compose version
 
-# NFR-1: unprivilegierter Benutzer. 568 ist die Homelab-Konvention (apps).
+# NFR-1: unprivileged user. 568 is the homelab convention (apps).
 RUN groupadd -g 568 apps && useradd -u 568 -g 568 -M -s /usr/sbin/nologin apps
 
 ENV PATH="/opt/venv/bin:${PATH}" \

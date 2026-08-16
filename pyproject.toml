@@ -1,7 +1,7 @@
 [project]
 name = "gatekeeper"
-version = "0.3.3"
-description = "Kontrollierter MCP-Server fuer Host-Operationen"
+version = "0.3.4"
+description = "Controlled MCP server for host operations"
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=2.0.0",

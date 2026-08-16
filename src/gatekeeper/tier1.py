@@ -1,9 +1,9 @@
-"""Ebene 1 - die zur Laufzeit unveraenderlichen Grenzen (REQUIREMENTS.md §6).
+"""Tier 1 - the immutable-at-runtime limits (REQUIREMENTS.md §6).
 
-Alles hier wird beim Start aus `toolkits.yaml` gelesen und danach nie wieder
-angefasst. Die Admin-API (Stufe 3) kann Tools anlegen, aber kein Toolkit --
-sonst waere Ebene 1 zur Laufzeit veraenderbar und der ganze Entwurf haette
-keinen Boden mehr (FR-4.11).
+Everything here is read from `toolkits.yaml` at startup and never
+touched again. The admin API (stage 3) can create tools, but no toolkit --
+otherwise Tier 1 would be mutable at runtime and the whole design would
+have no foundation (FR-4.11).
 """
 
 from __future__ import annotations
@@ -17,18 +17,18 @@ import yaml
 
 from .errors import ConfigError, read_config_file
 
-#: In Stufe 1 implementierte Executor-Typen. `truenas`/`http`/`ssh` folgen in
-#: Stufe 2 -- ein Toolkit, das sie referenziert, wird jetzt abgelehnt (FR-8.1).
+#: Executor types implemented in stage 1. `truenas`/`http`/`ssh` follow in
+#: stage 2 -- a toolkit that references them is now rejected (FR-8.1).
 KNOWN_EXECUTORS = frozenset({"docker", "local"})
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Toolkit:
-    """Traeger der Ebene-1-Grenzen (FR-4.8).
+    """Carrier of the Tier 1 limits (FR-4.8).
 
-    Grenzen haengen am Toolkit, nicht global: `diag.uptime` braucht keine
-    Pfad-Wurzel unter /mnt/raid, `docker.compose_up` schon. Eine globale
-    Allowlist waere die Vereinigungsmenge aller Beduerfnisse (FR-4.9).
+    Limits are attached to the toolkit, not globally: `diag.uptime` needs no
+    path root under /mnt/raid, `docker.compose_up` does. A global
+    allowlist would be the union of all needs (FR-4.9).
     """
 
     name: str
@@ -41,7 +41,7 @@ class Toolkit:
     max_output_bytes: int
 
     def check_binary(self, binary: str) -> None:
-        """FR-4.1: Executable muss exakt in der Allowlist stehen."""
+        """FR-4.1: the executable must be exactly in the allowlist."""
         if binary not in self.binaries:
             raise ConfigError(
                 f"Toolkit {self.name!r}: binary {binary!r} is not in the "
@@ -49,10 +49,10 @@ class Toolkit:
             )
 
     def check_args(self, argv: list[str]) -> str | None:
-        """FR-4.2: Gesperrte Unterbefehle und Flags.
+        """FR-4.2: blocked subcommands and flags.
 
-        Greift auf das *aufgeloeste* argv, nicht auf das Template -- ein
-        Parameterwert, der zu `rm` aufloest, wird genauso gefangen.
+        Operates on the *resolved* argv, not on the template -- a
+        parameter value that resolves to `rm` is caught just the same.
         """
         for arg in argv:
             if arg in self.denied_args:
@@ -60,10 +60,10 @@ class Toolkit:
         return None
 
     def check_path_root(self, root: str) -> None:
-        """Ein `must_resolve_under` muss innerhalb der Toolkit-Wurzeln liegen.
+        """A `must_resolve_under` must lie within the toolkit roots.
 
-        FR-4.10: ein Tool darf die Grenzen seines Toolkits verschaerfen,
-        niemals erweitern.
+        FR-4.10: a tool may tighten the limits of its toolkit,
+        never widen them.
         """
         if not self.path_roots:
             raise ConfigError(
@@ -81,11 +81,11 @@ class Toolkit:
         )
 
     def is_protected(self, resource: str) -> bool:
-        """FR-4.12: geschuetzte Ressourcen, unabhaengig von Rechten und Scopes.
+        """FR-4.12: protected resources, independent of permissions and scopes.
 
-        Ebene 1 kann Syntax pruefen, aber keine Bedeutung: `docker compose down`
-        ist fuer den Validator dieselbe Operation, egal ob sie einen Medien-Stack
-        oder gatekeeper selbst trifft.
+        Tier 1 can check syntax but not meaning: `docker compose down`
+        is the same operation to the validator, whether it hits a media stack
+        or gatekeeper itself.
         """
         return resource in self.protected_resources
 
@@ -98,7 +98,7 @@ class RateLimit:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Tier1:
-    """Die vollstaendige Deploy-Zeit-Konfiguration."""
+    """The complete deploy-time configuration."""
 
     toolkits: dict[str, Toolkit]
     rate_limits: dict[str, RateLimit]
@@ -115,13 +115,13 @@ class Tier1:
 
 
 def _is_absolute(path: str) -> bool:
-    """Absolut nach POSIX- ODER nach Host-Konvention.
+    """Absolute by POSIX OR by host convention.
 
-    Die Pfade in `toolkits.yaml` beschreiben immer das Container-Dateisystem,
-    also POSIX -- `os.path.isabs` allein wuerde `/usr/bin/docker` unter Windows
-    ab Python 3.13 ablehnen und die Konfiguration damit nur dort pruefbar
-    machen, wo sie auch laeuft. Entscheidend ist ohnehin nur, dass kein blosser
-    Programmname stehenbleibt, ueber den dann PATH entscheiden wuerde.
+    The paths in `toolkits.yaml` always describe the container filesystem,
+    i.e. POSIX -- `os.path.isabs` alone would reject `/usr/bin/docker` under
+    Windows starting Python 3.13 and make the configuration only checkable
+    where it also runs. What matters anyway is only that no bare
+    program name remains, over which PATH would then decide.
     """
     return path.startswith("/") or os.path.isabs(path)
 
@@ -141,11 +141,12 @@ def _str_tuple(value: Any, where: str) -> tuple[str, ...]:
 
 
 def load_tier1(path: str) -> Tier1:
-    """Laedt und validiert `toolkits.yaml`. Fehler hier brechen den Start ab.
+    """Loads and validates `toolkits.yaml`. Errors here abort startup.
 
-    Anders als der Katalog hat Ebene 1 keinen sinnvollen Leerzustand: sie ist
-    die Grenze, innerhalb derer alles andere stattfindet. Fehlt sie, ist nicht
-    entschieden, was erlaubt waere -- und Raten waere hier der falsche Reflex.
+    Unlike the catalog, Tier 1 has no meaningful empty state: it is
+    the boundary within which everything else takes place. If it is
+    missing, it is undecided what would be allowed -- and guessing
+    would be the wrong reflex here.
     """
     if not os.path.exists(path):
         raise ConfigError(
@@ -157,10 +158,10 @@ def load_tier1(path: str) -> Tier1:
         read_config_file(path, "A starting point sits in config/examples/toolkits.yaml.")
     ) or {}
 
-    # Ein leerer Abschnitt ist zulaessig und der Zustand nach `init`: dann ist
-    # nichts moeglich. Das ist eine gueltige Aussage, keine fehlende -- und die
-    # einzige, die gatekeeper von sich aus treffen darf. Welche Binaries ein
-    # Agent erreichen koennen soll, weiss nur, wer das System kennt.
+    # An empty section is valid and the state after `init`: then nothing
+    # is possible. That is a valid statement, not a missing one -- and the
+    # only one gatekeeper may make on its own. Which binaries an agent
+    # should be able to reach is known only by someone who knows the system.
     toolkit_section = raw.get("toolkits")
     if toolkit_section is None:
         toolkit_section = {}

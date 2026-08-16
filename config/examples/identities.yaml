@@ -1,43 +1,43 @@
-# BEISPIEL - `gatekeeper init` legt eine echte identities.yaml mit genau einem
-# Administrator an. Diese Datei zeigt nur, wie Rechteprofile aussehen koennen.
+# EXAMPLE - `gatekeeper init` creates a real identities.yaml with exactly one
+# administrator. This file only shows what permission profiles can look like.
 #
-# Identitaeten und Rechte (REQUIREMENTS.md §4 und §9).
+# Identities and permissions (REQUIREMENTS.md §4 and §9).
 #
-# Sie enthaelt NUR Hashes. Der Klartext-Token existiert an genau zwei Stellen:
-# einmalig bei der Erzeugung und in der config.yaml des Agenten (FR-2.6).
-# Damit ist die Datei nicht secret-kritisch und darf nach Homelab-Regel im
-# Dataset mit chown 568:568 liegen.
+# It contains ONLY hashes. The plain-text token exists in exactly two places:
+# once at generation time and in the agent's config.yaml (FR-2.6).
+# This means the file is not secret-critical and may sit in the dataset
+# with chown 568:568 by homelab convention.
 #
-# Zwei getrennte Nachweise je Identitaet:
-#   token_hash     - fuer die API (/mcp), als 'Authorization: Bearer'
-#   password_hash  - fuer die Anmeldung an der Konsole (/ui)
-# Ein Agent bekommt nur einen Token; er meldet sich nirgends an. 'viewer' und
-# 'admin' brauchen ein Passwort, sonst kaemen sie nicht in die Oberflaeche.
-# Getrennt sind sie, damit ein verlorenes Geheimnis nicht beide Wege oeffnet -
-# und damit der Token nicht durch einen Browser wandern muss (FR-11.5).
+# Two separate proofs per identity:
+#   token_hash     - for the API (/mcp), as 'Authorization: ***'
+#   password_hash  - for signing in at the console (/ui)
+# An agent gets only a token; it signs in nowhere. 'viewer' and
+# 'admin' need a password, otherwise they cannot get into the UI.
+# They are separate so that a lost secret does not open both paths -
+# and so the token does not have to wander through a browser (FR-11.5).
 #
-# Token-Hash erzeugen:
+# Generate a token hash:
 #   docker exec gatekeeper gatekeeper token
 #
-# Konsolenpasswort setzen (schreibt direkt in identities.yaml):
+# Set a console password (writes directly to identities.yaml):
 #   docker exec gatekeeper gatekeeper password --identity root
 #
-# Die Platzhalter muessen ersetzt werden - mit REPLACE_ME verweigert
-# gatekeeper den Start, statt zu laufen und jeden Token abzulehnen.
+# The placeholders must be replaced - with REPLACE_ME gatekeeper
+# refuses to start, instead of running and rejecting every token.
 #
-# Die Agenten unten verweisen auf Tools aus examples/tools.yaml. Existieren
-# die nicht, laufen die Rechte ins Leere; die Oberflaeche zeigt das an.
+# The agents below reference tools from examples/tools.yaml. If those
+# do not exist, the permissions run into the void; the UI shows that.
 
 identities:
-  # -- Menschen an der Oberflaeche ---------------------------------------
-  # `admin` darf Ebene 2 aendern (Tools, Identitaeten, Tokens), `viewer` nur
-  # lesen. Ohne mindestens einen der beiden startet der Server mit --ui nicht.
-  # Beide brauchen keine Tool-Rechte: die Oberflaeche ruft nichts auf.
+  # -- Humans at the UI -----------------------------------------------------
+  # `admin` may change Tier 2 (tools, identities, tokens), `viewer` only
+  # reads. Without at least one of the two, the server does not start with --ui.
+  # Both need no tool rights: the UI calls nothing.
   #
-  # Angemeldet wird mit 'password_hash', nicht mit dem Token. Fehlt das
-  # Passwort, legt der erste Start mit --ui eines an und schreibt es einmalig
-  # ins Log - ein Konsolenkonto ohne Passwort waere ein Zugang, den es nicht
-  # gibt.
+  # Sign-in is via 'password_hash', not the token. If the
+  # password is missing, the first start with --ui creates one and writes it
+  # to the log once - a console account without a password would be an
+  # access that does not exist.
   - id: root
     role: admin
     token_hash: "scrypt$REPLACE_ME"
@@ -52,13 +52,13 @@ identities:
     tools: []
     scopes: []
 
-  # -- Agenten am MCP-Endpunkt -------------------------------------------
+  # -- Agents at the MCP endpoint -------------------------------------------
   - id: homelab
     role: agent
     token_hash: "scrypt$REPLACE_ME"
-    # FR-7.5: Rechte werden auf einzelne Tool-IDs erteilt, nie auf ein Toolkit.
-    # Wildcards sind hier bewusst nicht zulaessig - sonst besaesse diese
-    # Identitaet jedes kuenftig angelegte Tool automatisch mit.
+    # FR-7.5: permissions are granted to individual tool IDs, never to a toolkit.
+    # Wildcards are deliberately not permitted here - otherwise this
+    # identity would automatically possess every tool created in the future.
     tools:
       - docker.compose_ps
       - docker.compose_logs

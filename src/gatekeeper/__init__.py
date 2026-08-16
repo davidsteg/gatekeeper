@@ -1,3 +1,3 @@
-"""gatekeeper - kontrollierter MCP-Server fuer Host-Operationen."""
+"""gatekeeper - controlled MCP server for host operations."""
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"

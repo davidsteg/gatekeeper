@@ -1,27 +1,27 @@
-"""Schreibzugriff auf Ebene 2 (REQUIREMENTS.md §7, Stufe 3).
+"""Write access to Tier 2 (REQUIREMENTS.md §7, Stage 3).
 
-Hier -- und nur hier -- veraendert gatekeeper seine eigene Konfiguration. Fuenf
-Zusicherungen tragen diese Schicht:
+Here -- and only here -- does gatekeeper modify its own configuration. Five
+guarantees underpin this layer:
 
-1. **Ebene 1 bleibt unberuehrbar.** Es gibt keine Funktion, die `toolkits.yaml`
-   schreibt. Binary-Allowlist, gesperrte Argumente, Pfad-Wurzeln, geschuetzte
-   Ressourcen und Obergrenzen aendert ausschliesslich ein Redeploy (FR-4.11).
+1. **Tier 1 remains untouchable.** There is no function that writes `toolkits.yaml`.
+   Binary allowlist, blocked arguments, path roots, protected
+   resources and ceilings are changed exclusively by a redeploy (FR-4.11).
 
-2. **Nur ein Pruefpfad.** Jede Definition laeuft durch `parse_tool_spec` --
-   dieselbe Funktion, die beim Start prueft. Ein zweiter, milderer Weg wuerde
-   die Grenze zur blossen Empfehlung machen.
+2. **Only one validation path.** Every definition runs through `parse_tool_spec` --
+   the same function that checks at startup. A second, more lenient path would
+   reduce the boundary to a mere recommendation.
 
-3. **Atomar.** Geschrieben wird in eine Nachbardatei, die nach `fsync` per
-   `os.replace` an ihren Platz rueckt. Ein Absturz mittendrin hinterlaesst die
-   alte Datei, nie eine halbe.
+3. **Atomic.** Writing goes to a sibling file that is moved into place via
+   `os.replace` after `fsync`. A crash in between leaves the
+   old file, never a half-written one.
 
-4. **Was gilt, steht auf der Platte.** Nach jedem Schreibvorgang wird aus der
-   Datei neu geladen und der laufende Zustand ausgetauscht. Die Anzeige kann
-   damit nicht von dem abweichen, was ein Neustart ergaebe.
+4. **What holds is on disk.** After every write, the file is reloaded
+   and the running state is swapped out. The display can
+   thus not deviate from what a restart would produce.
 
-5. **Kein stilles Ueberschreiben.** Jedes Formular traegt die Revision der
-   Datei, aus der es gebaut wurde. Hat inzwischen jemand anderes geschrieben,
-   wird abgelehnt statt zugebuegelt.
+5. **No silent overwriting.** Every form carries the revision of
+   the file it was built from. If someone else has written in the meantime,
+   the request is refused rather than ironed over.
 """
 
 from __future__ import annotations
@@ -53,21 +53,21 @@ from .identity import (
 )
 from .service import Service
 
-#: Kopf jeder geschriebenen Datei. Wer sie spaeter von Hand oeffnet, soll
-#: sofort sehen, dass hier eine Oberflaeche mitschreibt.
+#: Header of every written file. Anyone who later opens it by hand should
+#: immediately see that a console is co-writing here.
 _HEADER = (
-    "# Von gatekeeper verwaltet. Die Admin-Oberflaeche schreibt diese Datei;\n"
-    "# Aenderungen von Hand sind moeglich, gehen aber beim naechsten Schreiben\n"
-    "# aus dem UI verloren, wenn sie nicht vorher neu geladen wurden.\n"
+    "# Managed by gatekeeper. The admin console writes this file;\n"
+    "# manual changes are possible but will be lost on the next write\n"
+    "# from the UI unless they have been reloaded beforehand.\n"
 )
 
 
 class WriteRefused(ConfigError):
-    """Ein Schreibversuch wurde abgelehnt -- mit einem Grund fuer den Menschen."""
+    """A write attempt was refused -- with a human-readable reason."""
 
 
 def revision(path: str) -> str:
-    """Kurzer Fingerabdruck des Dateiinhalts fuer die Nebenlaeufigkeitspruefung."""
+    """Short fingerprint of the file content for the concurrency check."""
     try:
         with open(path, "rb") as handle:
             return hashlib.sha256(handle.read()).hexdigest()[:16]
@@ -99,11 +99,11 @@ def _dump(payload: dict[str, Any]) -> str:
 
 
 def writable(path: str) -> bool:
-    """Laesst sich hier ueberhaupt schreiben?
+    """Can anything be written here at all?
 
-    Geprueft wird das Verzeichnis, nicht nur die Datei: `os.replace` legt eine
-    neue Datei an. Ein Mount mit `:ro` faellt damit auf, bevor ein Admin ein
-    Formular ausfuellt und erst beim Absenden merkt, dass nichts ankommt.
+    The directory is checked, not just the file: `os.replace` creates a
+    new file. A mount with `:ro` is thus caught before an admin fills
+    out a form and only discovers on submission that nothing arrives.
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
     return os.access(directory, os.W_OK) and (
@@ -113,16 +113,16 @@ def writable(path: str) -> bool:
 
 @dataclasses.dataclass(slots=True)
 class ConfigStore:
-    """Besitzt die Ebene-2-Dateien und den daraus abgeleiteten Laufzeitzustand."""
+    """Owns the Tier 2 files and the runtime state derived from them."""
 
     service: Service
-    identities: Any  # IdentityStore -- als Any, um einen Zirkelbezug zu sparen
+    identities: Any  # IdentityStore -- as Any to avoid a circular import
     audit: AuditLog
     tools_path: str
     identities_path: str
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
-    # -- Zustand -----------------------------------------------------------
+    # -- State -----------------------------------------------------------
 
     def tools_revision(self) -> str:
         return revision(self.tools_path)
@@ -137,7 +137,7 @@ class ConfigStore:
         }
 
     def _check(self, path: str, supplied: str) -> None:
-        """Optimistische Nebenlaeufigkeit."""
+        """Optimistic concurrency."""
         if not writable(path):
             raise WriteRefused(
                 f"{os.path.basename(path)} is not writable. The file or its "
@@ -155,8 +155,8 @@ class ConfigStore:
 
     def _write_tools(self, specs: list[dict[str, Any]]) -> None:
         _atomic_write(self.tools_path, _dump({"tools": specs}))
-        # Aus der Datei neu laden, nicht aus dem Speicher: nur so ist belegt,
-        # dass der Zustand im Betrieb dem entspricht, was ein Neustart ergaebe.
+        # Reload from the file, not from memory: only this proves
+        # that the running state matches what a restart would produce.
         self.service.catalog = load_catalog(self.tools_path, self.service.tier1)
 
     def _specs(self) -> list[dict[str, Any]]:
@@ -170,12 +170,12 @@ class ConfigStore:
         rev: str,
         replaces: str | None = None,
     ) -> str:
-        """Legt eine Definition an oder ersetzt sie. Gibt die Tool-ID zurueck."""
+        """Creates a definition or replaces it. Returns the tool ID."""
         with self._lock:
             self._check(self.tools_path, rev)
 
-            # Derselbe Pruefweg wie beim Start. Wirft ConfigError oder
-            # Tier1Violation -- beides landet als Klartext im Formular.
+            # The same validation path as at startup. Raises ConfigError or
+            # Tier1Violation -- both appear as plaintext in the form.
             tool = parse_tool_spec(spec, self.service.tier1)
 
             specs = self._specs()
@@ -238,19 +238,19 @@ class ConfigStore:
                     "actor": actor,
                     "action": "tool_delete",
                     "target": tool_id,
-                    # Die vollstaendige Definition mitschreiben: eine Loeschung
-                    # bleibt damit aus dem Log heraus wiederherstellbar.
+                    # Record the full definition: a deletion
+                    # can thus be restored from the log.
                     "spec": removed[0],
                 }
             )
             self._orphan_warning(tool_id)
 
     def _orphan_warning(self, tool_id: str) -> None:
-        """Haelt fest, wer jetzt ein Recht auf ein Tool haelt, das es nicht gibt.
+        """Records who now holds a right to a tool that no longer exists.
 
-        Kein Fehler: das Recht laeuft ins Leere und wird beim Aufruf abgelehnt.
-        Aber es ist eine stille Abweichung, und stille Abweichungen gehoeren
-        ins Log.
+        No error: the right goes nowhere and is rejected at call time.
+        But it is a silent deviation, and silent deviations belong
+        in the log.
         """
         holders = sorted(
             i.id for i in self.identities.identities.values() if tool_id in i.tools
@@ -265,13 +265,13 @@ class ConfigStore:
                 }
             )
 
-    # -- Identitaeten ------------------------------------------------------
+    # -- Identities ------------------------------------------------------
 
     def _write_identities(self, payload: dict[str, Any]) -> None:
         _atomic_write(self.identities_path, _dump(payload))
         fresh = load_identities(self.identities_path)
-        # Den Inhalt austauschen, nicht das Objekt: `AuthMiddleware` und die
-        # UI-Routen halten eine Referenz auf den Store, nicht auf das Dict.
+        # Swap the contents, not the object: `AuthMiddleware` and the
+        # UI routes hold a reference to the store, not to the dict.
         self.identities.identities = fresh.identities
 
     def _admins(self, identities: dict[str, Identity]) -> list[str]:
@@ -297,11 +297,11 @@ class ConfigStore:
         replaces: str | None = None,
         password: str = "",
     ) -> None:
-        """Aendert eine bestehende Identitaet.
+        """Changes an existing identity.
 
-        `password=""` heisst: das bestehende Konsolenpasswort bleibt. Ein
-        leeres Feld im Formular darf keinen Zugang loeschen -- wer das will,
-        setzt die Rolle auf `agent`.
+        `password=""` means: the existing console password stays. An
+        empty field in the form must not delete access -- anyone who wants that
+        sets the role to `agent`.
         """
         with self._lock:
             self._check(self.identities_path, rev)
@@ -326,19 +326,19 @@ class ConfigStore:
             entries = payload["identities"]
 
             if replaces is None:
-                # Neue Identitaeten bekommen sofort einen Token, sonst gaebe es
-                # einen Eintrag ohne gueltigen Hash -- und der Loader verweigert
-                # den naechsten Start.
+                # New identities get a token immediately, otherwise there would
+                # be an entry without a valid hash -- and the loader refuses
+                # the next start.
                 raise WriteRefused(
                     "Use create_identity() for new entries -- a token is required."
                 )
 
             previous = current[replaces]
             if password and role not in UI_ROLES:
-                # Muss *vor* dem Schreiben scheitern: der Loader lehnt ein
-                # Passwort auf einer Agentenrolle ab, und `_write_identities`
-                # laedt direkt nach dem Schreiben neu. Erst hier zu bemerken
-                # hiesse, die Datei bereits unlesbar gemacht zu haben.
+                # Must fail *before* writing: the loader rejects a
+                # password on an agent role, and `_write_identities`
+                # reloads immediately after writing. Noticing it only here
+                # would mean having already made the file unreadable.
                 raise WriteRefused(
                     f"role {role!r} cannot sign in to the console, so a "
                     "password would be a door without a room. Choose "
@@ -350,10 +350,10 @@ class ConfigStore:
             elif role in UI_ROLES:
                 password_hash = previous.password_hash
             else:
-                # Rolle `agent`: der Konsolenzugang faellt weg, und mit ihm
-                # gehoert der Hash aus der Datei. Ihn stehen zu lassen waere
-                # ein Zugang, der nach der naechsten Rollenaenderung stumm
-                # wieder auflebt.
+                # Role `agent`: console access is removed, and with it
+                # the hash belongs out of the file. Leaving it in would be
+                # an access that silently comes back to life after the
+                # next role change.
                 password_hash = ""
 
             if role in UI_ROLES and not password_hash:
@@ -385,8 +385,8 @@ class ConfigStore:
                     "role": role,
                     "tools": sorted(set(tools)),
                     "scopes": [s for s in scopes if s],
-                    # Der Klartext wird nie protokolliert, die Tatsache schon:
-                    # ein Passwortwechsel gehoert in die Spur.
+                    # The plaintext is never logged, but the fact is:
+                    # a password change belongs in the trail.
                     "password_changed": bool(password),
                 }
             )
@@ -402,10 +402,10 @@ class ConfigStore:
         rev: str,
         password: str = "",
     ) -> str:
-        """Legt eine Identitaet an und gibt den Klartext-Token genau einmal zurueck.
+        """Creates an identity and returns the plaintext token exactly once.
 
-        `viewer` und `admin` brauchen zusaetzlich ein Passwort: ohne eines
-        entstuende ein Konsolenkonto, an dem sich niemand anmelden kann.
+        `viewer` and `admin` additionally need a password: without one
+        there would be a console account that nobody can sign in to.
         """
         with self._lock:
             self._check(self.identities_path, rev)
@@ -447,8 +447,8 @@ class ConfigStore:
             payload = dump_identities(self.identities)
             payload["identities"].append(entry)
             self._write_identities(payload)
-            # Der Klartext wird bewusst NICHT protokolliert (FR-2.6) -- weder
-            # der Token noch das Passwort.
+            # The plaintext is deliberately NOT logged (FR-2.6) -- neither
+            # the token nor the password.
             self.audit.write(
                 {
                     "kind": "admin_change",
@@ -493,15 +493,15 @@ class ConfigStore:
         current_password: str = "",
         require_current: bool = False,
     ) -> None:
-        """Setzt das Konsolenpasswort einer Identitaet.
+        """Sets the console password of an identity.
 
-        `require_current` gilt fuer die Selbstbedienung: wer sein eigenes
-        Passwort aendert, muss das alte kennen. Sonst genuegte eine
-        unbeaufsichtigte Sitzung, um den Zugang dauerhaft zu uebernehmen --
-        das Abmelden allein wuerde ihn dann nicht mehr zurueckholen.
-        Ein Administrator, der ein *fremdes* Passwort setzt, kennt das alte
-        naturgemaess nicht; dort steht die Aenderung stattdessen mit Urheber
-        im Audit-Log.
+        `require_current` applies to self-service: anyone changing their own
+        password must know the old one. Otherwise an
+        unattended session would suffice to permanently take over the access --
+        signing out alone would not bring it back.
+        An administrator setting *someone else's* password naturally
+        does not know the old one; there the change is instead recorded with
+        the actor in the audit log.
         """
         with self._lock:
             self._check(self.identities_path, rev)
@@ -553,18 +553,18 @@ class ConfigStore:
             )
 
     def _guard_last_admin(self, entries: list[dict[str, Any]], *, action: str) -> None:
-        """Verhindert die Aussperrung.
+        """Prevents lockout.
 
-        Bliebe kein `admin` uebrig, koennte niemand mehr einen anlegen -- die
-        Oberflaeche waere fuer immer zu, und der einzige Ausweg fuehrte ueber
-        einen Editor auf dem Host. Der Fehlerfall ist billig zu verhindern und
-        teuer zu beheben.
+        If no `admin` remained, nobody could create one -- the
+        console would be closed forever, and the only way out would be
+        an editor on the host. The failure case is cheap to prevent and
+        expensive to fix.
 
-        Seit der Konsolenanmeldung genuegt die Rolle allein nicht: ein
-        Administrator ohne Passwort kann sich nicht anmelden und ist als
-        letzter Ausweg wertlos. Geprueft wird das aber nur, wenn es vorher
-        einen anmeldefaehigen Administrator *gab* -- eine Konfiguration aus
-        einer aelteren Fassung soll sich nicht selbst blockieren.
+        Since console sign-in, the role alone is not enough: an
+        administrator without a password cannot sign in and is
+        worthless as a last resort. This is checked only if there
+        previously *was* a sign-in-capable administrator -- a configuration from
+        an older version should not block itself.
         """
         if not any(e.get("role") == ADMIN_ROLE for e in entries):
             raise WriteRefused(
@@ -586,12 +586,12 @@ class ConfigStore:
 
 
 def set_password_in_file(path: str, identity_id: str, password: str) -> None:
-    """Setzt ein Konsolenpasswort direkt in `identities.yaml`.
+    """Sets a console password directly in `identities.yaml`.
 
-    Der Weg ohne laufenden Dienst: fuer `gatekeeper password` und fuer den
-    Start, der einem Bestand aus einer aelteren Fassung erstmals ein Passwort
-    gibt. Geladen wird vorher aus der Datei, geschrieben wird atomar -- damit
-    gilt hier dieselbe Zusicherung wie fuer die Oberflaeche.
+    The path without a running service: for `gatekeeper password` and for
+    startup, which gives a stock from an older version a password for the
+    first time. Loading is done from the file beforehand, writing is atomic -- so
+    the same guarantee applies here as for the console.
     """
     store = load_identities(path)
     identity = store.identities.get(identity_id)
@@ -621,7 +621,7 @@ def set_password_in_file(path: str, identity_id: str, password: str) -> None:
 
 
 def load_tool_yaml(text: str) -> dict[str, Any]:
-    """Liest genau eine Tool-Definition aus dem Formularfeld."""
+    """Reads exactly one tool definition from the form field."""
     try:
         parsed = yaml.safe_load(text)
     except yaml.YAMLError as exc:

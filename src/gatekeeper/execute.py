@@ -1,8 +1,8 @@
-"""Prozessausfuehrung (REQUIREMENTS.md §8).
+"""Process execution (REQUIREMENTS.md §8).
 
-Kein Shell-Interpreter, harte Zeitlimits, begrenzte Ausgabe, Serialisierung
-pro Ressource. Die Ausfuehrung selbst ist der kleinste Teil -- der Aufwand
-steckt darin, dass sie sich bei Zeitueberschreitung ehrlich verhaelt.
+No shell interpreter, hard timeouts, bounded output, serialization per
+resource. The execution itself is the smallest part -- the effort goes
+into behaving honestly on timeout.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ import time
 
 from .errors import Denied, DenialReason
 
-#: Ergebnis-Zustaende. `unknown` ist der wichtige: bei einem Zeitlimit ist
-#: nicht entschieden, ob die Operation drueben gelaufen ist (FR-6.9).
+#: Outcome states. `unknown` is the important one: on timeout it is
+#: undecided whether the operation completed on the other side (FR-6.9).
 OUTCOME_OK = "ok"
 OUTCOME_FAILED = "failed"
 OUTCOME_UNKNOWN = "unknown"
@@ -34,10 +34,10 @@ class Result:
 
 
 class ResourceLocks:
-    """Serialisiert Aufrufe je Ressource (FR-6.7).
+    """Serializes calls per resource (FR-6.7).
 
-    Zwei gleichzeitige `compose up -d` auf denselben Stack duerfen sich nicht
-    ueberlappen -- der zweite sieht sonst einen halb gestarteten Zustand.
+    Two concurrent `compose up -d` on the same stack must not overlap --
+    the second would otherwise see a half-started state.
     """
 
     def __init__(self) -> None:
@@ -54,7 +54,7 @@ class ResourceLocks:
 async def _read_capped(
     stream: asyncio.StreamReader | None, limit: int
 ) -> tuple[bytes, bool]:
-    """Liest bis `limit` Bytes und meldet, ob abgeschnitten wurde."""
+    """Reads up to `limit` bytes and reports whether truncation occurred."""
     if stream is None:
         return b"", False
     chunks: list[bytes] = []
@@ -67,8 +67,8 @@ async def _read_capped(
         if total + len(chunk) > limit:
             chunks.append(chunk[: limit - total])
             truncated = True
-            # Weiterlesen und verwerfen, damit der Prozess nicht auf einer
-            # vollen Pipe blockiert und ins Zeitlimit laeuft.
+            # Continue reading and discarding so the process does not block
+            # on a full pipe and run into the timeout.
             while await stream.read(65536):
                 pass
             break
@@ -78,11 +78,11 @@ async def _read_capped(
 
 
 def _terminate(process: asyncio.subprocess.Process) -> None:
-    """Beendet den Prozess samt Kindern.
+    """Terminates the process and its children.
 
-    `docker compose` startet Unterprozesse; ein `kill` auf den Elternprozess
-    allein liesse sie zurueck. Unter POSIX laeuft der Aufruf deshalb in einer
-    eigenen Sitzung, die als Ganzes beendet wird.
+    `docker compose` starts subprocesses; a `kill` on the parent process
+    alone would leave them behind. Under POSIX the call therefore runs in
+    its own session, which is terminated as a whole.
     """
     if process.returncode is not None:
         return
@@ -107,12 +107,12 @@ async def run(
     cwd: str | None = None,
     env: dict[str, str] | None = None,
 ) -> Result:
-    """Fuehrt `argv` ohne Shell aus.
+    """Executes `argv` without a shell.
 
-    Bei Zeitueberschreitung wird der Prozessbaum beendet. Das Ergebnis ist dann
-    `unknown` statt `failed`, sofern die Operation nicht idempotent ist: ein als
-    Fehler gemeldetes Zeitlimit provoziert genau die Wiederholung, die bei einem
-    bereits durchgelaufenen Schreibzugriff das Duplikat erzeugt (FR-6.9).
+    On timeout the process tree is killed. The result is then `unknown`
+    instead of `failed`, unless the operation is idempotent: reporting a
+    timeout as failure provokes exactly the retry that creates a duplicate
+    on an already-completed write (FR-6.9).
     """
     started = time.monotonic()
     popen_kwargs: dict[str, object] = {}

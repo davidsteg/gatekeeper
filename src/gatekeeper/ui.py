@@ -1,43 +1,43 @@
-"""Betriebs- und Verwaltungsoberflaeche.
+"""Operations and administration console.
 
-Zeigt, was zur Laufzeit gilt -- Ebene-1-Grenzen, Katalog, Rechteprofile,
-Audit-Log -- und laesst Ebene 2 bearbeiten: Tools anlegen und aendern,
-Identitaeten verwalten, Tokens ausstellen.
+Shows what applies at runtime -- Tier 1 boundaries, catalog, permission profiles,
+audit log -- and lets Tier 2 be edited: create and modify tools,
+manage identities, issue tokens.
 
-Fuenf Entwurfsentscheidungen tragen diese Schicht:
+Five design decisions underpin this layer:
 
-1. **Die Sitzung gilt nie fuer /mcp.** Der MCP-Endpunkt authentifiziert
-   ausschliesslich ueber den `Authorization`-Header, und genau das macht ihn
-   CSRF-fest: ein Browser haengt einen solchen Header nicht von sich aus an,
-   eine fremde Seite kann ihn also nicht erzeugen. Ein Cookie dagegen wird
-   automatisch mitgeschickt. Die Sitzung hier liest nur `ui.py` --
-   `AuthMiddleware` kennt sie nicht.
+1. **The session never applies to /mcp.** The MCP endpoint authenticates
+   exclusively via the `Authorization` header, and that is exactly what makes it
+   CSRF-proof: a browser does not attach such a header on its own,
+   so a foreign page cannot produce it. A cookie, on the other hand, is
+   sent automatically. The session here is read only by `ui.py` --
+   `AuthMiddleware` does not know about it.
 
-2. **Angemeldet wird mit Kennung und Passwort, nicht mit dem Token**
-   (FR-11.5). Der Token ist der Nachweis der API; ihn in ein Anmeldeformular
-   zu tippen hiesse, ihn durch Zwischenablage, Passwortspeicher und Verlauf
-   zu schicken -- und dasselbe Geheimnis oeffnete danach beides. Getrennte
-   Nachweise heissen: ein verlorenes Konsolenpasswort ruft keine Tools auf,
-   ein verlorener Token oeffnet keine Oberflaeche, und jeder von beiden laesst
-   sich einzeln wechseln.
+2. **Sign-in uses ID and password, not the token**
+   (FR-11.5). The token is the credential for the API; typing it into a login form
+   would send it through the clipboard, password store, and history
+   -- and the same secret would then open both. Separate
+   credentials mean: a lost console password cannot call tools,
+   a lost token cannot open the console, and each can be
+   changed independently.
 
-3. **Jedes schreibende Formular traegt ein CSRF-Token.** Mit Schreibzugriff
-   wird das Cookie erstmals zur Waffe: eine fremde Seite koennte ein Formular
-   auf `/ui/...` abschicken. `SameSite=Strict` verhindert das bereits, aber
-   nicht in jeder Konstellation -- eine Seite auf derselben Site zaehlt nicht
-   als fremd. Das Token im Formular schliesst die Luecke.
+3. **Every write form carries a CSRF token.** With write access,
+   the cookie becomes a weapon for the first time: a foreign page could submit
+   a form to `/ui/...`. `SameSite=Strict` already prevents this, but
+   not in every constellation -- a page on the same site does not count
+   as foreign. The token in the form closes the gap.
 
-4. **Kein JavaScript.** Die CSP verbietet Skripte vollstaendig. Das folgt aus
-   der Datenlage: das Audit-Log zeigt Parameterwerte von Agenten, bei
-   abgelehnten Aufrufen unvalidierte. Ohne Skriptausfuehrung bleibt ein
-   eingeschleustes `<script>` folgenlos, auch wenn die Maskierung versagt.
-   Graph, Diagramm und alle Formulare kommen daher ohne Code im Browser aus.
+4. **No JavaScript.** The CSP forbids scripts entirely. This follows from
+   the data situation: the audit log shows parameter values from agents,
+   for denied calls, unvalidated ones. Without script execution, an
+   injected `<script>` is harmless, even if the escaping fails.
+   Graph, chart, and all forms therefore manage without code in the browser.
 
-5. **Lesen und Schreiben sind getrennte Rollen.** `viewer` sieht alles,
-   `admin` darf aendern. Ohne diese Trennung haette jeder, der ins Audit-Log
-   schauen soll, zugleich das Recht, Tools anzulegen.
+5. **Reading and writing are separate roles.** `viewer` sees everything,
+   `admin` may change. Without this separation, anyone who can view the audit
+   log would also have the right to create tools.
 
-Alle ausgegebenen Texte sind englisch; Kommentare bleiben deutsch.
+All output text is English; comments remain German.
 """
 
 from __future__ import annotations
@@ -71,27 +71,27 @@ from .identity import (
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
 
-#: Praefix aller UI-Pfade. `AuthMiddleware` laesst genau dieses Praefix ohne
-#: Bearer-Token durch -- die Handler pruefen stattdessen die Sitzung.
+#: Prefix of all UI paths. `AuthMiddleware` lets exactly this prefix through
+#: without a Bearer token -- the handlers check the session instead.
 UI_PREFIX = "/ui"
 
-#: Pfade, die ein Browser von sich aus anfaesst, sobald jemand die Adresse
-#: eintippt. Ohne eigene Behandlung liefe jeder Besuch in die Token-Pflicht und
-#: erzeugte zwei `auth_failure`-Eintraege -- der Fehlversuch ist aber der
-#: wichtigste Befund im Audit-Log, und er ist wertlos, wenn er zwischen
-#: Favicon-Rauschen steht. Gilt nur bei eingeschaltetem UI.
+#: Paths that a browser hits on its own as soon as someone types the
+#: address. Without special handling, every visit would run into the token requirement
+#: and produce two `auth_failure` entries -- but the failed attempt is the
+#: most important finding in the audit log, and it is worthless if it sits
+#: among favicon noise. Applies only when the UI is enabled.
 UI_COMPANION_PATHS = frozenset({"/", "/favicon.ico"})
 
 SESSION_COOKIE = "gatekeeper_ui"
 SESSION_TTL_SECONDS = 8 * 3600
 
-#: Hoechstens so viele Bytes vom Ende der Logdatei lesen. Das Log darf 32 MB
-#: gross werden; es vollstaendig zu parsen wuerde die Seite unbrauchbar machen.
+#: Read at most this many bytes from the end of the log file. The log may grow to 32 MB;
+#: parsing it in full would make the page unusable.
 AUDIT_READ_BYTES = 2 * 1024 * 1024
 AUDIT_DEFAULT_LIMIT = 200
 
 
-# -- Sitzungen -------------------------------------------------------------
+# -- Sessions -------------------------------------------------------------
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -107,11 +107,11 @@ class Session:
 
 @dataclasses.dataclass(slots=True)
 class SessionStore:
-    """Sitzungen im Arbeitsspeicher.
+    """Sessions in memory.
 
-    Bewusst nicht persistiert: ein Neustart meldet alle ab. Der Verlust ist
-    eine erneute Anmeldung, der Gewinn ist, dass ein Sitzungs-Token keinen
-    Neustart ueberlebt und nirgends auf Platte landet.
+    Deliberately not persisted: a restart signs out everyone. The loss is
+    a re-login, the gain is that a session token does not
+    survive a restart and never lands on disk.
     """
 
     ttl: int = SESSION_TTL_SECONDS
@@ -143,15 +143,15 @@ class SessionStore:
             self._sessions.pop(sid, None)
 
     def drop_identity(self, identity_id: str, *, keep: str | None = None) -> None:
-        """Meldet alle Sitzungen einer Identitaet ab.
+        """Signs out all sessions of an identity.
 
-        Wird nach Loeschung, Rollenentzug und Passwortwechsel aufgerufen: eine
-        bestehende Sitzung wuerde sonst weiterlaufen, obwohl der Zugang
-        entzogen oder das Geheimnis ausgetauscht ist.
+        Called after deletion, role revocation, and password change: an
+        existing session would otherwise continue, even though access
+        has been revoked or the secret has been changed.
 
-        `keep` verschont genau eine Sitzung -- die, die den Wechsel selbst
-        veranlasst hat. Ohne diese Ausnahme wuerde die Selbstbedienung den
-        Anwender fuer eine erfolgreiche Aenderung abmelden.
+        `keep` spares exactly one session -- the one that initiated the change
+        itself. Without this exception, self-service would sign
+        the user out for a successful change.
         """
         for sid in [
             s
@@ -168,13 +168,13 @@ class SessionStore:
 
 @dataclasses.dataclass(slots=True)
 class LoginThrottle:
-    """Bremst Rateversuche gegen das Anmeldeformular.
+    """Thwarts rate attacks against the login form.
 
-    Der scrypt-Vergleich kostet je Versuch rund 50 ms pro hinterlegter
-    Identitaet und bremst damit schon von sich aus. Das Formular ist aber die
-    erste Flaeche, die ein Mensch im Browser anfassen kann -- eine harte
-    Obergrenze je Herkunftsadresse ist hier billiger als die Diskussion, ob
-    scrypt allein reicht.
+    The scrypt comparison costs about 50 ms per attempt per stored
+    identity and thus already throttles on its own. But the form is the
+    first surface a human can touch in a browser -- a hard
+    limit per source address is cheaper here than the debate over whether
+    scrypt alone suffices.
     """
 
     max_failures: int = 10
@@ -197,7 +197,7 @@ class LoginThrottle:
         return recent
 
 
-# -- Audit-Log lesen -------------------------------------------------------
+# -- Reading the audit log -------------------------------------------------------
 
 
 def read_audit(
@@ -208,13 +208,13 @@ def read_audit(
     tool: str = "",
     outcome: str = "",
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Liest die juengsten Eintraege der aktuellen Logdatei.
+    """Reads the most recent entries of the current log file.
 
-    Gibt `(eintraege, gekuerzt)` zurueck. `gekuerzt` sagt, dass aelteres
-    Material existiert, das hier nicht sichtbar ist -- entweder weil die Datei
-    laenger als `AUDIT_READ_BYTES` ist oder weil bereits rotiert wurde. Das UI
-    weist darauf hin, damit niemand die Abwesenheit eines Eintrags fuer einen
-    Beweis haelt.
+    Returns `(entries, truncated)`. `truncated` indicates that older
+    material exists that is not visible here -- either because the file
+    is longer than `AUDIT_READ_BYTES` or because rotation has already occurred. The UI
+    points this out so that nobody takes the absence of an entry as
+    proof.
     """
     try:
         size = os.path.getsize(path)
@@ -226,7 +226,7 @@ def read_audit(
         handle.seek(start)
         blob = handle.read()
     if start:
-        # Die erste Zeile ist angeschnitten und damit kein gueltiges JSON.
+        # The first line is truncated and therefore not valid JSON.
         _, _, blob = blob.partition(b"\n")
 
     records: list[dict[str, Any]] = []
@@ -261,13 +261,13 @@ def _parse_ts(value: Any) -> datetime | None:
 def _bucket_calls(
     records: list[dict[str, Any]], hours: int = 12, *, now: datetime | None = None
 ) -> list[tuple[int, int]]:
-    """Aufrufe je Stundenfach als `(gelungen, nicht gelungen)`.
+    """Calls per hour slot as `(succeeded, not succeeded)`.
 
-    Beide Seiten werden auf die volle Stunde abgerundet, bevor gerechnet wird.
-    Nur die Gegenwart abzurunden waere ein stiller Fehler: ein Eintrag aus der
-    laufenden Stunde liegt dann *nach* der abgerundeten Gegenwart, bekommt ein
-    negatives Alter und faellt aus jedem Fach heraus -- das Diagramm bliebe
-    leer, obwohl gerade eben Aufrufe stattgefunden haben.
+    Both sides are rounded down to the full hour before computing.
+    Rounding down only the present would be a silent bug: an entry from the
+    current hour would then lie *after* the rounded-down present, get a
+    negative age, and fall out of every slot -- the chart would
+    stay empty even though calls just took place.
     """
     current = (now or datetime.now(timezone.utc)).replace(
         minute=0, second=0, microsecond=0
@@ -293,7 +293,7 @@ def _bucket_calls(
     return buckets
 
 
-# -- Bildmarken ------------------------------------------------------------
+# -- Image markers ------------------------------------------------------------
 
 _FAVICON = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
@@ -303,8 +303,8 @@ _FAVICON = (
     "</svg>"
 )
 
-#: Strichgrafiken, inline. Keine externe Quelle -- der Container hat kein Netz,
-#: und die CSP laesst ohnehin nichts Fremdes zu.
+#: Line graphics, inline. No external source -- the container has no network,
+#: and the CSP forbids anything foreign anyway.
 _ICONS = {
     "shield": '<path d="M12 21.5s7.5-3.7 7.5-9.5V5.4L12 2.5 4.5 5.4v6.6c0 5.8 7.5 9.5 7.5 9.5z"/>',
     "gauge": '<path d="M3.5 18a9 9 0 1 1 17 0"/><path d="M12 14.5 16 9.5"/>',
@@ -387,7 +387,7 @@ body {
 .mono, code, input, select, textarea { font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace; }
 .muted { color: var(--muted); }
 
-/* -- Geruest -- */
+/* -- Layout -- */
 .app { display: grid; grid-template-columns: 236px 1fr; min-height: 100vh; }
 .side {
   background: var(--surface); border-right: 1px solid var(--line);
@@ -449,7 +449,7 @@ main { padding: 1.2rem 1.4rem 3.5rem; }
   .topbar, main { padding-left: 1rem; padding-right: 1rem; }
 }
 
-/* -- Bausteine -- */
+/* -- Components -- */
 h2 {
   display: flex; align-items: center; gap: .45rem;
   font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
@@ -514,7 +514,7 @@ code {
 .row-l { display: flex; align-items: center; gap: .4rem; color: var(--muted); font-size: .83rem; }
 @media (max-width: 620px) { .row { grid-template-columns: 1fr; gap: .25rem; } }
 
-/* -- Tabellen -- */
+/* -- Tables -- */
 .wrap { overflow-x: auto; border-radius: 11px; }
 table { width: 100%; border-collapse: collapse; font-size: .87rem; }
 thead th {
@@ -523,13 +523,18 @@ thead th {
   font-size: .72rem; font-weight: 650; text-transform: uppercase;
   letter-spacing: .06em; border-bottom: 1px solid var(--line); white-space: nowrap;
 }
-tbody td { padding: .6rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody td { padding: .6rem .7rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
 tbody tr:last-child td { border-bottom: none; }
+tbody tr:nth-child(even) { background: color-mix(in srgb, var(--sunken) 35%, transparent); }
 tbody tr:hover { background: var(--sunken); }
 tbody tr.t-ok   td:first-child { box-shadow: inset 3px 0 var(--ok); }
 tbody tr.t-deny td:first-child { box-shadow: inset 3px 0 var(--deny); }
 tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 .tool-id { font-weight: 600; letter-spacing: -.01em; }
+.tool-matrix .col-tool { min-width: 160px; }
+.tool-matrix .col-status, .tool-matrix .col-cat, .tool-matrix .col-idem { width: 1%; white-space: nowrap; }
+.tool-matrix .col-ident { text-align: center; width: 1%; white-space: nowrap; }
+.tool-matrix .cell-grant { text-align: center; }
 .argv {
   display: block; background: var(--sunken); border: 1px solid var(--line);
   border-radius: 7px; padding: .38rem .48rem; margin-top: .28rem;
@@ -542,7 +547,7 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 td.ops { white-space: nowrap; }
 td.ops form { display: inline; }
 
-/* -- Zugriffskarte -- */
+/* -- Access map -- */
 .graph { width: 100%; height: auto; display: block; }
 .graph text { font-family: inherit; }
 .g-box { fill: var(--sunken); stroke: var(--line); transition: fill .18s, stroke .18s, stroke-width .18s; }
@@ -571,13 +576,13 @@ td.ops form { display: inline; }
 .legend .l-deny i { border-top: 2px dashed var(--deny); }
 .legend .l-hot i { border-top: 3px solid var(--accent); }
 
-/* -- Call Flow Pipeline -- */
+/* -- Call flow pipeline -- */
 .flow-scroll { overflow-x: auto; }
 .flow-scroll .g-s { font-size: 10px; fill: var(--muted); }
 .flow-scroll .g-t { font-size: 12.5px; }
 .flow-empty { text-align: center; color: var(--muted); font-size: .82rem; padding: .8rem 0; }
 
-/* -- Aktivitaet -- */
+/* -- Activity -- */
 .chart { width: 100%; height: auto; display: block; }
 .c-ok { fill: var(--ok); }
 .c-deny { fill: var(--deny); }
@@ -594,7 +599,7 @@ td.ops form { display: inline; }
 .feed-item .txt b { font-weight: 600; }
 .feed-item .when { color: var(--muted); font-size: .74rem; white-space: nowrap; }
 
-/* -- Hinweise -- */
+/* -- Notes -- */
 .note {
   display: flex; gap: .55rem; align-items: flex-start;
   background: var(--warn-soft); color: var(--warn);
@@ -607,7 +612,7 @@ td.ops form { display: inline; }
 .note strong { font-weight: 650; }
 .note ul { margin: .3rem 0 0; padding-left: 1.1rem; }
 
-/* -- Formulare -- */
+/* -- Forms -- */
 .filter {
   display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-end;
   background: var(--surface); border: 1px solid var(--line);
@@ -655,7 +660,7 @@ a.reset:hover { color: var(--accent); }
   padding: .7rem .8rem; font-size: .9rem; word-break: break-all; margin: .5rem 0;
 }
 
-/* -- Anmeldung -- */
+/* -- Login -- */
 .login { max-width: 390px; margin: 13vh auto; padding: 0 1.15rem; }
 .login .card { margin: 0; }
 .login .pad { padding: 1.6rem 1.5rem; }
@@ -669,8 +674,8 @@ a.reset:hover { color: var(--accent); }
 .err { display: flex; align-items: center; gap: .4rem; color: var(--deny); font-size: .85rem; margin: .9rem 0 0; }
 """
 
-#: Die Oberflaeche ist durchgehend englisch -- Kommentare und Doku bleiben
-#: deutsch wie im uebrigen Projekt.
+#: The console is entirely in English -- comments and docs remain
+#: German as in the rest of the project.
 _NAV = (
     ("", "Overview", "gauge"),
     ("/tools", "Tools", "sliders"),
@@ -680,11 +685,11 @@ _NAV = (
 
 
 def _e(value: Any) -> str:
-    """Escapen -- ausnahmslos.
+    """Escape -- without exception.
 
-    Alles, was hier durchlaeuft, kann von einem Agenten stammen: Audit-Eintraege
-    halten bei abgelehnten Aufrufen die *unvalidierten* Argumente fest, damit im
-    Log steht, was tatsaechlich versucht wurde.
+    Everything that passes through here can come from an agent: audit entries
+    record the *unvalidated* arguments for denied calls, so that the log
+    shows what was actually attempted.
     """
     return html.escape("" if value is None else str(value), quote=True)
 
@@ -715,7 +720,7 @@ def _page(
     return (
         "<!doctype html>"
         '<html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">'
         f"<title>{_e(title)} - gatekeeper</title>"
         f'<style nonce="{nonce}">{_STYLE}</style></head><body><div class="app">'
         '<aside class="side">'
@@ -791,9 +796,9 @@ def _post_button(
 
 def _respond(request: Request, html_text: str, nonce: str, status: int = 200) -> Response:
     response = HTMLResponse(html_text, status_code=status)
-    # Ohne Skripte und ohne externe Quellen. Der Nonce gilt nur dem einen
-    # <style>-Block. Graph, Diagramm und Formulare sind Inline-HTML/SVG und
-    # brauchen daher weder eine Bildquelle noch Code im Browser.
+    # No scripts and no external sources. The nonce applies only to the single
+    # <style> block. Graph, chart, and forms are inline HTML/SVG and
+    # therefore need neither an image source nor code in the browser.
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; "
         f"style-src 'nonce-{nonce}'; "
@@ -804,23 +809,23 @@ def _respond(request: Request, html_text: str, nonce: str, status: int = 200) ->
     )
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    # Ein UI mit Rechte- und Audit-Daten gehoert in keinen Cache.
+    # A UI with permission and audit data does not belong in any cache.
     response.headers["Cache-Control"] = "no-store"
     return response
 
 
-# -- Zugriffskarte ---------------------------------------------------------
+# -- Access map ---------------------------------------------------------
 
 
 def _svg_node(
     x: float, y: float, w: float, h: float, label: str, sub: str, css: str,
     *, tooltip: str = "", count_text: str = "",
 ) -> str:
-    """Ein Knoten der Zugriffskarte mit optionalem Tooltip und Zaehler.
+    """A node of the access map with optional tooltip and counter.
 
-    Der Tooltip laeuft ueber ein natives SVG-``<title>``-Element: der Browser
-    zeigt ihn beim Darueberfahren an, ohne dass Skripte noetig waeren. Der
-    Zaehler erscheint als dritte Textzeile, wenn ``count_text`` nicht leer ist.
+    The tooltip runs via a native SVG ``<title>`` element: the browser
+    shows it on hover, without scripts being necessary. The
+    counter appears as a third text line when ``count_text`` is not empty.
     """
     title = f"<title>{_e(tooltip)}</title>" if tooltip else ""
     count = (
@@ -842,7 +847,7 @@ def _svg_node(
 
 
 def _call_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
-    """Zaehlt Aufrufe je Identitaet: {id: {ok, denied, failed, total}}."""
+    """Counts calls per identity: {id: {ok, denied, failed, total}}."""
     stats: dict[str, dict[str, int]] = {}
     for record in records:
         if record.get("kind") != "call":
@@ -865,10 +870,10 @@ def _call_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
 def _tool_call_stats(
     records: list[dict[str, Any]], tools_by_kit: dict[str, set[str]],
 ) -> dict[str, dict[str, int]]:
-    """Zaehlt Aufrufe je Toolkit durch Aufloesen der Tool-ID.
+    """Counts calls per toolkit by resolving the tool ID.
 
-    ``{toolkit: {ok, denied, failed, total}}``. Ein Aufruf, dessen Tool in
-    keinem bekannten Toolkit liegt, wird unter ``_unknown`` zusammengefasst.
+    ``{toolkit: {ok, denied, failed, total}}``. A call whose tool is in
+    no known toolkit is grouped under ``_unknown``.
     """
     tool_to_kit: dict[str, str] = {}
     for kit, tool_ids in tools_by_kit.items():
@@ -896,17 +901,17 @@ def _access_graph(
     service: Service, identities: IdentityStore,
     records: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Wer erreicht was -- als serverseitig berechnetes SVG.
+    """Who reaches what -- as a server-side-computed SVG.
 
-    Die Karte beantwortet die Frage, fuer die es sonst drei Dateien
-    nebeneinander braucht: welche Identitaet kommt ueber welches Toolkit an
-    welche Ressource, und was ist fuer alle gesperrt. Kanten sind aggregiert;
-    einzeln gezeichnet waeren es bei zehn Tools und vier Identitaeten vierzig
-    Linien und keine Aussage mehr.
+    The map answers the question that would otherwise require three files
+    side by side: which identity reaches which
+    resource via which toolkit, and what is blocked for everyone. Edges are aggregated;
+    drawn individually, with ten tools and four identities there would be forty
+    lines and no statement left.
 
-    Mit ``records`` (Audit-Log) werden zusaetzlich gezeigt: Aufrufzaehler je
-    Identitaet und je Toolkit, Erfolgs-/Abweisungs-/Fehleraufschluesselung im
-    Tooltip, und hervorgehobene Kanten fuer viel frequentierte Wege.
+    With ``records`` (audit log), the following are additionally shown: call counters per
+    identity and per toolkit, success/rejection/error breakdown in the
+    tooltip, and highlighted edges for heavily trafficked paths.
     """
     idents = sorted(
         (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
@@ -925,9 +930,9 @@ def _access_graph(
     ident_stats = _call_stats(audit_records)
     kit_stats = _tool_call_stats(audit_records, tools_by_kit)
 
-    # Schwellenwert fuer "heisse" Kanten: das 75. Perzentil der Gesamtzahl,
-    # mindestens aber 3 Aufrufe -- sonst gibt es bei wenig Traffic kein
-    # Hervorheben, was richtig ist, weil nichts hervorzuheben ist.
+    # Threshold for "hot" edges: the 75th percentile of the total count,
+    # but at least 3 calls -- otherwise with little traffic there is
+    # no highlighting, which is correct because there is nothing to highlight.
     all_totals = [s["total"] for s in ident_stats.values()] + [
         s["total"] for s in kit_stats.values()
     ]
@@ -1075,11 +1080,11 @@ def _access_graph(
     )
 
 
-# -- Aktivitaet ------------------------------------------------------------
+# -- Activity ------------------------------------------------------------
 
 
 def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
-    """Aufrufe je Stunde, gelungen gegen abgelehnt -- als gestapelte Balken."""
+    """Calls per hour, succeeded vs. rejected -- as stacked bars."""
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     buckets = _bucket_calls(records, hours, now=now)
     peak = max((o + d for o, d in buckets), default=0)
@@ -1192,18 +1197,18 @@ def _feed(records: list[dict[str, Any]], limit: int = 7) -> str:
     )
 
 
-# -- Views: lesen ----------------------------------------------------------
+# -- Views: read ----------------------------------------------------------
 
-# -- Aufruf-Pipeline -------------------------------------------------------
+# -- Call pipeline -------------------------------------------------------
 
 
 def _call_flow_pipeline() -> str:
-    """Die 8 Schichten, die jeder Aufruf durchlaeuft -- als horizontales SVG.
+    """The 8 layers that every call passes through -- as a horizontal SVG.
 
-    Jede Schicht ist ein Knoten mit Namen und kurzer Erklaerung. Die Pfeile
-    zeigen den Weg vom Agenten bis zur Ausfuehrung. Das Diagramm beantwortet
-    die Frage, die sonst nur der Code beantwortet: in welcher Reihenfolge
-    greifen die Schutzmechanismen, und was tut jede Schicht.
+    Each layer is a node with a name and a short explanation. The arrows
+    show the path from the agent to execution. The diagram answers
+    the question that otherwise only the code answers: in what order
+    do the protective mechanisms engage, and what does each layer do.
     """
     layers = [
         ("MCP", "JSON-RPC 2.0, tools/list, tools/call"),
@@ -1257,14 +1262,14 @@ def _call_flow_pipeline() -> str:
     )
 
 
-# -- Tool-Matrix -----------------------------------------------------------
+# -- Tool matrix -----------------------------------------------------------
 
 
 def _tool_matrix(service: Service, identities: IdentityStore) -> str:
-    """Jedes Tool als Zeile: Status, Kategorie, Idempotenz, wer darf es.
+    """Each tool as a row: status, category, idempotency, who may call it.
 
-    Die Matrix beantwortet auf einen Blick: welche Tools gibt es, sind sie
-    aktiv, sind sie idempotent, und welche Identitaeten duerfen sie aufrufen.
+    The matrix answers at a glance: which tools exist, are they
+    active, are they idempotent, and which identities may call them.
     """
     tools = sorted(service.catalog.tools.values(), key=lambda t: t.id)
     if not tools:
@@ -1289,30 +1294,34 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
             '<span class="pill ok">yes</span>' if tool.idempotent
             else '<span class="pill warn">no</span>'
         )
-        grants = "".join(
-            '<span class="pill ok">' if tool.id in i.tools else '<span class="pill">-</span>'
-            for i in idents
-        )
+        # One cell per identity — aligned with the header columns
+        grant_cells = ""
+        for i in idents:
+            if tool.id in i.tools:
+                grant_cells += '<td class="cell-grant"><span class="pill ok">✓</span></td>'
+            else:
+                grant_cells += '<td class="cell-grant"><span class="pill">—</span></td>'
         rows.append(
             f"<tr>"
             f'<td><code class="tool-id">{_e(tool.id)}</code></td>'
             f"<td>{status}</td>"
             f"<td>{category}</td>"
             f"<td>{idem}</td>"
-            f'<td class="pills">{grants}</td>'
+            f"{grant_cells}"
             "</tr>"
         )
 
     id_cols = "".join(
-        f'<th class="mono" title="{_e(i.id)}">{_e(i.id[:8])}</th>' for i in idents
+        f'<th class="col-ident" title="{_e(i.id)}">{_e(i.id[:8])}</th>' for i in idents
     )
     return (
-        '<div class="wrap"><table>'
+        '<div class="wrap"><table class="tool-matrix">'
         "<thead><tr>"
-        "<th>Tool</th><th>Status</th><th>Category</th><th>Idempotent</th>"
-        f"<th>{id_cols}</th>"
+        '<th class="col-tool">Tool</th><th class="col-status">Status</th>'
+        '<th class="col-cat">Category</th><th class="col-idem">Idempotent</th>'
+        f"{id_cols}"
         "</tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></div>"
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
     )
 
 
@@ -1369,7 +1378,7 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
         + "</div>"
     )
 
-    # Aufruf-Pipeline: die 8 Schichten, die jeder Aufruf durchlaeuft.
+    # Call pipeline: the 8 layers that every call passes through.
     parts.append(
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("layers", 14)}Call flow &ndash; 8 layers every request passes</h3></div>'
@@ -1412,9 +1421,9 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
         "</div></div>"
     )
 
-    # Tool-Matrix: jedes Tool als Zeile mit Status, Kategorie, Idempotenz
-    # und wer es aufrufen darf. Beantwortet die Frage, die die Zugriffskarte
-    # nur aggregiert zeigt: welches konkrete Tool ist fuer wen freigegeben.
+    # Tool matrix: each tool as a row with status, category, idempotency
+    # and who may call it. Answers the question that the access map
+    # only shows aggregated: which concrete tool is granted to whom.
     if catalog.tools:
         parts.append(
             '<div class="card">'
@@ -1550,9 +1559,9 @@ def _view_tools(
         return _no_toolkits_note()
 
     if not rows:
-        # Der Normalzustand nach der Installation. Eine leere Tabelle waere
-        # hier eine Sackgasse -- sie sagt nicht, ob etwas fehlt oder ob so
-        # gedacht ist.
+        # The normal state after installation. An empty table would
+        # be a dead end here -- it does not say whether something is missing or
+        # whether this is by design.
         hint = (
             f'<p><a class="btn primary" href="{UI_PREFIX}/tools/new">'
             f'{_icon("plus", 14)}Create the first tool</a></p>'
@@ -1626,9 +1635,9 @@ def _view_identities(
                 f'href="{UI_PREFIX}/identities/delete?id={_e(identity.id)}">'
                 f'{_icon("trash", 14)}</a>'
             )
-        # Zwei Nachweise, zwei Anzeigen: der Token oeffnet /mcp, das Passwort
-        # die Konsole. Wer nur die Rolle sieht, haelt einen `admin` ohne
-        # Passwort faelschlich fuer einen Zugang.
+        # Two credentials, two indicators: the token opens /mcp, the password
+        # the console. Someone who only sees the role might mistake an
+        # `admin` without a password for access.
         if identity.role in UI_ROLES:
             console = (
                 '<span class="pill ok">console access</span>'
@@ -1715,8 +1724,8 @@ def _view_audit(service: Service, request: Request) -> str:
         if record.get("detail"):
             bits.append(f'<span class="muted">{_e(record["detail"])}</span>')
         if record.get("parameters"):
-            # Agentendaten. json.dumps macht daraus einen String, _e macht ihn
-            # unschaedlich -- in dieser Reihenfolge.
+            # Agent data. json.dumps turns it into a string, _e makes it
+            # harmless -- in that order.
             bits.append(
                 f"<code>{_e(json.dumps(record['parameters'], ensure_ascii=False))}</code>"
             )
@@ -1753,16 +1762,16 @@ def _view_audit(service: Service, request: Request) -> str:
     )
 
 
-# -- Views: schreiben ------------------------------------------------------
+# -- Views: write ------------------------------------------------------
 
 def _tool_scaffold(service: Service) -> str:
-    """Geruest fuer eine neue Definition, aus der echten Ebene 1 gebaut.
+    """Scaffold for a new definition, built from the real Tier 1.
 
-    Frueher stand hier ein fertiges Docker-Tool mit fremden Pfaden. Das war
-    doppelt falsch: es sah aus wie eine Voreinstellung, und auf einem System
-    ohne dieses Toolkit liess es sich nicht einmal speichern. Das Geruest nimmt
-    jetzt das erste konfigurierte Toolkit und dessen tatsaechliche Werte -- es
-    ist damit auf jedem Deployment ein gueltiger Ausgangspunkt.
+    This used to contain a finished Docker tool with foreign paths. That was
+    doubly wrong: it looked like a preset, and on a system
+    without this toolkit it could not even be saved. The scaffold now
+    takes the first configured toolkit and its actual values -- it
+    is thus a valid starting point on every deployment.
     """
     name, toolkit = next(iter(sorted(service.tier1.toolkits.items())))
     binary = toolkit.binaries[0]
@@ -1800,12 +1809,12 @@ def _tool_scaffold(service: Service) -> str:
 
 
 def _no_toolkits_note() -> str:
-    """Was zu tun ist, wenn Ebene 1 leer ist.
+    """What to do when Tier 1 is empty.
 
-    Der Zustand nach `init`. Er ist erklaerungsbeduerftig, weil er sich nicht
-    hier beheben laesst -- und das ist keine Luecke, sondern der Kern des
-    Entwurfs: was moeglich sein soll, entscheidet der Deploy, nicht die
-    laufende Oberflaeche.
+    The state after `init`. It needs explanation, because it cannot
+    be fixed here -- and that is not a gap, but the core of the
+    design: what should be possible is decided by the deploy, not the
+    running console.
     """
     return _note(
         "<strong>No toolkits configured.</strong> A tool always binds to a "
@@ -1820,11 +1829,11 @@ def _no_toolkits_note() -> str:
 
 
 def _tier1_reference(service: Service) -> str:
-    """Die Grenzen neben dem Editor -- nicht als Zierde.
+    """The boundaries next to the editor -- not as decoration.
 
-    Wer ein Tool schreibt, muss wissen, welche Binaries erlaubt sind und welche
-    Argumente gesperrt. Steht das nicht daneben, wird der Editor zum Ratespiel
-    mit Fehlermeldung.
+    Anyone writing a tool needs to know which binaries are allowed and which
+    arguments are blocked. If this is not shown alongside, the editor becomes
+    guesswork with an error message.
     """
     cards = []
     for name, tk in sorted(service.tier1.toolkits.items()):
@@ -1872,12 +1881,12 @@ def _tool_editor(
 def _account_page(
     session: Session, *, rev: str, error: str = "", done: bool = False
 ) -> str:
-    """Selbstbedienung: das eigene Konsolenpasswort aendern.
+    """Self-service: change your own console password.
 
-    Auch ein `viewer` kommt hier hinein, obwohl er sonst nichts schreiben
-    darf. Das ist kein Loch in der Rollentrennung: geaendert wird
-    ausschliesslich das eigene Passwort, und ein Zugang, dessen Passwort nur
-    ein anderer wechseln kann, wird nie gewechselt.
+    A `viewer` also gets in here, even though they may write
+    nothing else. This is not a hole in the role separation: what is changed
+    is exclusively their own password, and an access whose password can
+    only be changed by someone else will never be changed.
     """
     return (
         (_note(f"<strong>Rejected.</strong> {_e(error)}", tone="bad") if error else "")
@@ -2028,18 +2037,18 @@ def _token_page(identity_id: str, token: str, back: str) -> str:
 
 
 def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
-    """Die Anmeldung: Kennung und Passwort, nicht der API-Token.
+    """Sign-in: ID and password, not the API token.
 
-    Das Feld hiess frueher `token`, und genau das war der Fehler: derselbe
-    Nachweis oeffnete `/mcp` und die Konsole, und er musste dafuer durch eine
-    Zwischenablage und einen Browser-Passwortspeicher wandern (FR-11.5). Wer
-    hier einen Token eintippt, kommt nicht mehr hinein -- der Hinweis unter
-    dem Formular sagt das, bevor jemand es dreimal versucht.
+    The field used to be called `token`, and that was exactly the mistake: the same
+    credential opened `/mcp` and the console, and it had to pass through a
+    clipboard and a browser password store (FR-11.5). Anyone
+    who types a token here can no longer get in -- the note below
+    the form says so before someone tries three times.
     """
     return (
         "<!doctype html>"
         '<html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">'
         "<title>Sign in - gatekeeper</title>"
         f'<style nonce="{nonce}">{_STYLE}</style></head><body>'
         '<main class="login"><div class="card"><div class="pad">'
@@ -2071,10 +2080,10 @@ def build_ui_routes(
     sessions: SessionStore | None = None,
     throttle: LoginThrottle | None = None,
 ) -> list[Route]:
-    """Baut die UI-Routen.
+    """Builds the UI routes.
 
-    `store=None` heisst: nur lesen. Jeder Handler prueft die Sitzung selbst,
-    jeder schreibende zusaetzlich Rolle und CSRF-Token.
+    `store=None` means: read only. Each handler checks the session itself,
+    each write handler additionally checks role and CSRF token.
     """
     sessions = sessions or SessionStore()
     throttle = throttle or LoginThrottle()
@@ -2097,8 +2106,8 @@ def build_ui_routes(
             request,
             _page(title, body, session=session, subtitle=subtitle, icon=icon,
                   active=active, nonce=nonce, actions=actions,
-                  # Ohne beschreibbare Ebene 2 gibt es keine Kontoseite: sie
-                  # koennte nichts als eine Fehlermeldung anbieten.
+                  # Without writable Tier 2 there is no account page: it
+                  # could offer nothing but an error message.
                   account=store is not None),
             nonce,
             status,
@@ -2107,12 +2116,12 @@ def build_ui_routes(
     def guarded(view: Callable[[Request, Session], str], title: str, active: str, *,
                 icon: str, subtitle: str = "",
                 actions: Callable[[Session], str] | None = None):
-        """Bindet einen View an eine gueltige Sitzung.
+        """Binds a view to a valid session.
 
-        Jeder lesende Handler laeuft durch diese Huelle, jeder schreibende
-        durch `writer`. `test_ui.py` zaehlt die registrierten Routen ab und
-        verlangt fuer jede eine Umleitung ohne Sitzung -- eine kuenftig
-        vergessene Absicherung faellt damit im Test auf, nicht im Betrieb.
+        Every read handler runs through this wrapper, every write
+        handler through `writer`. `test_ui.py` counts the registered routes and
+        requires a redirect for each without a session -- a future
+        forgotten guard thus shows up in the test, not in production.
         """
 
         async def handler(request: Request) -> Response:
@@ -2128,7 +2137,7 @@ def build_ui_routes(
         return handler
 
     def _csrf_ok(session: Session, form: FormData) -> bool:
-        # Konstante Zeit, damit der Vergleich nichts ueber das Token verraet.
+        # Constant time, so the comparison reveals nothing about the token.
         return hmac.compare_digest(str(form.get("_csrf") or ""), session.csrf)
 
     def _csrf_refused(request: Request, session: Session) -> Response:
@@ -2144,11 +2153,11 @@ def build_ui_routes(
         )
 
     def session_post(handler: Callable[[Request, Session, FormData], Any]):
-        """Huelle fuer Formulare, die keine Admin-Rolle verlangen.
+        """Wrapper for forms that do not require the admin role.
 
-        Genau eines faellt darunter: das eigene Passwort. Es braucht Sitzung
-        und CSRF-Token wie jedes schreibende Formular, aber nicht `admin` --
-        sonst koennte ein `viewer` sein Passwort nie wechseln.
+        Exactly one falls under this: your own password. It needs a session
+        and CSRF token like every write form, but not `admin` --
+        otherwise a `viewer` could never change their password.
         """
 
         async def wrapped(request: Request) -> Response:
@@ -2173,7 +2182,7 @@ def build_ui_routes(
         return wrapped
 
     def writer(handler: Callable[[Request, Session, FormData], Any]):
-        """Huelle fuer alles, was schreibt: Sitzung, Rolle, CSRF."""
+        """Wrapper for everything that writes: session, role, CSRF."""
 
         async def wrapped(request: Request) -> Response:
             session = _current(request)
@@ -2215,7 +2224,7 @@ def build_ui_routes(
 
         return wrapped
 
-    # -- Anmeldung ---------------------------------------------------------
+    # -- Login ---------------------------------------------------------
 
     async def login_form(request: Request) -> Response:
         if _current(request) is not None:
@@ -2236,9 +2245,9 @@ def build_ui_routes(
             )
 
         form = await request.form()
-        # Die Kennung kommt ungeprueft aus dem Formular und landet gleich im
-        # Audit-Log und wieder im Feld. Gekuerzt, damit niemand das Log mit
-        # einem Megabyte je Fehlversuch aufblaeht.
+        # The ID comes unvalidated from the form and lands immediately in the
+        # audit log and back in the field. Truncated so nobody inflates the log
+        # with a megabyte per failed attempt.
         supplied = str(form.get("identity") or "").strip()[:64]
         password = str(form.get("password") or "")
         identity = (
@@ -2248,9 +2257,9 @@ def build_ui_routes(
         )
 
         if identity is None:
-            # Die Antwort nennt nie den Grund: ob die Kennung existiert, ob
-            # sie eine Konsolenrolle hat oder ob nur das Passwort falsch war,
-            # geht den Absender nichts an. Im Log steht es vollstaendig.
+            # The response never names the reason: whether the ID exists, whether
+            # it has a console role, or whether only the password was wrong,
+            # is none of the sender business. The log has it in full.
             throttle.record_failure(client)
             audit.auth_failure(
                 reason="ui_login_failed",
@@ -2275,9 +2284,9 @@ def build_ui_routes(
             SESSION_COOKIE,
             sid,
             httponly=True,
-            # Strict: der Browser schickt das Cookie bei keiner fremdinitiierten
-            # Navigation mit. Zusammen mit dem CSRF-Token im Formular und damit,
-            # dass /mcp Cookies ohnehin nicht ansieht, bleibt keine Flaeche.
+            # Strict: the browser does not send the cookie on any foreign-initiated
+            # navigation. Together with the CSRF token in the form and the
+            # fact that /mcp does not look at cookies anyway, no surface remains.
             samesite="strict",
             secure=request.url.scheme == "https",
             path=UI_PREFIX,
@@ -2291,7 +2300,7 @@ def build_ui_routes(
         response.delete_cookie(SESSION_COOKIE, path=UI_PREFIX)
         return response
 
-    # -- Eigenes Konto -----------------------------------------------------
+    # -- Own account -----------------------------------------------------
 
     def _account_shell(
         request: Request, session: Session, *, error: str = "",
@@ -2342,25 +2351,25 @@ def build_ui_routes(
                 require_current=True,
             )
         except (WriteRefused, ConfigError) as exc:
-            # Ein falsches aktuelles Passwort ist ein Fehlversuch und gehoert
-            # ins Log -- eine offene Sitzung ist die bequemste Stelle, an der
-            # jemand ein Passwort raet.
+            # A wrong current password is a failed attempt and belongs
+            # in the log -- an open session is the most convenient place for
+            # someone to guess a password.
             audit.auth_failure(
                 reason="ui_password_change_failed",
                 detail=f"identity={session.identity!r}: {exc}",
             )
             return _account_shell(request, session, error=str(exc), status=400)
 
-        # Alle uebrigen Sitzungen dieser Identitaet beenden. Wer sein Passwort
-        # wechselt, tut das oft genau deswegen: es soll anderswo nichts mehr
-        # offen sein. Die eigene Sitzung bleibt -- sonst waere der Erfolg von
-        # einem Rauswurf nicht zu unterscheiden.
+        # End all other sessions of this identity. Anyone changing their
+        # password often does so for exactly this reason: nothing should
+        # remain open elsewhere. The current session stays -- otherwise
+        # success would be indistinguishable from a sign-out.
         sessions.drop_identity(
             session.identity, keep=request.cookies.get(SESSION_COOKIE)
         )
         return _account_shell(request, session, done=True)
 
-    # -- Tools schreiben ---------------------------------------------------
+    # -- Write tools ---------------------------------------------------
 
     def _tools_actions(session: Session) -> str:
         if not (session.can_write and store is not None):
@@ -2377,9 +2386,9 @@ def build_ui_routes(
         if store is None or not session.can_write:
             return RedirectResponse(f"{UI_PREFIX}/tools", status_code=303)
         if not service.tier1.toolkits:
-            # Ohne Toolkit gibt es nichts, worauf sich ein Tool stuetzen
-            # koennte. Ein leeres Formular anzubieten waere eine Einladung in
-            # eine Fehlermeldung.
+            # Without a toolkit there is nothing for a tool to
+            # build on. Offering an empty form would be an invitation into
+            # an error message.
             return _shell(
                 request, "New tool", _no_toolkits_note(), session,
                 icon="plus", active="/tools",
@@ -2487,7 +2496,7 @@ def build_ui_routes(
             )
         return RedirectResponse(f"{UI_PREFIX}/tools", status_code=303)
 
-    # -- Identitaeten schreiben -------------------------------------------
+    # -- Write identities -------------------------------------------
 
     def _identities_actions(session: Session) -> str:
         if not (session.can_write and store is not None):
@@ -2567,8 +2576,8 @@ def build_ui_routes(
                                  replaces=None, error=str(exc)),
                 session, icon="plus", active="/identities", status=400,
             )
-        # Der Klartext wird gerendert, nicht umgeleitet: er darf nirgends in
-        # einer URL stehen, wo ihn Verlauf oder Log auffangen wuerden.
+        # The plaintext is rendered, not redirected: it must never appear in
+        # a URL where history or log could capture it.
         return _shell(
             request, "Token issued",
             _token_page(values["id"], token, f"{UI_PREFIX}/identities"),
@@ -2594,15 +2603,15 @@ def build_ui_routes(
                                  replaces=replaces, error=str(exc)),
                 session, icon="pencil", active="/identities", status=400,
             )
-        # Umbenannt oder aus dem UI ausgesperrt: bestehende Sitzungen der alten
-        # Identitaet duerfen nicht weiterlaufen. Ein neues Passwort beendet sie
-        # ebenfalls -- sonst bliebe eine uebernommene Sitzung genau dann offen,
-        # wenn ein Administrator sie gerade schliessen will.
+        # Renamed or locked out of the UI: existing sessions of the old
+        # identity must not continue. A new password ends them
+        # too -- otherwise a taken-over session would remain open exactly when
+        # an administrator is trying to close it.
         locked_out = values["id"] != replaces or values["role"] not in UI_ROLES
         if locked_out or password:
             keep = None
             if not locked_out and replaces == session.identity:
-                # Wer sein eigenes Passwort hier setzt, bleibt angemeldet.
+                # Anyone setting their own password here stays signed in.
                 keep = request.cookies.get(SESSION_COOKIE)
             sessions.drop_identity(replaces, keep=keep)
         return RedirectResponse(f"{UI_PREFIX}/identities", status_code=303)
@@ -2619,11 +2628,10 @@ def build_ui_routes(
                 request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
                 session, icon="ban", active="/identities", status=400,
             )
-        # Der alte Token ist tot. Die Konsolensitzung haengt seit der eigenen
-        # Anmeldung nicht mehr am Token -- beendet wird sie trotzdem: eine
-        # Rotation ist die Antwort auf einen Verdacht, und dann soll von
-        # dieser Identitaet nichts offen bleiben. Der Preis ist eine erneute
-        # Anmeldung.
+        # The old token is dead. The console session has not depended on the
+        # token since its own sign-in -- it is still terminated: a
+        # rotation is the response to a suspicion, and then nothing of
+        # this identity should remain open. The price is a re-login.
         if identity_id != session.identity:
             sessions.drop_identity(identity_id)
         return _shell(
@@ -2672,13 +2680,13 @@ def build_ui_routes(
             return RedirectResponse(f"{UI_PREFIX}/login", status_code=303)
         return RedirectResponse(f"{UI_PREFIX}/identities", status_code=303)
 
-    # -- Beiwerk -----------------------------------------------------------
+    # -- Misc -----------------------------------------------------------
 
     async def root(_request: Request) -> Response:
         return RedirectResponse(f"{UI_PREFIX}/", status_code=303)
 
     async def favicon(_request: Request) -> Response:
-        # Inline-SVG statt 204: der Browser hoert sonst nicht auf zu fragen.
+        # Inline SVG instead of 204: otherwise the browser keeps asking.
         return Response(
             _FAVICON,
             media_type="image/svg+xml",
@@ -2766,16 +2774,16 @@ def build_ui_routes(
 
 
 def has_admin(identities: IdentityStore) -> bool:
-    """Gibt es jemanden, der schreiben darf?"""
+    """Is there anyone who may write?"""
     return any(i.role == ADMIN_ROLE for i in identities.identities.values())
 
 
 def has_ui_identity(identities: IdentityStore) -> bool:
-    """Gibt es ueberhaupt jemanden, der sich anmelden koennte?
+    """Is there anyone at all who could sign in?
 
-    Rolle *und* Passwort: seit der Konsolenanmeldung ist eine UI-Rolle ohne
-    Passwort kein Zugang. Ein Server, der eine Anmeldemaske ausliefert,
-    hinter die niemand kommt, ist schlimmer als einer ohne Oberflaeche --
-    er sieht benutzbar aus.
+    Role *and* password: since console sign-in, a UI role without
+    a password is not access. A server that delivers a login form
+    that nobody can get past is worse than one without a console --
+    it looks usable.
     """
     return any(i.can_sign_in for i in identities.identities.values())

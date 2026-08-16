@@ -1,8 +1,8 @@
-"""Positivtests: was funktionieren muss.
+"""Positive tests: what must work.
 
-Der Negativkorpus zeigt, dass die Grenzen halten. Hier geht es darum, dass
-gatekeeper innerhalb der Grenzen auch tatsaechlich etwas ausrichtet -- eine
-Absicherung, die alles ablehnt, waere trivial und nutzlos.
+The negative corpus shows that the boundaries hold. Here it is about
+gatekeeper actually accomplishing something within the boundaries -- a
+protection that rejects everything would be trivial and useless.
 """
 
 from __future__ import annotations
@@ -41,13 +41,13 @@ async def test_narrow_identity_within_scope(service, identities):
 
 
 def test_scope_wildcard_requires_dash_boundary():
-    """Der `-` in `stack:dev-*` ist literal, kein naiver Praefix.
+    """The `-` in `stack:dev-*` is literal, not a naive prefix.
 
-    Das ist die tragende Zusicherung des Rechteprofils: `dev` darf nur
-    `dev-*` anfassen, nicht `devtools` oder `dev_x`. `fnmatch` behandelt
-    `-` als normales Zeichen -- dieser Test hält das fest, damit eine
-    kuenftige Umstellung auf einen Praefixvergleich nicht stillschweigend
-    die Grenze oeffnet.
+    This is the foundational guarantee of the permission profile: `dev` may
+    only touch `dev-*`, not `devtools` or `dev_x`. `fnmatch` treats
+    `-` as a normal character -- this test pins that down, so a
+    future switch to a prefix comparison does not silently
+    open the boundary.
     """
     from gatekeeper.identity import Identity
 
@@ -57,7 +57,7 @@ def test_scope_wildcard_requires_dash_boundary():
     )
     assert dev.covers_scope("stack:dev-argus")
     assert dev.covers_scope("stack:dev-argus-extra")
-    # Der kritische Fall: gleicher Praefix, aber kein Bindestrich.
+    # The critical case: same prefix, but no hyphen.
     assert not dev.covers_scope("stack:devtools")
     assert not dev.covers_scope("stack:dev_x")
     assert not dev.covers_scope("stack:dev")
@@ -65,11 +65,11 @@ def test_scope_wildcard_requires_dash_boundary():
 
 
 async def test_scope_mismatch_rejects_sibling_prefix(service, identities):
-    """Ein Stack mit gleichem Praefix ohne Bindestrich wird abgelehnt.
+    """A stack with the same prefix but no hyphen is rejected.
 
-    Der Negativfall zur Wildcard-Grenze: `devtools` darf fuer eine
-    `dev-*`-Identitaet nicht durchgehen -- weder in der Scope-Aufloesung
-    noch im echten Aufrufpfad.
+    The negative case for the wildcard boundary: `devtools` must not
+    pass for a `dev-*` identity -- neither in scope resolution
+    nor in the real call path.
     """
     store, _ = identities
     narrow = store.identities["narrow"]  # scopes: stack:media-*
@@ -88,7 +88,7 @@ def test_derived_path_resolves(catalog, sandbox):
 
 
 def test_input_schema_hides_derived_parameters(catalog):
-    """Der Agent sieht nur, was er setzen darf."""
+    """The agent sees only what it is allowed to set."""
     schema = catalog.get("demo.show").input_schema()
     assert set(schema["properties"]) == {"stack"}
     assert schema["required"] == ["stack"]
@@ -131,12 +131,12 @@ def test_integer_bounds(tmp_path, tier1):
         with pytest.raises(Denied) as exc:
             resolve_parameters(tool, {"n": bad})
         assert exc.value.reason is DenialReason.PARAM_INVALID
-    # Wahrheitswerte sind in Python Ganzzahlen - hier duerfen sie es nicht sein.
+    # Booleans are integers in Python - here they must not be.
     with pytest.raises(Denied):
         resolve_parameters(tool, {"n": True})
 
 
-# -- Ausfuehrung -----------------------------------------------------------
+# -- Execution -------------------------------------------------------------
 
 
 async def test_output_is_capped():
@@ -161,10 +161,10 @@ async def test_timeout_on_idempotent_tool_is_a_failure():
 
 
 async def test_timeout_on_non_idempotent_tool_is_unknown():
-    """FR-6.9: der wichtigste Unterschied im Ausfuehrungspfad.
+    """FR-6.9: the most important distinction in the execution path.
 
-    Ein als Fehler gemeldetes Zeitlimit provoziert die Wiederholung, die bei
-    einem bereits durchgelaufenen Schreibzugriff das Duplikat erzeugt.
+    A timeout reported as an error provokes the retry that, on an
+    already-completed write, produces the duplicate.
     """
     result = await execute.run(
         [PYTHON, "-c", "import time; time.sleep(30)"],
@@ -178,7 +178,7 @@ async def test_timeout_on_non_idempotent_tool_is_unknown():
 
 
 async def test_no_shell_interpretation():
-    """Der Wert bleibt ein Wert -- es gibt keinen Interpreter."""
+    """The value stays a value -- there is no interpreter."""
     result = await execute.run(
         [PYTHON, "-c", "import sys; print(sys.argv[1])", "$(id); `whoami`"],
         timeout_seconds=10,
@@ -191,7 +191,7 @@ async def test_no_shell_interpretation():
 async def test_missing_binary_is_reported(tmp_path):
     with pytest.raises(Denied) as exc:
         await execute.run(
-            [str(tmp_path / "gibt-es-nicht")],
+            [str(tmp_path / "does-not-exist")],
             timeout_seconds=5,
             max_output_bytes=1024,
             idempotent=True,
@@ -235,7 +235,7 @@ async def test_audit_records_denial_reason(service, identities, tmp_path):
     lines = (tmp_path / "logs" / "audit.jsonl").read_text(encoding="utf-8").splitlines()
     record = json.loads(lines[-1])
     assert record["outcome"] == "denied"
-    # Der Agent bekam eine nichtssagende Antwort - das Log kennt den Grund.
+    # The agent got an uninformative response - the log knows the reason.
     assert record["denial_reason"] == DenialReason.NOT_GRANTED.value
     assert record["identity"] == "narrow"
 
@@ -261,54 +261,54 @@ def test_audit_rotates(tmp_path):
     assert os.path.exists(str(tmp_path / "rot" / "audit.jsonl.1"))
 
 
-# -- Auslieferungszustand und Beispiele ------------------------------------
+# -- Shipped state and examples --------------------------------------------
 
 
 def test_nothing_active_is_shipped():
-    """gatekeeper bringt keine Konfiguration mit -- nur Beispiele.
+    """gatekeeper ships no configuration -- only examples.
 
-    Eine mitgelieferte `tools.yaml` waere eine Faehigkeit, die niemand
-    entschieden hat: nach der Installation stuenden Tools bereit, die im
-    Audit-Log keinen Urheber haben. Der Auslieferungszustand ist deshalb leer.
+    A shipped `tools.yaml` would be a capability that nobody
+    decided on: after installation, tools would be ready that have
+    no author in the audit log. The shipped state is therefore empty.
     """
     config = os.path.join(os.path.dirname(__file__), "..", "config")
     present = sorted(
         name for name in os.listdir(config) if name.endswith((".yaml", ".yml"))
     )
-    assert present == [], f"aktive Konfiguration im Repo: {present}"
+    assert present == [], f"active configuration in repo: {present}"
     assert os.path.isdir(os.path.join(config, "examples"))
 
 
 def test_missing_catalog_is_an_empty_catalog(tier1, tmp_path):
-    """Der Normalzustand nach `init`, kein Fehlerfall."""
-    catalog = load_catalog(str(tmp_path / "gibt-es-nicht.yaml"), tier1)
+    """The normal state after `init`, not an error condition."""
+    catalog = load_catalog(str(tmp_path / "does-not-exist.yaml"), tier1)
     assert catalog.tools == {}
     assert catalog.raw == []
 
 
 def test_empty_catalog_file_loads(tier1, tmp_path):
-    path = tmp_path / "leer.yaml"
+    path = tmp_path / "empty.yaml"
     path.write_text("tools: []\n", encoding="utf-8")
     assert load_catalog(str(path), tier1).tools == {}
-    # Auch der Fall, in dem der Schluessel ohne Inhalt dasteht.
+    # Also the case where the key stands without content.
     path.write_text("tools:\n", encoding="utf-8")
     assert load_catalog(str(path), tier1).tools == {}
 
 
 def test_missing_tier1_names_the_way_out(tmp_path):
-    """Ebene 1 hat keinen Leerzustand -- die Meldung muss weiterhelfen."""
+    """Tier 1 has no empty state -- the message must point the way forward."""
     from gatekeeper.errors import ConfigError
 
     with pytest.raises(ConfigError) as exc:
-        load_tier1(str(tmp_path / "fehlt.yaml"))
+        load_tier1(str(tmp_path / "missing.yaml"))
     assert "gatekeeper init" in str(exc.value)
 
 
 def test_shipped_config_is_valid(repo_config_dir):
-    """Die Beispiele muessen streng laden -- inklusive Ebene-1-Pruefung.
+    """The examples must load strictly -- including Tier 1 checks.
 
-    Sie sind das, wovon jemand abschreibt. Ein Tippfehler darin faellt sonst
-    erst auf einem fremden Host auf.
+    They are what someone copies from. A typo in them would otherwise
+    only surface on a foreign host.
     """
     tier1 = load_tier1(os.path.join(repo_config_dir, "toolkits.yaml"))
     catalog = load_catalog(
@@ -318,8 +318,8 @@ def test_shipped_config_is_valid(repo_config_dir):
     assert "diag.uptime" in catalog.tools
     assert catalog.disabled_by_tier1 == []
 
-    # Alle Docker-Tools muessen einen Stack-Scope beanspruchen, sonst greift
-    # weder das Rechteprofil noch die Sperrliste aus FR-4.12.
+    # All Docker tools must claim a stack scope, otherwise neither
+    # the permission profile nor the block list from FR-4.12 applies.
     for tool in catalog.tools.values():
         if tool.toolkit == "docker":
             assert tool.required_scopes == ("stack:{stack}",), tool.id
@@ -333,7 +333,7 @@ def test_shipped_docker_toolkit_protects_itself(repo_config_dir):
 
 
 def test_shipped_docker_toolkit_blocks_volume_removal(repo_config_dir):
-    """'compose down -v' loescht Volumes - kein Tool braucht das."""
+    """'compose down -v' deletes volumes - no tool needs that."""
     tier1 = load_tier1(os.path.join(repo_config_dir, "toolkits.yaml"))
     docker = tier1.toolkit("docker")
     for flag in ("-v", "--volumes", "--rmi", "rm", "prune"):
@@ -341,11 +341,11 @@ def test_shipped_docker_toolkit_blocks_volume_removal(repo_config_dir):
 
 
 async def test_local_executor_probe_does_not_execute(service):
-    """NFR-9: `local` wird ueber Dateirechte geprueft, nicht durch Ausfuehrung.
+    """NFR-9: `local` is checked via file permissions, not by execution.
 
-    Regression: die erste Fassung startete das erste Binary des Toolkits ohne
-    Argumente. Bei einem Interpreter wartet das auf Eingabe, und /health/ready
-    meldete dauerhaft 'degraded'.
+    Regression: the first version started the first binary of the toolkit
+    without arguments. With an interpreter that waits for input, and
+    /health/ready permanently reported 'degraded'.
     """
     ready = await service.probe_executors()
     assert ready == {"local": True}
@@ -355,7 +355,7 @@ async def test_local_executor_probe_does_not_execute(service):
 
 
 def _run_init(tmp_path, *extra):
-    """Ruft das CLI wie ein Mensch auf -- inklusive Argument-Parsing."""
+    """Calls the CLI like a human -- including argument parsing."""
     import contextlib
     import io
 
@@ -372,25 +372,25 @@ def _run_init(tmp_path, *extra):
 
 
 def _init_secrets(out: str) -> tuple[str, str]:
-    """Konsolenpasswort und API-Token aus der Ausgabe von `init`.
+    """Console password and API token from the output of `init`.
 
-    `init` gibt beides aus, und zwar in dieser Reihenfolge -- zuerst das,
-    womit sich ein Mensch anmeldet.
+    `init` outputs both, and in this order -- first that
+    with which a human signs in.
     """
     parts = out.split("shown once):")
-    assert len(parts) == 3, f"init muss zwei Geheimnisse ausgeben:\n{out}"
+    assert len(parts) == 3, f"init must output two secrets:\n{out}"
     password = parts[1].split("\n\n")[0].strip()
     token = parts[2].strip()
     return password, token
 
 
 def test_init_creates_a_runnable_but_empty_state(tmp_path):
-    """Nach `init` startet der Server -- und kann nichts.
+    """After `init` the server starts -- and can do nothing.
 
-    Genau das ist gewollt. gatekeeper trifft keine Annahme darueber, welche
-    Binaries ein Agent erreichen koennen soll: das weiss nur, wer das System
-    kennt. Ein mitgeliefertes Toolkit waere eine Faehigkeit, die niemand
-    entschieden hat.
+    That is exactly the intention. gatekeeper makes no assumption about
+    which binaries an agent should be able to reach: only someone who
+    knows the system knows that. A shipped toolkit would be a capability
+    that nobody decided on.
     """
     code, out, _ = _run_init(tmp_path)
     assert code == 0
@@ -399,26 +399,26 @@ def test_init_creates_a_runnable_but_empty_state(tmp_path):
     catalog = load_catalog(str(tmp_path / "tools.yaml"), tier1, strict=True)
     identities = load_identities(str(tmp_path / "identities.yaml"))
 
-    assert tier1.toolkits == {}, "Ebene 1 darf nichts vorgeben"
-    assert catalog.tools == {}, "der Auslieferungszustand darf kein Tool kennen"
+    assert tier1.toolkits == {}, "Tier 1 must not preset anything"
+    assert catalog.tools == {}, "the shipped state must not know any tool"
     assert list(identities.identities) == ["admin"]
     assert identities.identities["admin"].role == "admin"
     assert identities.identities["admin"].tools == frozenset()
 
-    # Betriebsparameter darf init setzen -- sie erlauben nichts, sie begrenzen.
+    # init may set operational parameters -- they permit nothing, they limit.
     assert tier1.rate_limits["read"].count > 0
     assert tier1.audit_dir
 
     password, token = _init_secrets(out)
     assert identities.authenticate(token).id == "admin"
-    # Und der zweite, getrennte Nachweis: das Konsolenpasswort. Es oeffnet die
-    # Oberflaeche, der Token tut das nicht.
+    # And the second, separate proof: the console password. It opens the
+    # UI; the token does not.
     assert identities.authenticate_console("admin", password).id == "admin"
     assert identities.authenticate_console("admin", token) is None
 
 
 def test_empty_tier1_is_valid(tmp_path):
-    """Ebene 1 ohne Toolkits ist eine gueltige Aussage: nichts ist moeglich."""
+    """Tier 1 without toolkits is a valid statement: nothing is possible."""
     path = tmp_path / "toolkits.yaml"
     for body in ("toolkits: {}\n", "toolkits:\n"):
         path.write_text(body + "audit:\n  dir: /tmp/x\n", encoding="utf-8")
@@ -426,11 +426,11 @@ def test_empty_tier1_is_valid(tmp_path):
 
 
 def test_tool_for_a_removed_toolkit_is_disabled_not_fatal(tmp_path, tier1, tool_specs):
-    """FR-4.7: verschwindet ein Toolkit, faellt sein Tool weg -- nicht der Start.
+    """FR-4.7: if a toolkit disappears, its tool falls away -- not the startup.
 
-    Sonst waere das Entfernen eines Toolkits ein Weg, den Dienst lahmzulegen:
-    der naechste Start braeche ab, und zwar bevor jemand die Oberflaeche
-    erreichen koennte, um den Katalog zu reparieren.
+    Otherwise, removing a toolkit would be a way to bring the service down:
+    the next startup would abort, and before anyone could reach the UI
+    to repair the catalog.
     """
     import yaml as _yaml
 
@@ -474,8 +474,8 @@ def test_init_secrets_appear_once_and_only_as_hashes_on_disk(tmp_path):
     assert out.count(token) == 1
     assert token not in on_disk
 
-    # Das Passwort traegt bewusst kein 'gk_': im Klartext soll man den
-    # API-Token vom Konsolenpasswort unterscheiden koennen.
+    # The password deliberately does not carry 'gk_': in plain text one
+    # should be able to distinguish the API token from the console password.
     assert not password.startswith("gk_")
     assert password != token
     assert out.count(password) == 1
@@ -484,28 +484,28 @@ def test_init_secrets_appear_once_and_only_as_hashes_on_disk(tmp_path):
 
 
 def test_example_compose_ps_asks_for_json(repo_config_dir):
-    """`docker compose ps` soll strukturiert antworten, nicht als Textabelle.
+    """`docker compose ps` should answer structured, not as a text table.
 
-    Ein Agent, der Spalten abzaehlt, verliest sich beim ersten langen
-    Containernamen. '--format json' steht fest im Template und ist damit kein
-    Einfallstor -- ein Parameterwert kann es nicht erzeugen (FR-5.4).
+    An agent that counts columns misreads on the first long container
+    name. '--format json' is fixed in the template and therefore not
+    an attack surface -- a parameter value cannot produce it (FR-5.4).
     """
     tier1 = load_tier1(os.path.join(repo_config_dir, "toolkits.yaml"))
     catalog = load_catalog(os.path.join(repo_config_dir, "tools.yaml"), tier1, strict=True)
     argv = catalog.tools["docker.compose_ps"].argv
     assert argv[-2:] == ("--format", "json")
 
-    # Das Format darf nicht aus einem Parameter kommen -- sonst koennte ein
-    # Agent es umlenken.
+    # The format must not come from a parameter -- otherwise an
+    # agent could redirect it.
     assert "{" not in "".join(argv[-2:])
 
 
 def test_directory_instead_of_file_says_what_happened(tmp_path):
-    """Die Docker-Falle: gemountete Datei fehlt auf dem Host -> Verzeichnis.
+    """The Docker trap: mounted file missing on the host -> directory.
 
-    Ohne eigene Behandlung schlaegt das als roher IsADirectoryError durch --
-    eine Meldung ueber eine Datei, die scheinbar vorhanden ist. Die Ursache
-    liegt aber im Mount, und genau das muss dastehen.
+    Without special handling this breaks through as a raw IsADirectoryError --
+    a message about a file that is seemingly present. The cause
+    is in the mount, and that is exactly what must be stated.
     """
     from gatekeeper.errors import ConfigError
 
@@ -523,7 +523,7 @@ def test_directory_instead_of_file_says_what_happened(tmp_path):
 
 
 def test_state_dir_separates_the_two_tiers(tmp_path, monkeypatch):
-    """Ebene 1 und Ebene 2 duerfen in getrennten Mounts liegen."""
+    """Tier 1 and Tier 2 may reside in separate mounts."""
     from gatekeeper.__main__ import _config_path
 
     monkeypatch.setenv("GATEKEEPER_CONFIG_DIR", str(tmp_path / "conf"))
@@ -532,16 +532,16 @@ def test_state_dir_separates_the_two_tiers(tmp_path, monkeypatch):
     assert _config_path("tools.yaml", None).startswith(str(tmp_path / "state"))
     assert _config_path("identities.yaml", None).startswith(str(tmp_path / "state"))
 
-    # Ohne STATE_DIR liegt alles beisammen -- ein Mount genuegt.
+    # Without STATE_DIR everything is together -- one mount suffices.
     monkeypatch.delenv("GATEKEEPER_STATE_DIR")
     assert _config_path("tools.yaml", None).startswith(str(tmp_path / "conf"))
 
 
-# -- Erststart -------------------------------------------------------------
+# -- First start -------------------------------------------------------------
 
 
 def test_first_start_creates_everything_from_an_empty_directory(tmp_path):
-    """Ordner mounten, starten -- mehr soll es nicht brauchen."""
+    """Mount a folder, start -- that should be all it takes."""
     from gatekeeper.__main__ import _bootstrap_on_first_start
 
     empty = tmp_path / "config"
@@ -556,12 +556,12 @@ def test_first_start_creates_everything_from_an_empty_directory(tmp_path):
 
 
 def test_unwritable_directory_names_the_real_cause(tmp_path, monkeypatch):
-    """Der Fall, der im Betrieb wirklich auftrat.
+    """The case that actually occurred in operation.
 
-    Docker legt eine fehlende Bind-Mount-Quelle als root an; der Container
-    laeuft als 568 und darf nicht hinein. Vorher stieg der Erststart hier
-    still aus, und der Loader meldete danach 'not found' -- die falsche
-    Ursache, denn das Verzeichnis war da. Es gehoerte nur niemandem.
+    Docker creates a missing bind-mount source as root; the container
+    runs as 568 and may not enter it. Previously, the first start
+    exited silently here, and the loader then reported 'not found' -- the wrong
+    cause, because the directory was there. It just belonged to nobody.
     """
     from gatekeeper import __main__ as cli
 
@@ -576,12 +576,12 @@ def test_unwritable_directory_names_the_real_cause(tmp_path, monkeypatch):
 
 
 def test_first_start_does_not_touch_a_partial_configuration(tmp_path):
-    """Der wichtige Fall: liegt schon etwas da, wird nichts angelegt.
+    """The important case: if something is already there, nothing is created.
 
-    Ein verrutschter Mount sieht sonst aus wie eine Erstinstallation. Eine
-    frische Konfiguration darueberzulegen wuerde den Fehler verdecken und den
-    Eindruck erwecken, der Katalog sei verschwunden -- mitsamt neuem
-    Administrator-Token, das niemand angefordert hat.
+    A slipped mount otherwise looks like a first installation. Laying
+    a fresh configuration over it would cover up the error and give
+    the impression that the catalog had disappeared -- along with a new
+    administrator token that nobody requested.
     """
     from gatekeeper.__main__ import _bootstrap_on_first_start
 
@@ -613,11 +613,11 @@ def test_first_start_leaves_a_complete_configuration_alone(tmp_path):
 
 
 def test_unwritable_audit_directory_refuses_to_start(tmp_path, capsys):
-    """Ohne Audit-Log wird nicht gestartet.
+    """Without an audit log, startup is refused.
 
-    Ein Dienst, der Host-Operationen vermittelt und dabei nicht mitschreiben
-    kann, ist schlimmer als keiner: die Aufrufe finden statt, nur weiss
-    hinterher niemand welche. Vorher schlug das als roher OSError durch.
+    A service that mediates host operations and cannot record them
+    is worse than none: the calls take place, but afterwards
+    nobody knows which. Previously this broke through as a raw OSError.
     """
     from gatekeeper import __main__ as cli
 
@@ -640,11 +640,11 @@ def test_unwritable_audit_directory_refuses_to_start(tmp_path, capsys):
     assert "chown" in message
 
 
-# -- Konsolenpasswort auf der Kommandozeile --------------------------------
+# -- Console password on the command line --------------------------------
 
 
 def _run_cli(*argv):
-    """Ruft das CLI wie ein Mensch auf und faengt beide Stroeme ab."""
+    """Calls the CLI like a human and captures both streams."""
     import contextlib
     import io
 
@@ -659,7 +659,7 @@ def _run_cli(*argv):
 
 
 def test_password_command_sets_a_console_password(tmp_path):
-    """Der Weg zurueck, wenn niemand mehr hineinkommt."""
+    """The way back in when nobody can get in anymore."""
     from gatekeeper.__main__ import bootstrap
 
     bootstrap(str(tmp_path), str(tmp_path))
@@ -673,13 +673,12 @@ def test_password_command_sets_a_console_password(tmp_path):
 
     identities = load_identities(str(path))
     assert identities.authenticate_console("admin", password).role == "admin"
-    # Nur der Klartext ist neu; auf der Platte steht ein Hash.
+    # Only the plain text is new; on disk there is a hash.
     assert password not in path.read_text(encoding="utf-8")
 
 
 def test_password_command_leaves_the_api_token_alone(tmp_path):
-    """Zwei Nachweise, zwei Wechsel: das eine anzufassen darf das andere nicht
-    ungueltig machen."""
+    """Two proofs, two changes: touching one must not invalidate the other."""
     from gatekeeper.__main__ import bootstrap
 
     token, _ = bootstrap(str(tmp_path), str(tmp_path))
@@ -716,7 +715,7 @@ def test_password_command_names_the_known_identities(tmp_path):
     bootstrap(str(tmp_path), str(tmp_path))
     code, _, err = _run_cli(
         "--identities", str(tmp_path / "identities.yaml"),
-        "password", "--identity", "tippfehler",
+        "password", "--identity", "typo",
     )
     assert code == 1
     assert "Known: admin" in err
@@ -728,17 +727,17 @@ def test_a_short_password_is_refused_on_the_command_line(tmp_path):
     bootstrap(str(tmp_path), str(tmp_path))
     code, _, err = _run_cli(
         "--identities", str(tmp_path / "identities.yaml"),
-        "password", "--identity", "admin", "--password", "kurz",
+        "password", "--identity", "admin", "--password", "short",
     )
     assert code == 1
     assert "at least" in err
 
 
-# -- Aufstieg aus einer Fassung ohne Konsolenpasswoerter --------------------
+# -- Upgrade from a version without console passwords --------------------
 
 
 def _legacy_identities(tmp_path):
-    """Eine identities.yaml, wie sie vor der Konsolenanmeldung aussah."""
+    """An identities.yaml as it looked before console login existed."""
     from gatekeeper.identity import generate_token, hash_token
 
     path = tmp_path / "identities.yaml"
@@ -755,11 +754,11 @@ def _legacy_identities(tmp_path):
 
 
 def test_an_old_configuration_still_loads(tmp_path):
-    """Ohne 'password_hash' bleibt die Datei gueltig.
+    """Without 'password_hash' the file remains valid.
 
-    Der MCP-Endpunkt haengt nicht an der Konsole: eine Fassung ohne
-    Passwoerter muss weiter starten und Agenten bedienen. Ueber den
-    Konsolenzugang entscheidet der Start mit --ui, nicht der Loader.
+    The MCP endpoint does not depend on the console: a version without
+    passwords must continue to start and serve agents. Whether console
+    access is available is decided by startup with --ui, not by the loader.
     """
     store = load_identities(str(_legacy_identities(tmp_path)))
     assert store.identities["root"].role == "admin"
@@ -768,10 +767,10 @@ def test_an_old_configuration_still_loads(tmp_path):
 
 
 def test_the_first_ui_start_hands_out_a_password(tmp_path, caplog):
-    """Der Aufstiegsweg: einmalig erzeugt, einmalig ins Log.
+    """The upgrade path: generated once, written to the log once.
 
-    Die Alternative waere ein Deployment, das nach einem Image-Wechsel
-    stillsteht -- fuer eine Aenderung, die niemand angefordert hat.
+    The alternative would be a deployment that stands still after an
+    image change -- for a change that nobody requested.
     """
     import logging
 
@@ -787,14 +786,14 @@ def test_the_first_ui_start_hands_out_a_password(tmp_path, caplog):
     assert identities.authenticate_console("root", password) is not None
     assert password not in path.read_text(encoding="utf-8")
 
-    # Ein zweiter Start erzeugt nichts Neues.
+    # A second start generates nothing new.
     before = path.read_text(encoding="utf-8")
     assert _ensure_console_passwords(str(path), identities) is None
     assert path.read_text(encoding="utf-8") == before
 
 
 def test_a_read_only_configuration_names_the_way_out(tmp_path, monkeypatch):
-    """Kann nichts geschrieben werden, wird nicht gestartet -- mit Anleitung."""
+    """If nothing can be written, startup is refused -- with instructions."""
     from gatekeeper import store as store_module
     from gatekeeper.__main__ import _ensure_console_passwords
 

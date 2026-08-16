@@ -5,26 +5,26 @@
 
 services:
   gatekeeper:
-    # Feste Version, nicht :latest (NFR-5). Ein bewegliches Tag zoege bei einem
-    # Redeploy unbemerkt eine andere Fassung -- und dieser Dienst haelt
-    # root-aequivalenten Zugriff auf den Host.
+    # Fixed version, not :latest (NFR-5). A moving tag would pull a different
+    # image on redeploy without anyone noticing -- and this service holds
+    # root-equivalent access to the host.
     image: davidsteg/gatekeeper:0.1.0
     container_name: gatekeeper
     restart: unless-stopped
 
-    # NFR-1: unprivilegiert. 568:568 ist die Homelab-Konvention.
+    # NFR-1: unprivileged. 568:568 is the homelab convention.
     user: "568:568"
-    # Der Docker-Socket gehoert auf dem Host root:docker. Damit der
-    # unprivilegierte Benutzer ihn nutzen kann, braucht der Container die GID
-    # dieser Gruppe. Auf dem Ziel-Host pruefen:
+    # The Docker socket belongs to root:docker on the host. For the
+    # unprivileged user to use it, the container needs the GID of that
+    # group. Check on the target host:
     #   stat -c '%g' /var/run/docker.sock
     group_add:
       - "999"
 
-    # Oberflaeche unter /ui. Standardmaessig aus; verlangt eine Identitaet mit
-    # role: viewer oder role: admin. Ein admin darf Ebene 2 aendern, ein viewer
-    # nur lesen. Mit --ui-read-only bleibt die Oberflaeche auch fuer Admins
-    # schreibgeschuetzt.
+    # UI at /ui. Disabled by default; requires an identity with
+    # role: viewer or role: admin. An admin can modify Tier 2, a viewer
+    # can only read. With --ui-read-only the UI stays read-only even for
+    # admins.
     # command: ["serve", "--ui"]
 
     security_opt:
@@ -39,43 +39,40 @@ services:
       - "8080:8080"
 
     volumes:
-      # FR-8.2: root-aequivalenter Zugriff auf den Host. Bewusst akzeptiert,
-      # weil gatekeeper genau die Whitelist ist, die ihn einschraenkt - aber
-      # es heisst: ein Fehler in gatekeeper ist ein Root-Fehler.
+      # FR-8.2: root-equivalent access to the host. Deliberately accepted,
+      # because gatekeeper is precisely the whitelist that constrains it --
+      # but it means: a bug in gatekeeper is a root bug.
       - /var/run/docker.sock:/var/run/docker.sock
 
-      # EIN beschreibbares Verzeichnis genuegt. Ist es leer, legt der erste
-      # Start toolkits.yaml, tools.yaml und identities.yaml selbst an und
-      # schreibt die beiden Nachweise des Administrators EINMALIG ins
-      # Containerlog - das Konsolenpasswort fuer /ui und den API-Token fuer
-      # /mcp:
+      # ONE writable directory suffices. If empty, the first start creates
+      # toolkits.yaml, tools.yaml and identities.yaml and writes the two
+      # admin credentials ONCE to the container log -- the console password
+      # for /ui and the API token for /mcp:
       #
       #   docker compose logs gatekeeper | grep 'Administrator'
       #
-      # Das Passwort nach dem ersten Anmelden unter /ui/account aendern, den
-      # Token bei Bedarf in der Oberflaeche rotieren - damit beide nicht im
-      # Log stehen bleiben.
-      # Wer nichts automatisch angelegt haben will: GATEKEEPER_NO_BOOTSTRAP=1
-      # setzen und 'gatekeeper init' von Hand aufrufen.
+      # Change the password after first login at /ui/account, rotate the
+      # token in the UI if needed -- so neither stays in the log.
+      # To disable auto-bootstrap: set GATEKEEPER_NO_BOOTSTRAP=1 and run
+      # 'gatekeeper init' manually.
       #
-      # Bewusst KEIN Einzeldatei-Mount fuer toolkits.yaml. Docker legt ein
-      # Verzeichnis an, wenn die gemountete Datei auf dem Host nicht existiert
-      # - bei einer Erstinstallation also immer. Der Container startet dann in
-      # einer Schleife mit "Is a directory", und auf dem Host bleibt ein
-      # Ordner namens toolkits.yaml zurueck. Ein Verzeichnis-Mount kennt das
-      # Problem nicht.
+      # Deliberately NO single-file mount for toolkits.yaml. Docker creates
+      # a directory when the mounted file does not exist on the host --
+      # which is always the case on a fresh install. The container then
+      # loops with "Is a directory", and a folder named toolkits.yaml is
+      # left on the host. A directory mount avoids this problem.
       #
-      # Ebene 1 ist hier durch Code geschuetzt, nicht durch den Mount: es gibt
-      # keine Funktion und keine Route, die toolkits.yaml schreibt (FR-4.11),
-      # und ein Test haelt das fest. Wer den Mount zusaetzlich als Riegel will,
-      # trennt die Verzeichnisse - siehe unten.
+      # Tier 1 is protected by code here, not by the mount: there is no
+      # function and no route that writes toolkits.yaml (FR-4.11), and a
+      # test enforces this. To add an extra lock via mount, split the
+      # directories -- see below.
       - /mnt/raid/gatekeeper/config:/etc/gatekeeper
 
-      # Compose-Dateien der verwalteten Stacks. Die Pfad-Wurzel aus
-      # toolkits.yaml muss hierauf passen.
+      # Compose files of managed stacks. The path root from toolkits.yaml
+      # must match this.
       - /mnt/raid:/mnt/raid
 
-      # Audit-Log, beschreibbar.
+      # Audit log, writable.
       - /mnt/raid/gatekeeper/logs:/mnt/raid/gatekeeper/logs
 
     environment:
@@ -83,10 +80,10 @@ services:
       GATEKEEPER_PORT: "8080"
       GATEKEEPER_LOG_LEVEL: INFO
 
-      # Optionale Haertung: Ebene 1 und Ebene 2 in getrennte Verzeichnisse.
-      # Dann kann der Konfigurations-Mount :ro sein, waehrend die Oberflaeche
-      # weiterhin schreibt. Beides sind Verzeichnisse -- die Docker-Falle von
-      # oben tritt dabei nicht auf.
+      # Optional hardening: split Tier 1 and Tier 2 into separate
+      # directories. Then the config mount can be :ro while the UI still
+      # writes. Both are directories -- the Docker trap above does not
+      # apply.
       #
       #   GATEKEEPER_STATE_DIR: /var/lib/gatekeeper
       #

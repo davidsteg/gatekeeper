@@ -1,249 +1,264 @@
 # Releases
 
-Die Notizen stehen hier, nicht in einem Webformular. Sie durchlaufen damit
-denselben Review wie der Code, und der Workflow liest sie beim Taggen aus —
-was veröffentlicht wird, ist vorher gelesen worden.
+The notes live here, not in a web form. They go through the same review as
+the code, and the workflow reads them when tagging — what is published has
+been read first.
 
-## Die Regel: jede Änderung ist ein Release
+## The rule: every change is a release
 
-**Was auf `main` landet, wird veröffentlicht.** Keine angesammelten,
-unveröffentlichten Änderungen; kein „das nehmen wir beim nächsten Mal mit".
+**What lands on `main` is published.** No accumulated, unreleased changes;
+no "we'll catch it next time."
 
-Der Grund ist nicht Ordnungsliebe. gatekeeper vermittelt root-äquivalenten
-Zugriff auf einen Host. Läuft irgendwo eine Fassung, muss man sagen können,
-*welche* — und das geht nur, wenn jeder Stand eine Version mit Notizen hat.
-Ein Sammel-Release nach fünf Änderungen macht aus fünf nachvollziehbaren
-Schritten einen unteilbaren Klumpen, und im Störungsfall weiß niemand, welcher
-davon es war.
+The reason is not tidiness. gatekeeper mediates root-equivalent access to
+a host. If a build is running somewhere, you must be able to say *which one*
+— and that only works if every state has a version with notes. A batch
+release after five changes turns five traceable steps into an indivisible
+ lump, and in an incident nobody knows which one it was.
 
-**Der Tag wird nicht von Hand gesetzt.** Ausgelöst wird das Release von der
-Version in `pyproject.toml`: steht dort eine Fassung, zu der es noch kein Tag
-gibt, veröffentlicht der Workflow sie. Damit gehört die Versionsanhebung in
-denselben Commit wie die Änderung — und wer sie vergisst, merkt es daran, dass
-nichts erscheint.
+**The tag is not set by hand.** The release is triggered by the version in
+`pyproject.toml`: if there is a version with no corresponding tag yet, the
+workflow publishes it. This means the version bump belongs in the same
+commit as the change — and whoever forgets it notices because nothing
+appears.
 
-## Vorgehen
+## Procedure
 
-Zwei Dateien im selben Commit wie die Änderung:
+Two files in the same commit as the change:
 
-**1. `pyproject.toml`** — Version anheben.
+**1. `pyproject.toml`** — bump the version.
 
-**2. `RELEASE.md`** — Abschnitt ergänzen, Überschrift exakt `## <version>`,
-ohne `v`. Fehlt er, bricht der Workflow ab, *bevor* ein Image in die Registry
-gelangt: eine Version ohne Notizen wird nicht veröffentlicht.
+**2. `RELEASE.md`** — add a section, heading exactly `## <version>`,
+without `v`. If it is missing, the workflow aborts *before* any image
+reaches the registry: a version without notes is not published.
 
-Dann `git push`. Danach läuft von selbst: Tests → Image nach Docker Hub
-(`0.2.0`, `0.2`, `latest`) → Git-Tag `v0.2.0` → GitHub-Release mit dem
-Abschnitt von hier, dem Image-Digest und einem Deploy-Bündel.
+Then `git push`. After that it runs automatically: tests → image to Docker
+Hub (`0.2.0`, `0.2`, `latest`) → Git tag `v0.2.0` → GitHub release with the
+section from here, the image digest, and a deploy bundle.
 
-Ein Push ohne neue Version baut nur `<version>-dev` und veröffentlicht nichts.
-Das ist der Weg für Zwischenstände und für Änderungen, die nichts am Verhalten
-ändern — er ist die Ausnahme, nicht der Normalfall.
+A push without a new version only builds `<version>-dev` and publishes
+nothing. This is the path for intermediate states and for changes that do
+not alter behavior — it is the exception, not the norm.
 
-`latest` zeigt immer auf den neuesten Bau. Da nach der Regel oben jede Änderung
-ein Release ist, ist das in aller Regel auch das neueste Release. Für den
-**Betrieb** bleibt trotzdem eine feste Version richtig (NFR-5): `latest` bewegt
-sich, und ein Redeploy zöge sonst eine andere Fassung, ohne dass jemand es
-entschieden hätte.
+`latest` always points to the latest build. Since every change is a release
+per the rule above, this is almost always also the latest release. For
+**production** a fixed version remains correct (NFR-5): `latest` moves, and
+a redeploy would otherwise pull a different build without anyone deciding
+to.
 
-## Versionierung
+## Versioning
 
-`MAJOR.MINOR.PATCH`. Für dieses Projekt heißt das:
+`MAJOR.MINOR.PATCH`. For this project:
 
-- **MAJOR** — Ebene 1 ändert ihre Bedeutung, oder ein bestehendes Deployment
-  startet ohne Anpassung nicht mehr.
-- **MINOR** — neue Toolkits, Executoren, Oberflächenfunktionen oder neues
-  Verhalten im Betrieb.
-- **PATCH** — Fehlerbehebungen, auch sicherheitsrelevante.
+- **MAJOR** — Tier 1 changes its meaning, or an existing deployment does
+  not start without adjustment.
+- **MINOR** — new toolkits, executors, UI features, or new runtime
+  behavior.
+- **PATCH** — bug fixes, including security-relevant ones.
 
-**Nach dem Deploy den Digest pinnen.** Ein Tag lässt sich überschreiben, ein
-Digest nicht. Er steht in jedem Release.
+**Pin the digest after deploy.** A tag can be overwritten, a digest
+cannot. It is in every release.
+
+---
+
+## 0.3.4
+
+**Fully English + UI fixes.**
+
+- **All German removed** — every docstring, comment, UI string, test,
+  release note, requirement doc, Dockerfile, compose file, and config
+  example is now English. 27 files changed.
+- **Tool matrix rebuilt** — one cell per identity column (was all stuffed
+  in a single `<td>`), aligned with headers. Zebra striping for
+  readability. `✓` / `—` instead of raw text pills. Column widths
+  optimized: tool name gets space, status/category/idempotent are
+  narrow, identity columns are centered.
+- **Zoom fixed** — viewport meta now explicitly allows user scaling.
+  Previously the sticky sidebar captured zoom independently from the
+  main content.
 
 ---
 
 ## 0.3.3
 
-**Fünf UI-Probleme behoben.**
+**Five UI issues fixed.**
 
-- **Executors in die linke Spalte** verschoben — zuvor in der rechten
-  Sidebar unter dem Activity-Feed, wo sie bei wenig Platz abgeschnitten
-  wurde. Jetzt unter der Access map, sichtbar ohne Scrollen.
-- **Blocked-Edges gestaffelt** — alle roten gestrichelten Kanten starteten
-  am selben Punkt der Hub-Rechten. Jetzt verteilen sich die Startpunkte
-  vertikal über die Hub-Kante, was bei mehreren geschützten Ressourcen
-  die Übersicht wahrt.
-- **Call-Flow-Pipeline vergrößert** — Knoten 120×52 → 130×58, Subtitle
-  9.5px → 10px. Container scrollt horizontal bei engem Viewport. Jeder
-  Knoten hat jetzt einen `<title>`-Tooltip mit Name + Beschreibung.
-- **Activity-Chart Empty-State** — statt einer leeren Gitterfläche zeigt
-  das Diagramm jetzt „No calls in the last 12 hours“, wenn keine
-  Audit-Records vom Typ `call` vorliegen.
-- **Call-Flow CSS** — `.flow-scroll` Klasse mit `overflow-x: auto` und
-  expliziten Font-Größen für Titel (12.5px) und Subtitle (10px).
+- **Executors moved to the left column** — previously in the right sidebar
+  below the activity feed, where it was cut off when space was tight. Now
+  under the access map, visible without scrolling.
+- **Blocked edges staggered** — all red dashed edges started from the same
+  point on the hub's right side. Now the start points are distributed
+  vertically along the hub edge, which preserves clarity with multiple
+  protected resources.
+- **Call flow pipeline enlarged** — nodes 120×52 → 130×58, subtitle
+  9.5px → 10px. Container scrolls horizontally on narrow viewports. Each
+  node now has a `<title>` tooltip with name + description.
+- **Activity chart empty state** — instead of an empty grid, the chart now
+  shows "No calls in the last 12 hours" when there are no `call`-type
+  audit records.
+- **Call flow CSS** — `.flow-scroll` class with `overflow-x: auto` and
+  explicit font sizes for title (12.5px) and subtitle (10px).
 
 ---
 
 ## 0.3.2
 
-**Version sichtbar.** Die Sidebar und die Anmeldeseite zeigen jetzt die
-laufende Version (`v0.3.2` etc.) neben dem gatekeeper-Schild. Diskret in
-Muted-Grau, damit es nicht vom Inhalt ablenkt.
+**Version visible.** The sidebar and login page now show the running
+version (`v0.3.2` etc.) next to the gatekeeper shield. Subtle muted grey
+so it does not distract from the content.
 
 ---
 
 ## 0.3.1
 
-**Zugriffskarte mit Audit-Daten.** Die Access map auf der Übersichtsseite
-zeigt jetzt Aufrufzähler je Identität und je Toolkit. Jeder Knoten hat einen
-Tooltip (SVG `<title>`, nativ im Browser, kein JavaScript) mit der
-Aufschlüsselung ok / denied / failed. Kanten mit hohem Traffic werden
-dicker gezeichnet ("hot"); beim Darüberfahren heben sie sich hervor. Die
-Knoten selbst reagieren mit CSS-Transitions auf Hover: Rahmen, Füllung und
-Schriftfarbe wechseln. Die Legende hat einen dritten Eintrag für
-"high traffic". Voraussetzung ist der Audit-Log; ohne ihn bleibt die Karte
-wie bisher, nur mit Tooltips.
+**Access map with audit data.** The access map on the overview page now
+shows call counts per identity and per toolkit. Each node has a tooltip
+(SVG `<title>`, native browser support, no JavaScript) with the
+breakdown of ok / denied / failed. High-traffic edges are drawn thicker
+("hot"); they highlight on hover. The nodes themselves react with CSS
+transitions on hover: border, fill, and text color change. The legend has
+a third entry for "high traffic." Requires the audit log; without it the
+map renders as before, only with tooltips.
 
 ---
 
 ## 0.3.0
 
-**Die Konsole hat eine eigene Anmeldung.** `/ui` fragt jetzt nach Kennung und
-Passwort; der API-Token bleibt, wofür er gedacht ist — `/mcp`. Bisher war
-beides dasselbe Geheimnis: wer die Oberfläche öffnen wollte, tippte den Token
-in ein Formular und trug ihn damit durch Zwischenablage, Passwortspeicher und
-Verlauf. Getrennte Nachweise heißen: ein verlorenes Konsolenpasswort ruft
-keine Tools auf, ein verlorener Token öffnet keine Oberfläche, und jeder von
-beiden lässt sich einzeln wechseln (FR-11.5).
+**The console has its own login.** `/ui` now asks for identity and
+password; the API token stays where it belongs — `/mcp`. Previously both
+were the same secret: anyone wanting to open the UI typed the token into
+a form, carrying it through clipboard, password manager, and history.
+Separate credentials mean: a lost console password cannot invoke tools, a
+lost token cannot open the UI, and each can be changed independently
+(FR-11.5).
 
-**Nach dem Aufstieg ist nichts zu tun.** Kennt `identities.yaml` noch keine
-Passwörter, erzeugt der erste Start mit `--ui` für jedes Konsolenkonto eines
-und schreibt es einmalig ins Log — so wie es der Erststart mit dem Token
-ohnehin hält. Ist die Datei nicht beschreibbar, startet der Server nicht und
-nennt den Weg: `gatekeeper password --identity <id>`.
+**After upgrade, nothing to do.** If `identities.yaml` has no passwords
+yet, the first start with `--ui` generates one for each console account
+and writes it to the log once — just as the first start does with the
+token. If the file is not writable, the server does not start and tells
+you the way: `gatekeeper password --identity <id>`.
 
 ### Added
 
-- **`password_hash` je Identität**, scrypt wie der Token, optional und nur
-  für `viewer` und `admin`. Ein Agent bekommt keines — er meldet sich
-  nirgends an, und ein Passwort auf einer Rolle ohne Anmeldung wird
-  abgelehnt.
-- **`IdentityStore.authenticate_console(id, password)`**. Für jeden
-  Fehlschlag wird einmal scrypt gerechnet, auch bei unbekannter Kennung:
-  sonst wäre die Antwortzeit ein Verzeichnis aller Konsolenkonten.
-- **`/ui/account`** — Selbstbedienung für das eigene Passwort, mit Abfrage
-  des alten. Auch für `viewer`, der sonst nichts schreiben darf: ein Zugang,
-  dessen Passwort nur ein anderer ändern kann, wird nie geändert.
-- **Passwortfeld im Identitäts-Editor.** Beim Anlegen Pflicht für
-  Konsolenrollen, beim Ändern leer lassen = unverändert.
-- **`gatekeeper password --identity <id>`** setzt ein Passwort direkt in
-  `identities.yaml` — der Weg zurück, wenn niemand mehr hineinkommt.
-- **`gatekeeper init`** gibt Konsolenpasswort und API-Token getrennt aus,
-  beide genau einmal (FR-2.6).
+- **`password_hash` per identity**, scrypt like the token, optional and
+  only for `viewer` and `admin`. An agent does not get one — it never logs
+  in anywhere, and a password on a role without login is rejected.
+- **`IdentityStore.authenticate_console(id, password)`**. For each
+  failure, scrypt is computed once even for unknown identities: otherwise
+  response time would be a directory of all console accounts.
+- **`/ui/account`** — self-service for your own password, with the old
+  password required. Also for `viewer`, who otherwise cannot write: an
+  account whose password only someone else can change will never be
+  changed.
+- **Password field in the identity editor.** Required when creating
+  console roles, leave empty when editing = unchanged.
+- **`gatekeeper password --identity <id>`** sets a password directly in
+  `identities.yaml` — the way back when nobody can get in.
+- **`gatekeeper init`** outputs console password and API token separately,
+  both exactly once (FR-2.6).
 
 ### Changed
 
-- **Die Anmeldemaske nimmt keinen Token mehr an.** Wer es versucht, bekommt
-  denselben Satz wie bei jedem Fehlversuch; der Hinweis unter dem Formular
-  sagt vorher, warum.
-- **Der Aussperrschutz zählt Zugänge statt Rollen.** Ein `admin` ohne
-  Passwort kann sich nicht anmelden und hält die Tür nicht mehr auf.
-  Geprüft wird nur, wenn es vorher einen anmeldefähigen Admin gab — ein
-  Bestand aus einer älteren Fassung blockiert sich nicht selbst.
-- **Ein Passwortwechsel beendet die übrigen Sitzungen** der Identität; die
-  auslösende bleibt. Setzt ein Admin ein fremdes Passwort, ist die fremde
-  Sitzung zu — meist ist genau das der Grund für den Wechsel.
-- **`--ui` startet nur mit einer anmeldefähigen Identität.** Bisher genügte
-  die Rolle.
-- **Die Identitätenseite zeigt den Konsolenzugang** je Identität an:
-  `console access`, `no console password` oder `api only`.
+- **The login form no longer accepts a token.** Anyone who tries gets the
+  same message as any other failed attempt; the hint below the form says
+  so upfront.
+- **Lockout protection counts accounts, not roles.** An `admin` without a
+  password cannot log in and no longer holds the door open. The check only
+  runs if there was previously a login-capable admin — a setup from an
+  older version does not block itself.
+- **A password change terminates other sessions** of the identity; the
+  triggering one stays. If an admin sets someone else's password, that
+  person's session is gone — usually exactly the reason for the change.
+- **`--ui` starts only with a login-capable identity.** Previously the
+  role alone was sufficient.
+- **The identities page shows console access** per identity: `console
+  access`, `no console password`, or `api only`.
 
 ---
 
 ## 0.2.6
 
-**Scope-Wildcard-Grenze per Test festgeschrieben.** Der `-` in
-`stack:dev-*` ist literal, kein naiver Präfix — `devtools` oder `dev_x`
-dürfen für eine `dev-*`-Identität nicht durchgehen. Zwei neue Tests
-halten das fest, damit eine künftige Umstellung auf einen Präfixvergleich
-die Grenze nicht stillschweigend öffnet.
+**Scope wildcard boundary enforced by test.** The `-` in `stack:dev-*` is
+literal, not a naive prefix — `devtools` or `dev_x` must not pass for a
+`dev-*` identity. Two new tests enforce this so that a future switch to
+prefix comparison does not silently open the boundary.
 
 ### Added
 
-- **`test_scope_wildcard_requires_dash_boundary`**: prüft `covers_scope`
-  direkt gegen `dev-argus` (erlaubt) und `devtools`/`dev_x`/`dev`
-  (abgelehnt).
-- **`test_scope_mismatch_rejects_sibling_prefix`**: der Negativfall im
-  echten Aufrufpfad — `mediatools` wird für eine `media-*`-Identität
-  mit `SCOPE_MISMATCH` abgelehnt.
+- **`test_scope_wildcard_requires_dash_boundary`**: checks `covers_scope`
+  directly against `dev-argus` (allowed) and `devtools`/`dev_x`/`dev`
+  (rejected).
+- **`test_scope_mismatch_rejects_sibling_prefix`**: the negative case in
+  the real call path — `mediatools` is rejected with `SCOPE_MISMATCH` for
+  a `media-*` identity.
 
 ---
 
 ## 0.2.5
 
-**Zwei neue Diagramme auf der Übersichtsseite.** Die Aufruf-Pipeline zeigt
-die 8 Schichten, die jeder Request durchläuft; die Tool-Matrix listet jedes
-Tool mit Status, Kategorie, Idempotenz und den berechtigten Identitäten.
+**Two new diagrams on the overview page.** The call flow pipeline shows
+the 8 layers every request passes through; the tool matrix lists every
+tool with status, category, idempotency, and the identities permitted to
+call it.
 
 ### Added
 
-- **Aufruf-Pipeline** (`_call_flow_pipeline`): horizontales SVG mit den
-  8 Schichten MCP → Auth → Authorize → Registry → Validate → argv-build →
-  Executor → Audit. Jede Schicht mit Namen und Kurzbeschreibung.
-- **Tool-Matrix** (`_tool_matrix`): jedes Tool als Tabellenzeile mit
-  Status-Pill (enabled/disabled), Kategorie (read/write/write_external),
-  Idempotenz (yes/no) und einer Spalte pro Identität, die anzeigt, wer
-  das Tool aufrufen darf.
+- **Call flow pipeline** (`_call_flow_pipeline`): horizontal SVG with the
+  8 layers MCP → Auth → Authorize → Registry → Validate → argv-build →
+  Executor → Audit. Each layer with name and short description.
+- **Tool matrix** (`_tool_matrix`): each tool as a table row with a status
+  pill (enabled/disabled), category (read/write/write_external),
+  idempotency (yes/no), and a column per identity showing who may call the
+  tool.
 
 ---
 
 ## 0.2.4
 
-**SIGHUP lädt die Konfiguration neu.** `kill -HUP <pid>` oder
-`docker kill -s HUP gatekeeper` lädt alle drei Dateien (`toolkits.yaml`,
-`tools.yaml`, `identities.yaml`) atomar neu — ohne Neustart, ohne
-Verbindungsabbruch.
+**SIGHUP reloads the configuration.** `kill -HUP <pid>` or
+`docker kill -s HUP gatekeeper` reloads all three files (`toolkits.yaml`,
+`tools.yaml`, `identities.yaml`) atomically — no restart, no connection
+drop.
 
 ### Added
 
-- **`Service.reload_config()`** lädt Tier 1, Katalog und Identitäten in
-  einem Durchlauf. Schlägt eine Datei fehl, bleibt der alte Zustand
-  unangetastet.
-- **SIGHUP-Handler** in `cmd_serve`. Bei Erfolg loggt er die neue
-  Anzahl Toolkits/Tools/Identitäten; bei Fehler den Grund.
+- **`Service.reload_config()`** loads Tier 1, catalog, and identities in
+  one pass. If a file fails, the previous state remains untouched.
+- **SIGHUP handler** in `cmd_serve`. On success it logs the new count of
+  toolkits/tools/identities; on failure the reason.
 
 ### Changed
 
-- **Rate-Limiter** wird beim Reload neu aufgesetzt, damit geänderte
-  Limits sofort greifen und alte Fenster nicht mitgeschleppt werden.
+- **Rate limiter** is rebuilt on reload so changed limits take effect
+  immediately and old windows are not carried over.
 
 ---
 
 ## 0.2.3
 
-Ein nicht beschreibbares Audit-Verzeichnis brach den Start bisher mit einem
-rohen `OSError` ab. Jetzt kommt dieselbe Behandlung wie beim
-Konfigurationsverzeichnis: Ursache, laufender Benutzer und der Befehl, der es
-richtet.
+A non-writable audit directory previously crashed the start with a raw
+`OSError`. Now it gets the same treatment as the config directory: cause,
+current user, and the command that fixes it.
 
-Gestartet wird ohne Audit-Log weiterhin nicht. Ein Dienst, der
-Host-Operationen vermittelt und dabei nicht mitschreiben kann, ist schlimmer
-als keiner — die Aufrufe finden statt, nur weiß hinterher niemand, welche.
+Starting without an audit log is still not allowed. A service that
+mediates host operations but cannot record them is worse than none — the
+calls happen, but nobody knows which ones afterwards.
 
-Betrifft vor allem Installationen, deren `audit.dir` in ein eigenes Volume
-zeigt: das gehört Docker beim Anlegen root, und der unprivilegierte Benutzer
-kommt nicht hinein.
+Mainly affects installations whose `audit.dir` points to a separate
+volume: Docker creates it as root, and the unprivileged user cannot enter
+it.
 
 ---
 
 ## 0.2.2
 
-Behebt, dass der Erststart aus 0.2.0/0.2.1 stillschweigend nichts tat, wenn das
-gemountete Verzeichnis dem Container nicht gehört — und der Server danach
-`toolkits.yaml not found` meldete, obwohl das Verzeichnis vorhanden war.
+Fixes the first start from 0.2.0/0.2.1 silently doing nothing when the
+mounted directory did not belong to the container — and the server then
+reporting `toolkits.yaml not found` even though the directory existed.
 
-Ursache war eine Vorabprüfung mit `os.access`: fehlte das Schreibrecht, stieg
-der Erststart aus, ohne etwas zu sagen. Die Meldung des Loaders nannte danach
-die falsche Ursache. Jetzt wird geschrieben und der Fehlerfall ausgewertet:
+The cause was a pre-check with `os.access`: if the write permission was
+missing, the first start exited without saying anything. The loader's
+message then named the wrong cause. Now it writes and evaluates the
+error:
 
 ```
 Cannot create the configuration in /etc/gatekeeper: [Errno 13] Permission denied
@@ -253,188 +268,189 @@ On the host, give the directory to the container user, then start again:
   chown -R 568:568 <the directory mounted at /etc/gatekeeper>
 ```
 
-**Wer das trifft:** Docker legt eine fehlende Bind-Mount-Quelle als `root` an.
-Existiert `./gatekeeper/config` auf dem Host nicht, gehört es danach root, und
-der unprivilegierte Benutzer im Container kommt nicht hinein. Ein Container
-ohne `CAP_CHOWN` kann das nicht selbst richten — die Meldung nennt deshalb den
-einen Befehl, der es tut.
+**Who this affects:** Docker creates a missing bind-mount source as
+`root`. If `./gatekeeper/config` does not exist on the host, it is owned
+by root afterwards, and the unprivileged user in the container cannot
+enter it. A container without `CAP_CHOWN` cannot fix this itself — the
+message names the one command that does.
 
-`latest` folgt jetzt ausnahmslos dem neuesten Bau, nicht nur dem neuesten
-Release. Da nach der Regel oben ohnehin jede Änderung ein Release ist, fallen
-beide fast immer zusammen; der Unterschied betraf nur Pushes ohne
-Versionsanhebung, die nun ebenfalls `latest` bewegen.
+`latest` now follows the latest build without exception, not just the
+latest release. Since every change is a release per the rule above, both
+almost always coincide; the difference only affected pushes without a
+version bump, which now also move `latest`.
 
-Der Smoke-Test des Images greift dafür gezielt auf `latest` zu, statt sich auf
-die Reihenfolge der erzeugten Tags zu verlassen.
+The image smoke test deliberately accesses `latest` instead of relying on
+the order of generated tags.
 
-Für den Betrieb bleibt die Empfehlung unverändert: feste Version oder Digest
-pinnen. `latest` ist zum Ausprobieren da, nicht zum Betreiben.
+For production the recommendation is unchanged: pin a fixed version or
+digest. `latest` is for trying out, not for running.
 
 ---
 
 ## 0.2.0
 
-Behebt einen Fehler, der jede Erstinstallation von 0.1.0 in eine
-Neustartschleife schickte, und macht den ersten Start selbsttragend.
+Fixes a bug that sent every fresh install from 0.1.0 into a restart loop,
+and makes the first start self-sufficient.
 
-### Behoben
+### Fixed
 
-**Die `compose.yaml` von 0.1.0 war kaputt.** Sie hängte `toolkits.yaml` als
-einzelne Datei per Bind-Mount ein, um Ebene 1 read-only zu halten. Docker legt
-in dem Fall ein **Verzeichnis** an, wenn die Quelldatei auf dem Host fehlt — bei
-einer Erstinstallation also immer. Der Container startete daraufhin endlos neu
-mit `IsADirectoryError`, und auf dem Host blieb ein Ordner namens
-`toolkits.yaml` zurück.
+**The `compose.yaml` from 0.1.0 was broken.** It bind-mounted
+`toolkits.yaml` as a single file to keep Tier 1 read-only. Docker creates
+a **directory** in that case when the source file does not exist on the
+host — which is always the case on a fresh install. The container then
+restarted endlessly with `IsADirectoryError`, and a folder named
+`toolkits.yaml` was left on the host.
 
-Wer 0.1.0 ausgerollt hat, räumt ihn einmalig weg:
+Anyone who rolled out 0.1.0 cleans it up once:
 
 ```bash
 rm -rf <config>/toolkits.yaml
 ```
 
-Jetzt genügt **ein** Verzeichnis-Mount, der diesen Fehler nicht kennt. Ebene 1
-bleibt geschützt, aber durch Code statt durch den Mount: es schreibt niemand
-`toolkits.yaml`, und ein Test hält das fest.
+Now a single **directory** mount suffices, which does not have this
+problem. Tier 1 remains protected, but by code rather than by the mount:
+nobody writes `toolkits.yaml`, and a test enforces this.
 
-**Konfigurationsfehler nennen die Ursache statt des Symptoms.** Ein Verzeichnis
-an Stelle einer Datei erklärt jetzt, dass Docker es angelegt hat und warum.
-Geprüft wird vor dem Öffnen, nicht über die Ausnahme — Linux meldet dort
+**Configuration errors name the cause, not the symptom.** A directory in
+place of a file now explains that Docker created it and why. The check
+happens before opening, not via the exception — Linux reports
 `IsADirectoryError`, Windows `PermissionError`.
 
-### Neu
+### New
 
-- **Der erste Start legt die Konfiguration selbst an.** Ein leeres,
-  beschreibbares Verzeichnis mounten und starten genügt; `init` von Hand
-  entfällt. Der Administrator-Token erscheint einmalig im Containerlog — nach
-  dem ersten Anmelden in `/ui` rotieren.
+- **The first start creates the configuration itself.** Mount an empty,
+  writable directory and start; `init` by hand is no longer needed. The
+  admin token appears once in the container log — rotate it after the
+  first login in `/ui`.
 
-  Geschrieben wird nur, wenn **keine** der drei Dateien existiert. Ein
-  verrutschter Mount sieht sonst aus wie eine Erstinstallation, und eine frische
-  Konfiguration darüber würde den Fehler verdecken. `GATEKEEPER_NO_BOOTSTRAP=1`
-  schaltet das ab.
+  Writing only happens if **none** of the three files exist. A slipped
+  mount would otherwise look like a fresh install, and a new
+  configuration on top would hide the error.
+  `GATEKEEPER_NO_BOOTSTRAP=1` disables this.
 
-- **`GATEKEEPER_STATE_DIR`** trennt Ebene 1 und Ebene 2 in getrennte
-  Verzeichnisse. Damit kann der Konfigurations-Mount `:ro` sein, während die
-  Oberfläche weiterhin schreibt — beides Verzeichnis-Mounts, die Falle von oben
-  tritt nicht auf.
+- **`GATEKEEPER_STATE_DIR`** separates Tier 1 and Tier 2 into separate
+  directories. This allows the config mount to be `:ro` while the UI
+  still writes — both are directory mounts, the trap above does not
+  apply.
 
-### Geändert
+### Changed
 
-`docker.compose_ps` im Beispielkatalog liefert JSON statt einer Textabelle. Ein
-Agent, der Spalten abzählt, verliest sich beim ersten langen Containernamen.
-`--format json` steht fest im Template; ein Parameterwert kann es nicht
-umlenken.
+`docker.compose_ps` in the example catalog returns JSON instead of a text
+table. An agent that counts columns would misread the first long
+container name. `--format json` is fixed in the template; a parameter
+value cannot override it.
 
-### Sonstiges
+### Other
 
-Releases entstehen ab jetzt aus der Version in `pyproject.toml`, nicht aus
-einem handgesetzten Tag. Jede Änderung auf `main` bekommt eine Version und
-Notizen — siehe [Die Regel](#die-regel-jede-änderung-ist-ein-release) oben.
+Releases are now driven by the version in `pyproject.toml`, not by a
+hand-set tag. Every change on `main` gets a version and notes — see [The
+rule](#the-rule-every-change-is-a-release) above.
 
-### Prüfstand
+### Test bench
 
-127 Tests unter Linux.
+127 tests on Linux.
 
 ---
 
 ## 0.1.0
 
-Erste Veröffentlichung. Umgesetzt sind die Stufen 1 und 3 aus
+First release. Implements stages 1 and 3 from
 [REQUIREMENTS.md](REQUIREMENTS.md) §14.
 
-### Was es tut
+### What it does
 
-Kontrollierter MCP-Server für Host-Operationen. Agenten bekommen keine Shell,
-sondern eine feste Menge geprüfter Aktionen — jede mit eigenem Token, eigenen
-Rechten und vollständigem Audit.
+Controlled MCP server for host operations. Agents do not get a shell,
+but a fixed set of validated actions — each with its own token, own
+permissions, and full audit.
 
-- **MCP über Streamable HTTP** unter `/mcp`, Bearer-Token je Identität.
-  `tools/list` ist pro Identität gefiltert; nicht erteilte Tools existieren für
-  den Agenten nicht.
-- **Executoren `local` und `docker`.** Was damit erreichbar ist, entscheidet
-  ausschließlich die eigene `toolkits.yaml`.
-- **Audit-Log** als JSON Lines mit Rotation. Der wahre Ablehnungsgrund steht
-  dort auch dann, wenn der Agent nur eine nichtssagende Antwort bekam.
-- **Betriebs- und Verwaltungsoberfläche** unter `/ui`, standardmäßig aus.
-  Zugriffskarte, Ebene-1-Grenzen, Katalog, Rechteprofile, Audit-Log mit
-  Filtern — und für Admins Schreibzugriff auf Ebene 2.
-- **Health-Proben** (`/health/live`, `/health/ready`, `/health/startup`) und
-  Prometheus-Metriken unter `/metrics`.
+- **MCP over Streamable HTTP** at `/mcp`, bearer token per identity.
+  `tools/list` is filtered per identity; ungranted tools do not exist for
+  the agent.
+- **Executors `local` and `docker`.** What is reachable with them is
+  decided exclusively by the `toolkits.yaml` file.
+- **Audit log** as JSON Lines with rotation. The true denial reason is
+  there even when the agent only got a non-descriptive response.
+- **Operations and admin console** at `/ui`, disabled by default. Access
+  map, Tier 1 boundaries, catalog, identity profiles, audit log with
+  filters — and for admins, write access to Tier 2.
+- **Health probes** (`/health/live`, `/health/ready`,
+  `/health/startup`) and Prometheus metrics at `/metrics`.
 
-### Leer nach der Installation
+### Empty after installation
 
-`gatekeeper init` legt eine **leere** Ebene 1 (`toolkits: {}`), einen leeren
-Katalog und genau einen Administrator an. Direkt danach kann gatekeeper
-nichts — nicht ein einziges Kommando.
+`gatekeeper init` creates an **empty** Tier 1 (`toolkits: {}`), an empty
+catalog, and exactly one admin. Immediately afterwards, gatekeeper can do
+nothing — not a single command.
 
-Das ist Absicht. Ein Werkzeug, das root-äquivalenten Zugriff auf einen Host
-vermittelt, sollte keine Fähigkeit mitbringen, die niemand entschieden hat:
-ein vorbelegter Katalog hätte im Audit-Log keinen Urheber. Welche Binaries
-ein Agent erreichen können soll, weiß ohnehin nur, wer das System kennt.
+This is intentional. A tool that mediates root-equivalent access to a
+host should not bring capabilities nobody decided on: a pre-populated
+catalog would have no author in the audit log. Which binaries an agent
+should be able to reach is known only by someone who knows the system.
 
-Fertige Vorlagen zum Abschauen — ein Docker-Toolkit und zehn Compose- und
-Diagnose-Tools — stehen in [config/examples/](config/examples/). Übernehmen
-heißt: lesen, anpassen, ausrollen.
+Ready-made templates to look at — a Docker toolkit and ten compose and
+diagnostic tools — are in [config/examples/](config/examples/). Adopting
+them means: read, adapt, deploy.
 
-### Was es garantiert
+### What it guarantees
 
-- **Kein Shell-Interpreter.** Ausführung ausschließlich über argv-Liste. Ein
-  Parameter expandiert strukturell zu genau einem Argument — ein Wert kann kein
-  zweites erzeugen, unabhängig von seinem Inhalt. Injection ist damit nicht
-  wegescapt, sondern konstruktiv ausgeschlossen.
-- **Zwei Ebenen.** Binary-Allowlist, gesperrte Argumente, Pfad-Wurzeln,
-  geschützte Ressourcen und Obergrenzen stehen in `toolkits.yaml` und sind zur
-  Laufzeit unveränderlich. Der Katalog bewegt sich innerhalb dieser Grenzen,
-  niemals darüber hinaus — auch nicht über die Oberfläche.
-- **Rechte auf Tool-IDs, nicht auf Toolkits.** Ein neu angelegtes Tool landet
-  bei niemandem automatisch.
-- **Ablehnungen verraten nichts.** Fehlendes Recht und unbekanntes Tool ergeben
-  für den Agenten dieselbe Antwort.
-- **Geschützte Ressourcen.** Was in `protected_resources` steht, ist für kein
-  Tool erreichbar — sonst könnte ein Agent den Kanal abschalten, über den er
-  spricht. Die Namen sind deployment-spezifisch; gatekeeper rät sie nicht.
-- **Zeitlimit ≠ Fehler.** Läuft ein nicht-idempotentes Tool in sein Zeitlimit,
-  meldet der Server „Ausgang unbekannt" statt „fehlgeschlagen". Ein als Fehler
-  gemeldetes Zeitlimit provoziert genau die Wiederholung, die bei einem bereits
-  durchgelaufenen Schreibzugriff das Duplikat erzeugt.
+- **No shell interpreter.** Execution exclusively via argv list. A
+  parameter expands structurally to exactly one argument — a value cannot
+  produce a second one, regardless of its content. Injection is not
+  escaped away but structurally impossible.
+- **Two tiers.** Binary allowlist, denied arguments, path roots,
+  protected resources, and ceilings live in `toolkits.yaml` and are
+  immutable at runtime. The catalog moves within these boundaries, never
+  beyond them — not even through the UI.
+- **Rights on tool IDs, not on toolkits.** A newly created tool is not
+  granted to anyone automatically.
+- **Denials reveal nothing.** Missing permission and unknown tool produce
+  the same response for the agent.
+- **Protected resources.** What is in `protected_resources` is not
+  reachable by any tool — otherwise an agent could shut down the channel
+  it speaks through. The names are deployment-specific; gatekeeper does
+  not guess them.
+- **Timeout ≠ failure.** If a non-idempotent tool hits its timeout, the
+  server reports "outcome unknown" instead of "failed." Reporting a
+  timeout as failure provokes exactly the retry that creates a duplicate
+  on an already-completed write.
 
-### Rollen
+### Roles
 
-| Rolle | MCP | Konsole lesen | Ebene 2 ändern |
+| Role | MCP | Console read | Tier 2 write |
 |---|:--:|:--:|:--:|
 | `agent` | ✓ | — | — |
 | `viewer` | — | ✓ | — |
 | `admin` | — | ✓ | ✓ |
 
-### Bekannte Grenzen
+### Known limitations
 
-- **Der Docker-Socket ist root-äquivalent auf dem Host.** Bewusst akzeptiert:
-  gatekeeper ist genau die Whitelist, die diesen Zugriff einschränkt. Es
-  bedeutet aber, dass ein Fehler in gatekeeper ein Root-Fehler ist. Daher der
-  Negativtest-Korpus und `read_only`, `cap_drop: ALL`, `no-new-privileges` in
-  der `compose.yaml`.
-- **Container-Logs enthalten regelmäßig Umgebungsvariablen.** Ein Agent mit
-  `docker.compose_logs` auf einen Stack sieht potenziell dessen Secrets. Die
-  Maskierung greift erst, wenn gatekeeper die Werte selbst kennt — also mit dem
-  Credential-Store in 0.2.
-- **Die Oberfläche spricht HTTP.** Ohne TLS läuft das Sitzungs-Cookie ohne
-  `Secure`-Flag. Hinter einem HTTPS-Proxy setzt gatekeeper es automatisch. Der
-  Port gehört nicht ins offene Netz.
-- **Ebene 1 ändert man nur per Redeploy.** Ein Toolkit gewährt Zugriff auf
-  echte Binaries; das bleibt eine Deploy-Zeit-Entscheidung (FR-4.11). Die
-  Oberfläche legt Tools an, aber niemals ein Toolkit.
-- **Noch nicht enthalten:** ZFS und TrueNAS-API (brauchen den
-  `truenas`-Executor), Dienst-APIs wie Sonarr/Radarr/Jellyfin (brauchen `http`
-  und den Credential-Store), `write_external`.
+- **The Docker socket is root-equivalent on the host.** Deliberately
+  accepted: gatekeeper is precisely the whitelist that constrains this
+  access. But it means: a bug in gatekeeper is a root bug. Hence the
+  negative test corpus and `read_only`, `cap_drop: ALL`,
+  `no-new-privileges` in `compose.yaml`.
+- **Container logs regularly contain environment variables.** An agent
+  with `docker.compose_logs` on a stack potentially sees its secrets.
+  Masking only works when gatekeeper knows the values itself — i.e., with
+  the credential store in 0.2.
+- **The UI speaks HTTP.** Without TLS, the session cookie runs without the
+  `Secure` flag. Behind an HTTPS proxy, gatekeeper sets it automatically.
+  The port does not belong on the open network.
+- **Tier 1 is only changed by redeploy.** A toolkit grants access to real
+  binaries; that remains a deploy-time decision (FR-4.11). The UI creates
+  tools, but never a toolkit.
+- **Not yet included:** ZFS and TrueNAS API (need the `truenas` executor),
+  service APIs like Sonarr/Radarr/Jellyfin (need `http` and the credential
+  store), `write_external`.
 
-### Prüfstand
+### Test bench
 
-121 Tests unter Linux, davon 49 im Negativkorpus (NFR-8): Metazeichen,
-Steuerzeichen, argv-Expansion, Pfad-Traversal, Symlink-Ausbruch,
-Geschwister-Verzeichnis mit gleichem Präfix, Ebene-1-Verstöße, überschriebene
-abgeleitete Parameter, geschützte Ressourcen, Undurchsichtigkeit von
-Ablehnungen. Dazu 25 Tests für den Schreibzugriff der Oberfläche.
+121 tests on Linux, 49 of them in the negative corpus (NFR-8):
+metacharacters, control characters, argv expansion, path traversal,
+symlink escape, sibling directory with same prefix, Tier 1 violations,
+overridden derived parameters, protected resources, opacity of denials.
+Plus 25 tests for UI write access.
 
-Verifiziert wurde gegen einen echten Docker-Daemon, nicht nur in Unit-Tests:
-Stacks gestartet, abgefragt und gestoppt, während die Schutzmechanismen einzeln
-ausgelöst wurden.
+Verified against a real Docker daemon, not just unit tests: stacks
+started, queried, and stopped while protection mechanisms were triggered
+individually.

@@ -1,8 +1,9 @@
-"""Der Aufrufpfad (REQUIREMENTS.md §2).
+"""The call path (REQUIREMENTS.md §2).
 
-Jeder Aufruf durchlaeuft dieselben Schichten in derselben Reihenfolge:
-Authentifizierung, Autorisierung, Registry, Validierung, argv-Bau, Executor,
-Audit. Nichts umgeht diese Kette -- es gibt genau einen Weg zur Ausfuehrung.
+Every call passes through the same layers in the same order:
+authentication, authorization, registry, validation, argv construction,
+executor, audit. Nothing bypasses this chain -- there is exactly one way
+to execution.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from .tier1 import Tier1, load_tier1
 
 @dataclasses.dataclass(slots=True)
 class ToolView:
-    """Was ein Agent von einem Tool zu sehen bekommt."""
+    """What an agent sees of a tool."""
 
     name: str
     title: str
@@ -54,12 +55,12 @@ class Service:
     # -- Registry ---------------------------------------------------------
 
     def visible_tools(self, identity: Identity) -> list[ToolView]:
-        """FR-1.4: pro Identitaet gefiltert.
+        """FR-1.4: filtered per identity.
 
-        Ein Agent sieht ausschliesslich, was er auch aufrufen darf. Nicht
-        sichtbare Tools existieren fuer ihn nicht -- und weil `tools/call`
-        Ablehnungen nach FR-7.7 nicht unterscheidbar beantwortet, laesst sich
-        der Rest auch nicht erraten.
+        An agent sees exclusively what it is allowed to call. Non-visible
+        tools do not exist for it -- and because `tools/call` answers
+        rejections indistinguishably per FR-7.7, the rest cannot be
+        guessed either.
         """
         views = []
         for tool in self.catalog.tools.values():
@@ -77,7 +78,7 @@ class Service:
             )
         return sorted(views, key=lambda v: v.name)
 
-    # -- Aufruf -----------------------------------------------------------
+    # -- Call --------------------------------------------------------------
 
     def _authorize(self, identity: Identity, tool_id: str) -> ToolDef:
         tool = self.catalog.tools.get(tool_id)
@@ -95,9 +96,9 @@ class Service:
     def _environment(self, executor: str) -> dict[str, str] | None:
         if executor != "docker" or not self.docker_host:
             return None
-        # Bewusst minimal: der Kindprozess erbt nicht die Umgebung von
-        # gatekeeper, damit dort liegende Geheimnisse nicht in fremden
-        # Prozessen landen.
+        # Deliberately minimal: the child process does not inherit the
+        # gatekeeper environment, so that secrets located there do not
+        # end up in foreign processes.
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         env["DOCKER_HOST"] = self.docker_host
         return env
@@ -121,8 +122,8 @@ class Service:
             values = validate.resolve_parameters(tool, arguments)
             scopes = validate.resolve_scopes(tool, values)
 
-            # FR-4.12 vor der Rechtepruefung: eine geschuetzte Ressource bleibt
-            # gesperrt, auch wenn das Rechteprofil sie abdecken wuerde.
+            # FR-4.12 before the permission check: a protected resource
+            # remains locked even if the permission profile would cover it.
             validate.check_protected(scopes, toolkit)
 
             for scope in scopes:
@@ -171,20 +172,20 @@ class Service:
         )
         return result
 
-    # -- Betrieb ----------------------------------------------------------
+    # -- Operation ---------------------------------------------------------
 
     async def probe_executors(self) -> dict[str, bool]:
-        """Erreichbarkeit je Executor fuer /health/ready (NFR-9).
+        """Reachability per executor for /health/ready (NFR-9).
 
-        `live` und `ready` sind verschiedene Aussagen: ein gatekeeper ohne
-        Docker-Socket laeuft, kann aber nichts ausrichten.
+        `live` and `ready` are different statements: a gatekeeper without
+        a Docker socket runs but cannot accomplish anything.
 
-        Fuer `local` wird nur geprueft, ob die Binaries vorhanden und ausfuehrbar
-        sind. Ein beliebiges Programm ohne Argumente zu starten waere als
-        Gesundheitspruefung untauglich: es kann haengen, Nebenwirkungen haben
-        oder - wie ein Interpreter - auf Eingabe warten. Nur `docker` bekommt
-        einen echten Aufruf, weil dort die Verbindung zum Socket gemeint ist
-        und `version` nachweislich nichts veraendert.
+        For `local`, only the binaries are checked for presence and
+        executability. Starting an arbitrary program without arguments
+        would be unsuitable as a health check: it can hang, have side
+        effects, or -- like an interpreter -- wait for input. Only
+        `docker` gets a real call, because there the connection to the
+        socket is what matters, and `version` demonstrably changes nothing.
         """
         seen: dict[str, bool] = {}
         for toolkit in self.tier1.toolkits.values():
@@ -214,7 +215,7 @@ class Service:
         return seen
 
     def render_metrics(self) -> str:
-        """Prometheus-Textformat (NFR-3a) -- ohne zusaetzliche Abhaengigkeit."""
+        """Prometheus text format (NFR-3a) -- without additional dependencies."""
         lines = [
             "# HELP gatekeeper_tool_calls_total Calls by tool, identity and outcome",
             "# TYPE gatekeeper_tool_calls_total counter",
@@ -241,19 +242,19 @@ class Service:
         tools_path: str,
         identities_path: str,
     ) -> str | None:
-        """Lädt alle drei Konfigurationsdateien neu. Gibt None bei Erfolg,
-        sonst eine Fehlermeldung. Der alte Zustand bleibt bei Fehlern erhalten.
+        """Reloads all three configuration files. Returns None on success,
+        otherwise an error message. The old state is preserved on errors.
 
-        Nur Ebene 1 (toolkits.yaml) braucht das: Ebene 2 (tools.yaml,
-        identities.yaml) lädt die Oberfläche beim Schreiben selbst nach.
-        Aber ein SIGHUP soll alles auf einmal neu laden, damit ein
-        handeditierter Stand ohne Neustart wirksam wird.
+        Only Tier 1 (toolkits.yaml) needs this: Tier 2 (tools.yaml,
+        identities.yaml) is reloaded by the UI itself on write.
+        But a SIGHUP should reload everything at once, so that a
+        hand-edited state takes effect without a restart.
         """
         import logging
         logger = logging.getLogger("gatekeeper")
 
-        # Alles laden, bevor irgendetwas ausgetauscht wird. Schlägt eine Datei
-        # fehl, bleibt der alte Zustand unangetastet.
+        # Load everything before anything is swapped out. If one file
+        # fails, the old state remains untouched.
         try:
             tier1 = load_tier1(toolkits_path)
         except Exception as exc:
@@ -269,8 +270,8 @@ class Service:
         except Exception as exc:
             return f"identities.yaml: {exc}"
 
-        # Atomar tauschen. Der Limiter wird neu aufgesetzt, damit geänderte
-        # Rate-Limits sofort greifen und alte Fenster nicht mitgeschleppt werden.
+        # Atomically swap. The limiter is reinitialized so that changed
+        # rate limits take effect immediately and old windows are not carried over.
         self.tier1 = tier1
         self.catalog = catalog
         self.limiter = RateLimiter(tier1.rate_limits)
