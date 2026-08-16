@@ -371,6 +371,19 @@ def _run_init(tmp_path, *extra):
     return code, out.getvalue(), err.getvalue()
 
 
+def _init_secrets(out: str) -> tuple[str, str]:
+    """Konsolenpasswort und API-Token aus der Ausgabe von `init`.
+
+    `init` gibt beides aus, und zwar in dieser Reihenfolge -- zuerst das,
+    womit sich ein Mensch anmeldet.
+    """
+    parts = out.split("shown once):")
+    assert len(parts) == 3, f"init muss zwei Geheimnisse ausgeben:\n{out}"
+    password = parts[1].split("\n\n")[0].strip()
+    token = parts[2].strip()
+    return password, token
+
+
 def test_init_creates_a_runnable_but_empty_state(tmp_path):
     """Nach `init` startet der Server -- und kann nichts.
 
@@ -396,8 +409,12 @@ def test_init_creates_a_runnable_but_empty_state(tmp_path):
     assert tier1.rate_limits["read"].count > 0
     assert tier1.audit_dir
 
-    token = out.split("shown once):")[1].strip()
+    password, token = _init_secrets(out)
     assert identities.authenticate(token).id == "admin"
+    # Und der zweite, getrennte Nachweis: das Konsolenpasswort. Es oeffnet die
+    # Oberflaeche, der Token tut das nicht.
+    assert identities.authenticate_console("admin", password).id == "admin"
+    assert identities.authenticate_console("admin", token) is None
 
 
 def test_empty_tier1_is_valid(tmp_path):
@@ -448,12 +465,22 @@ def test_init_refuses_to_clobber(tmp_path):
     assert (tmp_path / "identities.yaml").read_text(encoding="utf-8") != before
 
 
-def test_init_token_appears_once_and_only_as_hash_on_disk(tmp_path):
+def test_init_secrets_appear_once_and_only_as_hashes_on_disk(tmp_path):
     _, out, _ = _run_init(tmp_path)
-    token = out.split("shown once):")[1].strip()
+    password, token = _init_secrets(out)
+    on_disk = (tmp_path / "identities.yaml").read_text(encoding="utf-8")
+
     assert token.startswith("gk_")
     assert out.count(token) == 1
-    assert token not in (tmp_path / "identities.yaml").read_text(encoding="utf-8")
+    assert token not in on_disk
+
+    # Das Passwort traegt bewusst kein 'gk_': im Klartext soll man den
+    # API-Token vom Konsolenpasswort unterscheiden koennen.
+    assert not password.startswith("gk_")
+    assert password != token
+    assert out.count(password) == 1
+    assert password not in on_disk
+    assert "password_hash" in on_disk
 
 
 def test_example_compose_ps_asks_for_json(repo_config_dir):
@@ -574,13 +601,15 @@ def test_first_start_leaves_a_complete_configuration_alone(tmp_path):
 
     directory = tmp_path / "config"
     directory.mkdir()
-    token = bootstrap(str(directory), str(directory))
+    token, password = bootstrap(str(directory), str(directory))
     before = (directory / "identities.yaml").read_text(encoding="utf-8")
 
     _bootstrap_on_first_start(str(directory), str(directory))
 
     assert (directory / "identities.yaml").read_text(encoding="utf-8") == before
-    assert load_identities(str(directory / "identities.yaml")).authenticate(token)
+    fresh = load_identities(str(directory / "identities.yaml"))
+    assert fresh.authenticate(token)
+    assert fresh.authenticate_console("admin", password)
 
 
 def test_unwritable_audit_directory_refuses_to_start(tmp_path, capsys):
@@ -609,3 +638,171 @@ def test_unwritable_audit_directory_refuses_to_start(tmp_path, capsys):
     message = capsys.readouterr().err
     assert "audit directory" in message
     assert "chown" in message
+
+
+# -- Konsolenpasswort auf der Kommandozeile --------------------------------
+
+
+def _run_cli(*argv):
+    """Ruft das CLI wie ein Mensch auf und faengt beide Stroeme ab."""
+    import contextlib
+    import io
+
+    from gatekeeper.__main__ import main
+
+    out, err = io.StringIO(), io.StringIO()
+    with mock.patch.object(sys, "argv", ["gatekeeper", *argv]), (
+        contextlib.redirect_stdout(out)
+    ), contextlib.redirect_stderr(err):
+        code = main()
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_password_command_sets_a_console_password(tmp_path):
+    """Der Weg zurueck, wenn niemand mehr hineinkommt."""
+    from gatekeeper.__main__ import bootstrap
+
+    bootstrap(str(tmp_path), str(tmp_path))
+    path = tmp_path / "identities.yaml"
+
+    code, out, _ = _run_cli(
+        "--identities", str(path), "password", "--identity", "admin"
+    )
+    assert code == 0
+    password = out.split("shown once):")[1].split("\n\n")[0].strip()
+
+    identities = load_identities(str(path))
+    assert identities.authenticate_console("admin", password).role == "admin"
+    # Nur der Klartext ist neu; auf der Platte steht ein Hash.
+    assert password not in path.read_text(encoding="utf-8")
+
+
+def test_password_command_leaves_the_api_token_alone(tmp_path):
+    """Zwei Nachweise, zwei Wechsel: das eine anzufassen darf das andere nicht
+    ungueltig machen."""
+    from gatekeeper.__main__ import bootstrap
+
+    token, _ = bootstrap(str(tmp_path), str(tmp_path))
+    path = tmp_path / "identities.yaml"
+
+    assert _run_cli("--identities", str(path), "password", "--identity", "admin")[0] == 0
+    assert load_identities(str(path)).authenticate(token).id == "admin"
+
+
+def test_password_command_refuses_an_agent(tmp_path):
+    from gatekeeper.__main__ import bootstrap
+    from gatekeeper.identity import generate_token, hash_token
+
+    bootstrap(str(tmp_path), str(tmp_path))
+    path = tmp_path / "identities.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "  - id: bot\n"
+        + "    role: agent\n"
+        + f'    token_hash: "{hash_token(generate_token())}"\n'
+        + "    tools: []\n"
+        + "    scopes: []\n",
+        encoding="utf-8",
+    )
+
+    code, _, err = _run_cli("--identities", str(path), "password", "--identity", "bot")
+    assert code == 1
+    assert "does not sign in" in err
+
+
+def test_password_command_names_the_known_identities(tmp_path):
+    from gatekeeper.__main__ import bootstrap
+
+    bootstrap(str(tmp_path), str(tmp_path))
+    code, _, err = _run_cli(
+        "--identities", str(tmp_path / "identities.yaml"),
+        "password", "--identity", "tippfehler",
+    )
+    assert code == 1
+    assert "Known: admin" in err
+
+
+def test_a_short_password_is_refused_on_the_command_line(tmp_path):
+    from gatekeeper.__main__ import bootstrap
+
+    bootstrap(str(tmp_path), str(tmp_path))
+    code, _, err = _run_cli(
+        "--identities", str(tmp_path / "identities.yaml"),
+        "password", "--identity", "admin", "--password", "kurz",
+    )
+    assert code == 1
+    assert "at least" in err
+
+
+# -- Aufstieg aus einer Fassung ohne Konsolenpasswoerter --------------------
+
+
+def _legacy_identities(tmp_path):
+    """Eine identities.yaml, wie sie vor der Konsolenanmeldung aussah."""
+    from gatekeeper.identity import generate_token, hash_token
+
+    path = tmp_path / "identities.yaml"
+    path.write_text(
+        "identities:\n"
+        "  - id: root\n"
+        "    role: admin\n"
+        f'    token_hash: "{hash_token(generate_token())}"\n'
+        "    tools: []\n"
+        "    scopes: []\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_an_old_configuration_still_loads(tmp_path):
+    """Ohne 'password_hash' bleibt die Datei gueltig.
+
+    Der MCP-Endpunkt haengt nicht an der Konsole: eine Fassung ohne
+    Passwoerter muss weiter starten und Agenten bedienen. Ueber den
+    Konsolenzugang entscheidet der Start mit --ui, nicht der Loader.
+    """
+    store = load_identities(str(_legacy_identities(tmp_path)))
+    assert store.identities["root"].role == "admin"
+    assert store.identities["root"].password_hash == ""
+    assert not store.identities["root"].can_sign_in
+
+
+def test_the_first_ui_start_hands_out_a_password(tmp_path, caplog):
+    """Der Aufstiegsweg: einmalig erzeugt, einmalig ins Log.
+
+    Die Alternative waere ein Deployment, das nach einem Image-Wechsel
+    stillsteht -- fuer eine Aenderung, die niemand angefordert hat.
+    """
+    import logging
+
+    from gatekeeper.__main__ import _ensure_console_passwords
+
+    path = _legacy_identities(tmp_path)
+    identities = load_identities(str(path))
+    with caplog.at_level(logging.WARNING):
+        assert _ensure_console_passwords(str(path), identities) is None
+
+    password = caplog.text.split("shown once, and only here): ")[1].split(" --")[0]
+    assert identities.identities["root"].can_sign_in
+    assert identities.authenticate_console("root", password) is not None
+    assert password not in path.read_text(encoding="utf-8")
+
+    # Ein zweiter Start erzeugt nichts Neues.
+    before = path.read_text(encoding="utf-8")
+    assert _ensure_console_passwords(str(path), identities) is None
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_a_read_only_configuration_names_the_way_out(tmp_path, monkeypatch):
+    """Kann nichts geschrieben werden, wird nicht gestartet -- mit Anleitung."""
+    from gatekeeper import store as store_module
+    from gatekeeper.__main__ import _ensure_console_passwords
+
+    path = _legacy_identities(tmp_path)
+    identities = load_identities(str(path))
+    monkeypatch.setattr(store_module, "writable", lambda _path: False)
+
+    message = _ensure_console_passwords(str(path), identities)
+    assert message is not None
+    assert "gatekeeper password --identity root" in message
+    assert not identities.identities["root"].can_sign_in

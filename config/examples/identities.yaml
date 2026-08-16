@@ -8,8 +8,19 @@
 # Damit ist die Datei nicht secret-kritisch und darf nach Homelab-Regel im
 # Dataset mit chown 568:568 liegen.
 #
-# Hash erzeugen:
+# Zwei getrennte Nachweise je Identitaet:
+#   token_hash     - fuer die API (/mcp), als 'Authorization: Bearer'
+#   password_hash  - fuer die Anmeldung an der Konsole (/ui)
+# Ein Agent bekommt nur einen Token; er meldet sich nirgends an. 'viewer' und
+# 'admin' brauchen ein Passwort, sonst kaemen sie nicht in die Oberflaeche.
+# Getrennt sind sie, damit ein verlorenes Geheimnis nicht beide Wege oeffnet -
+# und damit der Token nicht durch einen Browser wandern muss (FR-11.5).
+#
+# Token-Hash erzeugen:
 #   docker exec gatekeeper gatekeeper token
+#
+# Konsolenpasswort setzen (schreibt direkt in identities.yaml):
+#   docker exec gatekeeper gatekeeper password --identity root
 #
 # Die Platzhalter muessen ersetzt werden - mit REPLACE_ME verweigert
 # gatekeeper den Start, statt zu laufen und jeden Token abzulehnen.
@@ -22,15 +33,22 @@ identities:
   # `admin` darf Ebene 2 aendern (Tools, Identitaeten, Tokens), `viewer` nur
   # lesen. Ohne mindestens einen der beiden startet der Server mit --ui nicht.
   # Beide brauchen keine Tool-Rechte: die Oberflaeche ruft nichts auf.
+  #
+  # Angemeldet wird mit 'password_hash', nicht mit dem Token. Fehlt das
+  # Passwort, legt der erste Start mit --ui eines an und schreibt es einmalig
+  # ins Log - ein Konsolenkonto ohne Passwort waere ein Zugang, den es nicht
+  # gibt.
   - id: root
     role: admin
     token_hash: "scrypt$REPLACE_ME"
+    password_hash: "scrypt$REPLACE_ME"
     tools: []
     scopes: []
 
   - id: watch
     role: viewer
     token_hash: "scrypt$REPLACE_ME"
+    password_hash: "scrypt$REPLACE_ME"
     tools: []
     scopes: []
 

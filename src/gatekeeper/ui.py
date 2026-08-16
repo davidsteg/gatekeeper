@@ -4,7 +4,7 @@ Zeigt, was zur Laufzeit gilt -- Ebene-1-Grenzen, Katalog, Rechteprofile,
 Audit-Log -- und laesst Ebene 2 bearbeiten: Tools anlegen und aendern,
 Identitaeten verwalten, Tokens ausstellen.
 
-Vier Entwurfsentscheidungen tragen diese Schicht:
+Fuenf Entwurfsentscheidungen tragen diese Schicht:
 
 1. **Die Sitzung gilt nie fuer /mcp.** Der MCP-Endpunkt authentifiziert
    ausschliesslich ueber den `Authorization`-Header, und genau das macht ihn
@@ -13,19 +13,27 @@ Vier Entwurfsentscheidungen tragen diese Schicht:
    automatisch mitgeschickt. Die Sitzung hier liest nur `ui.py` --
    `AuthMiddleware` kennt sie nicht.
 
-2. **Jedes schreibende Formular traegt ein CSRF-Token.** Mit Schreibzugriff
+2. **Angemeldet wird mit Kennung und Passwort, nicht mit dem Token**
+   (FR-11.5). Der Token ist der Nachweis der API; ihn in ein Anmeldeformular
+   zu tippen hiesse, ihn durch Zwischenablage, Passwortspeicher und Verlauf
+   zu schicken -- und dasselbe Geheimnis oeffnete danach beides. Getrennte
+   Nachweise heissen: ein verlorenes Konsolenpasswort ruft keine Tools auf,
+   ein verlorener Token oeffnet keine Oberflaeche, und jeder von beiden laesst
+   sich einzeln wechseln.
+
+3. **Jedes schreibende Formular traegt ein CSRF-Token.** Mit Schreibzugriff
    wird das Cookie erstmals zur Waffe: eine fremde Seite koennte ein Formular
    auf `/ui/...` abschicken. `SameSite=Strict` verhindert das bereits, aber
    nicht in jeder Konstellation -- eine Seite auf derselben Site zaehlt nicht
    als fremd. Das Token im Formular schliesst die Luecke.
 
-3. **Kein JavaScript.** Die CSP verbietet Skripte vollstaendig. Das folgt aus
+4. **Kein JavaScript.** Die CSP verbietet Skripte vollstaendig. Das folgt aus
    der Datenlage: das Audit-Log zeigt Parameterwerte von Agenten, bei
    abgelehnten Aufrufen unvalidierte. Ohne Skriptausfuehrung bleibt ein
    eingeschleustes `<script>` folgenlos, auch wenn die Maskierung versagt.
    Graph, Diagramm und alle Formulare kommen daher ohne Code im Browser aus.
 
-4. **Lesen und Schreiben sind getrennte Rollen.** `viewer` sieht alles,
+5. **Lesen und Schreiben sind getrennte Rollen.** `viewer` sieht alles,
    `admin` darf aendern. Ohne diese Trennung haette jeder, der ins Audit-Log
    schauen soll, zugleich das Recht, Tools anzulegen.
 
@@ -51,8 +59,14 @@ from starlette.routing import Route
 
 from .audit import AuditLog
 from .catalog import ToolDef
-from .errors import ConfigError, DenialReason
-from .identity import ADMIN_ROLE, ROLES, UI_ROLES, IdentityStore
+from .errors import ConfigError
+from .identity import (
+    ADMIN_ROLE,
+    MIN_PASSWORD_LENGTH,
+    ROLES,
+    UI_ROLES,
+    IdentityStore,
+)
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
 
@@ -127,14 +141,21 @@ class SessionStore:
         if sid:
             self._sessions.pop(sid, None)
 
-    def drop_identity(self, identity_id: str) -> None:
+    def drop_identity(self, identity_id: str, *, keep: str | None = None) -> None:
         """Meldet alle Sitzungen einer Identitaet ab.
 
-        Wird nach Loeschung und Token-Wechsel aufgerufen: eine bestehende
-        Sitzung wuerde sonst weiterlaufen, obwohl der Zugang entzogen ist.
+        Wird nach Loeschung, Rollenentzug und Passwortwechsel aufgerufen: eine
+        bestehende Sitzung wuerde sonst weiterlaufen, obwohl der Zugang
+        entzogen oder das Geheimnis ausgetauscht ist.
+
+        `keep` verschont genau eine Sitzung -- die, die den Wechsel selbst
+        veranlasst hat. Ohne diese Ausnahme wuerde die Selbstbedienung den
+        Anwender fuer eine erfolgreiche Aenderung abmelden.
         """
         for sid in [
-            s for s, (sess, _) in self._sessions.items() if sess.identity == identity_id
+            s
+            for s, (sess, _) in self._sessions.items()
+            if sess.identity == identity_id and s != keep
         ]:
             self._sessions.pop(sid, None)
 
@@ -625,6 +646,7 @@ a.reset:hover { color: var(--accent); }
 .login form { display: flex; flex-direction: column; gap: .6rem; }
 .login input { width: 100%; padding: .55rem .7rem; }
 .login button { padding: .55rem .7rem; justify-content: center; }
+.login p.foot { font-size: .8rem; margin: .9rem 0 0; }
 .err { display: flex; align-items: center; gap: .4rem; color: var(--deny); font-size: .85rem; margin: .9rem 0 0; }
 """
 
@@ -658,6 +680,7 @@ def _page(
     active: str,
     nonce: str,
     actions: str = "",
+    account: bool = False,
 ) -> str:
     nav = "".join(
         f'<a href="{UI_PREFIX}{path or "/"}"'
@@ -684,7 +707,14 @@ def _page(
         f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
         f'{_icon("users", 15)}<b>{_e(session.identity)}</b>'
         f'<span class="pill">{_e(session.role)}</span>'
-        f'<button class="ghost" type="submit">{_icon("logout", 14)}</button>'
+        + (
+            f'<a class="btn" href="{UI_PREFIX}/account" title="Account">'
+            f'{_icon("lock", 14)}</a>'
+            if account
+            else ""
+        )
+        + f'<button class="ghost" type="submit" title="Sign out">'
+        f"{_icon('logout', 14)}</button>"
         "</form></div></aside>"
         f'<div class="col"><div class="topbar"><div class="grow">'
         f'<h1>{_icon(icon, 20)}{_e(title)}</h1>'
@@ -916,7 +946,8 @@ _ADMIN_VERBS = {
     "identity_create": "created identity",
     "identity_update": "updated identity",
     "identity_delete": "deleted identity",
-    "token_rotate": "rotated the token of",
+    "token_rotate": "rotated the API token of",
+    "password_set": "set the console password of",
 }
 
 
@@ -1384,7 +1415,7 @@ def _view_identities(
                 f'{_icon("pencil", 14)}Edit</a>'
                 + _post_button(
                     f"{UI_PREFIX}/identities/rotate",
-                    "Rotate token",
+                    "Issue a new API token",
                     "refresh",
                     session,
                     fields=fields,
@@ -1393,11 +1424,22 @@ def _view_identities(
                 f'href="{UI_PREFIX}/identities/delete?id={_e(identity.id)}">'
                 f'{_icon("trash", 14)}</a>'
             )
+        # Zwei Nachweise, zwei Anzeigen: der Token oeffnet /mcp, das Passwort
+        # die Konsole. Wer nur die Rolle sieht, haelt einen `admin` ohne
+        # Passwort faelschlich fuer einen Zugang.
+        if identity.role in UI_ROLES:
+            console = (
+                '<span class="pill ok">console access</span>'
+                if identity.can_sign_in
+                else '<span class="pill deny">no console password</span>'
+            )
+        else:
+            console = '<span class="pill">api only</span>'
         parts.append(
             '<div class="card">'
             f'<div class="card-head"><span class="name mono">{_e(identity.id)}</span>'
             f'<span class="pill {"accent" if identity.role == ADMIN_ROLE else ""}">'
-            f'{_icon("key", 12)}{_e(identity.role)}</span>'
+            f'{_icon("key", 12)}{_e(identity.role)}</span>{console}'
             + (
                 f'<span class="pill">{len(identity.tools)} tools</span>'
                 if identity.tools
@@ -1625,6 +1667,59 @@ def _tool_editor(
     )
 
 
+def _account_page(
+    session: Session, *, rev: str, error: str = "", done: bool = False
+) -> str:
+    """Selbstbedienung: das eigene Konsolenpasswort aendern.
+
+    Auch ein `viewer` kommt hier hinein, obwohl er sonst nichts schreiben
+    darf. Das ist kein Loch in der Rollentrennung: geaendert wird
+    ausschliesslich das eigene Passwort, und ein Zugang, dessen Passwort nur
+    ein anderer wechseln kann, wird nie gewechselt.
+    """
+    return (
+        (_note(f"<strong>Rejected.</strong> {_e(error)}", tone="bad") if error else "")
+        + (
+            _note(
+                "<strong>Password changed.</strong> Other sessions of this "
+                "identity have been signed out.",
+                icon="check",
+                tone="good",
+            )
+            if done
+            else ""
+        )
+        + '<div class="editor card">'
+        f'<div class="card-head"><span class="name mono">{_e(session.identity)}</span>'
+        f'<span class="pill accent">{_icon("key", 12)}{_e(session.role)}</span></div>'
+        '<div class="pad">'
+        f'<form method="post" action="{UI_PREFIX}/account/password">'
+        f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
+        f'<input type="hidden" name="rev" value="{_e(rev)}">'
+        '<div class="field"><span>Current password</span>'
+        '<input type="password" name="current" autocomplete="current-password" '
+        "required></div>"
+        '<div class="field"><span>New password'
+        f'<div class="hint">At least {MIN_PASSWORD_LENGTH} characters.</div></span>'
+        '<input type="password" name="password" autocomplete="new-password" '
+        "required></div>"
+        '<div class="field"><span>Repeat the new password</span>'
+        '<input type="password" name="confirm" autocomplete="new-password" '
+        "required></div>"
+        f'<button type="submit">{_icon("save", 14)}Change password</button> '
+        f'<a class="btn" href="{UI_PREFIX}/">{_icon("back", 14)}Back</a>'
+        "</form></div></div>"
+        + _note(
+            "<strong>This password is not your API token.</strong> It opens "
+            "this console and nothing else; the token opens <code>/mcp</code> "
+            "and not this console. Changing one leaves the other untouched "
+            "&ndash; an administrator issues a new token on the identities "
+            "page.",
+            icon="key",
+        )
+    )
+
+
 def _identity_editor(
     service: Service, session: Session, *, values: dict[str, Any], rev: str,
     replaces: str | None, error: str = "",
@@ -1654,6 +1749,17 @@ def _identity_editor(
         '<div class="hint">agent = MCP access only. viewer = read the console. '
         "admin = read and change everything on this page.</div></span>"
         f'<select name="role">{roles}</select></div>'
+        '<div class="field"><span>Console password'
+        f'<div class="hint">At least {MIN_PASSWORD_LENGTH} characters, and only '
+        "for <code>viewer</code> and <code>admin</code> &ndash; an agent signs "
+        "in nowhere. This is not the API token: the token authenticates "
+        "<code>/mcp</code>, the password opens this console."
+        + (
+            " Leave empty to keep the current one.</div></span>"
+            if replaces
+            else "</div></span>"
+        )
+        + '<input type="password" name="password" autocomplete="new-password"></div>'
         '<div class="field"><span>Granted tools'
         '<div class="hint">Rights attach to individual tool IDs (FR-7.5). A tool '
         "added later is never granted automatically.</div></span>"
@@ -1705,10 +1811,12 @@ def _token_page(identity_id: str, token: str, back: str) -> str:
             tone="good",
         )
         + '<div class="editor card"><div class="pad">'
-        f'<p>Token for <code>{_e(identity_id)}</code>:</p>'
+        f'<p>API token for <code>{_e(identity_id)}</code>:</p>'
         f'<div class="secret mono">{_e(token)}</div>'
         "<p class='muted'>Goes into the agent's config as "
-        "<code>Authorization: Bearer &lt;token&gt;</code>.</p>"
+        "<code>Authorization: Bearer &lt;token&gt;</code>. It authenticates "
+        "<code>/mcp</code> and does not sign in to this console &ndash; that "
+        "is what the console password is for.</p>"
         f'<a class="btn primary" href="{_e(back)}">{_icon("check", 14)}Done</a>'
         "</div></div>"
     )
@@ -1717,7 +1825,15 @@ def _token_page(identity_id: str, token: str, back: str) -> str:
 # -- Routen ----------------------------------------------------------------
 
 
-def _login_page(nonce: str, error: str = "") -> str:
+def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
+    """Die Anmeldung: Kennung und Passwort, nicht der API-Token.
+
+    Das Feld hiess frueher `token`, und genau das war der Fehler: derselbe
+    Nachweis oeffnete `/mcp` und die Konsole, und er musste dafuer durch eine
+    Zwischenablage und einen Browser-Passwortspeicher wandern (FR-11.5). Wer
+    hier einen Token eintippt, kommt nicht mehr hinein -- der Hinweis unter
+    dem Formular sagt das, bevor jemand es dreimal versucht.
+    """
     return (
         "<!doctype html>"
         '<html lang="en"><head><meta charset="utf-8">'
@@ -1727,14 +1843,20 @@ def _login_page(nonce: str, error: str = "") -> str:
         '<main class="login"><div class="card"><div class="pad">'
         f'<div class="mark">{_icon("shield", 24)}</div>'
         "<h1>gatekeeper</h1>"
-        "<p>Operations console. Requires an identity with "
-        "<code>role: viewer</code> or <code>role: admin</code>.</p>"
+        "<p>Operations console. Sign in with the console password of an "
+        "identity with <code>role: viewer</code> or <code>role: admin</code>.</p>"
         f'<form method="post" action="{UI_PREFIX}/login">'
-        '<input type="password" name="token" placeholder="Console token" '
-        'autocomplete="current-password" autofocus>'
+        f'<input name="identity" placeholder="Identity" value="{_e(identity)}" '
+        'autocomplete="username" autocapitalize="none" spellcheck="false" autofocus>'
+        '<input type="password" name="password" placeholder="Console password" '
+        'autocomplete="current-password">'
         '<button type="submit">Sign in</button></form>'
         + (f'<p class="err">{_icon("alert", 15)}{_e(error)}</p>' if error else "")
-        + "</div></div></main></body></html>"
+        + '<p class="foot">'
+        "An API token does not sign in here &ndash; it belongs in the "
+        "<code>Authorization</code> header of an agent, never in a browser."
+        "</p>"
+        "</div></div></main></body></html>"
     )
 
 
@@ -1772,7 +1894,10 @@ def build_ui_routes(
         return _respond(
             request,
             _page(title, body, session=session, subtitle=subtitle, icon=icon,
-                  active=active, nonce=nonce, actions=actions),
+                  active=active, nonce=nonce, actions=actions,
+                  # Ohne beschreibbare Ebene 2 gibt es keine Kontoseite: sie
+                  # koennte nichts als eine Fehlermeldung anbieten.
+                  account=store is not None),
             nonce,
             status,
         )
@@ -1799,6 +1924,51 @@ def build_ui_routes(
             )
 
         return handler
+
+    def _csrf_ok(session: Session, form: FormData) -> bool:
+        # Konstante Zeit, damit der Vergleich nichts ueber das Token verraet.
+        return hmac.compare_digest(str(form.get("_csrf") or ""), session.csrf)
+
+    def _csrf_refused(request: Request, session: Session) -> Response:
+        return _shell(
+            request, "Rejected",
+            _note(
+                "<strong>Missing or stale form token.</strong> The request "
+                "did not originate from a page this session rendered. If "
+                "you had the page open for a long time, reload and retry.",
+                tone="bad",
+            ),
+            session, icon="ban", active="", status=403,
+        )
+
+    def session_post(handler: Callable[[Request, Session, FormData], Any]):
+        """Huelle fuer Formulare, die keine Admin-Rolle verlangen.
+
+        Genau eines faellt darunter: das eigene Passwort. Es braucht Sitzung
+        und CSRF-Token wie jedes schreibende Formular, aber nicht `admin` --
+        sonst koennte ein `viewer` sein Passwort nie wechseln.
+        """
+
+        async def wrapped(request: Request) -> Response:
+            session = _current(request)
+            if session is None:
+                return _to_login()
+            if store is None:
+                return RedirectResponse(f"{UI_PREFIX}/", status_code=303)
+            form = await request.form()
+            if not _csrf_ok(session, form):
+                audit.write(
+                    {
+                        "kind": "admin_denied",
+                        "actor": session.identity,
+                        "path": request.url.path,
+                        "reason": "csrf_mismatch",
+                    }
+                )
+                return _csrf_refused(request, session)
+            return await handler(request, session, form)
+
+        return wrapped
 
     def writer(handler: Callable[[Request, Session, FormData], Any]):
         """Huelle fuer alles, was schreibt: Sitzung, Rolle, CSRF."""
@@ -1829,8 +1999,7 @@ def build_ui_routes(
                     session, icon="ban", active="", status=403,
                 )
             form = await request.form()
-            # Konstante Zeit, damit der Vergleich nichts ueber das Token verraet.
-            if not hmac.compare_digest(str(form.get("_csrf") or ""), session.csrf):
+            if not _csrf_ok(session, form):
                 audit.write(
                     {
                         "kind": "admin_denied",
@@ -1839,16 +2008,7 @@ def build_ui_routes(
                         "reason": "csrf_mismatch",
                     }
                 )
-                return _shell(
-                    request, "Rejected",
-                    _note(
-                        "<strong>Missing or stale form token.</strong> The request "
-                        "did not originate from a page this session rendered. If "
-                        "you had the page open for a long time, reload and retry.",
-                        tone="bad",
-                    ),
-                    session, icon="ban", active="", status=403,
-                )
+                return _csrf_refused(request, session)
             return await handler(request, session, form)
 
         return wrapped
@@ -1874,20 +2034,29 @@ def build_ui_routes(
             )
 
         form = await request.form()
-        token = str(form.get("token") or "")
-        identity = identities.authenticate(token) if token else None
+        # Die Kennung kommt ungeprueft aus dem Formular und landet gleich im
+        # Audit-Log und wieder im Feld. Gekuerzt, damit niemand das Log mit
+        # einem Megabyte je Fehlversuch aufblaeht.
+        supplied = str(form.get("identity") or "").strip()[:64]
+        password = str(form.get("password") or "")
+        identity = (
+            identities.authenticate_console(supplied, password)
+            if supplied and password
+            else None
+        )
 
-        # Nur `viewer` und `admin` duerfen hier hinein. Ein Agenten-Token
-        # oeffnet das UI nicht, auch wenn es gueltig ist.
-        if identity is None or identity.role not in UI_ROLES:
+        if identity is None:
+            # Die Antwort nennt nie den Grund: ob die Kennung existiert, ob
+            # sie eine Konsolenrolle hat oder ob nur das Passwort falsch war,
+            # geht den Absender nichts an. Im Log steht es vollstaendig.
             throttle.record_failure(client)
             audit.auth_failure(
-                reason=DenialReason.UNKNOWN_TOKEN.value
-                if identity is None
-                else "ui_role_required",
-                detail=f"POST {UI_PREFIX}/login from {client}",
+                reason="ui_login_failed",
+                detail=f"identity={supplied!r} from {client}",
             )
-            return _respond(request, _login_page(nonce, "Sign-in failed."), nonce)
+            return _respond(
+                request, _login_page(nonce, "Sign-in failed.", supplied), nonce
+            )
 
         throttle.reset(client)
         sid = sessions.create(identity.id, identity.role)
@@ -1919,6 +2088,75 @@ def build_ui_routes(
         response = RedirectResponse(f"{UI_PREFIX}/login", status_code=303)
         response.delete_cookie(SESSION_COOKIE, path=UI_PREFIX)
         return response
+
+    # -- Eigenes Konto -----------------------------------------------------
+
+    def _account_shell(
+        request: Request, session: Session, *, error: str = "",
+        done: bool = False, status: int = 200,
+    ) -> Response:
+        assert store is not None
+        return _shell(
+            request, "Account",
+            _account_page(
+                session, rev=store.identities_revision(), error=error, done=done
+            ),
+            session, icon="lock", active="",
+            subtitle=(
+                "Your console password. The API token of an identity lives on "
+                "the identities page and is a separate credential."
+            ),
+            status=status,
+        )
+
+    async def account_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None:
+            return RedirectResponse(f"{UI_PREFIX}/", status_code=303)
+        return _account_shell(request, session)
+
+    async def account_password(
+        request: Request, session: Session, form: FormData
+    ) -> Response:
+        assert store is not None
+        current = str(form.get("current") or "")
+        password = str(form.get("password") or "")
+        confirm = str(form.get("confirm") or "")
+        if password != confirm:
+            return _account_shell(
+                request, session,
+                error="The two new passwords do not match.",
+                status=400,
+            )
+        try:
+            store.set_password(
+                session.identity,
+                password,
+                actor=session.identity,
+                rev=str(form.get("rev") or ""),
+                current_password=current,
+                require_current=True,
+            )
+        except (WriteRefused, ConfigError) as exc:
+            # Ein falsches aktuelles Passwort ist ein Fehlversuch und gehoert
+            # ins Log -- eine offene Sitzung ist die bequemste Stelle, an der
+            # jemand ein Passwort raet.
+            audit.auth_failure(
+                reason="ui_password_change_failed",
+                detail=f"identity={session.identity!r}: {exc}",
+            )
+            return _account_shell(request, session, error=str(exc), status=400)
+
+        # Alle uebrigen Sitzungen dieser Identitaet beenden. Wer sein Passwort
+        # wechselt, tut das oft genau deswegen: es soll anderswo nichts mehr
+        # offen sein. Die eigene Sitzung bleibt -- sonst waere der Erfolg von
+        # einem Rauswurf nicht zu unterscheiden.
+        sessions.drop_identity(
+            session.identity, keep=request.cookies.get(SESSION_COOKIE)
+        )
+        return _account_shell(request, session, done=True)
 
     # -- Tools schreiben ---------------------------------------------------
 
@@ -2118,6 +2356,7 @@ def build_ui_routes(
             token = store.create_identity(
                 identity_id=values["id"], role=values["role"], tools=values["tools"],
                 scopes=values["scopes"], actor=session.identity, rev=rev,
+                password=str(form.get("password") or ""),
             )
         except (WriteRefused, ConfigError) as exc:
             return _shell(
@@ -2139,11 +2378,12 @@ def build_ui_routes(
         values = _form_values(form)
         rev = str(form.get("rev") or "")
         replaces = str(form.get("replaces") or "")
+        password = str(form.get("password") or "")
         try:
             store.save_identity(
                 identity_id=values["id"], role=values["role"], tools=values["tools"],
                 scopes=values["scopes"], actor=session.identity, rev=rev,
-                replaces=replaces,
+                replaces=replaces, password=password,
             )
         except (WriteRefused, ConfigError) as exc:
             return _shell(
@@ -2152,10 +2392,17 @@ def build_ui_routes(
                                  replaces=replaces, error=str(exc)),
                 session, icon="pencil", active="/identities", status=400,
             )
-        if values["id"] != replaces or values["role"] not in UI_ROLES:
-            # Umbenannt oder aus dem UI ausgesperrt: bestehende Sitzungen der
-            # alten Identitaet duerfen nicht weiterlaufen.
-            sessions.drop_identity(replaces)
+        # Umbenannt oder aus dem UI ausgesperrt: bestehende Sitzungen der alten
+        # Identitaet duerfen nicht weiterlaufen. Ein neues Passwort beendet sie
+        # ebenfalls -- sonst bliebe eine uebernommene Sitzung genau dann offen,
+        # wenn ein Administrator sie gerade schliessen will.
+        locked_out = values["id"] != replaces or values["role"] not in UI_ROLES
+        if locked_out or password:
+            keep = None
+            if not locked_out and replaces == session.identity:
+                # Wer sein eigenes Passwort hier setzt, bleibt angemeldet.
+                keep = request.cookies.get(SESSION_COOKIE)
+            sessions.drop_identity(replaces, keep=keep)
         return RedirectResponse(f"{UI_PREFIX}/identities", status_code=303)
 
     async def identity_rotate(request: Request, session: Session, form: FormData) -> Response:
@@ -2170,7 +2417,11 @@ def build_ui_routes(
                 request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
                 session, icon="ban", active="/identities", status=400,
             )
-        # Der alte Token ist tot -- offene Sitzungen dieser Identitaet auch.
+        # Der alte Token ist tot. Die Konsolensitzung haengt seit der eigenen
+        # Anmeldung nicht mehr am Token -- beendet wird sie trotzdem: eine
+        # Rotation ist die Antwort auf einen Verdacht, und dann soll von
+        # dieser Identitaet nichts offen bleiben. Der Preis ist eine erneute
+        # Anmeldung.
         if identity_id != session.identity:
             sessions.drop_identity(identity_id)
         return _shell(
@@ -2277,8 +2528,8 @@ def build_ui_routes(
                 "Identities", "/identities", icon="key", actions=_identities_actions,
                 subtitle=(
                     "Rights attach to individual tool IDs, never to a whole "
-                    "toolkit. Tokens are stored as scrypt hashes and are not "
-                    "shown here."
+                    "toolkit. API tokens and console passwords are stored as "
+                    "scrypt hashes and are never shown here."
                 ),
             ),
             methods=["GET"],
@@ -2290,6 +2541,12 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/identities/rotate", writer(identity_rotate), methods=["POST"]),
         Route(f"{UI_PREFIX}/identities/delete", identity_delete_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/identities/delete", writer(identity_delete), methods=["POST"]),
+        Route(f"{UI_PREFIX}/account", account_form, methods=["GET"]),
+        Route(
+            f"{UI_PREFIX}/account/password",
+            session_post(account_password),
+            methods=["POST"],
+        ),
         Route(
             f"{UI_PREFIX}/audit",
             guarded(
@@ -2312,5 +2569,11 @@ def has_admin(identities: IdentityStore) -> bool:
 
 
 def has_ui_identity(identities: IdentityStore) -> bool:
-    """Gibt es ueberhaupt jemanden, der sich anmelden koennte?"""
-    return any(i.role in UI_ROLES for i in identities.identities.values())
+    """Gibt es ueberhaupt jemanden, der sich anmelden koennte?
+
+    Rolle *und* Passwort: seit der Konsolenanmeldung ist eine UI-Rolle ohne
+    Passwort kein Zugang. Ein Server, der eine Anmeldemaske ausliefert,
+    hinter die niemand kommt, ist schlimmer als einer ohne Oberflaeche --
+    er sieht benutzbar aus.
+    """
+    return any(i.can_sign_in for i in identities.identities.values())

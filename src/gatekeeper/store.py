@@ -41,12 +41,15 @@ from .errors import ConfigError
 from .identity import (
     ADMIN_ROLE,
     Identity,
+    MIN_PASSWORD_LENGTH,
     ROLES,
+    UI_ROLES,
     dump_identities,
     generate_token,
     hash_token,
     load_identities,
     to_spec,
+    verify_token,
 )
 from .service import Service
 
@@ -274,6 +277,14 @@ class ConfigStore:
     def _admins(self, identities: dict[str, Identity]) -> list[str]:
         return [i.id for i in identities.values() if i.role == ADMIN_ROLE]
 
+    @staticmethod
+    def _check_password(password: str) -> None:
+        if len(password) < MIN_PASSWORD_LENGTH:
+            raise WriteRefused(
+                f"The console password must be at least {MIN_PASSWORD_LENGTH} "
+                "characters long."
+            )
+
     def save_identity(
         self,
         *,
@@ -284,7 +295,14 @@ class ConfigStore:
         actor: str,
         rev: str,
         replaces: str | None = None,
+        password: str = "",
     ) -> None:
+        """Aendert eine bestehende Identitaet.
+
+        `password=""` heisst: das bestehende Konsolenpasswort bleibt. Ein
+        leeres Feld im Formular darf keinen Zugang loeschen -- wer das will,
+        setzt die Rolle auf `agent`.
+        """
         with self._lock:
             self._check(self.identities_path, rev)
             if role not in ROLES:
@@ -316,6 +334,34 @@ class ConfigStore:
                 )
 
             previous = current[replaces]
+            if password and role not in UI_ROLES:
+                # Muss *vor* dem Schreiben scheitern: der Loader lehnt ein
+                # Passwort auf einer Agentenrolle ab, und `_write_identities`
+                # laedt direkt nach dem Schreiben neu. Erst hier zu bemerken
+                # hiesse, die Datei bereits unlesbar gemacht zu haben.
+                raise WriteRefused(
+                    f"role {role!r} cannot sign in to the console, so a "
+                    "password would be a door without a room. Choose "
+                    f"{' or '.join(UI_ROLES)} instead."
+                )
+            if password:
+                self._check_password(password)
+                password_hash = hash_token(password)
+            elif role in UI_ROLES:
+                password_hash = previous.password_hash
+            else:
+                # Rolle `agent`: der Konsolenzugang faellt weg, und mit ihm
+                # gehoert der Hash aus der Datei. Ihn stehen zu lassen waere
+                # ein Zugang, der nach der naechsten Rollenaenderung stumm
+                # wieder auflebt.
+                password_hash = ""
+
+            if role in UI_ROLES and not password_hash:
+                raise WriteRefused(
+                    f"role {role!r} needs a console password -- without one, "
+                    f"{identity_id!r} could not sign in. Set one in this form."
+                )
+
             updated = {
                 "id": identity_id,
                 "role": role,
@@ -323,6 +369,8 @@ class ConfigStore:
                 "tools": sorted(set(tools)),
                 "scopes": [s for s in scopes if s],
             }
+            if password_hash:
+                updated["password_hash"] = password_hash
             entries = [updated if e["id"] == replaces else e for e in entries]
 
             self._guard_last_admin(entries, action=f"changing {replaces!r}")
@@ -337,6 +385,9 @@ class ConfigStore:
                     "role": role,
                     "tools": sorted(set(tools)),
                     "scopes": [s for s in scopes if s],
+                    # Der Klartext wird nie protokolliert, die Tatsache schon:
+                    # ein Passwortwechsel gehoert in die Spur.
+                    "password_changed": bool(password),
                 }
             )
 
@@ -349,8 +400,13 @@ class ConfigStore:
         scopes: list[str],
         actor: str,
         rev: str,
+        password: str = "",
     ) -> str:
-        """Legt eine Identitaet an und gibt den Klartext-Token genau einmal zurueck."""
+        """Legt eine Identitaet an und gibt den Klartext-Token genau einmal zurueck.
+
+        `viewer` und `admin` brauchen zusaetzlich ein Passwort: ohne eines
+        entstuende ein Konsolenkonto, an dem sich niemand anmelden kann.
+        """
         with self._lock:
             self._check(self.identities_path, rev)
             if role not in ROLES:
@@ -364,20 +420,35 @@ class ConfigStore:
             unknown = sorted(set(tools) - set(self.service.catalog.tools))
             if unknown:
                 raise WriteRefused(f"Unknown tool IDs: {', '.join(unknown)}")
+            if role in UI_ROLES and not password:
+                raise WriteRefused(
+                    f"role {role!r} signs in to the console and therefore "
+                    "needs a password."
+                )
+            if password and role not in UI_ROLES:
+                raise WriteRefused(
+                    f"role {role!r} cannot sign in to the console, so a "
+                    "password would be a door without a room. Choose "
+                    f"{' or '.join(UI_ROLES)} instead."
+                )
+            if password:
+                self._check_password(password)
 
             token = generate_token()
+            entry = {
+                "id": identity_id,
+                "role": role,
+                "token_hash": hash_token(token),
+                "tools": sorted(set(tools)),
+                "scopes": [s for s in scopes if s],
+            }
+            if password:
+                entry["password_hash"] = hash_token(password)
             payload = dump_identities(self.identities)
-            payload["identities"].append(
-                {
-                    "id": identity_id,
-                    "role": role,
-                    "token_hash": hash_token(token),
-                    "tools": sorted(set(tools)),
-                    "scopes": [s for s in scopes if s],
-                }
-            )
+            payload["identities"].append(entry)
             self._write_identities(payload)
-            # Der Klartext wird bewusst NICHT protokolliert (FR-2.6).
+            # Der Klartext wird bewusst NICHT protokolliert (FR-2.6) -- weder
+            # der Token noch das Passwort.
             self.audit.write(
                 {
                     "kind": "admin_change",
@@ -412,6 +483,57 @@ class ConfigStore:
             )
             return token
 
+    def set_password(
+        self,
+        identity_id: str,
+        password: str,
+        *,
+        actor: str,
+        rev: str,
+        current_password: str = "",
+        require_current: bool = False,
+    ) -> None:
+        """Setzt das Konsolenpasswort einer Identitaet.
+
+        `require_current` gilt fuer die Selbstbedienung: wer sein eigenes
+        Passwort aendert, muss das alte kennen. Sonst genuegte eine
+        unbeaufsichtigte Sitzung, um den Zugang dauerhaft zu uebernehmen --
+        das Abmelden allein wuerde ihn dann nicht mehr zurueckholen.
+        Ein Administrator, der ein *fremdes* Passwort setzt, kennt das alte
+        naturgemaess nicht; dort steht die Aenderung stattdessen mit Urheber
+        im Audit-Log.
+        """
+        with self._lock:
+            self._check(self.identities_path, rev)
+            identity = self.identities.identities.get(identity_id)
+            if identity is None:
+                raise WriteRefused(f"No identity {identity_id!r}.")
+            if identity.role not in UI_ROLES:
+                raise WriteRefused(
+                    f"{identity_id!r} has role {identity.role!r} and does not "
+                    "sign in to the console. A password would change nothing."
+                )
+            if require_current and not verify_token(
+                current_password, identity.password_hash
+            ):
+                raise WriteRefused("The current password is not correct.")
+            self._check_password(password)
+
+            payload = dump_identities(self.identities)
+            for entry in payload["identities"]:
+                if entry["id"] == identity_id:
+                    entry["password_hash"] = hash_token(password)
+            self._write_identities(payload)
+            self.audit.write(
+                {
+                    "kind": "admin_change",
+                    "actor": actor,
+                    "action": "password_set",
+                    "target": identity_id,
+                    "self_service": identity_id == actor,
+                }
+            )
+
     def delete_identity(self, identity_id: str, *, actor: str, rev: str) -> None:
         with self._lock:
             self._check(self.identities_path, rev)
@@ -437,12 +559,65 @@ class ConfigStore:
         Oberflaeche waere fuer immer zu, und der einzige Ausweg fuehrte ueber
         einen Editor auf dem Host. Der Fehlerfall ist billig zu verhindern und
         teuer zu beheben.
+
+        Seit der Konsolenanmeldung genuegt die Rolle allein nicht: ein
+        Administrator ohne Passwort kann sich nicht anmelden und ist als
+        letzter Ausweg wertlos. Geprueft wird das aber nur, wenn es vorher
+        einen anmeldefaehigen Administrator *gab* -- eine Konfiguration aus
+        einer aelteren Fassung soll sich nicht selbst blockieren.
         """
         if not any(e.get("role") == ADMIN_ROLE for e in entries):
             raise WriteRefused(
                 f"Refused: {action} would leave no identity with role 'admin', "
                 "and nobody could sign in to create one."
             )
+        had_console = any(
+            i.role == ADMIN_ROLE and i.password_hash
+            for i in self.identities.identities.values()
+        )
+        keeps_console = any(
+            e.get("role") == ADMIN_ROLE and e.get("password_hash") for e in entries
+        )
+        if had_console and not keeps_console:
+            raise WriteRefused(
+                f"Refused: {action} would leave no administrator with a "
+                "console password, and nobody could sign in to set one."
+            )
+
+
+def set_password_in_file(path: str, identity_id: str, password: str) -> None:
+    """Setzt ein Konsolenpasswort direkt in `identities.yaml`.
+
+    Der Weg ohne laufenden Dienst: fuer `gatekeeper password` und fuer den
+    Start, der einem Bestand aus einer aelteren Fassung erstmals ein Passwort
+    gibt. Geladen wird vorher aus der Datei, geschrieben wird atomar -- damit
+    gilt hier dieselbe Zusicherung wie fuer die Oberflaeche.
+    """
+    store = load_identities(path)
+    identity = store.identities.get(identity_id)
+    if identity is None:
+        known = ", ".join(sorted(store.identities)) or "none"
+        raise ConfigError(f"No identity {identity_id!r} in {path}. Known: {known}")
+    if identity.role not in UI_ROLES:
+        raise ConfigError(
+            f"{identity_id!r} has role {identity.role!r} and does not sign in "
+            f"to the console. Only {' and '.join(UI_ROLES)} do."
+        )
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ConfigError(
+            f"The console password must be at least {MIN_PASSWORD_LENGTH} "
+            "characters long."
+        )
+    if not writable(path):
+        raise ConfigError(
+            f"{path} is not writable. The file or its directory is mounted "
+            "read-only."
+        )
+    payload = dump_identities(store)
+    for entry in payload["identities"]:
+        if entry["id"] == identity_id:
+            entry["password_hash"] = hash_token(password)
+    _atomic_write(path, _dump(payload))
 
 
 def load_tool_yaml(text: str) -> dict[str, Any]:
@@ -469,6 +644,7 @@ __all__ = [
     "WriteRefused",
     "load_tool_yaml",
     "revision",
+    "set_password_in_file",
     "to_spec",
     "tool_to_yaml",
     "writable",
