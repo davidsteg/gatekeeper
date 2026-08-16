@@ -46,11 +46,15 @@ services:
 
       # EIN beschreibbares Verzeichnis genuegt. Ist es leer, legt der erste
       # Start toolkits.yaml, tools.yaml und identities.yaml selbst an und
-      # schreibt den Administrator-Token EINMALIG ins Containerlog:
+      # schreibt die beiden Nachweise des Administrators EINMALIG ins
+      # Containerlog - das Konsolenpasswort fuer /ui und den API-Token fuer
+      # /mcp:
       #
-      #   docker compose logs gatekeeper | grep 'Administrator token'
+      #   docker compose logs gatekeeper | grep 'Administrator'
       #
-      # Nach dem ersten Anmelden in /ui rotieren, damit er nicht im Log bleibt.
+      # Das Passwort nach dem ersten Anmelden unter /ui/account aendern, den
+      # Token bei Bedarf in der Oberflaeche rotieren - damit beide nicht im
+      # Log stehen bleiben.
       # Wer nichts automatisch angelegt haben will: GATEKEEPER_NO_BOOTSTRAP=1
       # setzen und 'gatekeeper init' von Hand aufrufen.
       #
