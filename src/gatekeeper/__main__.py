@@ -1,4 +1,4 @@
-"""Einstiegspunkt und Token-Werkzeug."""
+"""Einstiegspunkt, Token- und Passwortwerkzeug."""
 
 from __future__ import annotations
 
@@ -12,10 +12,17 @@ import uvicorn
 from .audit import AuditLog, Redactor
 from .catalog import load_catalog
 from .errors import ConfigError
-from .identity import generate_token, hash_token, load_identities
+from .identity import (
+    UI_ROLES,
+    IdentityStore,
+    generate_password,
+    generate_token,
+    hash_token,
+    load_identities,
+)
 from .server import build_app, log_startup
 from .service import Service
-from .store import ConfigStore
+from .store import ConfigStore, set_password_in_file
 from .tier1 import load_tier1
 from .ui import has_ui_identity
 
@@ -118,16 +125,25 @@ def cmd_serve(args: argparse.Namespace) -> int:
     _signal.signal(_signal.SIGHUP, _on_sighup)
 
     ui_enabled = args.ui or os.environ.get("GATEKEEPER_UI", "") in ("1", "true", "yes")
-    if ui_enabled and not has_ui_identity(identities):
-        # Fail closed: eine Oberflaeche ohne anmeldefaehige Identitaet waere eine
-        # offene Flaeche ohne Nutzen. Lieber gar nicht starten als eine
-        # Anmeldemaske anbieten, hinter die niemand kommt.
-        print(
-            "Configuration error: --ui requires at least one identity with "
-            "role: viewer or role: admin in identities.yaml.",
-            file=sys.stderr,
-        )
-        return 2
+    if ui_enabled:
+        identities_path = _config_path("identities.yaml", args.identities)
+        if not any(i.role in UI_ROLES for i in identities.identities.values()):
+            # Fail closed: eine Oberflaeche ohne anmeldefaehige Identitaet waere
+            # eine offene Flaeche ohne Nutzen. Lieber gar nicht starten als eine
+            # Anmeldemaske anbieten, hinter die niemand kommt.
+            print(
+                "Configuration error: --ui requires at least one identity with "
+                "role: viewer or role: admin in identities.yaml.",
+                file=sys.stderr,
+            )
+            return 2
+        # Danach hat jede Konsolenrolle ein Passwort -- oder es steht in
+        # `problem`, warum nicht, und dann wird nicht gestartet.
+        problem = _ensure_console_passwords(identities_path, identities)
+        if problem:
+            print(problem, file=sys.stderr)
+            return 2
+        assert has_ui_identity(identities)
 
     store = None
     if ui_enabled:
@@ -259,8 +275,14 @@ def _paths(config_dir: str, state_dir: str) -> dict[str, str]:
     }
 
 
-def bootstrap(config_dir: str, state_dir: str, audit_dir: str | None = None) -> str:
-    """Schreibt den Leerzustand und gibt den Klartext-Token zurueck.
+def bootstrap(
+    config_dir: str, state_dir: str, audit_dir: str | None = None
+) -> tuple[str, str]:
+    """Schreibt den Leerzustand, gibt Token und Konsolenpasswort zurueck.
+
+    Der Administrator bekommt beides, weil er beides braucht und weil es zwei
+    verschiedene Dinge sind: der Token spricht `/mcp` an, das Passwort oeffnet
+    die Konsole. Beide erscheinen genau einmal (FR-2.6).
 
     Gemeinsamer Kern von `init` und dem Erststart. Es gibt bewusst nur eine
     Fassung: zwei Wege, die eine Anfangskonfiguration erzeugen, laufen sonst
@@ -271,6 +293,7 @@ def bootstrap(config_dir: str, state_dir: str, audit_dir: str | None = None) -> 
 
     paths = _paths(config_dir, state_dir)
     token = generate_token()
+    password = generate_password()
     audit = audit_dir or os.path.join(state_dir, "logs")
     files = {
         paths["toolkits"]: _INIT_TOOLKITS.format(audit_dir=audit),
@@ -278,11 +301,16 @@ def bootstrap(config_dir: str, state_dir: str, audit_dir: str | None = None) -> 
         paths["identities"]: (
             "# Identitaeten und Rechte (REQUIREMENTS.md §4 und §9).\n"
             "#\n"
-            "# Enthaelt nur Hashes. Weitere Identitaeten legt die Oberflaeche an.\n\n"
+            "# Enthaelt nur Hashes. Weitere Identitaeten legt die Oberflaeche an.\n"
+            "#\n"
+            "# Zwei getrennte Nachweise: 'token_hash' gehoert zur API (/mcp),\n"
+            "# 'password_hash' zur Anmeldung an der Konsole (/ui). Wer eines\n"
+            "# verliert, verliert nicht beides.\n\n"
             "identities:\n"
             "  - id: admin\n"
             "    role: admin\n"
             f'    token_hash: "{hash_token(token)}"\n'
+            f'    password_hash: "{hash_token(password)}"\n'
             "    # Ein Administrator braucht keine Tool-Rechte: die Oberflaeche\n"
             "    # ruft nichts auf.\n"
             "    tools: []\n"
@@ -292,7 +320,7 @@ def bootstrap(config_dir: str, state_dir: str, audit_dir: str | None = None) -> 
     for path, content in files.items():
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
-    return token
+    return token, password
 
 
 def _whoami() -> str:
@@ -326,7 +354,7 @@ def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> str | None:
         return None
 
     try:
-        token = bootstrap(config_dir, state_dir)
+        token, password = bootstrap(config_dir, state_dir)
     except OSError as exc:
         return (
             f"Cannot create the configuration in {config_dir}: {exc}\n"
@@ -342,15 +370,98 @@ def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> str | None:
         "may do.",
         config_dir,
     )
-    # Der Token steht damit im Containerlog. Das ist der Preis dafuer, dass ein
-    # Erststart ohne zweiten Befehl auskommt; wer das nicht will, nutzt
-    # `gatekeeper init` und GATEKEEPER_NO_BOOTSTRAP=1.
+    # Beide Geheimnisse stehen damit im Containerlog. Das ist der Preis dafuer,
+    # dass ein Erststart ohne zweiten Befehl auskommt; wer das nicht will,
+    # nutzt `gatekeeper init` und GATEKEEPER_NO_BOOTSTRAP=1.
     logger.warning(
-        "Administrator token (shown once, and only here): %s -- sign in at "
-        "/ui, then rotate it there so it no longer lives in this log.",
+        "Administrator console password (shown once, and only here): %s -- "
+        "sign in at /ui as 'admin', then change it there so it no longer "
+        "lives in this log.",
+        password,
+    )
+    logger.warning(
+        "Administrator API token (shown once, and only here): %s -- for "
+        "/mcp only; it does not sign in to /ui. Rotate it in the console.",
         token,
     )
     return None
+
+
+def _ensure_console_passwords(path: str, identities: IdentityStore) -> str | None:
+    """Gibt Konsolenkonten ohne Passwort eines -- einmalig, ins Log.
+
+    Der Aufstiegsweg. Eine `identities.yaml` aus einer Fassung vor der
+    Konsolenanmeldung kennt nur Tokens; nach dem Aufstieg koennte sich
+    niemand mehr anmelden. Drei Auswege waeren denkbar gewesen: den Token
+    weiter als Passwort gelten lassen (dann waere die Trennung eine
+    Behauptung), den Start verweigern (dann steht ein laufendes Deployment
+    nach einem Image-Wechsel still), oder ein Passwort erzeugen und es genau
+    einmal ins Log schreiben -- so wie es der Erststart mit dem Token
+    ohnehin haelt. Der dritte Weg gewinnt.
+
+    Gibt `None` zurueck, wenn nichts zu tun war oder es geklappt hat, sonst
+    eine Meldung fuer Menschen.
+    """
+    missing = [
+        i.id
+        for i in identities.identities.values()
+        if i.role in UI_ROLES and not i.password_hash
+    ]
+    if not missing:
+        return None
+
+    for identity_id in missing:
+        password = generate_password()
+        try:
+            set_password_in_file(path, identity_id, password)
+        except (ConfigError, OSError) as exc:
+            return (
+                f"Configuration error: {identity_id!r} has role "
+                f"{identities.identities[identity_id].role!r} but no console "
+                f"password, and one cannot be written: {exc}\n"
+                "Signing in to /ui needs a password since 0.3.0 -- the API "
+                "token no longer opens the console. Set one on a writable "
+                "copy of the file with:\n"
+                f"  gatekeeper password --identity {identity_id}"
+            )
+        logger.warning(
+            "Console password for %r (shown once, and only here): %s -- this "
+            "identity had none; signing in to /ui needs one since 0.3.0. "
+            "Change it under /ui/account so it no longer lives in this log.",
+            identity_id,
+            password,
+        )
+
+    # Aus der Datei nachladen, nicht im Speicher flicken: nur so ist belegt,
+    # dass der laufende Zustand dem entspricht, was ein Neustart ergaebe.
+    identities.identities = load_identities(path).identities
+    return None
+
+
+def cmd_password(args: argparse.Namespace) -> int:
+    """Setzt das Konsolenpasswort einer Identitaet in `identities.yaml`.
+
+    Der Weg zurueck, wenn niemand mehr hineinkommt -- und der Weg hinein fuer
+    einen Bestand, der noch keine Passwoerter kennt.
+    """
+    path = _config_path("identities.yaml", args.identities)
+    password = args.password or generate_password()
+    try:
+        set_password_in_file(path, args.identity, password)
+    except ConfigError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"ERROR: cannot write {path}: {exc}", file=sys.stderr)
+        return 2
+    print(f"Console password for {args.identity!r} in {path} set.")
+    if not args.password:
+        print(f"\nPassword (shown once):\n  {password}")
+    print(
+        "\nThis opens /ui only. The API token of this identity is unchanged "
+        "and still authenticates /mcp."
+    )
+    return 0
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -376,7 +487,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        token = bootstrap(base, state, args.audit_dir)
+        token, password = bootstrap(base, state, args.audit_dir)
     except OSError as exc:
         print(f"Cannot write the configuration: {exc}", file=sys.stderr)
         return 2
@@ -388,7 +499,12 @@ def cmd_init(args: argparse.Namespace) -> int:
         "\nNo tools, no agents. Start with --ui and create what you need;\n"
         "every capability from here on is a deliberate, audited decision."
     )
-    print(f"\nAdministrator token (shown once):\n  {token}")
+    # Zwei Zeilen, weil es zwei Nachweise sind. Sie zu einem zusammenzuziehen
+    # waere genau das Missverstaendnis, das die Trennung aufloesen soll.
+    print(
+        f"\nAdministrator console password for /ui (shown once):\n  {password}"
+        f"\n\nAdministrator API token for /mcp (shown once):\n  {token}"
+    )
     return 0
 
 
@@ -458,9 +574,22 @@ def main() -> int:
     )
     init.set_defaults(func=cmd_init)
 
-    token = sub.add_parser("token", help="Generate a token")
+    token = sub.add_parser("token", help="Generate an API token")
     token.add_argument("--token", help="Hash an existing token instead of generating one")
     token.set_defaults(func=cmd_token)
+
+    password = sub.add_parser(
+        "password", help="Set the console password of an identity (/ui sign-in)"
+    )
+    password.add_argument(
+        "--identity", required=True, help="Which identity gets the password"
+    )
+    password.add_argument(
+        "--password",
+        help="Use this password instead of generating one. Beware the shell "
+        "history -- omit it and gatekeeper generates one.",
+    )
+    password.set_defaults(func=cmd_password)
 
     args = parser.parse_args()
     return int(args.func(args))

@@ -68,7 +68,7 @@ src/gatekeeper/
   tier1.py      Ebene-1-Grenzen aus toolkits.yaml
   catalog.py    Tool-Definitionen, Prüfung gegen Ebene 1
   validate.py   Parametervalidierung und argv-Bau      <- sicherheitskritisch
-  identity.py   Tokens (scrypt), Rechte, Scopes
+  identity.py   Tokens und Konsolenpasswörter (scrypt), Rechte, Scopes
   service.py    der Aufrufpfad
   execute.py    Prozessausführung, Zeitlimits, Ausgabegrenzen
   audit.py      JSON-Lines, Rotation, Maskierung
@@ -84,7 +84,7 @@ tests/
   test_negative_corpus.py  Angriffe, die fehlschlagen MÜSSEN (NFR-8)
   test_behaviour.py        was funktionieren muss
   test_integration_mcp.py  Ende-zu-Ende über echtes MCP
-  test_ui.py               Trennung von UI-Sitzung und MCP-Token
+  test_ui.py               Trennung von Konsolenanmeldung und MCP-Token
   test_ui_admin.py         Schreibzugriff: Ebene-1-Grenzen, CSRF, Aussperrschutz
 ```
 
@@ -122,13 +122,18 @@ mkdir -p /mnt/raid/gatekeeper/config /mnt/raid/gatekeeper/logs && chown -R 568:5
 erste Start legt alles Nötige selbst an:
 
 ```bash
-docker compose up -d && docker compose logs gatekeeper | grep 'Administrator token'
+docker compose up -d && docker compose logs gatekeeper | grep 'Administrator'
 ```
 
 Erzeugt wird eine **leere** `toolkits.yaml` (`toolkits: {}`), eine leere
-`tools.yaml` und eine `identities.yaml` mit **einem** Administrator. Dessen
-Token steht genau einmal im Containerlog — nach dem ersten Anmelden in `/ui`
-rotieren, damit er dort nicht liegen bleibt.
+`tools.yaml` und eine `identities.yaml` mit **einem** Administrator. Der
+bekommt zwei getrennte Nachweise, und beide stehen genau einmal im
+Containerlog:
+
+- ein **Konsolenpasswort** für die Anmeldung an `/ui` — nach dem ersten
+  Anmelden unter `/ui/account` ändern, damit es dort nicht liegen bleibt;
+- einen **API-Token** für `/mcp` — in der Oberfläche rotieren, wenn er
+  gebraucht wird. Ein Administrator braucht ihn meist gar nicht.
 
 Angelegt wird nur, wenn **keine** der drei Dateien existiert. Liegt schon eine
 da, passiert nichts: ein verrutschter Mount sieht sonst aus wie eine
@@ -171,7 +176,8 @@ docker exec ix-dockhand-dockhand-1 docker compose -p gatekeeper -f /mnt/raid/gat
 curl -s localhost:8080/health/ready
 ```
 
-**8. Tools anlegen** unter `/ui` mit dem Administrator-Token aus Schritt 3.
+**8. Tools anlegen** unter `/ui`, angemeldet als `admin` mit dem
+Konsolenpasswort aus Schritt 3.
 Vorlagen zum Abschauen stehen in
 [config/examples/tools.yaml](config/examples/tools.yaml).
 
@@ -199,22 +205,55 @@ Standardmäßig aus. Einschalten mit `--ui` bzw. `GATEKEEPER_UI=1`, in
 `compose.yaml` als `command: ["serve", "--ui"]`. `--ui-read-only` liefert die
 Oberfläche ohne jede Schreibfunktion, unabhängig von den Rollen.
 
+### Anmeldung: Passwort für die Konsole, Token für die API
+
+Jede Identität trägt bis zu zwei Nachweise, und sie sind bewusst getrennt
+(FR-11.5):
+
+| Nachweis | Wofür | Wo er hingehört |
+|---|---|---|
+| `token_hash` | `/mcp`, als `Authorization: Bearer` | in die Konfiguration eines Agenten |
+| `password_hash` | Anmeldung an `/ui` | in den Kopf eines Menschen |
+
+Ein Token, den jemand in ein Anmeldeformular tippt, liegt danach in der
+Zwischenablage, im Passwortspeicher des Browsers und mit etwas Pech im
+Verlauf — und dasselbe Geheimnis öffnet dann auch noch `/mcp`. Getrennte
+Nachweise heißen: ein verlorenes Konsolenpasswort ruft keine Tools auf, ein
+verlorener Token öffnet keine Oberfläche, und jeder von beiden lässt sich
+einzeln wechseln.
+
+Beide liegen ausschließlich als scrypt-Hash in `identities.yaml`.
+
 ### Rollen
 
-| Rolle | MCP | Konsole lesen | Ebene 2 ändern |
-|---|:--:|:--:|:--:|
-| `agent` | ✓ | — | — |
-| `viewer` | — | ✓ | — |
-| `admin` | — | ✓ | ✓ |
+| Rolle | MCP-Token | Konsolenpasswort | Konsole lesen | Ebene 2 ändern |
+|---|:--:|:--:|:--:|:--:|
+| `agent` | ✓ | — | — | — |
+| `viewer` | ✓ | ✓ | ✓ | — |
+| `admin` | ✓ | ✓ | ✓ | ✓ |
 
-Ein Agenten-Token öffnet die Oberfläche nicht. Ohne mindestens eine Identität
-mit `viewer` oder `admin` startet der Server mit `--ui` gar nicht erst.
+Ein Agent bekommt kein Passwort — er meldet sich nirgends an, und ein
+Passwort auf einer Rolle ohne Anmeldung wird abgelehnt. Umgekehrt braucht
+`viewer` und `admin` eines: ohne Passwort gäbe es ein Konsolenkonto, hinter
+das niemand kommt. Ohne mindestens eine anmeldefähige Identität startet der
+Server mit `--ui` gar nicht erst.
+
+**Aufstieg aus einer Fassung vor 0.3.0.** Kennt `identities.yaml` noch keine
+Passwörter, erzeugt der erste Start mit `--ui` für jedes Konsolenkonto eines
+und schreibt es einmalig ins Log — so wie es der Erststart mit dem Token
+ohnehin hält. Ist die Datei nicht beschreibbar, startet der Server nicht und
+nennt den Weg: `gatekeeper password --identity <id>`.
 
 ### Was ein Admin darf — und was nicht
 
 Anlegen, ändern, ab- und anschalten, löschen von **Tools**; anlegen, ändern,
-löschen von **Identitäten**; **Tokens** ausstellen und rotieren. Änderungen
-wirken sofort, ohne Neustart.
+löschen von **Identitäten**; **Tokens** ausstellen und rotieren;
+**Konsolenpasswörter** setzen. Änderungen wirken sofort, ohne Neustart.
+
+Sein eigenes Passwort ändert jeder Angemeldete selbst unter `/ui/account` —
+auch ein `viewer`, der sonst nichts schreiben darf. Dafür braucht es das
+alte Passwort: eine unbeaufsichtigte Sitzung soll den Zugang nicht
+übernehmen können.
 
 **Ebene 1 kann die Oberfläche nicht anfassen.** Es gibt keine Route und keine
 Funktion, die `toolkits.yaml` schreibt. Jede Definition aus dem Formular läuft
@@ -230,8 +269,10 @@ Ratespiel mit Fehlermeldung.
 ### Weitere Leitplanken
 
 - **Der letzte Admin ist geschützt.** Löschen oder Herabstufen wird abgelehnt,
-  wenn danach niemand mehr anmelden könnte. Der Fehler ist billig zu verhindern
-  und teuer zu beheben.
+  wenn danach niemand mehr anmelden könnte. Gezählt werden dabei nicht Rollen,
+  sondern Zugänge: ein `admin` ohne Konsolenpasswort kommt nicht hinein und
+  zählt deshalb nicht. Der Fehler ist billig zu verhindern und teuer zu
+  beheben.
 - **CSRF.** Jedes schreibende Formular trägt ein Sitzungs-Token. `SameSite=Strict`
   allein genügt nicht: eine Seite auf derselben Site gilt nicht als fremd.
 - **Optimistische Nebenläufigkeit.** Jedes Formular kennt die Revision der Datei,
@@ -244,7 +285,8 @@ Ratespiel mit Fehlermeldung.
   ergäbe.
 - **Alles im Audit-Log**, mit Urheber. Eine Löschung schreibt die vollständige
   Definition mit — sie bleibt aus dem Log heraus wiederherstellbar.
-- **Token-Rotation beendet offene Sitzungen** der betroffenen Identität.
+- **Ein Passwortwechsel beendet offene Sitzungen** der betroffenen Identität —
+  bis auf die, die ihn veranlasst hat. Token-Rotation ebenso.
 
 ### Zugriffskarte
 
@@ -257,14 +299,24 @@ Aktivitätsdiagramm auch, denn im Browser läuft kein Skript.
 ### Ersten Admin anlegen
 
 Erledigt `gatekeeper init` (Deployment, Schritt 3) — es legt genau einen
-Administrator an und gibt den Token einmalig aus. Weitere Identitäten entstehen
-danach in der Oberfläche.
+Administrator an und gibt Konsolenpasswort und Token einmalig aus. Weitere
+Identitäten entstehen danach in der Oberfläche.
 
-Einen zusätzlichen Hash von Hand erzeugen:
+Einen zusätzlichen Token-Hash von Hand erzeugen:
 
 ```bash
 docker exec gatekeeper gatekeeper token
 ```
+
+**Ausgesperrt?** Ein Konsolenpasswort lässt sich ohne Oberfläche setzen — der
+Weg zurück, wenn niemand mehr hineinkommt:
+
+```bash
+docker exec gatekeeper gatekeeper password --identity root
+```
+
+Das schreibt direkt in `identities.yaml`, zeigt das erzeugte Passwort einmalig
+an und lässt den API-Token der Identität unberührt.
 
 **Warum die Sitzung nicht für `/mcp` gilt.** Der MCP-Endpunkt authentifiziert
 nur über den `Authorization`-Header, und genau das macht ihn CSRF-fest: ein
@@ -322,13 +374,18 @@ Daher der Negativtest-Korpus, und daher `read_only`, `cap_drop: ALL` und
 Maskierung greift erst ab Stufe 2, wenn gatekeeper die Werte selbst kennt.
 
 **`identities.yaml` enthält nur Hashes** und ist damit nicht secret-kritisch.
-Die Klartext-Tokens leben ausschließlich in den Agenten-Konfigurationen.
+Die Klartext-Tokens leben ausschließlich in den Agenten-Konfigurationen, die
+Konsolenpasswörter nirgends auf der Platte.
 
-**Ein Admin-Token ist mächtig.** Wer es hat, kann Tools anlegen und Rechte
-vergeben — innerhalb von Ebene 1, aber das reicht für jeden Stack unter
-`/mnt/raid`. Behandle es wie einen Host-Zugang: eigener Token je Person,
-Rotation über die Oberfläche, und `role: viewer` für alle, die nur schauen
-wollen.
+**Ein Admin-Zugang ist mächtig.** Wer das Konsolenpasswort hat, kann Tools
+anlegen und Rechte vergeben — innerhalb von Ebene 1, aber das reicht für jeden
+Stack unter `/mnt/raid`. Behandle ihn wie einen Host-Zugang: eigene Identität
+je Person, Passwortwechsel über `/ui/account`, und `role: viewer` für alle,
+die nur schauen wollen.
+
+**`gatekeeper password --password ...` landet in der Shell-History.** Ohne
+das Argument erzeugt gatekeeper eines und zeigt es einmalig an — das ist der
+bessere Weg.
 
 **Der Port gehört nicht ins offene Netz.** Die Oberfläche spricht über HTTP;
 ohne TLS läuft das Sitzungs-Cookie ohne `Secure`-Flag. Hinter einem Reverse

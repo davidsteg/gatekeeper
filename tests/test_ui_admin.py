@@ -31,6 +31,10 @@ from gatekeeper.ui import UI_PREFIX
 
 BASE = "http://gatekeeper.test"
 
+#: Konsolenpasswoerter der beiden Menschen im Test. Der Agent hat keines --
+#: er meldet sich nirgends an.
+PASSWORDS = {"root": "admin-konsolenpasswort", "eye": "viewer-konsolenpasswort"}
+
 
 @pytest.fixture
 def admin_env(tmp_path, tier1, tool_specs):
@@ -48,6 +52,7 @@ def admin_env(tmp_path, tier1, tool_specs):
                         "id": "root",
                         "role": "admin",
                         "token_hash": hash_token(tokens["root"]),
+                        "password_hash": hash_token(PASSWORDS["root"]),
                         "tools": [],
                         "scopes": [],
                     },
@@ -55,6 +60,7 @@ def admin_env(tmp_path, tier1, tool_specs):
                         "id": "eye",
                         "role": "viewer",
                         "token_hash": hash_token(tokens["eye"]),
+                        "password_hash": hash_token(PASSWORDS["eye"]),
                         "tools": [],
                         "scopes": [],
                     },
@@ -104,9 +110,16 @@ def _client(app) -> httpx2.AsyncClient:
     )
 
 
-async def _signed_in(client, token: str) -> str:
+async def _login(client, identity: str = "root"):
+    return await client.post(
+        f"{UI_PREFIX}/login",
+        data={"identity": identity, "password": PASSWORDS[identity]},
+    )
+
+
+async def _signed_in(client, identity: str = "root") -> str:
     """Meldet an und liefert das CSRF-Token aus der gerenderten Seite."""
-    await client.post(f"{UI_PREFIX}/login", data={"token": token})
+    await _login(client, identity)
     page = await client.get(f"{UI_PREFIX}/tools")
     marker = 'name="_csrf" value="'
     start = page.text.index(marker) + len(marker)
@@ -408,9 +421,9 @@ def test_bad_yaml_is_reported_not_raised_raw(admin_env):
 
 async def test_viewer_cannot_write(admin_env):
     """Lesen und Schreiben sind getrennte Rollen -- ueber HTTP nachgewiesen."""
-    app, tokens = admin_env["app"], admin_env["tokens"]
+    app = admin_env["app"]
     async with _client(app) as client:
-        await client.post(f"{UI_PREFIX}/login", data={"token": tokens["eye"]})
+        await _login(client, "eye")
         page = await client.get(f"{UI_PREFIX}/tools")
         assert page.status_code == 200
         # Ein viewer sieht die Schaltflaechen gar nicht erst.
@@ -431,9 +444,9 @@ async def test_write_without_csrf_token_is_refused(admin_env):
     Das ist die Absicherung gegen eine fremde Seite, die ein Formular auf
     /ui/... abschickt: das Cookie waere dabei, das Token nicht.
     """
-    app, tokens = admin_env["app"], admin_env["tokens"]
+    app = admin_env["app"]
     async with _client(app) as client:
-        await client.post(f"{UI_PREFIX}/login", data={"token": tokens["root"]})
+        await _login(client)
         response = await client.post(
             f"{UI_PREFIX}/tools/toggle",
             data={"id": "demo.echo", "enabled": "0", "rev": ""},
@@ -444,10 +457,10 @@ async def test_write_without_csrf_token_is_refused(admin_env):
 
 
 async def test_csrf_token_of_another_session_does_not_work(admin_env):
-    app, tokens = admin_env["app"], admin_env["tokens"]
+    app = admin_env["app"]
     async with _client(app) as first, _client(app) as second:
-        stolen = await _signed_in(first, tokens["root"])
-        await second.post(f"{UI_PREFIX}/login", data={"token": tokens["root"]})
+        stolen = await _signed_in(first)
+        await _login(second)
         response = await second.post(
             f"{UI_PREFIX}/tools/toggle",
             data={"id": "demo.echo", "enabled": "0", "rev": "", "_csrf": stolen},
@@ -458,9 +471,9 @@ async def test_csrf_token_of_another_session_does_not_work(admin_env):
 
 async def test_admin_session_still_does_not_open_mcp(admin_env):
     """Schreibrecht im UI aendert nichts an der Trennung zu /mcp."""
-    app, tokens = admin_env["app"], admin_env["tokens"]
+    app = admin_env["app"]
     async with _client(app) as client:
-        await _signed_in(client, tokens["root"])
+        await _signed_in(client)
         response = await client.post(
             "/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
@@ -470,10 +483,10 @@ async def test_admin_session_still_does_not_open_mcp(admin_env):
 
 
 async def test_admin_can_toggle_over_http(admin_env):
-    app, tokens = admin_env["app"], admin_env["tokens"]
+    app = admin_env["app"]
     store = admin_env["store"]
     async with _client(app) as client:
-        csrf = await _signed_in(client, tokens["root"])
+        csrf = await _signed_in(client)
         response = await client.post(
             f"{UI_PREFIX}/tools/toggle",
             data={"id": "demo.echo", "enabled": "0", "rev": _rev(store), "_csrf": csrf},
@@ -485,10 +498,10 @@ async def test_admin_can_toggle_over_http(admin_env):
 
 async def test_invalid_definition_returns_to_the_editor(admin_env):
     """Ein Fehler darf die Eingabe nicht verwerfen."""
-    app, tokens = admin_env["app"], admin_env["tokens"]
+    app = admin_env["app"]
     store = admin_env["store"]
     async with _client(app) as client:
-        csrf = await _signed_in(client, tokens["root"])
+        csrf = await _signed_in(client)
         broken = "id: demo.bad\ntoolkit: demo\nbinary: /bin/sh\ncategory: read\n"
         response = await client.post(
             f"{UI_PREFIX}/tools/new",
@@ -500,9 +513,284 @@ async def test_invalid_definition_returns_to_the_editor(admin_env):
 
 
 async def test_agent_token_cannot_reach_the_console(admin_env):
+    """Weder als Passwort noch sonstwie: ein Agent hat kein Konsolenkonto."""
     app, tokens = admin_env["app"], admin_env["tokens"]
     async with _client(app) as client:
         response = await client.post(
-            f"{UI_PREFIX}/login", data={"token": tokens["bot"]}
+            f"{UI_PREFIX}/login",
+            data={"identity": "bot", "password": tokens["bot"]},
         )
         assert "Sign-in failed" in response.text
+
+        # Und der Token des Admins ebenso wenig -- er gehoert an /mcp.
+        response = await client.post(
+            f"{UI_PREFIX}/login",
+            data={"identity": "root", "password": tokens["root"]},
+        )
+        assert "Sign-in failed" in response.text
+        assert not client.cookies.get("gatekeeper_ui")
+
+
+# -- Konsolenpasswoerter ----------------------------------------------------
+
+
+def test_console_password_is_stored_only_as_a_hash(admin_env):
+    """Der Klartext darf weder in der Datei noch im Log landen."""
+    store = admin_env["store"]
+    secret = "ein-frisches-konsolenpasswort"
+    store.set_password("eye", secret, actor="root", rev=store.identities_revision())
+
+    on_disk = admin_env["identities_path"].read_text(encoding="utf-8")
+    assert secret not in on_disk
+    assert "password_hash: scrypt$" in on_disk
+
+    log = open(
+        os.path.join(admin_env["tier1"].audit_dir, "audit.jsonl"), encoding="utf-8"
+    ).read()
+    assert secret not in log
+    assert "password_set" in log
+
+    assert admin_env["identities"].authenticate_console("eye", secret).role == "viewer"
+
+
+def test_a_short_password_is_refused(admin_env):
+    store = admin_env["store"]
+    with pytest.raises(WriteRefused) as exc:
+        store.set_password("eye", "kurz", actor="root", rev=store.identities_revision())
+    assert "at least" in str(exc.value)
+
+
+def test_an_agent_gets_no_console_password(admin_env):
+    """Ein Passwort auf einer Rolle, die sich nirgends anmeldet, ist eine Tuer
+    ohne Raum -- und meist eine falsch gesetzte Rolle."""
+    store = admin_env["store"]
+    with pytest.raises(WriteRefused) as exc:
+        store.set_password(
+            "bot", "trotzdem-ein-passwort", actor="root",
+            rev=store.identities_revision(),
+        )
+    assert "does not sign in" in str(exc.value)
+
+    with pytest.raises(WriteRefused):
+        store.create_identity(
+            identity_id="bot2", role="agent", tools=[], scopes=[],
+            actor="root", rev=store.identities_revision(),
+            password="trotzdem-ein-passwort",
+        )
+
+
+def test_a_console_role_needs_a_password_from_the_start(admin_env):
+    """Sonst entstuende ein Konto, an dem sich niemand anmelden kann."""
+    store = admin_env["store"]
+    with pytest.raises(WriteRefused) as exc:
+        store.create_identity(
+            identity_id="ghost", role="viewer", tools=[], scopes=[],
+            actor="root", rev=store.identities_revision(),
+        )
+    assert "needs a password" in str(exc.value)
+    assert "ghost" not in admin_env["identities"].identities
+
+
+def test_promoting_an_agent_requires_a_password(admin_env):
+    """Auch der Weg ueber die Rolle darf kein passwortloses Konto erzeugen."""
+    store = admin_env["store"]
+    with pytest.raises(WriteRefused) as exc:
+        store.save_identity(
+            identity_id="bot", role="viewer", tools=["demo.show"], scopes=["stack:*"],
+            actor="root", rev=store.identities_revision(), replaces="bot",
+        )
+    assert "needs a console password" in str(exc.value)
+    assert admin_env["identities"].identities["bot"].role == "agent"
+
+
+def test_demoting_drops_the_password(admin_env):
+    """Wer kein Konsolenkonto mehr ist, behaelt auch keinen Hash.
+
+    Ein liegengebliebenes Passwort waere ein Zugang, der bei der naechsten
+    Rollenaenderung stumm wieder auflebt.
+    """
+    store = admin_env["store"]
+    store.save_identity(
+        identity_id="eye", role="agent", tools=[], scopes=[],
+        actor="root", rev=store.identities_revision(), replaces="eye",
+    )
+    assert admin_env["identities"].identities["eye"].password_hash == ""
+    on_disk = yaml.safe_load(admin_env["identities_path"].read_text(encoding="utf-8"))
+    entry = next(e for e in on_disk["identities"] if e["id"] == "eye")
+    assert "password_hash" not in entry
+
+
+def test_the_last_signed_in_admin_cannot_lose_the_console(admin_env):
+    """Der Aussperrschutz zaehlt seit der Anmeldung nicht Rollen, sondern Zugaenge.
+
+    Ein `admin` ohne Passwort kann sich nicht anmelden. Bliebe nur ein solcher
+    uebrig, waere die Oberflaeche zu -- der teure Fehler, den `_guard_last_admin`
+    verhindern soll.
+    """
+    store = admin_env["store"]
+    # Ein zweiter Admin, aber ohne Konsolenzugang: von Hand in die Datei, denn
+    # ueber den Store ginge das gar nicht erst.
+    payload = yaml.safe_load(admin_env["identities_path"].read_text(encoding="utf-8"))
+    payload["identities"].append(
+        {
+            "id": "halbadmin",
+            "role": "admin",
+            "token_hash": hash_token(generate_token()),
+            "tools": [],
+            "scopes": [],
+        }
+    )
+    admin_env["identities_path"].write_text(yaml.safe_dump(payload), encoding="utf-8")
+    admin_env["identities"].identities = load_identities(
+        str(admin_env["identities_path"])
+    ).identities
+
+    with pytest.raises(WriteRefused) as exc:
+        store.delete_identity("root", actor="root", rev=store.identities_revision())
+    assert "console password" in str(exc.value)
+    assert "root" in admin_env["identities"].identities
+
+
+async def test_self_service_password_change(admin_env):
+    """Auch ein viewer muss sein eigenes Passwort wechseln koennen.
+
+    Er darf sonst nichts schreiben. Ein Zugang, dessen Passwort nur ein
+    anderer aendern kann, wird nie geaendert.
+    """
+    app = admin_env["app"]
+    fresh = "ein-neues-viewer-passwort"
+    async with _client(app) as client:
+        await _login(client, "eye")
+        page = await client.get(f"{UI_PREFIX}/account")
+        assert page.status_code == 200
+        marker = 'name="_csrf" value="'
+        start = page.text.index(marker) + len(marker)
+        csrf = page.text[start : page.text.index('"', start)]
+
+        response = await client.post(
+            f"{UI_PREFIX}/account/password",
+            data={
+                "_csrf": csrf,
+                "rev": admin_env["store"].identities_revision(),
+                "current": PASSWORDS["eye"],
+                "password": fresh,
+                "confirm": fresh,
+            },
+        )
+        assert response.status_code == 200
+        assert "Password changed" in response.text
+        # Die eigene Sitzung ueberlebt den Wechsel.
+        assert (await client.get(f"{UI_PREFIX}/")).status_code == 200
+
+    identities = admin_env["identities"]
+    assert identities.authenticate_console("eye", fresh) is not None
+    assert identities.authenticate_console("eye", PASSWORDS["eye"]) is None
+
+
+async def test_self_service_needs_the_current_password(admin_env):
+    """Eine unbeaufsichtigte Sitzung darf den Zugang nicht uebernehmen koennen."""
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client, "eye")
+        page = await client.get(f"{UI_PREFIX}/account")
+        marker = 'name="_csrf" value="'
+        start = page.text.index(marker) + len(marker)
+        csrf = page.text[start : page.text.index('"', start)]
+
+        response = await client.post(
+            f"{UI_PREFIX}/account/password",
+            data={
+                "_csrf": csrf,
+                "rev": admin_env["store"].identities_revision(),
+                "current": "das-ist-es-nicht",
+                "password": "uebernommenes-passwort",
+                "confirm": "uebernommenes-passwort",
+            },
+        )
+        assert response.status_code == 400
+        assert "current password is not correct" in response.text
+
+    assert admin_env["identities"].authenticate_console("eye", PASSWORDS["eye"])
+
+
+async def test_password_change_without_csrf_is_refused(admin_env):
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client, "eye")
+        response = await client.post(
+            f"{UI_PREFIX}/account/password",
+            data={
+                "rev": "",
+                "current": PASSWORDS["eye"],
+                "password": "sowieso-nicht-durch",
+                "confirm": "sowieso-nicht-durch",
+            },
+        )
+        assert response.status_code == 403
+        assert "form token" in response.text
+    assert admin_env["identities"].authenticate_console("eye", PASSWORDS["eye"])
+
+
+async def test_admin_password_reset_ends_the_other_sessions(admin_env):
+    """Setzt ein Admin ein fremdes Passwort, ist die offene Sitzung zu.
+
+    Sonst bliebe genau die Sitzung offen, die er gerade schliessen will --
+    der Passwortwechsel ist die uebliche Antwort auf einen Verdacht.
+    """
+    app, store = admin_env["app"], admin_env["store"]
+    async with _client(app) as viewer, _client(app) as admin:
+        await _login(viewer, "eye")
+        assert (await viewer.get(f"{UI_PREFIX}/")).status_code == 200
+
+        csrf = await _signed_in(admin)
+        response = await admin.post(
+            f"{UI_PREFIX}/identities/edit",
+            data={
+                "_csrf": csrf,
+                "rev": store.identities_revision(),
+                "replaces": "eye",
+                "id": "eye",
+                "role": "viewer",
+                "scopes": "",
+                "password": "vom-admin-neu-gesetzt",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        after = await viewer.get(f"{UI_PREFIX}/", follow_redirects=False)
+        assert after.status_code == 303, "die alte Sitzung muss beendet sein"
+        # Der Admin selbst bleibt angemeldet.
+        assert (await admin.get(f"{UI_PREFIX}/")).status_code == 200
+
+    assert admin_env["identities"].authenticate_console("eye", "vom-admin-neu-gesetzt")
+
+
+async def test_identities_page_shows_who_can_sign_in(admin_env):
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/identities")
+    assert "console access" in page.text
+    assert "api only" in page.text
+
+
+def test_a_password_on_an_agent_role_never_reaches_the_file(admin_env):
+    """Muss scheitern, bevor geschrieben wird.
+
+    Der Loader lehnt ein Passwort auf einer Agentenrolle ab, und nach jedem
+    Schreibvorgang wird aus der Datei neu geladen. Eine Pruefung erst danach
+    haette die Datei schon unlesbar gemacht -- der Dienst startete nicht mehr.
+    """
+    store = admin_env["store"]
+    before = admin_env["identities_path"].read_text(encoding="utf-8")
+    with pytest.raises(WriteRefused) as exc:
+        store.save_identity(
+            identity_id="eye", role="agent", tools=[], scopes=[],
+            actor="root", rev=store.identities_revision(), replaces="eye",
+            password="ein-passwort-fuer-niemanden",
+        )
+    assert "door without a room" in str(exc.value)
+    assert admin_env["identities_path"].read_text(encoding="utf-8") == before
+    # Die Datei laedt weiterhin -- das ist der eigentliche Befund.
+    assert load_identities(str(admin_env["identities_path"])).identities["eye"].role == "viewer"
