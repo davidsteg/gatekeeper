@@ -40,6 +40,44 @@ async def test_narrow_identity_within_scope(service, identities):
     assert result.outcome == execute.OUTCOME_OK
 
 
+def test_scope_wildcard_requires_dash_boundary():
+    """Der `-` in `stack:dev-*` ist literal, kein naiver Praefix.
+
+    Das ist die tragende Zusicherung des Rechteprofils: `dev` darf nur
+    `dev-*` anfassen, nicht `devtools` oder `dev_x`. `fnmatch` behandelt
+    `-` als normales Zeichen -- dieser Test hält das fest, damit eine
+    kuenftige Umstellung auf einen Praefixvergleich nicht stillschweigend
+    die Grenze oeffnet.
+    """
+    from gatekeeper.identity import Identity
+
+    dev = Identity(
+        id="dev", role="agent", token_hash="x",
+        tools=frozenset({"docker.compose_ps"}), scopes=("stack:dev-*",),
+    )
+    assert dev.covers_scope("stack:dev-argus")
+    assert dev.covers_scope("stack:dev-argus-extra")
+    # Der kritische Fall: gleicher Praefix, aber kein Bindestrich.
+    assert not dev.covers_scope("stack:devtools")
+    assert not dev.covers_scope("stack:dev_x")
+    assert not dev.covers_scope("stack:dev")
+    assert not dev.covers_scope("stack:media-jellyfin")
+
+
+async def test_scope_mismatch_rejects_sibling_prefix(service, identities):
+    """Ein Stack mit gleichem Praefix ohne Bindestrich wird abgelehnt.
+
+    Der Negativfall zur Wildcard-Grenze: `devtools` darf fuer eine
+    `dev-*`-Identitaet nicht durchgehen -- weder in der Scope-Aufloesung
+    noch im echten Aufrufpfad.
+    """
+    store, _ = identities
+    narrow = store.identities["narrow"]  # scopes: stack:media-*
+    with pytest.raises(Denied) as exc:
+        await service.call(narrow, "demo.show", {"stack": "mediatools"})
+    assert exc.value.reason is DenialReason.SCOPE_MISMATCH
+
+
 def test_derived_path_resolves(catalog, sandbox):
     tool = catalog.get("demo.show")
     values = resolve_parameters(tool, {"stack": "media-jellyfin"})
