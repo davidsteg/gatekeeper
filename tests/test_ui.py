@@ -1,11 +1,14 @@
 """Das Betriebs-UI (nur lesend).
 
-Der Schwerpunkt liegt nicht auf dem Aussehen, sondern auf zwei Eigenschaften,
+Der Schwerpunkt liegt nicht auf dem Aussehen, sondern auf drei Eigenschaften,
 die das UI nicht verletzen darf:
 
 * Die Sitzung oeffnet ausschliesslich `/ui`. Wuerde sie auch fuer `/mcp`
   gelten, koennte eine beliebige Webseite ueber das automatisch mitgeschickte
   Cookie Tools auf dem Host ausfuehren lassen.
+* Konsolenpasswort und API-Token sind getrennte Nachweise. Keiner von beiden
+  darf dort wirken, wo der andere gilt -- sonst waere die Trennung eine
+  Behauptung und ein verlorenes Geheimnis oeffnete beide Wege.
 * Angezeigte Audit-Daten stammen teilweise von Agenten und sind bei
   abgelehnten Aufrufen unvalidiert. Sie muessen maskiert ankommen.
 """
@@ -36,6 +39,10 @@ from gatekeeper.ui import (
 BASE = "http://gatekeeper.test"
 
 
+#: Konsolenpasswort des Test-Admins. Lang genug fuer MIN_PASSWORD_LENGTH.
+ROOT_PASSWORD = "korrektes-pferd-batterie"
+
+
 @pytest.fixture
 def ui_identities(tmp_path):
     """Ein Admin fuer das UI und ein Agent, der dort nichts verloren hat."""
@@ -49,6 +56,9 @@ def ui_identities(tmp_path):
                         "id": "root",
                         "role": "admin",
                         "token_hash": hash_token(tokens["root"]),
+                        # Zwei getrennte Nachweise: der Token spricht /mcp an,
+                        # das Passwort meldet an der Konsole an.
+                        "password_hash": hash_token(ROOT_PASSWORD),
                         # Ein Admin braucht keine Tool-Rechte: das UI ruft nichts auf.
                         "tools": [],
                         "scopes": [],
@@ -82,8 +92,12 @@ def _client(app, **kwargs) -> httpx2.AsyncClient:
     )
 
 
-async def _login(client: httpx2.AsyncClient, token: str):
-    return await client.post(f"{UI_PREFIX}/login", data={"token": token})
+async def _login(
+    client: httpx2.AsyncClient, identity: str = "root", password: str = ROOT_PASSWORD
+):
+    return await client.post(
+        f"{UI_PREFIX}/login", data={"identity": identity, "password": password}
+    )
 
 
 # -- Die Trennung von MCP und UI -------------------------------------------
@@ -99,7 +113,7 @@ async def test_ui_session_does_not_authenticate_mcp(ui_app, ui_identities):
     """
     _, tokens = ui_identities
     async with _client(ui_app) as client:
-        await _login(client, tokens["root"])
+        await _login(client)
         assert client.cookies.get("gatekeeper_ui")  # Sitzung besteht
 
         # Derselbe Client, dieselbe Herkunft, gueltige Sitzung - aber ohne
@@ -116,7 +130,7 @@ async def test_ui_session_does_not_authenticate_mcp(ui_app, ui_identities):
 async def test_ui_session_does_not_open_metrics(ui_app, ui_identities):
     _, tokens = ui_identities
     async with _client(ui_app) as client:
-        await _login(client, tokens["root"])
+        await _login(client)
         assert (await client.get("/metrics")).status_code == 401
 
 
@@ -134,7 +148,7 @@ async def test_bearer_token_does_not_open_ui(ui_app, ui_identities):
 async def test_session_cookie_is_scoped_and_httponly(ui_app, ui_identities):
     _, tokens = ui_identities
     async with _client(ui_app) as client:
-        response = await _login(client, tokens["root"])
+        response = await _login(client)
         raw = response.headers["set-cookie"].lower()
         assert "httponly" in raw
         assert "samesite=strict" in raw
@@ -175,18 +189,52 @@ async def test_every_ui_route_requires_a_session(ui_app):
 
 
 async def test_agent_role_cannot_log_in(ui_app, ui_identities):
-    """`role` war bis hierher ein Feld ohne Wirkung. Jetzt entscheidet es."""
+    """`role` war bis hierher ein Feld ohne Wirkung. Jetzt entscheidet es.
+
+    Ein Agent hat kein Konsolenpasswort -- weder sein Token noch irgendein
+    anderer Wert bringt ihn hinein.
+    """
     _, tokens = ui_identities
     async with _client(ui_app) as client:
-        response = await _login(client, tokens["bot"])
+        response = await _login(client, "bot", tokens["bot"])
         assert response.status_code == 200
         assert "Sign-in failed" in response.text
         assert not client.cookies.get("gatekeeper_ui")
 
 
-async def test_wrong_token_is_rejected_and_audited(ui_app, tier1):
+async def test_api_token_is_not_a_console_password(ui_app, ui_identities):
+    """Der Kern der Trennung: der Token des Admins oeffnet die Konsole nicht.
+
+    Frueher war er genau das Anmeldegeheimnis. Wer ihn heute ins Formular
+    tippt, kommt nicht hinein -- und muss es auch nicht mehr, denn er gehoert
+    in die Konfiguration eines Agenten, nicht in einen Browser (FR-11.5).
+    """
+    _, tokens = ui_identities
     async with _client(ui_app) as client:
-        response = await _login(client, "gk_falsch")
+        response = await _login(client, "root", tokens["root"])
+        assert "Sign-in failed" in response.text
+        assert not client.cookies.get("gatekeeper_ui")
+
+        # Und die Gegenprobe: mit dem Passwort geht es.
+        assert (await _login(client)).status_code == 303
+
+
+async def test_console_password_is_not_an_api_token(ui_app):
+    """Die Gegenrichtung: das Konsolenpasswort spricht /mcp nicht an."""
+    async with _client(
+        ui_app, headers={"Authorization": f"Bearer {ROOT_PASSWORD}"}
+    ) as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+        assert response.status_code == 401
+
+
+async def test_wrong_password_is_rejected_and_audited(ui_app, tier1):
+    async with _client(ui_app) as client:
+        response = await _login(client, "root", "falsches-passwort-hier")
     assert not response.cookies.get("gatekeeper_ui")
 
     path = os.path.join(tier1.audit_dir, "audit.jsonl")
@@ -195,10 +243,27 @@ async def test_wrong_token_is_rejected_and_audited(ui_app, tier1):
     assert any(r["kind"] == "auth_failure" for r in records)
 
 
+async def test_unknown_identity_gets_the_same_answer(ui_app):
+    """Die Maske darf kein Verzeichnis der Konsolenkonten sein.
+
+    Unbekannte Kennung, falsches Passwort, Agentenrolle -- der Absender
+    bekommt dreimal denselben Satz. Was wirklich war, steht im Audit-Log.
+    """
+    def error_of(response) -> str:
+        start = response.text.index('<p class="err">')
+        return response.text[start : response.text.index("</p>", start)]
+
+    async with _client(ui_app) as client:
+        unknown = await _login(client, "gibtsnicht", ROOT_PASSWORD)
+        wrong = await _login(client, "root", "auch-nicht-richtig")
+    assert "Sign-in failed" in error_of(unknown)
+    assert error_of(unknown) == error_of(wrong)
+
+
 async def test_login_and_logout_roundtrip(ui_app, ui_identities):
     _, tokens = ui_identities
     async with _client(ui_app) as client:
-        response = await _login(client, tokens["root"])
+        response = await _login(client)
         assert response.status_code == 303
 
         page = await client.get(f"{UI_PREFIX}/")
@@ -294,7 +359,7 @@ async def test_audit_values_from_agents_are_escaped(ui_app, ui_identities, tier1
 
     _, tokens = ui_identities
     async with _client(ui_app) as client:
-        await _login(client, tokens["root"])
+        await _login(client)
         page = await client.get(f"{UI_PREFIX}/audit")
 
     assert page.status_code == 200
@@ -305,7 +370,7 @@ async def test_audit_values_from_agents_are_escaped(ui_app, ui_identities, tier1
 async def test_pages_forbid_scripts(ui_app, ui_identities):
     _, tokens = ui_identities
     async with _client(ui_app) as client:
-        await _login(client, tokens["root"])
+        await _login(client)
         page = await client.get(f"{UI_PREFIX}/tools")
     csp = page.headers["content-security-policy"]
     assert "default-src 'none'" in csp
@@ -316,7 +381,7 @@ async def test_pages_forbid_scripts(ui_app, ui_identities):
 async def test_token_hashes_are_never_rendered(ui_app, ui_identities):
     store, tokens = ui_identities
     async with _client(ui_app) as client:
-        await _login(client, tokens["root"])
+        await _login(client)
         page = await client.get(f"{UI_PREFIX}/identities")
     for identity in store.identities.values():
         assert identity.token_hash not in page.text
@@ -326,7 +391,7 @@ async def test_token_hashes_are_never_rendered(ui_app, ui_identities):
 async def test_tools_page_shows_who_may_call(ui_app, ui_identities):
     _, tokens = ui_identities
     async with _client(ui_app) as client:
-        await _login(client, tokens["root"])
+        await _login(client)
         page = await client.get(f"{UI_PREFIX}/tools")
     assert "demo.show" in page.text
     # 'bot' darf demo.show aufrufen, 'root' nicht - die Querverbindung ist der

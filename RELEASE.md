@@ -61,6 +61,60 @@ Digest nicht. Er steht in jedem Release.
 
 ---
 
+## 0.3.0
+
+**Die Konsole hat eine eigene Anmeldung.** `/ui` fragt jetzt nach Kennung und
+Passwort; der API-Token bleibt, wofür er gedacht ist — `/mcp`. Bisher war
+beides dasselbe Geheimnis: wer die Oberfläche öffnen wollte, tippte den Token
+in ein Formular und trug ihn damit durch Zwischenablage, Passwortspeicher und
+Verlauf. Getrennte Nachweise heißen: ein verlorenes Konsolenpasswort ruft
+keine Tools auf, ein verlorener Token öffnet keine Oberfläche, und jeder von
+beiden lässt sich einzeln wechseln (FR-11.5).
+
+**Nach dem Aufstieg ist nichts zu tun.** Kennt `identities.yaml` noch keine
+Passwörter, erzeugt der erste Start mit `--ui` für jedes Konsolenkonto eines
+und schreibt es einmalig ins Log — so wie es der Erststart mit dem Token
+ohnehin hält. Ist die Datei nicht beschreibbar, startet der Server nicht und
+nennt den Weg: `gatekeeper password --identity <id>`.
+
+### Added
+
+- **`password_hash` je Identität**, scrypt wie der Token, optional und nur
+  für `viewer` und `admin`. Ein Agent bekommt keines — er meldet sich
+  nirgends an, und ein Passwort auf einer Rolle ohne Anmeldung wird
+  abgelehnt.
+- **`IdentityStore.authenticate_console(id, password)`**. Für jeden
+  Fehlschlag wird einmal scrypt gerechnet, auch bei unbekannter Kennung:
+  sonst wäre die Antwortzeit ein Verzeichnis aller Konsolenkonten.
+- **`/ui/account`** — Selbstbedienung für das eigene Passwort, mit Abfrage
+  des alten. Auch für `viewer`, der sonst nichts schreiben darf: ein Zugang,
+  dessen Passwort nur ein anderer ändern kann, wird nie geändert.
+- **Passwortfeld im Identitäts-Editor.** Beim Anlegen Pflicht für
+  Konsolenrollen, beim Ändern leer lassen = unverändert.
+- **`gatekeeper password --identity <id>`** setzt ein Passwort direkt in
+  `identities.yaml` — der Weg zurück, wenn niemand mehr hineinkommt.
+- **`gatekeeper init`** gibt Konsolenpasswort und API-Token getrennt aus,
+  beide genau einmal (FR-2.6).
+
+### Changed
+
+- **Die Anmeldemaske nimmt keinen Token mehr an.** Wer es versucht, bekommt
+  denselben Satz wie bei jedem Fehlversuch; der Hinweis unter dem Formular
+  sagt vorher, warum.
+- **Der Aussperrschutz zählt Zugänge statt Rollen.** Ein `admin` ohne
+  Passwort kann sich nicht anmelden und hält die Tür nicht mehr auf.
+  Geprüft wird nur, wenn es vorher einen anmeldefähigen Admin gab — ein
+  Bestand aus einer älteren Fassung blockiert sich nicht selbst.
+- **Ein Passwortwechsel beendet die übrigen Sitzungen** der Identität; die
+  auslösende bleibt. Setzt ein Admin ein fremdes Passwort, ist die fremde
+  Sitzung zu — meist ist genau das der Grund für den Wechsel.
+- **`--ui` startet nur mit einer anmeldefähigen Identität.** Bisher genügte
+  die Rolle.
+- **Die Identitätenseite zeigt den Konsolenzugang** je Identität an:
+  `console access`, `no console password` oder `api only`.
+
+---
+
 ## 0.2.6
 
 **Scope-Wildcard-Grenze per Test festgeschrieben.** Der `-` in
