@@ -332,6 +332,7 @@ _ICONS = {
     "save": '<path d="M5 4.5h11L19.5 8v11.5H5z"/><path d="M8.5 4.5v5h7v-5M8.5 19.5v-5h7v5"/>',
     "back": '<path d="M20 12H4.5"/><path d="m10 6-6 6 6 6"/>',
     "pencil": '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/>',
+    "chevron": '<path d="m9 5 7 7-7 7"/>',
 }
 
 
@@ -355,6 +356,10 @@ _STYLE = """
   --muted: #5b6a7d;
   --accent: #0b62c4;
   --accent-soft: rgba(11,98,196,.10);
+  /* Ink on a filled accent or deny surface. Light mode carries enough
+     contrast with white; the dark palette lightens both colours until
+     white on top drops to 2.5:1, so there the ink turns dark. */
+  --on-solid: #ffffff;
   --ok: #0c7a4f;   --ok-soft: rgba(12,122,79,.12);
   --deny: #bb2740; --deny-soft: rgba(187,39,64,.10);
   --warn: #8a5600; --warn-soft: rgba(138,86,0,.13);
@@ -370,6 +375,7 @@ _STYLE = """
     --muted: #8695a8;
     --accent: #58a6ff;
     --accent-soft: rgba(88,166,255,.14);
+    --on-solid: #08101a;
     --ok: #46c08a;   --ok-soft: rgba(70,192,138,.14);
     --deny: #ff8296; --deny-soft: rgba(255,130,150,.14);
     --warn: #e0b341; --warn-soft: rgba(224,179,65,.15);
@@ -418,7 +424,7 @@ body {
 }
 .side-foot { margin-top: auto; border-top: 1px solid var(--line); padding-top: .7rem; }
 .who { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: .84rem; }
-.who b { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.who b { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .who .icon { color: var(--muted); }
 
 .col { min-width: 0; display: flex; flex-direction: column; }
@@ -435,17 +441,23 @@ body {
 main { padding: 1.2rem 1.4rem 3.5rem; }
 
 @media (max-width: 900px) {
-  .app { grid-template-columns: 1fr; }
+  /* minmax(0,...) and not a bare 1fr: a grid track defaults to the
+     min-content width of its item, and the sidebar's is the full width of
+     the nav row. That pushed the page 17px past the viewport and made the
+     whole layout, content column included, slide sideways. */
+  .app { grid-template-columns: minmax(0, 1fr); }
   .side {
     position: static; height: auto; flex-direction: row; align-items: center;
     flex-wrap: wrap; gap: .5rem; border-right: none; border-bottom: 1px solid var(--line);
   }
   .brand { padding: .2rem .3rem; }
-  .side nav { flex-direction: row; flex: 1 1 320px; overflow-x: auto; scrollbar-width: none; }
+  /* min-width: 0 so the nav may become narrower than its links and scroll
+     them instead of widening the row. */
+  .side nav { flex-direction: row; flex: 1 1 320px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   .side nav::-webkit-scrollbar { display: none; }
   .side nav a { white-space: nowrap; border-left: none; border-bottom: 2px solid transparent; }
   .side nav a.active { border-left: none; border-bottom-color: var(--accent); }
-  .side-foot { margin: 0; border: none; padding: 0; }
+  .side-foot { margin: 0; border: none; padding: 0; min-width: 0; }
   .topbar, main { padding-left: 1rem; padding-right: 1rem; }
 }
 
@@ -456,6 +468,10 @@ h2 {
   color: var(--muted); margin: 1.6rem 0 .65rem; font-weight: 650;
 }
 h2 .icon { color: var(--muted); }
+.subhead {
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); font-weight: 650; padding: .75rem 1rem 0;
+}
 .card {
   background: var(--surface); border: 1px solid var(--line);
   border-radius: 11px; box-shadow: var(--shadow); margin-bottom: .8rem;
@@ -468,6 +484,18 @@ h2 .icon { color: var(--muted); }
 }
 .card-head .name { font-weight: 650; letter-spacing: -.01em; }
 .card-head .spacer { flex: 1; }
+/* A <summary> reuses .card-head so a disclosure looks identical to every
+   other card until it is opened. Closed, there is nothing below the divider
+   to divide from, so the bottom border and rounding come back. */
+summary.card-head { cursor: pointer; list-style: none; user-select: none; }
+summary.card-head::-webkit-details-marker { display: none; }
+details:not([open]) > summary.card-head {
+  border-bottom: none; border-radius: 11px;
+}
+summary.card-head .chev {
+  margin-left: auto; color: var(--muted); transition: transform .15s;
+}
+details[open] > summary.card-head .chev { transform: rotate(90deg); }
 .card-head h3 {
   margin: 0; font-size: .82rem; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); font-weight: 650; display: flex; align-items: center; gap: .4rem;
@@ -498,6 +526,13 @@ h2 .icon { color: var(--muted); }
   font-size: .755rem; font-weight: 500; white-space: nowrap;
   background: var(--sunken); border: 1px solid var(--line); color: var(--muted);
 }
+/* Every pill from _pills() carries a value that comes out of the
+   configuration: a path root, a binary, a scope pattern. Those have no
+   length limit, and kept on one line a single long one widens the grid
+   column, then the card, then the whole page -- the sidebar scrolls
+   sideways along with it. Short label pills ("required", "read") are not
+   .mono and keep their single line. */
+.pill.mono { white-space: normal; overflow-wrap: anywhere; }
 .pill.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
 .pill.ok     { background: var(--ok-soft);     border-color: transparent; color: var(--ok); }
 .pill.deny   { background: var(--deny-soft);   border-color: transparent; color: var(--deny); }
@@ -510,15 +545,28 @@ code {
 
 .rows { display: grid; }
 .row { display: grid; grid-template-columns: minmax(150px, 190px) 1fr; gap: .45rem 1rem; padding: .55rem 1rem; align-items: start; }
+/* Without this a grid item refuses to become narrower than its longest
+   unbreakable word, which is what lets one long value push the layout wider
+   than the viewport. */
+.row > * { min-width: 0; }
 .row + .row { border-top: 1px solid var(--line); }
 .row-l { display: flex; align-items: center; gap: .4rem; color: var(--muted); font-size: .83rem; }
 @media (max-width: 620px) { .row { grid-template-columns: 1fr; gap: .25rem; } }
 
 /* -- Tables -- */
-.wrap { overflow-x: auto; border-radius: 11px; }
+/* overflow-x alone already makes .wrap a scroll container on both axes -- a
+   visible axis computes to auto next to a clipped one. The sticky header
+   below therefore sticks inside .wrap and not to the viewport, which does
+   nothing at all while .wrap is free to grow to its content height: on the
+   audit page the header simply scrolled away with the rest.
+   Bounding the height is what makes it work. The bound leaves the page
+   itself less scroll than the table's own distance from the top, so the
+   header cannot slide under the sticky topbar either. */
+.wrap { overflow: auto; max-height: calc(100vh - 13rem); border-radius: 11px; }
 table { width: 100%; border-collapse: collapse; font-size: .87rem; }
 thead th {
-  position: sticky; top: 0; background: var(--sunken); z-index: 1;
+  /* Above the striped row backgrounds and the inset outcome bars. */
+  position: sticky; top: 0; background: var(--sunken); z-index: 2;
   text-align: left; padding: .58rem .7rem; color: var(--muted);
   font-size: .72rem; font-weight: 650; text-transform: uppercase;
   letter-spacing: .06em; border-bottom: 1px solid var(--line); white-space: nowrap;
@@ -570,6 +618,10 @@ td.ops form { display: inline; }
 .g-node:hover .g-t { fill: var(--accent); }
 .g-edge-group { cursor: help; }
 .g-edge-group:hover .g-e { opacity: 1; stroke-width: 3; }
+/* Filter result: a match is not decorated -- the point is that everything
+   *else* recedes, so the shape of the map survives even with one hit. */
+.g-node.dim, .g-edge-group.dim { opacity: .2; }
+.g-node.match .g-box { stroke: var(--accent); stroke-width: 2; }
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); }
 .legend i { display: inline-block; width: 14px; height: 0; margin-right: .3rem; vertical-align: middle; }
 .legend .l-ok i { border-top: 2px solid var(--ok); }
@@ -633,21 +685,21 @@ textarea { width: 100%; min-height: 26rem; line-height: 1.5; resize: vertical; t
 input:focus, select:focus, button:focus-visible, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 button {
   cursor: pointer; font-weight: 600; font-family: inherit;
-  background: var(--accent); border-color: var(--accent); color: #fff;
+  background: var(--accent); border-color: var(--accent); color: var(--on-solid);
   display: inline-flex; align-items: center; gap: .3rem;
 }
 button.ghost { background: transparent; border-color: var(--line); color: var(--muted); }
 button.ghost:hover { color: var(--fg); border-color: var(--muted); }
 button.danger { background: transparent; border-color: var(--deny); color: var(--deny); }
 button.danger:hover { background: var(--deny-soft); }
-button.solid-danger { background: var(--deny); border-color: var(--deny); color: #fff; }
+button.solid-danger { background: var(--deny); border-color: var(--deny); color: var(--on-solid); }
 a.btn {
   text-decoration: none; font-size: .87rem; padding: .4rem .58rem; border-radius: 7px;
   border: 1px solid var(--line); color: var(--muted); font-weight: 600;
   display: inline-flex; align-items: center; gap: .3rem;
 }
 a.btn:hover { color: var(--fg); border-color: var(--muted); }
-a.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+a.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-solid); }
 a.reset { align-self: center; color: var(--muted); text-decoration: none; font-size: .83rem; padding: .4rem .3rem; }
 a.reset:hover { color: var(--accent); }
 .checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: .3rem; }
@@ -900,7 +952,8 @@ def _tool_call_stats(
 def _access_graph(
     service: Service, identities: IdentityStore,
     records: list[dict[str, Any]] | None = None,
-) -> str:
+    *, highlight: str = "",
+) -> tuple[str, bool]:
     """Who reaches what -- as a server-side-computed SVG.
 
     The map answers the question that would otherwise require three files
@@ -912,7 +965,22 @@ def _access_graph(
     With ``records`` (audit log), the following are additionally shown: call counters per
     identity and per toolkit, success/rejection/error breakdown in the
     tooltip, and highlighted edges for heavily trafficked paths.
+
+    ``highlight`` is a case-insensitive substring match against identity IDs,
+    toolkit names, and protected resource names -- the "search" for a graph
+    that has no script to filter it live. A match dims everything else
+    instead of removing it, so the overall shape stays visible; the hub is
+    exempt; it is the one node true regardless of what is searched for.
+    Returns ``(svg, any_match)`` -- the caller uses the second value to show
+    a "nothing matched" note without duplicating the match logic.
     """
+    q = highlight.strip().lower()
+
+    def _mark(name: str) -> str:
+        """CSS class for a node/edge group: '', ' match', or ' dim'."""
+        if not q:
+            return ""
+        return " match" if q in name.lower() else " dim"
     idents = sorted(
         (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
         key=lambda i: i.id,
@@ -956,12 +1024,31 @@ def _access_graph(
     def _tooltip_line(label: str, value: int) -> str:
         return f"  {label}: {value}\n" if value else ""
 
+    def _tooltip_tools(tool_ids: set[str], limit: int = 8) -> str:
+        """Lists the actual tool IDs, not just their count.
+
+        A hover is the only drill-down this page offers without a script --
+        so it has to answer "which four tools", not just repeat the "4" the
+        node already shows. Capped so one toolkit with sixty tools cannot
+        turn the tooltip into a second scrollbar.
+        """
+        ordered = sorted(tool_ids)
+        shown = ordered[:limit]
+        rest = len(ordered) - len(shown)
+        lines = "".join(f"    {t}\n" for t in shown)
+        if rest > 0:
+            lines += f"    (+{rest} more)\n"
+        return lines
+
     edges, nodes = [], []
     hub_y = height / 2 - nh / 2
     hub_cy = height / 2
+    any_match = False
 
     for index, identity in enumerate(idents):
         y = lane_y(index, len(idents))
+        mark = _mark(identity.id)
+        any_match = any_match or mark == " match"
         granted = len(identity.tools)
         stats = ident_stats.get(identity.id, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
         total = stats["total"]
@@ -969,7 +1056,7 @@ def _access_graph(
         count_text = f"{total} calls" if total else ""
         tooltip = identity.id
         if granted:
-            tooltip += f"\n  tools: {granted}"
+            tooltip += f"\n  tools: {granted}\n" + _tooltip_tools(identity.tools)
         tooltip += "\n  calls:"
         tooltip += _tooltip_line("ok", stats["ok"])
         tooltip += _tooltip_line("denied", stats["denied"])
@@ -977,7 +1064,7 @@ def _access_graph(
         if not total:
             tooltip += "  (none in log)"
         nodes.append(
-            f'<g class="g-node">'
+            f'<g class="g-node{mark}">'
             + _svg_node(
                 lx, y, nw, nh, identity.id, sub,
                 "ok" if granted else "",
@@ -993,7 +1080,7 @@ def _access_graph(
         if stats["denied"]:
             edge_tooltip += f"  ({stats['denied']} denied)"
         edges.append(
-            f'<g class="g-edge-group"><path class="{edge_css}" '
+            f'<g class="g-edge-group{mark}"><path class="{edge_css}" '
             f'd="M{x1:.0f} {y1:.0f} '
             f"C{x1 + 60:.0f} {y1:.0f} {cx - 60:.0f} {hub_cy:.0f} "
             f'{cx:.0f} {hub_cy:.0f}"/>'
@@ -1002,19 +1089,23 @@ def _access_graph(
 
     for index, (name, _tk) in enumerate(toolkits):
         y = lane_y(index, right_items)
+        mark = _mark(name)
+        any_match = any_match or mark == " match"
         tool_count = len(tools_by_kit.get(name, ()))
         stats = kit_stats.get(name, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
         total = stats["total"]
         sub = f"{tool_count} tools"
         count_text = f"{total} calls" if total else ""
-        tooltip = f"{name}\n  tools: {tool_count}\n  calls:"
+        tooltip = f"{name}\n  tools: {tool_count}\n"
+        tooltip += _tooltip_tools(tools_by_kit.get(name, set()))
+        tooltip += "\n  calls:"
         tooltip += _tooltip_line("ok", stats["ok"])
         tooltip += _tooltip_line("denied", stats["denied"])
         tooltip += _tooltip_line("failed", stats["failed"])
         if not total:
             tooltip += "  (none in log)"
         nodes.append(
-            f'<g class="g-node">'
+            f'<g class="g-node{mark}">'
             + _svg_node(
                 rx, y, nw, nh, name, sub, "",
                 tooltip=tooltip, count_text=count_text,
@@ -1029,7 +1120,7 @@ def _access_graph(
         if stats["denied"]:
             edge_tooltip += f"  ({stats['denied']} denied)"
         edges.append(
-            f'<g class="g-edge-group"><path class="{edge_css}" '
+            f'<g class="g-edge-group{mark}"><path class="{edge_css}" '
             f'd="M{cx + cw:.0f} {hub_cy:.0f} '
             f"C{cx + cw + 60:.0f} {hub_cy:.0f} {rx - 60:.0f} {y2:.0f} "
             f'{rx:.0f} {y2:.0f}"/>'
@@ -1038,8 +1129,10 @@ def _access_graph(
 
     for index, resource in enumerate(protected):
         y = lane_y(len(toolkits) + index, right_items)
+        mark = _mark(resource)
+        any_match = any_match or mark == " match"
         nodes.append(
-            f'<g class="g-node">'
+            f'<g class="g-node{mark}">'
             + _svg_node(
                 rx, y, nw, nh, resource, "blocked", "deny",
                 tooltip=f"{resource}\n  protected for all identities (FR-4.12)",
@@ -1054,7 +1147,7 @@ def _access_graph(
         spread_step = nh / max(blocked_count, 1)
         edge_y = hub_y + (index + 0.5) * spread_step
         edges.append(
-            f'<g class="g-edge-group"><path class="g-e deny" '
+            f'<g class="g-edge-group{mark}"><path class="g-e deny" '
             f'd="M{cx + cw:.0f} {edge_y:.0f} '
             f"C{cx + cw + 60:.0f} {edge_y:.0f} {rx - 60:.0f} {y2:.0f} "
             f'{rx:.0f} {y2:.0f}"/>'
@@ -1065,12 +1158,14 @@ def _access_graph(
     hub_tooltip = "gatekeeper\n  the only path\n  "
     hub_tooltip += f"{total_calls} total calls"
     hub = (
+        # Exempt from dimming: it is the one node true for every search,
+        # not a match to a specific one.
         f'<g class="g-node">'
         + _svg_node(cx, hub_y, cw, nh, "gatekeeper", "the only path", "hub",
                     tooltip=hub_tooltip)
         + "</g>"
     )
-    return (
+    svg = (
         f'<svg class="graph" viewBox="0 0 {width:.0f} {height:.0f}" '
         f'role="img" aria-label="Access map">'
         f'{"".join(edges)}{"".join(nodes)}{hub}'
@@ -1078,6 +1173,7 @@ def _access_graph(
         f'<text class="g-n" x="{rx:.0f}" y="14">TOOLKITS AND BLOCKED</text>'
         "</svg>"
     )
+    return svg, (any_match if q else True)
 
 
 # -- Activity ------------------------------------------------------------
@@ -1325,13 +1421,19 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
     )
 
 
-def _view_overview(service: Service, identities: IdentityStore, store: ConfigStore | None) -> str:
+def _view_overview(
+    service: Service, identities: IdentityStore, store: ConfigStore | None,
+    request: Request | None = None,
+) -> str:
     ready = service.executor_ready
     catalog = service.catalog
     active = sum(1 for t in catalog.tools.values() if t.enabled)
     blocked = len(catalog.disabled_by_tier1)
     protected = {r for tk in service.tier1.toolkits.values() for r in tk.protected_resources}
     records, _ = read_audit(os.path.join(service.tier1.audit_dir, "audit.jsonl"), limit=400)
+    # The access map has no script to filter itself live, so it filters on
+    # reload instead: a GET with '?q=' like the audit page's own filters.
+    query = request.query_params.get("q", "").strip() if request is not None else ""
 
     parts = []
     if store is not None:
@@ -1378,12 +1480,17 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
         + "</div>"
     )
 
-    # Call pipeline: the 8 layers that every call passes through.
+    # Call pipeline: the 8 layers that every call passes through. This is
+    # documentation, not a status readout -- it looks the same on every
+    # visit, so it stays collapsed by default rather than pushing the
+    # things that actually change (the map, the activity) below the fold.
     parts.append(
-        '<div class="card">'
-        f'<div class="card-head"><h3>{_icon("layers", 14)}Call flow &ndash; 8 layers every request passes</h3></div>'
+        '<details class="card">'
+        f'<summary class="card-head"><h3>{_icon("layers", 14)}Call flow &ndash; '
+        f'8 layers every request passes</h3><span class="spacer"></span>'
+        f'<span class="chev">{_icon("chevron", 14)}</span></summary>'
         f'<div class="pad flow-scroll">{_call_flow_pipeline()}</div>'
-        "</div>"
+        "</details>"
     )
 
     if ready:
@@ -1399,11 +1506,34 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
             "call <code>/health/ready</code></span>"
         )
 
+    graph_svg, graph_matched = _access_graph(service, identities, records, highlight=query)
+    no_match_note = (
+        _note(
+            f"No identity, toolkit, or protected resource matches "
+            f"&ldquo;{_e(query)}&rdquo;.",
+            icon="search",
+        )
+        if query and not graph_matched
+        else ""
+    )
+
     parts.append(
         '<div class="split"><div>'
         '<div class="card">'
-        f'<div class="card-head"><h3>{_icon("share", 14)}Access map</h3></div>'
-        f'<div class="pad">{_access_graph(service, identities, records)}'
+        f'<div class="card-head"><h3>{_icon("share", 14)}Access map</h3>'
+        '<span class="spacer"></span>'
+        # GET, not a script: the same query-param pattern the audit filters
+        # already use. Submitting reloads the page with the map re-drawn,
+        # everything that does not match dimmed instead of removed -- so
+        # the shape stays legible at a glance even with one hit selected.
+        f'<form method="get" action="{UI_PREFIX}/" '
+        'style="display:flex;gap:.35rem;align-items:center">'
+        f'<input type="text" name="q" value="{_e(query)}" '
+        'placeholder="Filter identity or toolkit&hellip;" style="width:12rem">'
+        f'<button class="ghost" type="submit" title="Filter">{_icon("search", 14)}</button>'
+        + (f'<a class="reset" href="{UI_PREFIX}/">reset</a>' if query else "")
+        + "</form></div>"
+        f'<div class="pad">{no_match_note}{graph_svg}'
         '<div class="legend" style="margin-top:.6rem">'
         '<span class="l-ok"><i></i>granted</span>'
         '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
@@ -1414,8 +1544,14 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
         f'<div class="pad">{exec_cells}</div></div>'
         "</div><div>"
         '<div class="card">'
-        f'<div class="card-head"><h3>{_icon("activity", 14)}Calls, last 12 h</h3></div>'
-        f'<div class="pad">{_activity_chart(records)}</div>'
+        f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3></div>'
+        '<div class="subhead">Calls, last 12 h</div>'
+        f'<div class="pad" style="padding-top:.5rem">{_activity_chart(records)}</div>'
+        # The feed below also carries sign-ins and admin changes, not just
+        # calls -- labelling the whole card "Calls" said less than it
+        # showed. Two headings, one for what is actually a call and one
+        # for what is not.
+        '<div class="subhead">Recent events</div>'
         f'<div class="feed">{_feed(records)}</div>'
         "</div>"
         "</div></div>"
@@ -1847,7 +1983,10 @@ def _tier1_reference(service: Service) -> str:
             f"<div>{_pills(tk.denied_args, tone='deny')}</div></div>"
             f'<div class="row"><div class="row-l">Path roots</div><div>{_pills(tk.path_roots)}</div></div>'
             f'<div class="row"><div class="row-l">Ceilings</div>'
-            f'<div>{_pills([f"timeout &le; {tk.max_timeout_seconds}s", f"output &le; {tk.max_output_bytes} B"])}</div>'
+            # A literal character, not an entity: everything in _pills goes
+            # through _e(), which would escape the ampersand and print the
+            # entity itself.
+            f'<div>{_pills([f"timeout ≤ {tk.max_timeout_seconds}s", f"output ≤ {tk.max_output_bytes} B"])}</div>'
             "</div></div></div>"
         )
     return "".join(cards)
@@ -2702,7 +2841,7 @@ def build_ui_routes(
         Route(
             f"{UI_PREFIX}/",
             guarded(
-                lambda r, s: _view_overview(service, identities, store),
+                lambda r, s: _view_overview(service, identities, store, r),
                 "Overview", "", icon="gauge",
                 subtitle=(
                     "What actually applies at runtime. The Tier 1 boundaries come "
