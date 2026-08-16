@@ -61,6 +61,20 @@ Digest nicht. Er steht in jedem Release.
 
 ---
 
+## 0.3.1
+
+**Zugriffskarte mit Audit-Daten.** Die Access map auf der Übersichtsseite
+zeigt jetzt Aufrufzähler je Identität und je Toolkit. Jeder Knoten hat einen
+Tooltip (SVG `<title>`, nativ im Browser, kein JavaScript) mit der
+Aufschlüsselung ok / denied / failed. Kanten mit hohem Traffic werden
+dicker gezeichnet ("hot"); beim Darüberfahren heben sie sich hervor. Die
+Knoten selbst reagieren mit CSS-Transitions auf Hover: Rahmen, Füllung und
+Schriftfarbe wechseln. Die Legende hat einen dritten Eintrag für
+"high traffic". Voraussetzung ist der Audit-Log; ohne ihn bleibt die Karte
+wie bisher, nur mit Tooltips.
+
+---
+
 ## 0.3.0
 
 **Die Konsole hat eine eigene Anmeldung.** `/ui` fragt jetzt nach Kennung und
