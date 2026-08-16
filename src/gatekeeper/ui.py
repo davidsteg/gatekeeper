@@ -571,6 +571,12 @@ td.ops form { display: inline; }
 .legend .l-deny i { border-top: 2px dashed var(--deny); }
 .legend .l-hot i { border-top: 3px solid var(--accent); }
 
+/* -- Call Flow Pipeline -- */
+.flow-scroll { overflow-x: auto; }
+.flow-scroll .g-s { font-size: 10px; fill: var(--muted); }
+.flow-scroll .g-t { font-size: 12.5px; }
+.flow-empty { text-align: center; color: var(--muted); font-size: .82rem; padding: .8rem 0; }
+
 /* -- Aktivitaet -- */
 .chart { width: 100%; height: auto; display: block; }
 .c-ok { fill: var(--ok); }
@@ -1036,10 +1042,16 @@ def _access_graph(
             + "</g>"
         )
         y2 = y + nh / 2
+        # Spread blocked-edge origins vertically along the hub's right edge
+        # instead of all starting from the center point. This prevents
+        # clustering when multiple resources are blocked.
+        blocked_count = len(protected)
+        spread_step = nh / max(blocked_count, 1)
+        edge_y = hub_y + (index + 0.5) * spread_step
         edges.append(
             f'<g class="g-edge-group"><path class="g-e deny" '
-            f'd="M{cx + cw:.0f} {hub_cy:.0f} '
-            f"C{cx + cw + 60:.0f} {hub_cy:.0f} {rx - 60:.0f} {y2:.0f} "
+            f'd="M{cx + cw:.0f} {edge_y:.0f} '
+            f"C{cx + cw + 60:.0f} {edge_y:.0f} {rx - 60:.0f} {y2:.0f} "
             f'{rx:.0f} {y2:.0f}"/>'
             f"<title>{_e(resource + ' — blocked for all')}</title></g>"
         )
@@ -1098,6 +1110,18 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
             )
 
     first = (now - timedelta(hours=hours - 1)).strftime("%H:%M")
+    has_data = peak > 0
+    if not has_data:
+        return (
+            f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
+            f'aria-label="Calls per hour (none in last {hours}h)">'
+            f'<text class="c-ax" x="{width / 2:.0f}" y="{height / 2:.0f}" '
+            f'text-anchor="middle">No calls in the last {hours} hours</text>'
+            f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
+            f'<text class="c-ax" x="{width:.0f}" y="{height - 3:.0f}" '
+            f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
+            "</svg>"
+        )
     return (
         f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
         f'aria-label="Calls per hour">{"".join(bars)}'
@@ -1192,7 +1216,7 @@ def _call_flow_pipeline() -> str:
         ("Audit", "JSON Lines, rotation, redaction"),
     ]
     n = len(layers)
-    bw, bh, gap = 120.0, 52.0, 10.0
+    bw, bh, gap = 130.0, 58.0, 10.0
     arrow = 14.0
     total_w = n * bw + (n - 1) * (gap + arrow)
     height = bh + 36.0
@@ -1205,12 +1229,15 @@ def _call_flow_pipeline() -> str:
         rx = x + bw
         cy = y + bh / 2
         nodes.append(
+            f'<g class="g-node">'
             f'<rect class="g-box" x="{x:.0f}" y="{y:.0f}" width="{bw:.0f}" '
             f'height="{bh:.0f}" rx="7"/>'
-            f'<text class="g-t" x="{x + bw / 2:.0f}" y="{y + bh / 2 - 4:.0f}" '
+            f'<text class="g-t" x="{x + bw / 2:.0f}" y="{y + bh / 2 - 6:.0f}" '
             f'text-anchor="middle">{_e(name)}</text>'
-            f'<text class="g-s" x="{x + bw / 2:.0f}" y="{y + bh / 2 + 12:.0f}" '
+            f'<text class="g-s" x="{x + bw / 2:.0f}" y="{y + bh / 2 + 10:.0f}" '
             f'text-anchor="middle">{_e(desc)}</text>'
+            f"<title>{_e(name)}: {_e(desc)}</title>"
+            f"</g>"
         )
         if i < n - 1:
             ax = rx + 2
@@ -1346,7 +1373,7 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
     parts.append(
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("layers", 14)}Call flow &ndash; 8 layers every request passes</h3></div>'
-        f'<div class="pad">{_call_flow_pipeline()}</div>'
+        f'<div class="pad flow-scroll">{_call_flow_pipeline()}</div>'
         "</div>"
     )
 
@@ -1373,15 +1400,15 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
         '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
         '<span class="l-hot"><i></i>high traffic</span>'
         "</div></div></div>"
+        '<div class="card">'
+        f'<div class="card-head"><h3>{_icon("server", 14)}Executors</h3></div>'
+        f'<div class="pad">{exec_cells}</div></div>'
         "</div><div>"
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("activity", 14)}Calls, last 12 h</h3></div>'
         f'<div class="pad">{_activity_chart(records)}</div>'
         f'<div class="feed">{_feed(records)}</div>'
         "</div>"
-        '<div class="card">'
-        f'<div class="card-head"><h3>{_icon("server", 14)}Executors</h3></div>'
-        f'<div class="pad">{exec_cells}</div></div>'
         "</div></div>"
     )
 

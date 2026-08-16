@@ -61,6 +61,28 @@ Digest nicht. Er steht in jedem Release.
 
 ---
 
+## 0.3.3
+
+**Fünf UI-Probleme behoben.**
+
+- **Executors in die linke Spalte** verschoben — zuvor in der rechten
+  Sidebar unter dem Activity-Feed, wo sie bei wenig Platz abgeschnitten
+  wurde. Jetzt unter der Access map, sichtbar ohne Scrollen.
+- **Blocked-Edges gestaffelt** — alle roten gestrichelten Kanten starteten
+  am selben Punkt der Hub-Rechten. Jetzt verteilen sich die Startpunkte
+  vertikal über die Hub-Kante, was bei mehreren geschützten Ressourcen
+  die Übersicht wahrt.
+- **Call-Flow-Pipeline vergrößert** — Knoten 120×52 → 130×58, Subtitle
+  9.5px → 10px. Container scrollt horizontal bei engem Viewport. Jeder
+  Knoten hat jetzt einen `<title>`-Tooltip mit Name + Beschreibung.
+- **Activity-Chart Empty-State** — statt einer leeren Gitterfläche zeigt
+  das Diagramm jetzt „No calls in the last 12 hours“, wenn keine
+  Audit-Records vom Typ `call` vorliegen.
+- **Call-Flow CSS** — `.flow-scroll` Klasse mit `overflow-x: auto` und
+  expliziten Font-Größen für Titel (12.5px) und Subtitle (10px).
+
+---
+
 ## 0.3.2
 
 **Version sichtbar.** Die Sidebar und die Anmeldeseite zeigen jetzt die
