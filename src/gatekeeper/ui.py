@@ -57,6 +57,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from .__init__ import __version__
 from .audit import AuditLog
 from .catalog import ToolDef
 from .errors import ConfigError
@@ -403,6 +404,7 @@ body {
   border: 1px solid var(--line); border-radius: 999px; padding: .08rem .4rem;
 }
 .brand em.rw { color: var(--accent); border-color: var(--accent); }
+.brand .ver { font-weight: 500; font-size: .68rem; color: var(--muted); margin-left: -.1rem; }
 .side nav { display: flex; flex-direction: column; gap: .12rem; }
 .side nav a {
   display: flex; align-items: center; gap: .6rem;
@@ -711,7 +713,7 @@ def _page(
         f"<title>{_e(title)} - gatekeeper</title>"
         f'<style nonce="{nonce}">{_STYLE}</style></head><body><div class="app">'
         '<aside class="side">'
-        f'<div class="brand">{_icon("shield", 20)}gatekeeper{badge}</div>'
+        f'<div class="brand">{_icon("shield", 20)}gatekeeper<span class="ver">v{_e(__version__)}</span>{badge}</div>'
         f"<nav>{nav}</nav>"
         '<div class="side-foot">'
         f'<form class="who" method="post" action="{UI_PREFIX}/logout">'
@@ -2015,7 +2017,7 @@ def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
         f'<style nonce="{nonce}">{_STYLE}</style></head><body>'
         '<main class="login"><div class="card"><div class="pad">'
         f'<div class="mark">{_icon("shield", 24)}</div>'
-        "<h1>gatekeeper</h1>"
+        f'<h1>gatekeeper <span class="ver">v{_e(__version__)}</span></h1>'
         "<p>Operations console. Sign in with the console password of an "
         "identity with <code>role: viewer</code> or <code>role: admin</code>.</p>"
         f'<form method="post" action="{UI_PREFIX}/login">'

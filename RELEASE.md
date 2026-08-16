@@ -61,6 +61,14 @@ Digest nicht. Er steht in jedem Release.
 
 ---
 
+## 0.3.2
+
+**Version sichtbar.** Die Sidebar und die Anmeldeseite zeigen jetzt die
+laufende Version (`v0.3.2` etc.) neben dem gatekeeper-Schild. Diskret in
+Muted-Grau, damit es nicht vom Inhalt ablenkt.
+
+---
+
 ## 0.3.1
 
 **Zugriffskarte mit Audit-Daten.** Die Access map auf der Übersichtsseite
