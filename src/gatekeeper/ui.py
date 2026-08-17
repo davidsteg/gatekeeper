@@ -392,7 +392,7 @@ body {
 .side {
   background: var(--surface); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; gap: .25rem;
-  position: sticky; top: 0; height: 100vh; padding: .9rem .7rem;
+  padding: .9rem .7rem;
 }
 .brand {
   display: flex; align-items: center; gap: .55rem; padding: .35rem .5rem 1rem;
@@ -589,7 +589,7 @@ td.ops form { display: inline; }
 .c-base { fill: var(--line); }
 .c-ax { fill: var(--muted); font-size: 9px; font-family: inherit; }
 .feed { display: flex; flex-direction: column; }
-.feed-item { display: flex; gap: .55rem; padding: .55rem 1rem; align-items: baseline; border-top: 1px solid var(--line); font-size: .82rem; }
+.feed-item { display: flex; gap: .55rem; padding: .7rem 1rem; align-items: baseline; border-top: 1px solid var(--line); font-size: .82rem; }
 .feed-item .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
 .feed-item.t-ok .dot { background: var(--ok); }
 .feed-item.t-deny .dot { background: var(--deny); }
@@ -1121,7 +1121,7 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
             f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
             f'aria-label="Calls per hour (none in last {hours}h)">'
             f'<text class="c-ax" x="{width / 2:.0f}" y="{height / 2:.0f}" '
-            f'text-anchor="middle">No calls in the last {hours} hours</text>'
+            f'text-anchor="middle">No tool calls in the last {hours} hours</text>'
             f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
             f'<text class="c-ax" x="{width:.0f}" y="{height - 3:.0f}" '
             f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
@@ -1414,7 +1414,7 @@ def _view_overview(service: Service, identities: IdentityStore, store: ConfigSto
         f'<div class="pad">{exec_cells}</div></div>'
         "</div><div>"
         '<div class="card">'
-        f'<div class="card-head"><h3>{_icon("activity", 14)}Calls, last 12 h</h3></div>'
+        f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3></div>'
         f'<div class="pad">{_activity_chart(records)}</div>'
         f'<div class="feed">{_feed(records)}</div>'
         "</div>"
