@@ -60,6 +60,25 @@ cannot. It is in every release.
 
 ---
 
+## 0.3.5
+
+**UI polish.**
+
+- **Zoom fixed** — removed `position: sticky; height: 100vh` from the
+  sidebar. Browser zoom now applies uniformly to the whole page instead
+  of only the sidebar.
+- **Activity card relabeled** — header now says "Activity" (not "Calls,
+  last 12 h"), and the empty-state message reads "No tool calls in the
+  last 12 hours" — clarifying that the chart tracks tool calls
+  specifically, while the feed below shows all audit events (logins,
+  startup, admin changes).
+- **Feed spacing** — increased row padding from .55rem to .7rem for
+  better readability.
+- **Tool matrix** — zebra striping, one cell per identity column, ✓/—
+  indicators (from v0.3.4, verified live).
+
+---
+
 ## 0.3.4
 
 **Fully English + UI fixes.**
