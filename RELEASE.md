@@ -60,6 +60,22 @@ cannot. It is in every release.
 
 ---
 
+## 0.3.6
+
+**Tools page redesigned — card grid grouped by toolkit.**
+
+- Replaced the flat 7-column table with a responsive card grid.
+  Tools are grouped by toolkit prefix (`diag`, `docker`, etc.),
+  each group showing a summary header with read/write/disabled counts.
+- Each tool is a compact card: tool ID, title, category/idempotent
+  pills, binary, and granted-to identities at a glance. Params, scopes,
+  and limits are in a collapsible `<details>` (no JS — CSP-safe).
+- Disabled tools are dimmed. Cards highlight on hover.
+- Grid is responsive: `repeat(auto-fill, minmax(280px, 1fr))` —
+  adapts from 1 column on mobile to 3-4 on desktop.
+
+---
+
 ## 0.3.5
 
 **UI polish.**
