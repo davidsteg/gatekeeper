@@ -535,6 +535,61 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 .tool-matrix .col-status, .tool-matrix .col-cat, .tool-matrix .col-idem { width: 1%; white-space: nowrap; }
 .tool-matrix .col-ident { text-align: center; width: 1%; white-space: nowrap; }
 .tool-matrix .cell-grant { text-align: center; }
+
+/* -- Tool card grid (Tools page) -- */
+.tk-section { margin-bottom: 1.4rem; }
+.tk-head {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .5rem 0; margin-bottom: .6rem;
+  border-bottom: 1px solid var(--line);
+}
+.tk-head h3 {
+  margin: 0; font-size: .82rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); font-weight: 650; display: flex; align-items: center; gap: .4rem;
+}
+.tk-count { font-size: .78rem; color: var(--muted); }
+.tk-summary { display: flex; gap: .3rem; flex-wrap: wrap; margin-left: auto; }
+
+.t-grid {
+  display: grid; gap: .6rem;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+.t-card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; overflow: hidden;
+  transition: border-color .18s, box-shadow .18s;
+}
+.t-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(0,0,0,.18); }
+.t-card.disabled { opacity: .55; }
+.t-card-h {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem;
+  padding: .6rem .8rem; border-bottom: 1px solid var(--line);
+  background: var(--sunken);
+}
+.t-card-id { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.t-card-id .tool-id { font-size: .85rem; font-weight: 600; }
+.t-card-title { font-size: .78rem; }
+.t-card-marks { display: flex; gap: .25rem; flex-wrap: wrap; justify-content: flex-end; }
+.t-card-body { padding: .55rem .8rem; display: flex; flex-direction: column; gap: .4rem; }
+.t-card-row {
+  display: flex; align-items: baseline; gap: .5rem; font-size: .82rem;
+}
+.t-card-row > .muted { min-width: 70px; flex-shrink: 0; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+.t-card-ops {
+  display: flex; gap: .3rem; padding: .4rem .8rem;
+  border-top: 1px solid var(--line); background: var(--sunken);
+}
+.t-detail { margin-top: .2rem; }
+.t-detail summary {
+  cursor: pointer; font-size: .78rem; color: var(--muted);
+  padding: .3rem 0; user-select: none;
+}
+.t-detail summary:hover { color: var(--accent); }
+.t-detail-body {
+  padding: .4rem 0 .2rem; display: flex; flex-direction: column; gap: .4rem;
+  border-top: 1px solid var(--line); margin-top: .3rem;
+}
+
 .argv {
   display: block; background: var(--sunken); border: 1px solid var(--line);
   border-radius: 7px; padding: .38rem .48rem; margin-top: .28rem;
@@ -1508,64 +1563,22 @@ def _view_tools(
     service: Service, identities: IdentityStore, session: Session, store: ConfigStore | None
 ) -> str:
     rev = store.tools_revision() if store else ""
-    rows = []
+    can_write = session.can_write and store is not None
+
+    # Group tools by toolkit (the prefix before the first dot).
+    by_toolkit: dict[str, list] = {}
     for tool in sorted(service.catalog.tools.values(), key=lambda t: t.id):
-        callers = sorted(i.id for i in identities.identities.values() if tool.id in i.tools)
-        marks = [
-            f'<span class="pill {"ok" if tool.category == "read" else "warn"}">'
-            f"{_e(tool.category)}</span>",
-            '<span class="pill">idempotent</span>'
-            if tool.idempotent
-            else '<span class="pill deny">not idempotent</span>',
-        ]
-        if not tool.enabled:
-            marks.append('<span class="pill deny">disabled</span>')
+        tk = tool.id.split(".", 1)[0] if "." in tool.id else "other"
+        by_toolkit.setdefault(tk, []).append(tool)
 
-        ops = ""
-        if session.can_write and store is not None:
-            fields = {"id": tool.id, "rev": rev}
-            ops = (
-                f'<a class="btn" title="Edit" '
-                f'href="{UI_PREFIX}/tools/edit?id={_e(tool.id)}">{_icon("pencil", 14)}</a>'
-                + _post_button(
-                    f"{UI_PREFIX}/tools/toggle",
-                    "Disable" if tool.enabled else "Enable",
-                    "power",
-                    session,
-                    fields={**fields, "enabled": "0" if tool.enabled else "1"},
-                )
-                + f'<a class="btn" title="Delete" '
-                f'href="{UI_PREFIX}/tools/delete?id={_e(tool.id)}">{_icon("trash", 14)}</a>'
-            )
-
-        rows.append(
-            f'<tr class="{"t-ok" if tool.category == "read" else "t-warn"}">'
-            f'<td><div class="mono tool-id">{_e(tool.id)}</div>'
-            f'<div class="muted">{_e(tool.title)}</div>'
-            f'<div class="pills">{"".join(marks)}</div></td>'
-            f'<td><span class="mono">{_e(tool.binary)}</span>'
-            f'<code class="argv">{_e(" ".join(tool.argv))}</code></td>'
-            f"<td>{_param_cell(tool)}</td>"
-            f"<td>{_pills(tool.required_scopes, tone='accent')}</td>"
-            f"<td class='mono muted'>{tool.timeout_seconds}s<br>{tool.max_output_bytes} B</td>"
-            "<td>"
-            + (_pills(callers) if callers else '<span class="pill deny">nobody</span>')
-            + "</td>"
-            + (f'<td class="ops">{ops}</td>' if session.can_write else "")
-            + "</tr>"
-        )
-
-    if not rows and not service.tier1.toolkits:
+    if not by_toolkit and not service.tier1.toolkits:
         return _no_toolkits_note()
 
-    if not rows:
-        # The normal state after installation. An empty table would
-        # be a dead end here -- it does not say whether something is missing or
-        # whether this is by design.
+    if not by_toolkit:
         hint = (
             f'<p><a class="btn primary" href="{UI_PREFIX}/tools/new">'
             f'{_icon("plus", 14)}Create the first tool</a></p>'
-            if session.can_write and store is not None
+            if can_write
             else '<p class="muted">An identity with <code>role: admin</code> '
             "can create tools here.</p>"
         )
@@ -1582,7 +1595,6 @@ def _view_tools(
             f"{hint}</div></div>"
         )
 
-    head_ops = "<th>Actions</th>" if session.can_write else ""
     broken = ""
     if service.catalog.rejected:
         items = "".join(
@@ -1593,13 +1605,104 @@ def _view_tools(
             "<strong>Rejected by Tier 1 and therefore not loaded.</strong> They "
             f"stay in the file so they can be fixed:<ul>{items}</ul>"
         )
-    return (
-        broken
-        + '<div class="card wrap"><table><thead><tr>'
-        "<th>Tool</th><th>Execution</th><th>Parameters</th><th>Scopes</th>"
-        f"<th>Ceilings</th><th>Granted to</th>{head_ops}"
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
-    )
+
+    sections = []
+    for tk_name in sorted(by_toolkit):
+        tk_tools = by_toolkit[tk_name]
+        n_read = sum(1 for t in tk_tools if t.category == "read")
+        n_write = len(tk_tools) - n_read
+        n_enabled = sum(1 for t in tk_tools if t.enabled)
+        n_disabled = len(tk_tools) - n_enabled
+
+        # Toolkit summary header
+        summary = (
+            f'<span class="pill ok">{n_read} read</span>'
+            if n_read
+            else ""
+        )
+        if n_write:
+            summary += f'<span class="pill warn">{n_write} write</span>'
+        if n_disabled:
+            summary += f'<span class="pill deny">{n_disabled} disabled</span>'
+
+        cards = []
+        for tool in tk_tools:
+            callers = sorted(
+                i.id for i in identities.identities.values() if tool.id in i.tools
+            )
+            cat_cls = "ok" if tool.category == "read" else "warn"
+            marks = [
+                f'<span class="pill {cat_cls}">{_e(tool.category)}</span>',
+            ]
+            if tool.idempotent:
+                marks.append('<span class="pill">idempotent</span>')
+            else:
+                marks.append('<span class="pill deny">not idempotent</span>')
+            if not tool.enabled:
+                marks.append('<span class="pill deny">disabled</span>')
+
+            ops = ""
+            if can_write:
+                fields = {"id": tool.id, "rev": rev}
+                ops = (
+                    f'<a class="btn" title="Edit" '
+                    f'href="{UI_PREFIX}/tools/edit?id={_e(tool.id)}">{_icon("pencil", 14)}</a>'
+                    + _post_button(
+                        f"{UI_PREFIX}/tools/toggle",
+                        "Disable" if tool.enabled else "Enable",
+                        "power",
+                        session,
+                        fields={**fields, "enabled": "0" if tool.enabled else "1"},
+                    )
+                    + f'<a class="btn" title="Delete" '
+                    f'href="{UI_PREFIX}/tools/delete?id={_e(tool.id)}">{_icon("trash", 14)}</a>'
+                )
+
+            granted = (
+                _pills(callers) if callers
+                else '<span class="pill deny">nobody</span>'
+            )
+
+            # Compact card: header row + expandable details
+            cards.append(
+                f'<div class="t-card {"disabled" if not tool.enabled else ""}">'
+                f'<div class="t-card-h">'
+                f'<div class="t-card-id">'
+                f'<code class="tool-id">{_e(tool.id)}</code>'
+                f'<span class="t-card-title muted">{_e(tool.title)}</span>'
+                f'</div>'
+                f'<div class="t-card-marks">{" ".join(marks)}</div>'
+                f'</div>'
+                f'<div class="t-card-body">'
+                f'<div class="t-card-row"><span class="muted">binary</span>'
+                f'<code class="mono">{_e(tool.binary)}</code></div>'
+                f'<div class="t-card-row"><span class="muted">granted to</span>{granted}</div>'
+                f'<details class="t-detail"><summary>params, scopes &amp; limits</summary>'
+                f'<div class="t-detail-body">'
+                f'<div class="t-card-row"><span class="muted">argv</span>'
+                f'<code class="argv">{_e(" ".join(tool.argv))}</code></div>'
+                f'<div class="t-card-row"><span class="muted">params</span>{_param_cell(tool)}</div>'
+                f'<div class="t-card-row"><span class="muted">scopes</span>{_pills(tool.required_scopes, tone="accent")}</div>'
+                f'<div class="t-card-row"><span class="muted">limits</span>'
+                f'<span class="mono muted">{tool.timeout_seconds}s / {tool.max_output_bytes} B</span></div>'
+                f'</div></details>'
+                f'</div>'
+                + (f'<div class="t-card-ops">{ops}</div>' if can_write else "")
+                + "</div>"
+            )
+
+        sections.append(
+            f'<div class="tk-section">'
+            f'<div class="tk-head">'
+            f'<h3>{_icon("package", 14)}{_e(tk_name)}</h3>'
+            f'<span class="tk-count">{n_enabled} tool{"s" if n_enabled != 1 else ""}</span>'
+            f'<div class="tk-summary">{summary}</div>'
+            f'</div>'
+            f'<div class="t-grid">{" ".join(cards)}</div>'
+            f'</div>'
+        )
+
+    return broken + "".join(sections)
 
 
 def _view_identities(
