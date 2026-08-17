@@ -468,7 +468,7 @@ h2 .icon { color: var(--muted); }
 }
 .card-head .name { font-weight: 650; letter-spacing: -.01em; }
 .card-head .spacer { flex: 1; }
-.card-head h3 {
+.card-head h3, .tk-head h3 {
   margin: 0; font-size: .82rem; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); font-weight: 650; display: flex; align-items: center; gap: .4rem;
 }
@@ -543,12 +543,8 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
   padding: .5rem 0; margin-bottom: .6rem;
   border-bottom: 1px solid var(--line);
 }
-.tk-head h3 {
-  margin: 0; font-size: .82rem; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--muted); font-weight: 650; display: flex; align-items: center; gap: .4rem;
-}
 .tk-count { font-size: .78rem; color: var(--muted); }
-.tk-summary { display: flex; gap: .3rem; flex-wrap: wrap; margin-left: auto; }
+.tk-summary { display: flex; gap: .28rem; flex-wrap: wrap; margin-left: auto; }
 
 .t-grid {
   display: grid; gap: .6rem;
@@ -556,25 +552,25 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 }
 .t-card {
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: 10px; overflow: hidden;
+  border-radius: 11px; overflow: hidden; box-shadow: var(--shadow);
   transition: border-color .18s, box-shadow .18s;
 }
-.t-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(0,0,0,.18); }
-.t-card.disabled { opacity: .55; }
+.t-card:hover { border-color: var(--accent); box-shadow: var(--shadow), 0 0 0 1px var(--accent); }
+.t-card.disabled { opacity: .5; }
 .t-card-h {
   display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem;
   padding: .6rem .8rem; border-bottom: 1px solid var(--line);
   background: var(--sunken);
 }
 .t-card-id { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
-.t-card-id .tool-id { font-size: .85rem; font-weight: 600; }
+.t-card-id .tool-id { font-size: .85rem; }
 .t-card-title { font-size: .78rem; }
 .t-card-marks { display: flex; gap: .25rem; flex-wrap: wrap; justify-content: flex-end; }
 .t-card-body { padding: .55rem .8rem; display: flex; flex-direction: column; gap: .4rem; }
 .t-card-row {
   display: flex; align-items: baseline; gap: .5rem; font-size: .82rem;
 }
-.t-card-row > .muted { min-width: 70px; flex-shrink: 0; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+.t-card-row > .muted { min-width: 68px; flex-shrink: 0; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
 .t-card-ops {
   display: flex; gap: .3rem; padding: .4rem .8rem;
   border-top: 1px solid var(--line); background: var(--sunken);
