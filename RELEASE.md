@@ -60,6 +60,19 @@ cannot. It is in every release.
 
 ---
 
+## 0.3.11
+
+**Fix: Account page (and both 403 pages) wrongly highlighted "Overview" in the sidebar nav.**
+
+`_NAV`'s Overview entry uses `""` as its path (it maps to `/ui/`). Pages
+with no nav entry of their own -- Account, and the CSRF-refused /
+not-permitted 403 pages -- also passed `active=""` as a "nothing
+selected" default, so `path == active` matched Overview by accident.
+Pre-existing, not introduced by the 0.3.9/0.3.10 redesign, but far more
+visible under the new bracket-and-solid-fill active state than the old
+soft highlight. All three call sites now pass `active="none"`, a value
+no real nav path can equal.
+
 ## 0.3.10
 
 **Layout/alignment fixes + access map redesign + toolkit icons.**
