@@ -60,6 +60,42 @@ cannot. It is in every release.
 
 ---
 
+## 0.3.9
+
+**Console visual redesign -- "checkpoint console."**
+
+A full CSS-only reskin of the operations console, replacing the generic
+SaaS-dashboard look with something that reads as a security checkpoint
+instead. No HTML-generation logic changed, so it applies uniformly to
+every page (Overview, Tools, Identities, Audit, editors, login) at once
+and carries no risk to routing, forms, CSRF, or escaping.
+
+- **Cyan/teal accent** (`#0e7490` / `#2dd4bf` in dark) replacing the
+  generic blue, driven entirely by the `--accent` token.
+- **Always-dark sidebar bezel**, independent of the light/dark theme --
+  a fixed console panel regardless of which theme the content column is
+  in. The active nav item gets a `›` bracket instead of a filled pill.
+- **Sharper corners** -- a `--radius`/`--radius-sm` scale (6px/4px)
+  replacing the previous 11px/8px/7px, everywhere except pills, which
+  stay fully rounded.
+- **Card headers** dropped their filled background bar for a plain
+  bottom rule -- an instrument-panel label, not a button.
+- **Stat tiles** got outlined (not filled) chips and monospace numerals.
+- **Section headers** are monospace with a `//` prefix, terminal-comment
+  style.
+- **Subtle dot-grid background texture**, pure CSS `radial-gradient`,
+  no image request.
+- Every new color pair was checked against WCAG AA (4.5:1); all pass,
+  most with wide margins (5.4-16.5:1). The one flagged during design --
+  white text on the light-mode accent button -- was deliberately
+  verified rather than assumed, since the *previous* dark-mode accent
+  had failed exactly this kind of check before (RELEASE.md 0.3.7).
+- Fixed a latent bug found while touching this file: every inline
+  `style="..."` attribute (old and new) was silently non-functional --
+  the CSP is `style-src 'nonce-...'` with no `unsafe-inline`, which does
+  not cover inline style attributes at all. All 9 instances converted to
+  named classes.
+
 ## 0.3.8
 
 **Overview page: dashboard review fixes.**

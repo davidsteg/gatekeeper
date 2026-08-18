@@ -348,14 +348,17 @@ def _icon(name: str, size: int = 16) -> str:
 
 _STYLE = """
 :root {
-  --bg: #eef1f6;
+  --bg: #eef2f3;
   --surface: #ffffff;
-  --sunken: #f6f8fc;
-  --line: #dee5ee;
-  --fg: #0e141c;
-  --muted: #5b6a7d;
-  --accent: #0b62c4;
-  --accent-soft: rgba(11,98,196,.10);
+  --sunken: #f3f7f8;
+  --line: #d9e2e4;
+  --fg: #0d1417;
+  --muted: #5a6d72;
+  /* Cyan/teal "gate" accent -- deliberately not the generic SaaS blue every
+     other admin console reaches for. Semantic ok/deny/warn are unchanged:
+     this is the one color that means "gatekeeper", not "pass/fail". */
+  --accent: #0e7490;
+  --accent-soft: rgba(14,116,144,.10);
   /* Ink on a filled accent or deny surface. Light mode carries enough
      contrast with white; the dark palette lightens both colours until
      white on top drops to 2.5:1, so there the ink turns dark. */
@@ -364,18 +367,30 @@ _STYLE = """
   --deny: #bb2740; --deny-soft: rgba(187,39,64,.10);
   --warn: #8a5600; --warn-soft: rgba(138,86,0,.13);
   --shadow: 0 1px 2px rgba(16,24,40,.05), 0 10px 26px -16px rgba(16,24,40,.26);
+  /* Sharper than the rounded-card SaaS default -- a control panel, not a
+     consumer app. One scale, everywhere, so nothing is ever half-reskinned. */
+  --radius: 6px;
+  --radius-sm: 4px;
+  /* The sidebar's own palette, constant in both themes -- a console bezel,
+     not a page that happens to be on the left. It is always dark: the one
+     fixed reference point while the content column follows the OS theme. */
+  --bezel-bg: #0a0f14;
+  --bezel-line: #1c2830;
+  --bezel-fg: #e6eef0;
+  --bezel-muted: #7f9198;
+  --bezel-accent: #2dd4bf;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #090d13;
-    --surface: #111823;
-    --sunken: #0d131c;
-    --line: #202b39;
-    --fg: #e4ecf5;
-    --muted: #8695a8;
-    --accent: #58a6ff;
-    --accent-soft: rgba(88,166,255,.14);
-    --on-solid: #08101a;
+    --bg: #080b0d;
+    --surface: #101619;
+    --sunken: #0c1114;
+    --line: #1e2a2e;
+    --fg: #e3ecee;
+    --muted: #85999e;
+    --accent: #2dd4bf;
+    --accent-soft: rgba(45,212,191,.14);
+    --on-solid: #04191a;
     --ok: #46c08a;   --ok-soft: rgba(70,192,138,.14);
     --deny: #ff8296; --deny-soft: rgba(255,130,150,.14);
     --warn: #e0b341; --warn-soft: rgba(224,179,65,.15);
@@ -386,6 +401,11 @@ _STYLE = """
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; color: var(--fg); background: var(--bg);
+  /* A faint schematic dot grid instead of a flat fill -- infrastructure
+     tooling, not a landing page. Pure CSS, no image request, invisible at
+     reading distance until you look for it. */
+  background-image: radial-gradient(color-mix(in srgb, var(--fg) 6%, transparent) 1px, transparent 1px);
+  background-size: 22px 22px;
   font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
@@ -395,39 +415,51 @@ body {
 
 /* -- Layout -- */
 .app { display: grid; grid-template-columns: 236px 1fr; min-height: 100vh; }
+/* The sidebar is a bezel, not a page: it uses --bezel-* rather than the
+   theme tokens, so it stays the same dark panel whether the content column
+   is in light or dark mode -- the one constant a user re-orients from. */
 .side {
-  background: var(--surface); border-right: 1px solid var(--line);
+  background: var(--bezel-bg); border-right: 1px solid var(--bezel-line);
   display: flex; flex-direction: column; gap: .25rem;
-  padding: .9rem .7rem;
+  padding: .9rem .7rem; color: var(--bezel-fg);
 }
 .brand {
   display: flex; align-items: center; gap: .55rem; padding: .35rem .5rem 1rem;
   font-weight: 650; letter-spacing: -.015em; font-size: 1.02rem;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
 }
-.brand .icon { color: var(--accent); }
+.brand .icon { color: var(--bezel-accent); }
 .brand em {
-  font-style: normal; font-weight: 600; font-size: .68rem; color: var(--muted);
-  border: 1px solid var(--line); border-radius: 999px; padding: .08rem .4rem;
+  font-style: normal; font-weight: 600; font-size: .68rem; color: var(--bezel-muted);
+  border: 1px solid var(--bezel-line); border-radius: 999px; padding: .08rem .4rem;
 }
 .brand em.rw {
-  color: #fff; background: var(--accent); border-color: var(--accent); font-weight: 700;
+  color: #04191a; background: var(--bezel-accent); border-color: var(--bezel-accent); font-weight: 700;
 }
-.brand .ver { font-weight: 500; font-size: .68rem; color: var(--muted); margin-left: -.1rem; }
+.brand .ver { font-weight: 500; font-size: .68rem; color: var(--bezel-muted); margin-left: -.1rem; }
 .side nav { display: flex; flex-direction: column; gap: .12rem; }
 .side nav a {
   display: flex; align-items: center; gap: .6rem;
-  padding: .52rem .6rem; border-radius: 8px; text-decoration: none;
-  color: var(--muted); font-size: .9rem; border-left: 2px solid transparent;
+  padding: .52rem .6rem .52rem .5rem; border-radius: var(--radius-sm); text-decoration: none;
+  color: var(--bezel-muted); font-size: .9rem; border-left: 2px solid transparent;
 }
-.side nav a:hover { background: var(--sunken); color: var(--fg); }
+.side nav a:hover { background: color-mix(in srgb, var(--bezel-fg) 6%, transparent); color: var(--bezel-fg); }
+/* A bracket instead of a filled pill -- "selected" reads as a targeting
+   reticle on a console, not a hover state left switched on. */
 .side nav a.active {
-  background: var(--accent-soft); color: var(--accent);
-  font-weight: 600; border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--bezel-accent) 10%, transparent);
+  color: var(--bezel-accent); font-weight: 600; border-left-color: var(--bezel-accent);
 }
-.side-foot { margin-top: auto; border-top: 1px solid var(--line); padding-top: .7rem; }
+.side nav a.active::before { content: "\\203a"; font-weight: 700; }
+.side-foot { margin-top: auto; border-top: 1px solid var(--bezel-line); padding-top: .7rem; }
 .who { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: .84rem; }
 .who b { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.who .icon { color: var(--muted); }
+.who .icon { color: var(--bezel-muted); }
+.who .pill { background: transparent; border-color: var(--bezel-line); color: var(--bezel-muted); }
+.side-foot a.btn, .side-foot button.ghost {
+  border-color: var(--bezel-line); color: var(--bezel-muted);
+}
+.side-foot a.btn:hover, .side-foot button.ghost:hover { color: var(--bezel-fg); border-color: var(--bezel-muted); }
 
 .col { min-width: 0; display: flex; flex-direction: column; }
 .topbar {
@@ -450,7 +482,7 @@ main { padding: 1.2rem 1.4rem 3.5rem; }
   .app { grid-template-columns: minmax(0, 1fr); }
   .side {
     position: static; height: auto; flex-direction: row; align-items: center;
-    flex-wrap: wrap; gap: .5rem; border-right: none; border-bottom: 1px solid var(--line);
+    flex-wrap: wrap; gap: .5rem; border-right: none; border-bottom: 1px solid var(--bezel-line);
   }
   .brand { padding: .2rem .3rem; }
   /* min-width: 0 so the nav may become narrower than its links and scroll
@@ -458,7 +490,7 @@ main { padding: 1.2rem 1.4rem 3.5rem; }
   .side nav { flex-direction: row; flex: 1 1 320px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   .side nav::-webkit-scrollbar { display: none; }
   .side nav a { white-space: nowrap; border-left: none; border-bottom: 2px solid transparent; }
-  .side nav a.active { border-left: none; border-bottom-color: var(--accent); }
+  .side nav a.active { border-left: none; border-bottom-color: var(--bezel-accent); }
   .side-foot { margin: 0; border: none; padding: 0; min-width: 0; }
   .topbar, main { padding-left: 1rem; padding-right: 1rem; }
 }
@@ -466,23 +498,27 @@ main { padding: 1.2rem 1.4rem 3.5rem; }
 /* -- Components -- */
 h2 {
   display: flex; align-items: center; gap: .45rem;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
   font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
   color: var(--muted); margin: 1.6rem 0 .65rem; font-weight: 650;
 }
-h2 .icon { color: var(--muted); }
+h2 .icon { color: var(--accent); }
+h2::before { content: "//"; color: var(--accent); font-weight: 700; }
 .subhead {
   font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); font-weight: 650; padding: .75rem 1rem 0;
 }
 .card {
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: 11px; box-shadow: var(--shadow); margin-bottom: .8rem;
+  border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: .8rem;
 }
 .card > .pad { padding: .9rem 1rem; }
+/* No more filled sunken bar -- a thin accent rule under the label plus a
+   colored tick reads as an instrument-panel readout, not a button. */
 .card-head {
   display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
   padding: .7rem 1rem; border-bottom: 1px solid var(--line);
-  background: var(--sunken); border-radius: 11px 11px 0 0;
+  border-radius: var(--radius) var(--radius) 0 0;
 }
 .card-head .name { font-weight: 650; letter-spacing: -.01em; }
 .card-head .spacer { flex: 1; }
@@ -492,14 +528,15 @@ h2 .icon { color: var(--muted); }
 summary.card-head { cursor: pointer; list-style: none; user-select: none; }
 summary.card-head::-webkit-details-marker { display: none; }
 details:not([open]) > summary.card-head {
-  border-bottom: none; border-radius: 11px;
+  border-bottom: none; border-radius: var(--radius);
 }
 summary.card-head .chev {
   margin-left: auto; color: var(--muted); transition: transform .15s;
 }
 details[open] > summary.card-head .chev { transform: rotate(90deg); }
 .card-head h3, .tk-head h3 {
-  margin: 0; font-size: .82rem; text-transform: uppercase; letter-spacing: .06em;
+  margin: 0; font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); font-weight: 650; display: flex; align-items: center; gap: .4rem;
 }
 
@@ -507,17 +544,23 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
 .stat {
   display: flex; align-items: center; gap: .75rem;
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: 11px; padding: .8rem .9rem; box-shadow: var(--shadow);
+  border-radius: var(--radius); padding: .8rem .9rem; box-shadow: var(--shadow);
 }
+/* An outlined chip, not a filled one -- a readout indicator, not an icon
+   badge. The tone shows in the ring and glyph, not a soft color fill. */
 .stat .chip {
-  width: 34px; height: 34px; border-radius: 9px; flex: none;
-  display: grid; place-items: center; background: var(--accent-soft); color: var(--accent);
+  width: 34px; height: 34px; border-radius: var(--radius-sm); flex: none;
+  display: grid; place-items: center; background: transparent;
+  border: 1.5px solid var(--accent); color: var(--accent);
 }
-.stat.t-deny .chip { background: var(--deny-soft); color: var(--deny); }
-.stat.t-ok .chip { background: var(--ok-soft); color: var(--ok); }
-.stat.t-warn .chip { background: var(--warn-soft); color: var(--warn); }
-.stat .n { font-size: 1.45rem; font-weight: 650; line-height: 1.1; letter-spacing: -.02em; }
-.stat .l { color: var(--muted); font-size: .79rem; }
+.stat.t-deny .chip { border-color: var(--deny); color: var(--deny); }
+.stat.t-ok .chip { border-color: var(--ok); color: var(--ok); }
+.stat.t-warn .chip { border-color: var(--warn); color: var(--warn); }
+.stat .n {
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  font-size: 1.5rem; font-weight: 650; line-height: 1.1; letter-spacing: -.01em;
+}
+.stat .l { color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; }
 
 .split { display: grid; grid-template-columns: minmax(0,1fr) 330px; gap: .8rem; align-items: start; }
 @media (max-width: 1080px) { .split { grid-template-columns: 1fr; } }
@@ -539,10 +582,16 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
 .pill.ok     { background: var(--ok-soft);     border-color: transparent; color: var(--ok); }
 .pill.deny   { background: var(--deny-soft);   border-color: transparent; color: var(--deny); }
 .pill.warn   { background: var(--warn-soft);   border-color: transparent; color: var(--warn); }
+/* For pills that are pure reference trivia (a binary path, a ceiling
+   value) sitting next to pills that mean "notice this" (a denied
+   argument, a protected resource). Same shape, quieter ink, so the
+   colored ones keep their weight instead of competing with a wall of
+   equally loud neutral pills. */
+.pill.quiet { opacity: .62; }
 .pills { display: flex; flex-wrap: wrap; gap: .28rem; }
 code {
   background: var(--sunken); border: 1px solid var(--line);
-  padding: .06rem .3rem; border-radius: 5px; font-size: .84em;
+  padding: .06rem .3rem; border-radius: var(--radius-sm); font-size: .84em;
 }
 
 .rows { display: grid; }
@@ -564,7 +613,7 @@ code {
    Bounding the height is what makes it work. The bound leaves the page
    itself less scroll than the table's own distance from the top, so the
    header cannot slide under the sticky topbar either. */
-.wrap { overflow: auto; max-height: calc(100vh - 13rem); border-radius: 11px; }
+.wrap { overflow: auto; max-height: calc(100vh - 13rem); border-radius: var(--radius); }
 table { width: 100%; border-collapse: collapse; font-size: .87rem; }
 thead th {
   /* Above the striped row backgrounds and the inset outcome bars. */
@@ -602,7 +651,7 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 }
 .t-card {
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: 11px; overflow: hidden; box-shadow: var(--shadow);
+  border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
   transition: border-color .18s, box-shadow .18s;
 }
 .t-card:hover { border-color: var(--accent); box-shadow: var(--shadow), 0 0 0 1px var(--accent); }
@@ -610,7 +659,6 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 .t-card-h {
   display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem;
   padding: .6rem .8rem; border-bottom: 1px solid var(--line);
-  background: var(--sunken);
 }
 .t-card-id { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
 .t-card-id .tool-id { font-size: .85rem; }
@@ -623,7 +671,7 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 .t-card-row > .muted { min-width: 68px; flex-shrink: 0; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
 .t-card-ops {
   display: flex; gap: .3rem; padding: .4rem .8rem;
-  border-top: 1px solid var(--line); background: var(--sunken);
+  border-top: 1px solid var(--line);
 }
 .t-detail { margin-top: .2rem; }
 .t-detail summary {
@@ -638,7 +686,7 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 
 .argv {
   display: block; background: var(--sunken); border: 1px solid var(--line);
-  border-radius: 7px; padding: .38rem .48rem; margin-top: .28rem;
+  border-radius: var(--radius-sm); padding: .38rem .48rem; margin-top: .28rem;
   font-size: .77rem; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
   max-width: 30ch; color: var(--muted);
 }
@@ -675,7 +723,17 @@ td.ops form { display: inline; }
    *else* recedes, so the shape of the map survives even with one hit. */
 .g-node.dim, .g-edge-group.dim { opacity: .2; }
 .g-node.match .g-box { stroke: var(--accent); stroke-width: 2; }
-.legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); }
+.legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
+/* CSP is `style-src 'nonce-...'`, which does not cover inline `style=""`
+   attributes -- only a `<style>` block with the nonce runs. An inline
+   style is silently dropped, not an error the eye catches, so one-off
+   layout tweaks live here as named classes instead. */
+.caption { margin: .5rem 0 0; font-size: .78rem; }
+.inline-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.filter-row { display: flex; gap: .35rem; align-items: center; }
+.filter-row input[type="text"] { width: 12rem; }
+.pad.pad-tight { padding-top: .5rem; }
+.scopes-area { min-height: 6rem; }
 .legend i { display: inline-block; width: 14px; height: 0; margin-right: .3rem; vertical-align: middle; }
 .legend .l-ok i { border-top: 2px solid var(--ok); }
 .legend .l-deny i { border-top: 2px dashed var(--deny); }
@@ -708,7 +766,7 @@ td.ops form { display: inline; }
 .note {
   display: flex; gap: .55rem; align-items: flex-start;
   background: var(--warn-soft); color: var(--warn);
-  border-left: 3px solid var(--warn); border-radius: 8px;
+  border-left: 3px solid var(--warn); border-radius: var(--radius);
   padding: .65rem .8rem; margin-bottom: .8rem; font-size: .85rem;
 }
 .note.bad { background: var(--deny-soft); color: var(--deny); border-left-color: var(--deny); }
@@ -721,7 +779,7 @@ td.ops form { display: inline; }
 .filter {
   display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-end;
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: 11px; padding: .75rem .9rem; margin-bottom: .8rem; box-shadow: var(--shadow);
+  border-radius: var(--radius); padding: .75rem .9rem; margin-bottom: .8rem; box-shadow: var(--shadow);
 }
 .filter label, .field { display: flex; flex-direction: column; gap: .22rem; }
 .field { margin-bottom: .9rem; }
@@ -731,7 +789,7 @@ td.ops form { display: inline; }
 }
 .field .hint { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: .78rem; }
 input, select, button, textarea {
-  font-size: .87rem; padding: .4rem .58rem; border-radius: 7px;
+  font-size: .87rem; padding: .4rem .58rem; border-radius: var(--radius-sm);
   border: 1px solid var(--line); background: var(--surface); color: var(--fg);
 }
 textarea { width: 100%; min-height: 26rem; line-height: 1.5; resize: vertical; tab-size: 2; }
@@ -747,7 +805,7 @@ button.danger { background: transparent; border-color: var(--deny); color: var(-
 button.danger:hover { background: var(--deny-soft); }
 button.solid-danger { background: var(--deny); border-color: var(--deny); color: var(--on-solid); }
 a.btn {
-  text-decoration: none; font-size: .87rem; padding: .4rem .58rem; border-radius: 7px;
+  text-decoration: none; font-size: .87rem; padding: .4rem .58rem; border-radius: var(--radius-sm);
   border: 1px solid var(--line); color: var(--muted); font-weight: 600;
   display: inline-flex; align-items: center; gap: .3rem;
 }
@@ -756,12 +814,12 @@ a.btn.primary { background: var(--accent); border-color: var(--accent); color: v
 a.reset { align-self: center; color: var(--muted); text-decoration: none; font-size: .83rem; padding: .4rem .3rem; }
 a.reset:hover { color: var(--accent); }
 .checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: .3rem; }
-.checks label { display: flex; align-items: center; gap: .45rem; font-size: .85rem; padding: .25rem .35rem; border-radius: 6px; }
+.checks label { display: flex; align-items: center; gap: .45rem; font-size: .85rem; padding: .25rem .35rem; border-radius: var(--radius-sm); }
 .checks label:hover { background: var(--sunken); }
 .checks input { width: auto; padding: 0; }
 .editor { max-width: 900px; }
 .secret {
-  background: var(--sunken); border: 1px dashed var(--accent); border-radius: 8px;
+  background: var(--sunken); border: 1px dashed var(--accent); border-radius: var(--radius);
   padding: .7rem .8rem; font-size: .9rem; word-break: break-all; margin: .5rem 0;
 }
 
@@ -769,7 +827,7 @@ a.reset:hover { color: var(--accent); }
 .login { max-width: 390px; margin: 13vh auto; padding: 0 1.15rem; }
 .login .card { margin: 0; }
 .login .pad { padding: 1.6rem 1.5rem; }
-.login .mark { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: .9rem; }
+.login .mark { width: 46px; height: 46px; border-radius: var(--radius); display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: .9rem; }
 .login h1 { font-size: 1.28rem; margin: 0; letter-spacing: -.02em; }
 .login p { color: var(--muted); font-size: .87rem; margin: .4rem 0 1.2rem; }
 .login form { display: flex; flex-direction: column; gap: .6rem; }
@@ -854,11 +912,11 @@ def _page(
     )
 
 
-def _pills(values: Any, *, tone: str = "") -> str:
+def _pills(values: Any, *, tone: str = "", quiet: bool = False) -> str:
     items = list(values or ())
     if not items:
         return '<span class="muted">&ndash;</span>'
-    css = " ".join(filter(None, ["pill", tone, "mono"]))
+    css = " ".join(filter(None, ["pill", tone, "mono", "quiet" if quiet else ""]))
     return (
         '<div class="pills">'
         + "".join(f'<span class="{css}">{_e(v)}</span>' for v in items)
@@ -1492,7 +1550,7 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
     )
     omitted = len(identities.identities) - len(idents)
     caption = (
-        f'<p class="muted" style="margin:.5rem 1rem 0;font-size:.78rem">'
+        f'<p class="muted caption">'
         f"{omitted} identit{'y' if omitted == 1 else 'ies'} with a "
         f"{'/'.join(UI_ROLES)} role and no per-tool grants "
         f"{'is' if omitted == 1 else 'are'} omitted here &ndash; "
@@ -1597,7 +1655,7 @@ def _view_overview(
         ) + "</div>"
     elif session is not None:
         exec_cells = (
-            '<div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">'
+            '<div class="inline-row">'
             '<span class="muted">not probed yet</span>'
             f'<form method="post" action="{UI_PREFIX}/probe-executors">'
             f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
@@ -1620,6 +1678,18 @@ def _view_overview(
         if query and not graph_matched
         else ""
     )
+    has_call_activity = any(r.get("kind") == "call" for r in records)
+    # With no traffic yet, every edge is thin and every "hot path" feature
+    # has nothing to show -- the map can read as broken rather than as a
+    # topology view that also happens to track traffic. Said once, plainly,
+    # instead of hidden behind a hover on each individual edge.
+    no_traffic_caption = (
+        '<p class="muted caption">'
+        "No call traffic yet &ndash; the map above shows current grants; "
+        "edges thicken and highlight as tools actually get used.</p>"
+        if not has_call_activity
+        else ""
+    )
 
     parts.append(
         '<div class="split"><div>'
@@ -1630,19 +1700,18 @@ def _view_overview(
         # already use. Submitting reloads the page with the map re-drawn,
         # everything that does not match dimmed instead of removed -- so
         # the shape stays legible at a glance even with one hit selected.
-        f'<form method="get" action="{UI_PREFIX}/" '
-        'style="display:flex;gap:.35rem;align-items:center">'
+        f'<form method="get" action="{UI_PREFIX}/" class="filter-row">'
         f'<input type="text" name="q" value="{_e(query)}" '
-        'placeholder="Filter identity or toolkit&hellip;" style="width:12rem">'
+        'placeholder="Filter identity or toolkit&hellip;">'
         f'<button class="ghost" type="submit" title="Filter">{_icon("search", 14)}</button>'
         + (f'<a class="reset" href="{UI_PREFIX}/">reset</a>' if query else "")
         + "</form></div>"
         f'<div class="pad">{no_match_note}{graph_svg}'
-        '<div class="legend" style="margin-top:.6rem">'
+        '<div class="legend">'
         '<span class="l-ok"><i></i>granted</span>'
         '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
         '<span class="l-hot"><i></i>high traffic</span>'
-        "</div></div></div>"
+        f"</div>{no_traffic_caption}</div></div>"
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("server", 14)}Executors</h3></div>'
         f'<div class="pad">{exec_cells}</div></div>'
@@ -1650,7 +1719,7 @@ def _view_overview(
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3></div>'
         '<div class="subhead">Calls, last 12 h</div>'
-        f'<div class="pad" style="padding-top:.5rem">{_activity_chart(records)}</div>'
+        f'<div class="pad pad-tight">{_activity_chart(records)}</div>'
         # The feed below also carries sign-ins and admin changes, not just
         # calls -- labelling the whole card "Calls" said less than it
         # showed. Two headings, one for what is actually a call and one
@@ -1673,8 +1742,43 @@ def _view_overview(
             "</div>"
         )
 
+    toolkit_cards = "".join(
+        '<div class="card">'
+        f'<div class="card-head"><span class="name mono">{_e(name)}</span>'
+        f'<span class="pill accent">{_icon("server", 12)}{_e(tk.executor)}</span></div>'
+        '<div class="rows">'
+        f'<div class="row"><div class="row-l">{_icon("chip", 14)}Binaries</div>'
+        f"<div>{_pills(tk.binaries, quiet=True)}</div></div>"
+        f'<div class="row"><div class="row-l">{_icon("ban", 14)}Denied arguments</div>'
+        f"<div>{_pills(tk.denied_args, tone='deny')}</div></div>"
+        f'<div class="row"><div class="row-l">{_icon("folder", 14)}Path roots</div>'
+        f"<div>{_pills(tk.path_roots, quiet=True)}</div></div>"
+        f'<div class="row"><div class="row-l">{_icon("lock", 14)}Protected resources</div>'
+        f"<div>{_pills(tk.protected_resources, tone='deny')}</div></div>"
+        f'<div class="row"><div class="row-l">{_icon("gauge", 14)}Ceilings</div>'
+        f'<div>{_pills([f"timeout {tk.max_timeout_seconds}s", f"output {tk.max_output_bytes} B"], quiet=True)}</div></div>'
+        "</div></div>"
+        for name, tk in sorted(service.tier1.toolkits.items())
+    )
+
+    limits = "".join(
+        f"<tr><td><code>{_e(cat)}</code></td>"
+        f"<td class='mono'>{lim.count}</td><td class='mono'>{lim.window_seconds} s</td></tr>"
+        for cat, lim in sorted(service.tier1.rate_limits.items())
+    )
+
+    # Deploy-time configuration: it looks the same on every visit until the
+    # next redeploy, unlike everything above (grants, traffic, tool state),
+    # which changes from inside this same UI. Collapsed by default for the
+    # same reason the call-flow pipeline is -- reference material should not
+    # outweigh what actually changes on the page.
     parts.append(
-        f'<h2>{_icon("lock", 14)}Tier 1 &ndash; immutable at runtime</h2>'
+        '<details class="card">'
+        f'<summary class="card-head"><h3>{_icon("lock", 14)}Tier 1 &ndash; immutable '
+        f'at runtime &ndash; {len(service.tier1.toolkits)} toolkits</h3>'
+        '<span class="spacer"></span>'
+        f'<span class="chev">{_icon("chevron", 14)}</span></summary>'
+        '<div class="pad">'
         + _note(
             "These boundaries come from <code>toolkits.yaml</code> and cannot be "
             "edited here, by anyone, at any time. Changing them requires a "
@@ -1682,36 +1786,12 @@ def _view_overview(
             "to create from a web form.",
             icon="lock",
         )
-    )
-    for name, tk in sorted(service.tier1.toolkits.items()):
-        parts.append(
-            '<div class="card">'
-            f'<div class="card-head"><span class="name mono">{_e(name)}</span>'
-            f'<span class="pill accent">{_icon("server", 12)}{_e(tk.executor)}</span></div>'
-            '<div class="rows">'
-            f'<div class="row"><div class="row-l">{_icon("chip", 14)}Binaries</div>'
-            f"<div>{_pills(tk.binaries)}</div></div>"
-            f'<div class="row"><div class="row-l">{_icon("ban", 14)}Denied arguments</div>'
-            f"<div>{_pills(tk.denied_args, tone='deny')}</div></div>"
-            f'<div class="row"><div class="row-l">{_icon("folder", 14)}Path roots</div>'
-            f"<div>{_pills(tk.path_roots)}</div></div>"
-            f'<div class="row"><div class="row-l">{_icon("lock", 14)}Protected resources</div>'
-            f"<div>{_pills(tk.protected_resources, tone='deny')}</div></div>"
-            f'<div class="row"><div class="row-l">{_icon("gauge", 14)}Ceilings</div>'
-            f'<div>{_pills([f"timeout {tk.max_timeout_seconds}s", f"output {tk.max_output_bytes} B"])}</div></div>'
-            "</div></div>"
-        )
-
-    limits = "".join(
-        f"<tr><td><code>{_e(cat)}</code></td>"
-        f"<td class='mono'>{lim.count}</td><td class='mono'>{lim.window_seconds} s</td></tr>"
-        for cat, lim in sorted(service.tier1.rate_limits.items())
-    )
-    parts.append(
-        f'<h2>{_icon("gauge", 14)}Rate limits</h2>'
-        '<div class="card wrap"><table>'
+        + toolkit_cards
+        + f'<h2>{_icon("gauge", 14)}Rate limits</h2>'
+        '<div class="wrap"><table>'
         "<thead><tr><th>Category</th><th>Calls</th><th>Window</th></tr></thead>"
         f"<tbody>{limits}</tbody></table></div>"
+        "</div></details>"
     )
     return "".join(parts)
 
@@ -2269,7 +2349,7 @@ def _identity_editor(
         '<div class="field"><span>Scopes, one per line'
         '<div class="hint">Patterns such as <code>stack:media-*</code>. Empty means '
         "the identity can call no tool that requires a scope.</div></span>"
-        f'<textarea name="scopes" rows="4" style="min-height:6rem" spellcheck="false">'
+        f'<textarea name="scopes" rows="4" class="scopes-area" spellcheck="false">'
         f'{_e(chr(10).join(values.get("scopes") or ()))}</textarea></div>'
         + (
             ""
