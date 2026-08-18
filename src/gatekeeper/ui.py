@@ -406,10 +406,12 @@ body {
 }
 .brand .icon { color: var(--accent); }
 .brand em {
-  font-style: normal; font-weight: 500; font-size: .68rem; color: var(--muted);
+  font-style: normal; font-weight: 600; font-size: .68rem; color: var(--muted);
   border: 1px solid var(--line); border-radius: 999px; padding: .08rem .4rem;
 }
-.brand em.rw { color: var(--accent); border-color: var(--accent); }
+.brand em.rw {
+  color: #fff; background: var(--accent); border-color: var(--accent); font-weight: 700;
+}
 .brand .ver { font-weight: 500; font-size: .68rem; color: var(--muted); margin-left: -.1rem; }
 .side nav { display: flex; flex-direction: column; gap: .12rem; }
 .side nav a {
@@ -868,9 +870,10 @@ def _note(text: str, *, icon: str = "alert", tone: str = "") -> str:
     return f'<div class="note {tone}">{_icon(icon, 16)}<div>{text}</div></div>'
 
 
-def _stat(number: Any, label: str, icon: str, tone: str = "") -> str:
+def _stat(number: Any, label: str, icon: str, tone: str = "", title: str = "") -> str:
+    title_attr = f' title="{_e(title)}"' if title else ""
     return (
-        f'<div class="stat {tone}"><div class="chip">{_icon(icon, 18)}</div>'
+        f'<div class="stat {tone}"{title_attr}><div class="chip">{_icon(icon, 18)}</div>'
         f'<div><div class="n">{_e(number)}</div>'
         f'<div class="l">{_e(label)}</div></div></div>'
     )
@@ -1026,6 +1029,11 @@ def _access_graph(
     a "nothing matched" note without duplicating the match logic.
     """
     q = highlight.strip().lower()
+    # The hub is this running service. A protected resource can be named
+    # "gatekeeper" too -- typically its own container, guarded against the
+    # docker toolkit -- and the two boxes would otherwise carry the exact
+    # same bold label in the same diagram. Disambiguated below.
+    HUB_LABEL = "gatekeeper"
 
     def _mark(name: str) -> str:
         """CSS class for a node/edge group: '', ' match', or ' dim'."""
@@ -1127,7 +1135,7 @@ def _access_graph(
         edge_css = "g-e" if granted else "g-e none"
         if total >= hot_threshold and total > 0:
             edge_css += " hot"
-        edge_tooltip = f"{identity.id} -> gatekeeper\n  {total} calls"
+        edge_tooltip = f"{identity.id} -> {HUB_LABEL}\n  {total} calls"
         if stats["denied"]:
             edge_tooltip += f"  ({stats['denied']} denied)"
         edges.append(
@@ -1167,7 +1175,7 @@ def _access_graph(
         edge_css = "g-e"
         if total >= hot_threshold and total > 0:
             edge_css += " hot"
-        edge_tooltip = f"gatekeeper -> {name}\n  {total} calls"
+        edge_tooltip = f"{HUB_LABEL} -> {name}\n  {total} calls"
         if stats["denied"]:
             edge_tooltip += f"  ({stats['denied']} denied)"
         edges.append(
@@ -1182,12 +1190,17 @@ def _access_graph(
         y = lane_y(len(toolkits) + index, right_items)
         mark = _mark(resource)
         any_match = any_match or mark == " match"
+        self_ref = resource == HUB_LABEL
+        sub = "own container" if self_ref else "blocked"
+        tooltip = (
+            f"{resource}\n  this service's own container -- protected for all "
+            "identities (FR-4.12)"
+            if self_ref
+            else f"{resource}\n  protected for all identities (FR-4.12)"
+        )
         nodes.append(
             f'<g class="g-node{mark}">'
-            + _svg_node(
-                rx, y, nw, nh, resource, "blocked", "deny",
-                tooltip=f"{resource}\n  protected for all identities (FR-4.12)",
-            )
+            + _svg_node(rx, y, nw, nh, resource, sub, "deny", tooltip=tooltip)
             + "</g>"
         )
         y2 = y + nh / 2
@@ -1206,13 +1219,13 @@ def _access_graph(
         )
 
     total_calls = sum(s["total"] for s in ident_stats.values())
-    hub_tooltip = "gatekeeper\n  the only path\n  "
+    hub_tooltip = f"{HUB_LABEL}\n  the only path\n  "
     hub_tooltip += f"{total_calls} total calls"
     hub = (
         # Exempt from dimming: it is the one node true for every search,
         # not a match to a specific one.
         f'<g class="g-node">'
-        + _svg_node(cx, hub_y, cw, nh, "gatekeeper", "the only path", "hub",
+        + _svg_node(cx, hub_y, cw, nh, HUB_LABEL, "the only path", "hub",
                     tooltip=hub_tooltip)
         + "</g>"
     )
@@ -1302,8 +1315,14 @@ _ADMIN_VERBS = {
 
 
 def _feed(records: list[dict[str, Any]], limit: int = 7) -> str:
-    items = []
-    for record in records[:limit]:
+    """Recent events, newest first, with consecutive repeats collapsed.
+
+    Three identical "Sign-in failed" rows in a row say nothing the first
+    one didn't -- collapsing a run into a single "x3" row frees the
+    limited slots shown here for events that actually differ.
+    """
+    collapsed: list[list[Any]] = []  # [tone, what, clock, count]
+    for record in records:
         kind = record.get("kind", "")
         outcome = record.get("outcome") or ""
         clock = str(record.get("ts") or "").partition("T")[2][:5]
@@ -1333,9 +1352,19 @@ def _feed(records: list[dict[str, Any]], limit: int = 7) -> str:
         else:
             what = f"<b>{_e(kind)}</b>"
         tone = "t-accent" if outcome == "accent" else _TONE.get(outcome, "")
+        if collapsed and collapsed[-1][0] == tone and collapsed[-1][1] == what:
+            collapsed[-1][3] += 1
+        else:
+            if len(collapsed) >= limit:
+                break
+            collapsed.append([tone, what, clock, 1])
+
+    items = []
+    for tone, what, clock, count in collapsed:
+        suffix = f' <span class="muted">&times;{count}</span>' if count > 1 else ""
         items.append(
             f'<div class="feed-item {tone}"><span class="dot"></span>'
-            f'<span class="txt">{what}</span>'
+            f'<span class="txt">{what}{suffix}</span>'
             f'<span class="when mono">{_e(clock)}</span></div>'
         )
     return (
@@ -1461,6 +1490,15 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
     id_cols = "".join(
         f'<th class="col-ident" title="{_e(i.id)}">{_e(i.id[:8])}</th>' for i in idents
     )
+    omitted = len(identities.identities) - len(idents)
+    caption = (
+        f'<p class="muted" style="margin:.5rem 1rem 0;font-size:.78rem">'
+        f"{omitted} identit{'y' if omitted == 1 else 'ies'} with a "
+        f"{'/'.join(UI_ROLES)} role and no per-tool grants "
+        f"{'is' if omitted == 1 else 'are'} omitted here &ndash; "
+        "their access comes from the role, not a grant per tool.</p>"
+        if omitted > 0 else ""
+    )
     return (
         '<div class="wrap"><table class="tool-matrix">'
         "<thead><tr>"
@@ -1468,13 +1506,13 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
         '<th class="col-cat">Category</th><th class="col-idem">Idempotent</th>'
         f"{id_cols}"
         "</tr></thead>"
-        f'<tbody>{"".join(rows)}</tbody></table></div>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>{caption}'
     )
 
 
 def _view_overview(
     service: Service, identities: IdentityStore, store: ConfigStore | None,
-    request: Request | None = None,
+    request: Request | None = None, session: Session | None = None,
 ) -> str:
     ready = service.executor_ready
     catalog = service.catalog
@@ -1526,8 +1564,14 @@ def _view_overview(
         '<div class="grid">'
         + _stat(active, "Tools active", "sliders", "t-ok")
         + _stat(len(identities.identities), "Identities", "key")
-        + _stat(len(protected), "Protected resources", "lock", "t-deny")
-        + _stat(blocked, "Tools blocked", "ban", "t-deny" if blocked else "")
+        + _stat(
+            len(protected), "Protected resources", "lock", "t-deny",
+            title="Toolkit targets blocked for every identity, from toolkits.yaml (FR-4.12)",
+        )
+        + _stat(
+            blocked, "Tools disabled", "ban", "t-deny" if blocked else "",
+            title="Tool definitions rejected at load time for violating a Tier 1 rule",
+        )
         + "</div>"
     )
 
@@ -1551,6 +1595,15 @@ def _view_overview(
             f'{"reachable" if ok else "unreachable"}</span>'
             for name, ok in sorted(ready.items())
         ) + "</div>"
+    elif session is not None:
+        exec_cells = (
+            '<div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">'
+            '<span class="muted">not probed yet</span>'
+            f'<form method="post" action="{UI_PREFIX}/probe-executors">'
+            f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
+            f'<button class="ghost" type="submit">{_icon("refresh", 13)}Check now</button>'
+            "</form></div>"
+        )
     else:
         exec_cells = (
             '<span class="muted">not probed yet &ndash; '
@@ -2918,6 +2971,27 @@ def build_ui_routes(
             return RedirectResponse(f"{UI_PREFIX}/login", status_code=303)
         return RedirectResponse(f"{UI_PREFIX}/identities", status_code=303)
 
+    async def probe_executors_action(request: Request) -> Response:
+        # Not gated by `writer`: this reads reachability, it does not
+        # touch config, so it works the same in a read-only deployment
+        # as the `/health/ready` endpoint it wraps for the UI.
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        form = await request.form()
+        if not _csrf_ok(session, form):
+            audit.write(
+                {
+                    "kind": "admin_denied",
+                    "actor": session.identity,
+                    "path": request.url.path,
+                    "reason": "csrf_mismatch",
+                }
+            )
+            return _csrf_refused(request, session)
+        await service.probe_executors()
+        return RedirectResponse(f"{UI_PREFIX}/", status_code=303)
+
     # -- Misc -----------------------------------------------------------
 
     async def root(_request: Request) -> Response:
@@ -2940,7 +3014,7 @@ def build_ui_routes(
         Route(
             f"{UI_PREFIX}/",
             guarded(
-                lambda r, s: _view_overview(service, identities, store, r),
+                lambda r, s: _view_overview(service, identities, store, r, s),
                 "Overview", "", icon="gauge",
                 subtitle=(
                     "What actually applies at runtime. The Tier 1 boundaries come "
@@ -2950,6 +3024,7 @@ def build_ui_routes(
             ),
             methods=["GET"],
         ),
+        Route(f"{UI_PREFIX}/probe-executors", probe_executors_action, methods=["POST"]),
         Route(
             f"{UI_PREFIX}/tools",
             guarded(
