@@ -60,6 +60,38 @@ cannot. It is in every release.
 
 ---
 
+## 0.3.8
+
+**Overview page: dashboard review fixes.**
+
+- **Access map naming collision fixed** — the hub node (this running
+  service) and a protected resource can both be literally named
+  "gatekeeper" (typically the service's own container, guarded against
+  the docker toolkit). The two boxes used to carry the exact same bold
+  label in the same diagram; the protected one now reads "own container"
+  and its tooltip spells out the distinction.
+- **Dashboard stat tooltips** — "Protected resources" and "Tools
+  disabled" (renamed from "Tools blocked") sit side by side with the
+  same red styling but measure different things: whole toolkits blocked
+  for everyone vs. individual tool definitions rejected by a Tier 1
+  rule. Both now carry a `title` explaining which is which.
+- **Tool matrix caption** — identities with a viewer/admin role and no
+  per-tool grants are omitted from the grant columns (their access comes
+  from the role, not a grant per tool); the table now says so instead of
+  silently showing fewer columns than the identity count implies.
+- **Activity feed collapses repeats** — consecutive identical events
+  (e.g. three "Sign-in failed" rows in a row) now collapse into one row
+  with a "×N" suffix, freeing the feed's limited slots for events that
+  actually differ.
+- **Executors card is actionable** — "not probed yet" used to be a dead
+  end pointing at a raw API path; there is now a "Check now" button that
+  probes `/health/ready` and reloads the card in place.
+- **Read & write badge more prominent** — filled with the accent color
+  instead of a muted outline, since whether the console can currently
+  mutate config is one of the more consequential facts on the page.
+
+---
+
 ## 0.3.7
 
 **Console UI review fixes + access map filter.**
