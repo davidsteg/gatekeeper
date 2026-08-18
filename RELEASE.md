@@ -60,6 +60,51 @@ cannot. It is in every release.
 
 ---
 
+## 0.3.10
+
+**Layout/alignment fixes + access map redesign + toolkit icons.**
+
+Follow-up review of the 0.3.9 redesign caught real layout bugs that a
+downscaled screenshot had hidden -- found this time with DOM-level box
+measurements (`getBoundingClientRect`, `getBBox`) instead of eyeballing
+images, since the Browser pane wasn't reliably rendering screenshots
+mid-session.
+
+- **Sidebar "read & write" badge fixed** -- squeezed onto one flex row
+  with the logo and version, it had nowhere to shrink and wrapped its
+  text across four lines instead of staying on one. Brand is now two
+  rows (name+version, then the badge) so nothing has to shrink.
+- **Stat grid touched the card below it** -- 0px gap, confirmed by
+  measurement, not just impression. `.grid` and `.split` (bare grid
+  containers, unlike `.card`) had no margin-bottom of their own.
+- **Mobile sidebar padding didn't match the topbar/content column** --
+  11.2px vs. 16px, so the bezel's left edge sat ~5px out of line with
+  the page title beneath it. Aligned to the same 1rem.
+- **Call-flow pipeline captions overflowed their boxes** -- the longest
+  ("JSON-RPC 2.0, tools/list, tools/call") ran 14px past the left edge
+  and 11px past the right of its 130px-wide node. A font-size override
+  specific to that diagram was larger than everywhere else; brought back
+  in line so every caption fits, longest included.
+- **Long tool IDs overflowed their Tools-page cards** -- an identifier
+  like `docker.compose_restart` is one unbroken run of characters (dots,
+  not spaces), so with no break opportunity it ran past the card edge
+  instead of wrapping. Added `overflow-wrap: anywhere`.
+- **Access map redesigned: direct edges, no hub.** Every call already
+  goes through gatekeeper by definition -- the hub node in the middle
+  repeated that fact without adding one, and cost every edge an extra
+  hop to trace. Identities now connect straight to the toolkits they
+  hold at least one tool in; blocked resources sit isolated with no
+  inbound edge, since nothing reaches them from any identity and an edge
+  would have had to invent a source.
+- **Toolkit/executor icons added** -- a shell glyph for `local`, a
+  container glyph for `docker`, plus `git-branch` and `cloud` mapped for
+  future toolkit types, all deliberately generic pictograms rather than
+  reproductions of any vendor's trademarked logo. Also fixes a real
+  pre-existing bug found along the way: the Tools page's per-toolkit
+  header called `_icon("package", 14)`, but `"package"` was never
+  defined in `_ICONS` -- every toolkit section had been rendering with a
+  blank icon.
+
 ## 0.3.9
 
 **Console visual redesign -- "checkpoint console."**
