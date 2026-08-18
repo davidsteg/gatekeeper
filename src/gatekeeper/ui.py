@@ -333,7 +333,43 @@ _ICONS = {
     "back": '<path d="M20 12H4.5"/><path d="m10 6-6 6 6 6"/>',
     "pencil": '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/>',
     "chevron": '<path d="m9 5 7 7-7 7"/>',
+    # Generic executor/tooling glyphs -- deliberately schematic rather than
+    # brand marks: a toolkit's own logo would be trademarked and would also
+    # need refreshing whenever the toolkit doesn't map to a real product.
+    # These read as "a package", "a shell", "a container", "git", "an API"
+    # without claiming to *be* any specific vendor's icon.
+    "package": '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z"/>'
+    '<path d="M3.5 7.5 12 12l8.5-4.5"/><path d="M12 12v9"/>',
+    "terminal": '<rect x="3" y="4.5" width="18" height="15" rx="2"/>'
+    '<path d="m7.5 9.5 3.5 3-3.5 3"/><path d="M13 15.5h4"/>',
+    "container": '<rect x="3" y="9" width="8" height="8" rx="1"/>'
+    '<rect x="13" y="9" width="8" height="8" rx="1"/>'
+    '<path d="M7 9V6.5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1V9"/>',
+    "git-branch": '<path d="M6 3v9"/><circle cx="6" cy="15" r="3"/>'
+    '<circle cx="6" cy="6" r="3"/><circle cx="17" cy="6" r="3"/>'
+    '<path d="M17 9a8 8 0 0 1-8 8"/>',
+    "cloud": '<path d="M7 18h10.5a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.6-1.8A4.5 4.5 0 0 0 7 18z"/>',
 }
+
+# Which glyph best represents an executor: a docker-run toolkit reads as a
+# container, a local one as a shell. Free-form executor strings that don't
+# match a known value (an operator's own future addition) fall back to the
+# generic "package" glyph rather than guessing.
+_EXECUTOR_ICONS = {
+    "docker": "container",
+    "local": "terminal",
+    "cli": "terminal",
+    "shell": "terminal",
+    "github": "git-branch",
+    "git": "git-branch",
+    "google": "cloud",
+    "cloud": "cloud",
+    "api": "cloud",
+}
+
+
+def _executor_icon(executor: str) -> str:
+    return _EXECUTOR_ICONS.get(executor.strip().lower(), "package")
 
 
 def _icon(name: str, size: int = 16) -> str:
@@ -423,20 +459,28 @@ body {
   display: flex; flex-direction: column; gap: .25rem;
   padding: .9rem .7rem; color: var(--bezel-fg);
 }
+/* Two rows, not one: name+version on top, the read/write badge below.
+   Squeezed onto a single flex row, the badge was the item that shrank --
+   "read & write" has no shorter form, so it wrapped into a stack instead of
+   staying legible on one line. A row each has room for both in full. */
 .brand {
-  display: flex; align-items: center; gap: .55rem; padding: .35rem .5rem 1rem;
+  display: flex; flex-direction: column; align-items: flex-start; gap: .4rem;
+  padding: .5rem .5rem 1rem;
   font-weight: 650; letter-spacing: -.015em; font-size: 1.02rem;
   font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
 }
-.brand .icon { color: var(--bezel-accent); }
+.brand-top { display: flex; align-items: center; gap: .55rem; min-width: 0; }
+.brand-top .icon { color: var(--bezel-accent); flex: none; }
+.brand-top .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brand em {
   font-style: normal; font-weight: 600; font-size: .68rem; color: var(--bezel-muted);
-  border: 1px solid var(--bezel-line); border-radius: 999px; padding: .08rem .4rem;
+  border: 1px solid var(--bezel-line); border-radius: 999px; padding: .08rem .5rem;
+  white-space: nowrap;
 }
 .brand em.rw {
   color: #04191a; background: var(--bezel-accent); border-color: var(--bezel-accent); font-weight: 700;
 }
-.brand .ver { font-weight: 500; font-size: .68rem; color: var(--bezel-muted); margin-left: -.1rem; }
+.brand .ver { font-weight: 500; font-size: .68rem; color: var(--bezel-muted); }
 .side nav { display: flex; flex-direction: column; gap: .12rem; }
 .side nav a {
   display: flex; align-items: center; gap: .6rem;
@@ -483,8 +527,11 @@ main { padding: 1.2rem 1.4rem 3.5rem; }
   .side {
     position: static; height: auto; flex-direction: row; align-items: center;
     flex-wrap: wrap; gap: .5rem; border-right: none; border-bottom: 1px solid var(--bezel-line);
+    /* Matches .topbar/main's 1rem below, so the bezel's left edge lines up
+       with the content column's instead of sitting ~5px further in. */
+    padding: .9rem 1rem;
   }
-  .brand { padding: .2rem .3rem; }
+  .brand { padding: .2rem .3rem; flex-direction: row; align-items: center; }
   /* min-width: 0 so the nav may become narrower than its links and scroll
      them instead of widening the row. */
   .side nav { flex-direction: row; flex: 1 1 320px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
@@ -540,7 +587,10 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
   color: var(--muted); font-weight: 650; display: flex; align-items: center; gap: .4rem;
 }
 
-.grid { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+/* margin-bottom, not just the .7rem inter-tile gap: without it, the stat
+   grid sits flush against whatever card follows -- .card already carries
+   its own margin-bottom, but that trails the element, not leads it. */
+.grid { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin-bottom: .8rem; }
 .stat {
   display: flex; align-items: center; gap: .75rem;
   background: var(--surface); border: 1px solid var(--line);
@@ -562,7 +612,10 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
 }
 .stat .l { color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; }
 
-.split { display: grid; grid-template-columns: minmax(0,1fr) 330px; gap: .8rem; align-items: start; }
+/* Same reasoning as .grid's margin-bottom: this is a bare grid container,
+   not a .card, so it carries none of .card's own trailing margin -- without
+   one of its own it sits flush against whatever section follows it. */
+.split { display: grid; grid-template-columns: minmax(0,1fr) 330px; gap: .8rem; align-items: start; margin-bottom: .8rem; }
 @media (max-width: 1080px) { .split { grid-template-columns: 1fr; } }
 
 .pill {
@@ -629,7 +682,10 @@ tbody tr:hover { background: var(--sunken); }
 tbody tr.t-ok   td:first-child { box-shadow: inset 3px 0 var(--ok); }
 tbody tr.t-deny td:first-child { box-shadow: inset 3px 0 var(--deny); }
 tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
-.tool-id { font-weight: 600; letter-spacing: -.01em; }
+/* A tool ID is one unbroken run of characters (dots, not spaces) -- with
+   no break opportunity, "docker.compose_restart" stayed on one line and
+   ran past the edge of the narrower Tools-page cards instead of wrapping. */
+.tool-id { font-weight: 600; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .tool-matrix .col-tool { min-width: 160px; }
 .tool-matrix .col-status, .tool-matrix .col-cat, .tool-matrix .col-idem { width: 1%; white-space: nowrap; }
 .tool-matrix .col-ident { text-align: center; width: 1%; white-space: nowrap; }
@@ -700,7 +756,6 @@ td.ops form { display: inline; }
 .graph { width: 100%; height: auto; display: block; }
 .graph text { font-family: inherit; }
 .g-box { fill: var(--sunken); stroke: var(--line); transition: fill .18s, stroke .18s, stroke-width .18s; }
-.g-box.hub { fill: var(--accent-soft); stroke: var(--accent); }
 .g-box.deny { fill: var(--deny-soft); stroke: var(--deny); }
 .g-box.ok { fill: var(--ok-soft); stroke: var(--ok); }
 .g-t { fill: var(--fg); font-size: 11.5px; font-weight: 600; pointer-events: none; }
@@ -741,7 +796,11 @@ td.ops form { display: inline; }
 
 /* -- Call flow pipeline -- */
 .flow-scroll { overflow-x: auto; }
-.flow-scroll .g-s { font-size: 10px; fill: var(--muted); }
+/* 10px measured wider than its 130px node box for the longest caption
+   ("JSON-RPC 2.0, tools/list, tools/call") -- text ran past both edges of
+   the box instead of staying inside it. 8px keeps every caption in this
+   pipeline within its node, longest included. */
+.flow-scroll .g-s { font-size: 8px; fill: var(--muted); }
 .flow-scroll .g-t { font-size: 12.5px; }
 .flow-empty { text-align: center; color: var(--muted); font-size: .82rem; padding: .8rem 0; }
 
@@ -887,7 +946,9 @@ def _page(
         f"<title>{_e(title)} - gatekeeper</title>"
         f'<style nonce="{nonce}">{_STYLE}</style></head><body><div class="app">'
         '<aside class="side">'
-        f'<div class="brand">{_icon("shield", 20)}gatekeeper<span class="ver">v{_e(__version__)}</span>{badge}</div>'
+        f'<div class="brand"><div class="brand-top">{_icon("shield", 20)}'
+        f'<span class="name">gatekeeper</span><span class="ver">v{_e(__version__)}</span></div>'
+        f"{badge}</div>"
         f"<nav>{nav}</nav>"
         '<div class="side-foot">'
         f'<form class="who" method="post" action="{UI_PREFIX}/logout">'
@@ -1061,6 +1122,39 @@ def _tool_call_stats(
     return stats
 
 
+def _pair_call_stats(
+    records: list[dict[str, Any]], tools_by_kit: dict[str, set[str]],
+) -> dict[tuple[str, str], dict[str, int]]:
+    """Counts calls per (identity, toolkit) pair -- the access map's edges.
+
+    Without a hub node in the middle, each edge is a direct claim ("this
+    identity called into this toolkit this many times"), so the stat it
+    needs is per-pair, not per-identity and per-toolkit separately.
+    """
+    tool_to_kit: dict[str, str] = {}
+    for kit, tool_ids in tools_by_kit.items():
+        for tid in tool_ids:
+            tool_to_kit[tid] = kit
+    stats: dict[tuple[str, str], dict[str, int]] = {}
+    for record in records:
+        if record.get("kind") != "call":
+            continue
+        ident = record.get("identity") or ""
+        kit = tool_to_kit.get(record.get("tool") or "")
+        if not ident or not kit:
+            continue
+        bucket = stats.setdefault((ident, kit), {"ok": 0, "denied": 0, "failed": 0, "total": 0})
+        outcome = record.get("outcome") or "unknown"
+        if outcome == "ok":
+            bucket["ok"] += 1
+        elif outcome == "denied":
+            bucket["denied"] += 1
+        elif outcome == "failed":
+            bucket["failed"] += 1
+        bucket["total"] += 1
+    return stats
+
+
 def _access_graph(
     service: Service, identities: IdentityStore,
     records: list[dict[str, Any]] | None = None,
@@ -1068,36 +1162,36 @@ def _access_graph(
 ) -> tuple[str, bool]:
     """Who reaches what -- as a server-side-computed SVG.
 
-    The map answers the question that would otherwise require three files
-    side by side: which identity reaches which
-    resource via which toolkit, and what is blocked for everyone. Edges are aggregated;
-    drawn individually, with ten tools and four identities there would be forty
-    lines and no statement left.
+    Direct edges, identity to toolkit. Every call already goes through
+    gatekeeper by definition -- a hub node in the middle repeated that fact
+    without adding one, and cost every edge an extra hop to trace. What is
+    actually worth a look is which identity reaches which toolkit, and
+    which resource no identity reaches at all.
 
-    With ``records`` (audit log), the following are additionally shown: call counters per
-    identity and per toolkit, success/rejection/error breakdown in the
-    tooltip, and highlighted edges for heavily trafficked paths.
+    With ``records`` (audit log), the following are additionally shown: call
+    counters per identity-toolkit pair, success/rejection/error breakdown
+    in the tooltip, and highlighted edges for heavily trafficked pairs.
 
     ``highlight`` is a case-insensitive substring match against identity IDs,
     toolkit names, and protected resource names -- the "search" for a graph
     that has no script to filter it live. A match dims everything else
-    instead of removing it, so the overall shape stays visible; the hub is
-    exempt; it is the one node true regardless of what is searched for.
+    instead of removing it, so the overall shape stays visible.
     Returns ``(svg, any_match)`` -- the caller uses the second value to show
     a "nothing matched" note without duplicating the match logic.
     """
     q = highlight.strip().lower()
-    # The hub is this running service. A protected resource can be named
-    # "gatekeeper" too -- typically its own container, guarded against the
-    # docker toolkit -- and the two boxes would otherwise carry the exact
-    # same bold label in the same diagram. Disambiguated below.
-    HUB_LABEL = "gatekeeper"
+    # A protected resource can be named "gatekeeper" too -- typically its
+    # own container, guarded against the docker toolkit -- and would
+    # otherwise carry the exact same bold label as nothing in particular.
+    # Disambiguated below regardless of whether a hub node exists.
+    SELF_NAME = "gatekeeper"
 
     def _mark(name: str) -> str:
-        """CSS class for a node/edge group: '', ' match', or ' dim'."""
+        """CSS class for a node: '', ' match', or ' dim'."""
         if not q:
             return ""
         return " match" if q in name.lower() else " dim"
+
     idents = sorted(
         (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
         key=lambda i: i.id,
@@ -1114,13 +1208,12 @@ def _access_graph(
     audit_records = records or []
     ident_stats = _call_stats(audit_records)
     kit_stats = _tool_call_stats(audit_records, tools_by_kit)
+    pair_stats = _pair_call_stats(audit_records, tools_by_kit)
 
-    # Threshold for "hot" edges: the 75th percentile of the total count,
+    # Threshold for "hot" edges: the 75th percentile of the per-pair total,
     # but at least 3 calls -- otherwise with little traffic there is
     # no highlighting, which is correct because there is nothing to highlight.
-    all_totals = [s["total"] for s in ident_stats.values()] + [
-        s["total"] for s in kit_stats.values()
-    ]
+    all_totals = [s["total"] for s in pair_stats.values()]
     hot_threshold = max(
         sorted(all_totals)[int(len(all_totals) * 0.75)] if all_totals else 0,
         3,
@@ -1130,9 +1223,10 @@ def _access_graph(
     right_items = len(toolkits) + len(protected)
     lanes = max(len(idents), right_items, 1)
     height = max(lanes * (nh + gap) + 30, 210.0)
-    width = 640.0
-    lx, cx, rx = 8.0, 254.0, 500.0
-    cw = 132.0
+    # Just the two columns now, no hub in between -- rx sits close enough
+    # for a direct curve to read as one line, not three stitched together.
+    lx, rx = 8.0, 360.0
+    width = rx + nw + 8.0
 
     def lane_y(index: int, count: int) -> float:
         span = count * nh + max(count - 1, 0) * gap
@@ -1158,12 +1252,12 @@ def _access_graph(
         return lines
 
     edges, nodes = [], []
-    hub_y = height / 2 - nh / 2
-    hub_cy = height / 2
     any_match = False
+    ident_y: dict[str, float] = {}
 
     for index, identity in enumerate(idents):
         y = lane_y(index, len(idents))
+        ident_y[identity.id] = y
         mark = _mark(identity.id)
         any_match = any_match or mark == " match"
         granted = len(identity.tools)
@@ -1189,32 +1283,19 @@ def _access_graph(
             )
             + "</g>"
         )
-        x1, y1 = lx + nw, y + nh / 2
-        edge_css = "g-e" if granted else "g-e none"
-        if total >= hot_threshold and total > 0:
-            edge_css += " hot"
-        edge_tooltip = f"{identity.id} -> {HUB_LABEL}\n  {total} calls"
-        if stats["denied"]:
-            edge_tooltip += f"  ({stats['denied']} denied)"
-        edges.append(
-            f'<g class="g-edge-group{mark}"><path class="{edge_css}" '
-            f'd="M{x1:.0f} {y1:.0f} '
-            f"C{x1 + 60:.0f} {y1:.0f} {cx - 60:.0f} {hub_cy:.0f} "
-            f'{cx:.0f} {hub_cy:.0f}"/>'
-            f"<title>{_e(edge_tooltip)}</title></g>"
-        )
 
     for index, (name, _tk) in enumerate(toolkits):
         y = lane_y(index, right_items)
-        mark = _mark(name)
-        any_match = any_match or mark == " match"
+        kit_mark = _mark(name)
+        any_match = any_match or kit_mark == " match"
         tool_count = len(tools_by_kit.get(name, ()))
+        kit_tools = tools_by_kit.get(name, set())
         stats = kit_stats.get(name, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
         total = stats["total"]
         sub = f"{tool_count} tools"
         count_text = f"{total} calls" if total else ""
         tooltip = f"{name}\n  tools: {tool_count}\n"
-        tooltip += _tooltip_tools(tools_by_kit.get(name, set()))
+        tooltip += _tooltip_tools(kit_tools)
         tooltip += "\n  calls:"
         tooltip += _tooltip_line("ok", stats["ok"])
         tooltip += _tooltip_line("denied", stats["denied"])
@@ -1222,75 +1303,73 @@ def _access_graph(
         if not total:
             tooltip += "  (none in log)"
         nodes.append(
-            f'<g class="g-node{mark}">'
+            f'<g class="g-node{kit_mark}">'
             + _svg_node(
                 rx, y, nw, nh, name, sub, "",
                 tooltip=tooltip, count_text=count_text,
             )
             + "</g>"
         )
+
+        # One direct edge per identity holding at least one tool in this
+        # toolkit -- straight from the identity's box to the toolkit's,
+        # nothing routed through a third point in between.
         y2 = y + nh / 2
-        edge_css = "g-e"
-        if total >= hot_threshold and total > 0:
-            edge_css += " hot"
-        edge_tooltip = f"{HUB_LABEL} -> {name}\n  {total} calls"
-        if stats["denied"]:
-            edge_tooltip += f"  ({stats['denied']} denied)"
-        edges.append(
-            f'<g class="g-edge-group{mark}"><path class="{edge_css}" '
-            f'd="M{cx + cw:.0f} {hub_cy:.0f} '
-            f"C{cx + cw + 60:.0f} {hub_cy:.0f} {rx - 60:.0f} {y2:.0f} "
-            f'{rx:.0f} {y2:.0f}"/>'
-            f"<title>{_e(edge_tooltip)}</title></g>"
-        )
+        for identity in idents:
+            if not (identity.tools & kit_tools):
+                continue
+            id_mark = _mark(identity.id)
+            if not q:
+                edge_mark = ""
+            elif kit_mark == " match" or id_mark == " match":
+                edge_mark = " match"
+            else:
+                edge_mark = " dim"
+            pair = pair_stats.get(
+                (identity.id, name), {"ok": 0, "denied": 0, "failed": 0, "total": 0}
+            )
+            pair_total = pair["total"]
+            x1, y1 = lx + nw, ident_y[identity.id] + nh / 2
+            edge_css = "g-e"
+            if pair_total >= hot_threshold and pair_total > 0:
+                edge_css += " hot"
+            edge_tooltip = f"{identity.id} -> {name}\n  {pair_total} calls"
+            if pair["denied"]:
+                edge_tooltip += f"  ({pair['denied']} denied)"
+            edges.append(
+                f'<g class="g-edge-group{edge_mark}"><path class="{edge_css}" '
+                f'd="M{x1:.0f} {y1:.0f} '
+                f"C{x1 + 110:.0f} {y1:.0f} {rx - 110:.0f} {y2:.0f} "
+                f'{rx:.0f} {y2:.0f}"/>'
+                f"<title>{_e(edge_tooltip)}</title></g>"
+            )
 
     for index, resource in enumerate(protected):
         y = lane_y(len(toolkits) + index, right_items)
         mark = _mark(resource)
         any_match = any_match or mark == " match"
-        self_ref = resource == HUB_LABEL
+        self_ref = resource == SELF_NAME
         sub = "own container" if self_ref else "blocked"
         tooltip = (
             f"{resource}\n  this service's own container -- protected for all "
             "identities (FR-4.12)"
             if self_ref
-            else f"{resource}\n  protected for all identities (FR-4.12)"
+            else f"{resource}\n  protected for all identities (FR-4.12), "
+            "reachable by no identity"
         )
+        # No incoming edge: unlike a toolkit, nothing points here from any
+        # identity, and that absence is the fact worth showing -- an edge
+        # drawn from somewhere would have to invent a source for it.
         nodes.append(
             f'<g class="g-node{mark}">'
             + _svg_node(rx, y, nw, nh, resource, sub, "deny", tooltip=tooltip)
             + "</g>"
         )
-        y2 = y + nh / 2
-        # Spread blocked-edge origins vertically along the hub's right edge
-        # instead of all starting from the center point. This prevents
-        # clustering when multiple resources are blocked.
-        blocked_count = len(protected)
-        spread_step = nh / max(blocked_count, 1)
-        edge_y = hub_y + (index + 0.5) * spread_step
-        edges.append(
-            f'<g class="g-edge-group{mark}"><path class="g-e deny" '
-            f'd="M{cx + cw:.0f} {edge_y:.0f} '
-            f"C{cx + cw + 60:.0f} {edge_y:.0f} {rx - 60:.0f} {y2:.0f} "
-            f'{rx:.0f} {y2:.0f}"/>'
-            f"<title>{_e(resource + ' — blocked for all')}</title></g>"
-        )
 
-    total_calls = sum(s["total"] for s in ident_stats.values())
-    hub_tooltip = f"{HUB_LABEL}\n  the only path\n  "
-    hub_tooltip += f"{total_calls} total calls"
-    hub = (
-        # Exempt from dimming: it is the one node true for every search,
-        # not a match to a specific one.
-        f'<g class="g-node">'
-        + _svg_node(cx, hub_y, cw, nh, HUB_LABEL, "the only path", "hub",
-                    tooltip=hub_tooltip)
-        + "</g>"
-    )
     svg = (
         f'<svg class="graph" viewBox="0 0 {width:.0f} {height:.0f}" '
         f'role="img" aria-label="Access map">'
-        f'{"".join(edges)}{"".join(nodes)}{hub}'
+        f'{"".join(edges)}{"".join(nodes)}'
         f'<text class="g-n" x="{lx:.0f}" y="14">IDENTITIES</text>'
         f'<text class="g-n" x="{rx:.0f}" y="14">TOOLKITS AND BLOCKED</text>'
         "</svg>"
@@ -1745,7 +1824,7 @@ def _view_overview(
     toolkit_cards = "".join(
         '<div class="card">'
         f'<div class="card-head"><span class="name mono">{_e(name)}</span>'
-        f'<span class="pill accent">{_icon("server", 12)}{_e(tk.executor)}</span></div>'
+        f'<span class="pill accent">{_icon(_executor_icon(tk.executor), 12)}{_e(tk.executor)}</span></div>'
         '<div class="rows">'
         f'<div class="row"><div class="row-l">{_icon("chip", 14)}Binaries</div>'
         f"<div>{_pills(tk.binaries, quiet=True)}</div></div>"
@@ -1956,10 +2035,12 @@ def _view_tools(
                 + "</div>"
             )
 
+        tk_executor = service.tier1.toolkits.get(tk_name)
+        tk_icon = _executor_icon(tk_executor.executor) if tk_executor else "package"
         sections.append(
             f'<div class="tk-section">'
             f'<div class="tk-head">'
-            f'<h3>{_icon("package", 14)}{_e(tk_name)}</h3>'
+            f'<h3>{_icon(tk_icon, 14)}{_e(tk_name)}</h3>'
             f'<span class="tk-count">{n_enabled} tool{"s" if n_enabled != 1 else ""}</span>'
             f'<div class="tk-summary">{summary}</div>'
             f'</div>'
