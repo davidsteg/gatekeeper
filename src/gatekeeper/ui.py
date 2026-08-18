@@ -402,6 +402,17 @@ _STYLE = """
   --ok: #0c7a4f;   --ok-soft: rgba(12,122,79,.12);
   --deny: #bb2740; --deny-soft: rgba(187,39,64,.10);
   --warn: #8a5600; --warn-soft: rgba(138,86,0,.13);
+  /* One color per identity on the access map, so a busy graph reads as
+     "these lines belong to dev, those to homelab" at a glance instead of
+     every granted edge being the same green. Picked to sit clearly apart
+     from accent/ok/deny/warn's hues (no teal, green, red, or amber/brown)
+     and from each other; cycles if there are more identities than colors. */
+  --cat-1: #2563eb; --cat-1-soft: rgba(37,99,235,.12);
+  --cat-2: #7c3aed; --cat-2-soft: rgba(124,58,237,.12);
+  --cat-3: #db2777; --cat-3-soft: rgba(219,39,119,.12);
+  --cat-4: #4338ca; --cat-4-soft: rgba(67,56,202,.12);
+  --cat-5: #a21caf; --cat-5-soft: rgba(162,28,175,.12);
+  --cat-6: #0369a1; --cat-6-soft: rgba(3,105,161,.12);
   --shadow: 0 1px 2px rgba(16,24,40,.05), 0 10px 26px -16px rgba(16,24,40,.26);
   /* Sharper than the rounded-card SaaS default -- a control panel, not a
      consumer app. One scale, everywhere, so nothing is ever half-reskinned. */
@@ -430,6 +441,12 @@ _STYLE = """
     --ok: #46c08a;   --ok-soft: rgba(70,192,138,.14);
     --deny: #ff8296; --deny-soft: rgba(255,130,150,.14);
     --warn: #e0b341; --warn-soft: rgba(224,179,65,.15);
+    --cat-1: #60a5fa; --cat-1-soft: rgba(96,165,250,.16);
+    --cat-2: #a78bfa; --cat-2-soft: rgba(167,139,250,.16);
+    --cat-3: #f472b6; --cat-3-soft: rgba(244,114,182,.16);
+    --cat-4: #818cf8; --cat-4-soft: rgba(129,140,248,.16);
+    --cat-5: #e879f9; --cat-5-soft: rgba(232,121,249,.16);
+    --cat-6: #38bdf8; --cat-6-soft: rgba(56,189,248,.16);
     --shadow: 0 1px 2px rgba(0,0,0,.5), 0 12px 32px -18px rgba(0,0,0,.9);
   }
 }
@@ -459,27 +476,14 @@ body {
   display: flex; flex-direction: column; gap: .25rem;
   padding: .9rem .7rem; color: var(--bezel-fg);
 }
-/* Two rows, not one: name+version on top, the read/write badge below.
-   Squeezed onto a single flex row, the badge was the item that shrank --
-   "read & write" has no shorter form, so it wrapped into a stack instead of
-   staying legible on one line. A row each has room for both in full. */
 .brand {
-  display: flex; flex-direction: column; align-items: flex-start; gap: .4rem;
+  display: flex; align-items: center; gap: .55rem; min-width: 0;
   padding: .5rem .5rem 1rem;
   font-weight: 650; letter-spacing: -.015em; font-size: 1.02rem;
   font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
 }
-.brand-top { display: flex; align-items: center; gap: .55rem; min-width: 0; }
-.brand-top .icon { color: var(--bezel-accent); flex: none; }
-.brand-top .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.brand em {
-  font-style: normal; font-weight: 600; font-size: .68rem; color: var(--bezel-muted);
-  border: 1px solid var(--bezel-line); border-radius: 999px; padding: .08rem .5rem;
-  white-space: nowrap;
-}
-.brand em.rw {
-  color: #04191a; background: var(--bezel-accent); border-color: var(--bezel-accent); font-weight: 700;
-}
+.brand .icon { color: var(--bezel-accent); flex: none; }
+.brand .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brand .ver { font-weight: 500; font-size: .68rem; color: var(--bezel-muted); }
 .side nav { display: flex; flex-direction: column; gap: .12rem; }
 .side nav a {
@@ -531,7 +535,7 @@ main { padding: 1.2rem 1.4rem 3.5rem; }
        with the content column's instead of sitting ~5px further in. */
     padding: .9rem 1rem;
   }
-  .brand { padding: .2rem .3rem; flex-direction: row; align-items: center; }
+  .brand { padding: .2rem .3rem; }
   /* min-width: 0 so the nav may become narrower than its links and scroll
      them instead of widening the row. */
   .side nav { flex-direction: row; flex: 1 1 320px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
@@ -758,10 +762,25 @@ td.ops form { display: inline; }
 .g-box { fill: var(--sunken); stroke: var(--line); transition: fill .18s, stroke .18s, stroke-width .18s; }
 .g-box.deny { fill: var(--deny-soft); stroke: var(--deny); }
 .g-box.ok { fill: var(--ok-soft); stroke: var(--ok); }
+/* One identity, one color, on both its node and every edge leaving it --
+   so a busy graph reads as "which lines are dev's" instead of every
+   granted path being the same undifferentiated green. */
+.g-box.c1 { fill: var(--cat-1-soft); stroke: var(--cat-1); }
+.g-box.c2 { fill: var(--cat-2-soft); stroke: var(--cat-2); }
+.g-box.c3 { fill: var(--cat-3-soft); stroke: var(--cat-3); }
+.g-box.c4 { fill: var(--cat-4-soft); stroke: var(--cat-4); }
+.g-box.c5 { fill: var(--cat-5-soft); stroke: var(--cat-5); }
+.g-box.c6 { fill: var(--cat-6-soft); stroke: var(--cat-6); }
 .g-t { fill: var(--fg); font-size: 11.5px; font-weight: 600; pointer-events: none; }
 .g-s { fill: var(--muted); font-size: 9.5px; pointer-events: none; }
 .g-count { fill: var(--accent); font-size: 10px; font-weight: 700; pointer-events: none; }
 .g-e { fill: none; stroke: var(--ok); stroke-width: 1.5; opacity: .55; transition: opacity .18s, stroke-width .18s; }
+.g-e.c1 { stroke: var(--cat-1); }
+.g-e.c2 { stroke: var(--cat-2); }
+.g-e.c3 { stroke: var(--cat-3); }
+.g-e.c4 { stroke: var(--cat-4); }
+.g-e.c5 { stroke: var(--cat-5); }
+.g-e.c6 { stroke: var(--cat-6); }
 .g-e.deny { stroke: var(--deny); stroke-dasharray: 5 4; opacity: .7; }
 .g-e.none { stroke: var(--line); stroke-dasharray: 2 3; opacity: .5; }
 .g-e.hot { stroke-width: 2.8; opacity: .9; }
@@ -771,6 +790,12 @@ td.ops form { display: inline; }
 .g-node:hover .g-box { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
 .g-node:hover .g-box.deny { fill: var(--deny-soft); stroke: var(--deny); stroke-width: 2; }
 .g-node:hover .g-box.ok { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 2; }
+.g-node:hover .g-box.c1 { fill: var(--cat-1-soft); stroke: var(--cat-1); stroke-width: 2; }
+.g-node:hover .g-box.c2 { fill: var(--cat-2-soft); stroke: var(--cat-2); stroke-width: 2; }
+.g-node:hover .g-box.c3 { fill: var(--cat-3-soft); stroke: var(--cat-3); stroke-width: 2; }
+.g-node:hover .g-box.c4 { fill: var(--cat-4-soft); stroke: var(--cat-4); stroke-width: 2; }
+.g-node:hover .g-box.c5 { fill: var(--cat-5-soft); stroke: var(--cat-5); stroke-width: 2; }
+.g-node:hover .g-box.c6 { fill: var(--cat-6-soft); stroke: var(--cat-6); stroke-width: 2; }
 .g-node:hover .g-t { fill: var(--accent); }
 .g-edge-group { cursor: help; }
 .g-edge-group:hover .g-e { opacity: 1; stroke-width: 3; }
@@ -790,7 +815,6 @@ td.ops form { display: inline; }
 .pad.pad-tight { padding-top: .5rem; }
 .scopes-area { min-height: 6rem; }
 .legend i { display: inline-block; width: 14px; height: 0; margin-right: .3rem; vertical-align: middle; }
-.legend .l-ok i { border-top: 2px solid var(--ok); }
 .legend .l-deny i { border-top: 2px dashed var(--deny); }
 .legend .l-hot i { border-top: 3px solid var(--accent); }
 
@@ -937,11 +961,6 @@ def _page(
         f"{_icon(name_icon, 16)}{_e(label)}</a>"
         for path, label, name_icon in _NAV
     )
-    badge = (
-        '<em class="rw">read &amp; write</em>'
-        if session.can_write
-        else "<em>read-only</em>"
-    )
     return (
         "<!doctype html>"
         '<html lang="en"><head><meta charset="utf-8">'
@@ -949,9 +968,8 @@ def _page(
         f"<title>{_e(title)} - gatekeeper</title>"
         f'<style nonce="{nonce}">{_STYLE}</style></head><body><div class="app">'
         '<aside class="side">'
-        f'<div class="brand"><div class="brand-top">{_icon("shield", 20)}'
+        f'<div class="brand">{_icon("shield", 20)}'
         f'<span class="name">gatekeeper</span><span class="ver">v{_e(__version__)}</span></div>'
-        f"{badge}</div>"
         f"<nav>{nav}</nav>"
         '<div class="side-foot">'
         f'<form class="who" method="post" action="{UI_PREFIX}/logout">'
@@ -1257,6 +1275,14 @@ def _access_graph(
     edges, nodes = [], []
     any_match = False
     ident_y: dict[str, float] = {}
+    # One color per identity that actually holds a grant -- cycles if there
+    # are more identities than colors. An identity with no tool rights has
+    # no edges to color and stays neutral instead of spending a color on
+    # nothing.
+    ident_color: dict[str, str] = {}
+    for identity in idents:
+        if identity.tools:
+            ident_color[identity.id] = f"c{len(ident_color) % 6 + 1}"
 
     for index, identity in enumerate(idents):
         y = lane_y(index, len(idents))
@@ -1281,7 +1307,7 @@ def _access_graph(
             f'<g class="g-node{mark}">'
             + _svg_node(
                 lx, y, nw, nh, identity.id, sub,
-                "ok" if granted else "",
+                ident_color.get(identity.id, ""),
                 tooltip=tooltip, count_text=count_text,
             )
             + "</g>"
@@ -1333,7 +1359,7 @@ def _access_graph(
             )
             pair_total = pair["total"]
             x1, y1 = lx + nw, ident_y[identity.id] + nh / 2
-            edge_css = "g-e"
+            edge_css = f"g-e {ident_color[identity.id]}"
             if pair_total >= hot_threshold and pair_total > 0:
                 edge_css += " hot"
             edge_tooltip = f"{identity.id} -> {name}\n  {pair_total} calls"
@@ -1790,7 +1816,7 @@ def _view_overview(
         + "</form></div>"
         f'<div class="pad">{no_match_note}{graph_svg}'
         '<div class="legend">'
-        '<span class="l-ok"><i></i>granted</span>'
+        '<span>each color is one identity</span>'
         '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
         '<span class="l-hot"><i></i>high traffic</span>'
         f"</div>{no_traffic_caption}</div></div>"

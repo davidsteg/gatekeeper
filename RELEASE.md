@@ -60,6 +60,30 @@ cannot. It is in every release.
 
 ---
 
+## 0.3.12
+
+**Access map: per-identity colors. Sidebar: dropped the read/write badge.**
+
+- **Removed the "read & write" / "read-only" sidebar badge.** The same
+  information (role, hence write capability) was already shown in the
+  sidebar footer next to the signed-in identity's name -- the top badge
+  was redundant, and it was also the thing that kept overflowing under
+  the new tighter sidebar column. `.brand` is back to a single row now
+  that there's no badge fighting it for space.
+- **Access map: one color per identity.** Every granted edge used to be
+  the same green regardless of which identity it belonged to, so a
+  busier graph gave no way to trace "which lines are dev's" without
+  hovering each one. Each identity that holds at least one grant now
+  gets its own color (blue, violet, pink, indigo, fuchsia, sky --
+  chosen to sit clearly apart from the accent/ok/deny/warn hues, cycling
+  if there are more identities than colors), applied to both its node
+  and every edge leaving it. An identity with no tool rights stays
+  neutral -- there is nothing to color. The filter/dim interaction and
+  hover states were extended to match so highlighting a match still
+  works the same way against the new colors. All new color pairs
+  checked against WCAG AA against the card surface in both themes
+  (4.6-8.5:1, comfortable margin throughout).
+
 ## 0.3.11
 
 **Fix: Account page (and both 403 pages) wrongly highlighted "Overview" in the sidebar nav.**
