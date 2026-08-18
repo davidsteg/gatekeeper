@@ -898,6 +898,9 @@ a.reset:hover { color: var(--accent); }
 
 #: The console is entirely in English -- comments and docs remain
 #: German as in the rest of the project.
+#: Overview's path is "" (it maps to UI_PREFIX + "/"), not a sentinel --
+#: pages with no nav entry of their own (Account, the 403 pages) must pass
+#: active="none" rather than active="", or they match Overview by accident.
 _NAV = (
     ("", "Overview", "gauge"),
     ("/tools", "Tools", "sliders"),
@@ -2601,7 +2604,7 @@ def build_ui_routes(
                 "you had the page open for a long time, reload and retry.",
                 tone="bad",
             ),
-            session, icon="ban", active="", status=403,
+            session, icon="ban", active="none", status=403,
         )
 
     def session_post(handler: Callable[[Request, Session, FormData], Any]):
@@ -2659,7 +2662,7 @@ def build_ui_routes(
                         + ".",
                         tone="bad",
                     ),
-                    session, icon="ban", active="", status=403,
+                    session, icon="ban", active="none", status=403,
                 )
             form = await request.form()
             if not _csrf_ok(session, form):
@@ -2764,7 +2767,7 @@ def build_ui_routes(
             _account_page(
                 session, rev=store.identities_revision(), error=error, done=done
             ),
-            session, icon="lock", active="",
+            session, icon="lock", active="none",
             subtitle=(
                 "Your console password. The API token of an identity lives on "
                 "the identities page and is a separate credential."
