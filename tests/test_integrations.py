@@ -1,8 +1,8 @@
-"""The preset library (src/gatekeeper/presets.py).
+"""The integration library (src/gatekeeper/integrations.py).
 
-Every preset's `toolkit_yaml` and `tool_specs` must be real, valid
-definitions -- not just plausible-looking strings. If a preset were wrong,
-the UI's "pick a preset" flow would just relocate hand-editing YAML from
+Every integration's `toolkit_yaml` and `tool_specs` must be real, valid
+definitions -- not just plausible-looking strings. If an integration were wrong,
+the UI's "pick an integration" flow would just relocate hand-editing YAML from
 a blank textarea to a broken pre-filled one, which is worse.
 """
 
@@ -13,7 +13,7 @@ import yaml
 
 from gatekeeper.catalog import parse_tool_spec
 from gatekeeper.errors import ConfigError
-from gatekeeper.presets import PRESETS
+from gatekeeper.integrations import INTEGRATIONS
 from gatekeeper.tier1 import load_tier1
 
 
@@ -26,35 +26,35 @@ def _tier1_from_toolkit_yaml(tmp_path, toolkit_yaml: str, name: str):
     return load_tier1(str(path))
 
 
-@pytest.mark.parametrize("key", sorted(PRESETS))
+@pytest.mark.parametrize("key", sorted(INTEGRATIONS))
 def test_toolkit_yaml_parses(tmp_path, key):
-    preset = PRESETS[key]
-    tier1 = _tier1_from_toolkit_yaml(tmp_path, preset.toolkit_yaml, key)
+    integration = INTEGRATIONS[key]
+    tier1 = _tier1_from_toolkit_yaml(tmp_path, integration.toolkit_yaml, key)
     assert key in tier1.toolkits
 
 
-@pytest.mark.parametrize("key", sorted(PRESETS))
+@pytest.mark.parametrize("key", sorted(INTEGRATIONS))
 def test_tool_specs_parse_against_their_toolkit(tmp_path, key):
-    preset = PRESETS[key]
-    tier1 = _tier1_from_toolkit_yaml(tmp_path, preset.toolkit_yaml, key)
-    assert preset.tool_specs, f"preset {key!r} has no starter tools"
-    for spec in preset.tool_specs:
+    integration = INTEGRATIONS[key]
+    tier1 = _tier1_from_toolkit_yaml(tmp_path, integration.toolkit_yaml, key)
+    assert integration.tool_specs, f"integration {key!r} has no starter tools"
+    for spec in integration.tool_specs:
         tool = parse_tool_spec(dict(spec), tier1)
         assert tool.toolkit == key
         assert tool.id.startswith(f"{key}.")
 
 
-@pytest.mark.parametrize("key", sorted(PRESETS))
-def test_tool_ids_are_unique_within_a_preset(key):
-    preset = PRESETS[key]
-    ids = [spec["id"] for spec in preset.tool_specs]
+@pytest.mark.parametrize("key", sorted(INTEGRATIONS))
+def test_tool_ids_are_unique_within_a_integration(key):
+    integration = INTEGRATIONS[key]
+    ids = [spec["id"] for spec in integration.tool_specs]
     assert len(ids) == len(set(ids))
 
 
-@pytest.mark.parametrize("key", sorted(PRESETS))
+@pytest.mark.parametrize("key", sorted(INTEGRATIONS))
 def test_logo_is_inline_svg_with_no_external_reference(key):
-    preset = PRESETS[key]
-    svg = preset.logo_svg
+    integration = INTEGRATIONS[key]
+    svg = integration.logo_svg
     assert svg.strip().startswith("<svg")
     # The xmlns declaration is a namespace URI, never fetched -- only an
     # actual resource-loading attribute (href/src) would be a live
@@ -65,7 +65,7 @@ def test_logo_is_inline_svg_with_no_external_reference(key):
     assert "<image" not in svg.lower()
 
 
-@pytest.mark.parametrize("key", sorted(PRESETS))
+@pytest.mark.parametrize("key", sorted(INTEGRATIONS))
 def test_logo_has_no_csp_blocked_styling(key):
     """The console's CSP is `style-src 'nonce-...'`, which covers inline
 
@@ -75,61 +75,75 @@ def test_logo_has_no_csp_blocked_styling(key):
     real color. A fetched brand SVG must have every declaration converted
     to presentation attributes (`fill="#hex"`, not `style="fill:#hex"` or
     a CSS class resolved via a `<style>` block) before it ever reaches
-    `presets.py` -- this is what actually failed the first time these
+    `integrations.py` -- this is what actually failed the first time these
     logos were added: several rendered as solid black circles.
     """
-    svg = PRESETS[key].logo_svg
+    svg = INTEGRATIONS[key].logo_svg
     assert 'style="' not in svg, f"{key}: inline style= is dropped by CSP"
     assert "<style" not in svg.lower(), f"{key}: <style> block is dropped by CSP"
     assert 'class="' not in svg, f"{key}: class= implies a (dropped) stylesheet"
 
 
-def test_no_duplicate_svg_ids_or_gradient_targets_across_all_presets():
-    """The preset gallery renders every logo on one page at once -- an SVG
+def test_no_duplicate_svg_ids_or_gradient_targets_across_all_integrations():
+    """The integration gallery renders every logo on one page at once -- an SVG
 
     `id` (and the `url(#id)`/`href="#id"` that reference it, e.g. a
     gradient or clip-path) is global to the whole document, not scoped per
-    `<svg>`. Two presets defining the same bare id (several of the source
+    `<svg>`. Two integrations defining the same bare id (several of the source
     files used generic names like 'a'/'b' before namespacing) would make
     one logo silently borrow -- or corrupt -- another's gradient.
     """
     import re
 
     seen: dict[str, str] = {}
-    for key, preset in PRESETS.items():
-        for svg_id in re.findall(r'\bid="([^"]+)"', preset.logo_svg):
+    for key, integration in INTEGRATIONS.items():
+        for svg_id in re.findall(r'\bid="([^"]+)"', integration.logo_svg):
             owner = seen.get(svg_id)
             assert owner is None, f"id {svg_id!r} used by both {owner!r} and {key!r}"
             seen[svg_id] = key
 
 
-@pytest.mark.parametrize("key", sorted(PRESETS))
-def test_toolkit_yaml_is_a_mapping_under_the_preset_key(key):
-    preset = PRESETS[key]
-    parsed = yaml.safe_load(preset.toolkit_yaml)
+@pytest.mark.parametrize("key", sorted(INTEGRATIONS))
+def test_toolkit_yaml_is_a_mapping_under_the_integration_key(key):
+    integration = INTEGRATIONS[key]
+    parsed = yaml.safe_load(integration.toolkit_yaml)
     assert key in parsed
-    assert parsed[key]["executor"] in ("http", "truenas")
+    assert parsed[key]["executor"] in ("http", "truenas", "docker", "ssh")
 
 
 def test_credential_kind_is_known():
     from gatekeeper.credentials import KINDS
 
-    for key, preset in PRESETS.items():
-        assert preset.credential_kind in KINDS, key
+    for key, integration in INTEGRATIONS.items():
+        assert integration.credential_kind in KINDS, key
 
 
-def test_all_twelve_named_services_present():
+def test_all_named_services_present():
     expected = {
         "sonarr", "radarr", "jellyfin", "bazarr", "tdarr", "prowlarr",
         "hass", "n8n", "uptimekuma", "immich", "telegram", "google_api",
+        "truenas", "pfsense", "jellystat", "netdata", "sabnzbd", "paperless",
+        "docker", "linux",
     }
-    assert expected <= set(PRESETS)
+    assert expected <= set(INTEGRATIONS)
+
+
+def test_docker_and_linux_use_argv_shaped_tools_not_http():
+    """The two non-http/truenas integrations reuse the `docker`/`local`
+
+    binary+argv tool shape (FR-5.3/5.4) -- proven by checking their
+    starter tools carry `binary`/`argv`, not `method`/`path`.
+    """
+    for key in ("docker", "linux"):
+        for spec in INTEGRATIONS[key].tool_specs:
+            assert "binary" in spec and "argv" in spec
+            assert "method" not in spec and "path" not in spec
 
 
 def test_unedited_toolkit_yaml_fails_closed_not_open(tmp_path):
     """A CHANGEME placeholder CIDR must not accidentally allow a real host."""
-    preset = PRESETS["sonarr"]
-    tier1 = _tier1_from_toolkit_yaml(tmp_path, preset.toolkit_yaml, "sonarr")
+    integration = INTEGRATIONS["sonarr"]
+    tier1 = _tier1_from_toolkit_yaml(tmp_path, integration.toolkit_yaml, "sonarr")
     toolkit = tier1.toolkits["sonarr"]
     import ipaddress
 

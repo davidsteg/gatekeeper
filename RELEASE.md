@@ -60,6 +60,55 @@ cannot. It is in every release.
 
 ---
 
+## 0.8.0
+
+**Renamed "presets" to "integrations". New `ssh` executor. 7 new integrations: pfSense, Jellystat, Netdata, SABnzbd, Paperless-ngx, Docker, and Linux-over-SSH.**
+
+- **"Presets" is now "Integrations" everywhere** -- `presets.py` ->
+  `integrations.py`, `Preset`/`PRESETS` -> `Integration`/`INTEGRATIONS`,
+  `/ui/tools/presets` -> `/ui/tools/integrations`, `gatekeeper preset
+  list/show` -> `gatekeeper integration list/show`. No config format
+  change -- `toolkits.yaml`/`tools.yaml` are untouched, only the admin
+  route and CLI subcommand names moved.
+- **New `ssh` executor** (`execute_ssh.py`) -- reuses the `docker`/`local`
+  binary+argv tool shape exactly (REQUIREMENTS.md §17); the only
+  difference is the transport, an SSH exec channel to a remote host
+  instead of a local subprocess. Host-key verification is mandatory, not
+  optional: a new `ssh_known_hosts` Tier 1 field pins the exact key
+  (`ssh-keyscan` output), same posture as the DNS-rebinding check on the
+  `http` executor. SSH's exec channel is unavoidably shell-interpreted on
+  the server side, unlike every other executor here -- mitigated with
+  `shlex.quote` on every argv element before it's joined into the command
+  string, on top of (not instead of) each parameter's own regex allowlist.
+  New credential kind `ssh_private_key`.
+- **New `url_query` credential kind** -- FR-8.14's other documented
+  exception to "a credential is always a header" (alongside Telegram's
+  `url_path`), for a service with no header-auth option at all. Injected
+  as a query parameter by `execute_http.py` directly, never through a
+  tool's own `query_template`.
+- **7 new integrations**, researched against each service's real API:
+  - **pfSense** -- the community "pfSense REST API" package (pfrest.org),
+    `X-API-Key` header, `/api/v2`.
+  - **Jellystat** -- `x-api-token` header (confirmed from its own auth
+    middleware source, not just docs).
+  - **Netdata** -- unauthenticated by default; `bearer` only if you've
+    turned on `bearer_protection`.
+  - **SABnzbd** -- `url_query` (`?apikey=`), its classic API's only auth
+    option.
+  - **Paperless-ngx** -- `Authorization: Token <token>` (stored as the
+    credential value verbatim, via the existing `api_key_header` kind).
+  - **Docker** -- the `docker` executor's own toolkit shape (not `http`),
+    mirroring `config/examples/toolkits.yaml`'s `docker` entry.
+  - **Linux** -- the new `ssh` executor, three fixed read-only
+    diagnostics (uptime, memory, disk) on one remote host -- deliberately
+    not a general "Linux CLI" tool, which has no boundary to validate
+    against.
+  - Logos sourced the same way as before (homarr-labs/dashboard-icons,
+    Apache-2.0); Jellystat's only available mark there turned out to be a
+    raster PNG wrapped in an `<image>` tag and was rejected by the same
+    rule that excludes external images, falling back to a monogram like
+    Tdarr's.
+
 ## 0.7.0
 
 **Real service logos on the preset gallery, instead of plain letter monograms.**

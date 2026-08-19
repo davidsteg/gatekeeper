@@ -17,7 +17,7 @@ not, see [docs/ROADMAP.md](docs/ROADMAP.md).
 |---|---|
 | **Repo** | `davidsteg/gatekeeper` |
 | **Language** | Python 3.12+ |
-| **Runtime deps** | `mcp`, `pyyaml`, `uvicorn`, `httpx`, `websockets`, `cryptography` — see `pyproject.toml` |
+| **Runtime deps** | `mcp`, `pyyaml`, `uvicorn`, `httpx`, `websockets`, `cryptography`, `asyncssh` — see `pyproject.toml` |
 | **Tests** | `python -m pytest -q` — all must pass before push |
 
 Check the current version in `pyproject.toml`, not here — it changes every
@@ -61,9 +61,11 @@ python -m pytest -q
 ```
 
 All green before every push — no exceptions. If a test file references a
-loopback HTTP/WebSocket server (`test_execute_http.py`,
-`test_execute_truenas.py`), that's a real local listener the test starts
-itself, not a mock; no network access outside localhost is needed.
+loopback HTTP/WebSocket/SSH server (`test_execute_http.py`,
+`test_execute_truenas.py`, `test_execute_ssh.py`), that's a real local
+listener the test starts itself — the ssh one via
+`asyncssh.create_server()` with an ephemeral host key — not a mock; no
+network access outside localhost is needed.
 
 ## Known pitfalls
 
@@ -82,8 +84,8 @@ itself, not a mock; no network access outside localhost is needed.
 - **New dependency, new install.** After pulling a change that touches
   `pyproject.toml`'s `dependencies`, re-run `pip install -e ".[dev]"` (or
   the `uv` equivalent) before running tests — a stale venv will import-error
-  on `httpx`/`websockets`/`cryptography` instead of giving a useful test
-  failure.
+  on `httpx`/`websockets`/`cryptography`/`asyncssh` instead of giving a
+  useful test failure.
 - **Credential-store tests/scripts need a master key.** Anything that
   touches `credentials.py` beyond an empty store (creating, rotating,
   resolving a credential) needs `GATEKEEPER_CREDENTIAL_KEY` set — generate
@@ -113,7 +115,7 @@ gatekeeper init                        # empty config + one admin
 gatekeeper token                       # generate an API token
 gatekeeper password --identity <id>    # set a console password
 gatekeeper credential-key              # generate the credential-store master key
-gatekeeper preset list                 # list available service presets
-gatekeeper preset show <key>           # print one preset's toolkit YAML + starter tools
+gatekeeper integration list             # list available service integrations
+gatekeeper integration show <key>       # print one integration's toolkit YAML + starter tools
 gatekeeper serve --ui                  # start the server with the admin console
 ```

@@ -72,7 +72,7 @@ from .identity import (
     UI_ROLES,
     IdentityStore,
 )
-from .presets import PRESETS, Preset
+from .integrations import INTEGRATIONS, Integration
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
 from .tier1 import Destination, Toolkit
@@ -936,13 +936,13 @@ a.reset:hover { color: var(--accent); }
   padding: .7rem .8rem; font-size: .9rem; word-break: break-all; margin: .5rem 0;
 }
 
-/* -- Presets -- */
-.preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .8rem; }
-.preset-card { display: flex; flex-direction: column; gap: .5rem; min-height: 100%; }
-.preset-card-head { display: flex; align-items: center; gap: .6rem; }
-.preset-card-head .name { font-weight: 650; font-size: 1rem; }
-.preset-card-foot { margin-top: auto; }
-.preset-logo {
+/* -- Integrations -- */
+.integration-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .8rem; }
+.integration-card { display: flex; flex-direction: column; gap: .5rem; min-height: 100%; }
+.integration-card-head { display: flex; align-items: center; gap: .6rem; }
+.integration-card-head .name { font-weight: 650; font-size: 1rem; }
+.integration-card-foot { margin-top: auto; }
+.integration-logo {
   display: inline-flex; flex: none; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 999px; overflow: hidden;
   /* Real brand marks are full-color and drawn for a light background; a
@@ -950,8 +950,8 @@ a.reset:hover { color: var(--accent); }
      over this, so the white never shows through for that case. */
   background: #fff;
 }
-.preset-logo-lg { width: 36px; height: 36px; }
-.preset-logo svg { display: block; width: 100%; height: 100%; }
+.integration-logo-lg { width: 36px; height: 36px; }
+.integration-logo svg { display: block; width: 100%; height: 100%; }
 
 /* -- Release notes popup --
    CSS-only modal (:target), consistent with "no JavaScript" -- the
@@ -1010,7 +1010,7 @@ a.ver:hover { text-decoration: underline; color: var(--accent); }
 _NAV = (
     ("", "Overview", "gauge"),
     ("/tools", "Tools", "sliders"),
-    ("/tools/presets", "Presets", "package"),
+    ("/tools/integrations", "Integrations", "package"),
     ("/identities", "Identities", "key"),
     ("/credentials", "Credentials", "lock"),
     ("/audit", "Audit", "clock"),
@@ -2748,7 +2748,7 @@ def _tool_scaffold(service: Service) -> str:
     """Scaffold for a new definition, built from the real Tier 1.
 
     This used to contain a finished Docker tool with foreign paths. That was
-    doubly wrong: it looked like a preset, and on a system
+    doubly wrong: it looked like an integration, and on a system
     without this toolkit it could not even be saved. The scaffold now
     takes the first configured toolkit and its actual values -- it
     is thus a valid starting point on every deployment.
@@ -2836,16 +2836,16 @@ def _tier1_reference(service: Service) -> str:
     return "".join(cards)
 
 
-def _preset_logo(preset: Preset, *, large: bool = False) -> str:
-    """Renders a preset's inline-SVG brand mark.
+def _integration_logo(integration: Integration, *, large: bool = False) -> str:
+    """Renders an integration's inline-SVG brand mark.
 
     Deliberately its own helper, not folded into `_icon()`/`_ICONS`: those
     are generic Lucide-style UI chrome (nav, buttons) shared across every
-    page, whereas a preset logo is per-service and lives in `presets.py`,
+    page, whereas an integration logo is per-service and lives in `integrations.py`,
     not this module. Conflating the two dicts would make an unrelated icon
-    edit risk breaking every preset card.
+    edit risk breaking every integration card.
 
-    Sizing is a named class (`.preset-logo`/`.preset-logo-lg`), not an
+    Sizing is a named class (`.integration-logo`/`.integration-logo-lg`), not an
     inline `style="width:...px"` -- the CSP's `style-src 'nonce-...'` does
     not cover inline style attributes, so one silently does nothing
     instead of erroring (see the `.caption` comment in `_STYLE`). The
@@ -2855,64 +2855,64 @@ def _preset_logo(preset: Preset, *, large: bool = False) -> str:
     element size -- large and inconsistent, exactly the bug this class
     exists to avoid.
     """
-    cls = "preset-logo preset-logo-lg" if large else "preset-logo"
-    return f'<span class="{cls}">{preset.logo_svg}</span>'
+    cls = "integration-logo integration-logo-lg" if large else "integration-logo"
+    return f'<span class="{cls}">{integration.logo_svg}</span>'
 
 
-def _view_presets(service: Service, session: Session, store: ConfigStore | None) -> str:
+def _view_integrations(service: Service, session: Session, store: ConfigStore | None) -> str:
     configured = set(service.tier1.toolkits)
     cards = []
-    for preset in sorted(PRESETS.values(), key=lambda p: p.display_name):
-        has_toolkit = preset.key in configured
+    for integration in sorted(INTEGRATIONS.values(), key=lambda p: p.display_name):
+        has_toolkit = integration.key in configured
         if has_toolkit and session.can_write and store is not None:
             action = (
                 f'<a class="btn primary" '
-                f'href="{UI_PREFIX}/tools/presets/pick?key={_e(preset.key)}">'
+                f'href="{UI_PREFIX}/tools/integrations/pick?key={_e(integration.key)}">'
                 f'{_icon("plus", 14)}Create a tool</a>'
             )
         else:
             action = (
-                f'<a class="btn" href="{UI_PREFIX}/toolkits/reference#{_e(preset.key)}">'
+                f'<a class="btn" href="{UI_PREFIX}/toolkits/reference#{_e(integration.key)}">'
                 f'{_icon("lock", 14)}'
                 + ("View starter tools" if has_toolkit else "Add this toolkit first")
                 + "</a>"
             )
         cards.append(
-            '<div class="card"><div class="pad preset-card">'
-            f'<div class="preset-card-head">{_preset_logo(preset)}'
-            f'<span class="name">{_e(preset.display_name)}</span>'
+            '<div class="card"><div class="pad integration-card">'
+            f'<div class="integration-card-head">{_integration_logo(integration)}'
+            f'<span class="name">{_e(integration.display_name)}</span>'
             + (
                 '<span class="pill ok">toolkit configured</span>'
                 if has_toolkit
                 else '<span class="pill">toolkit not configured</span>'
             )
             + "</div>"
-            + (f'<p class="muted">{_e(preset.notes)}</p>' if preset.notes else "")
-            + f'<div class="preset-card-foot">{action}</div>'
+            + (f'<p class="muted">{_e(integration.notes)}</p>' if integration.notes else "")
+            + f'<div class="integration-card-foot">{action}</div>'
             "</div></div>"
         )
     return (
         _note(
-            "Picking a preset only pre-fills the tool editor -- it goes "
+            "Picking an integration only pre-fills the tool editor -- it goes "
             "through the exact same Tier 1 validation as hand-written YAML "
             "(FR-4.6). The toolkit itself always stays a manual, deploy-time "
             "edit (FR-4.11); use the reference page for its YAML.",
             icon="package",
         )
-        + f'<div class="preset-grid">{"".join(cards)}</div>'
+        + f'<div class="integration-grid">{"".join(cards)}</div>'
     )
 
 
-def _view_preset_picker(preset: Preset, service: Service, session: Session) -> str:
+def _view_integration_picker(integration: Integration, service: Service, session: Session) -> str:
     rows = []
-    for spec in preset.tool_specs:
+    for spec in integration.tool_specs:
         exists = service.catalog.raw_of(spec["id"]) is not None
         action = (
             f'<span class="pill">already defined</span>'
             if exists
             else (
-                f'<a class="btn primary" href="{UI_PREFIX}/tools/presets/new'
-                f'?key={_e(preset.key)}&tool={_e(spec["id"])}">'
+                f'<a class="btn primary" href="{UI_PREFIX}/tools/integrations/new'
+                f'?key={_e(integration.key)}&tool={_e(spec["id"])}">'
                 f'{_icon("plus", 14)}Use this</a>'
             )
         )
@@ -2926,36 +2926,36 @@ def _view_preset_picker(preset: Preset, service: Service, session: Session) -> s
             "</div>"
         )
     return (
-        f'<div class="preset-card-head">{_preset_logo(preset, large=True)}'
-        f'<span class="name">{_e(preset.display_name)}</span></div>'
-        + (f'<p class="muted">{_e(preset.notes)}</p>' if preset.notes else "")
+        f'<div class="integration-card-head">{_integration_logo(integration, large=True)}'
+        f'<span class="name">{_e(integration.display_name)}</span></div>'
+        + (f'<p class="muted">{_e(integration.notes)}</p>' if integration.notes else "")
         + "".join(rows)
-        + f'<p><a class="btn" href="{UI_PREFIX}/tools/presets">'
-        f'{_icon("back", 14)}Back to presets</a></p>'
+        + f'<p><a class="btn" href="{UI_PREFIX}/tools/integrations">'
+        f'{_icon("back", 14)}Back to integrations</a></p>'
     )
 
 
 def _view_toolkit_reference() -> str:
     sections = []
-    for preset in sorted(PRESETS.values(), key=lambda p: p.display_name):
+    for integration in sorted(INTEGRATIONS.values(), key=lambda p: p.display_name):
         sections.append(
-            f'<div class="card" id="{_e(preset.key)}"><div class="card-head">'
-            f'{_preset_logo(preset)}<span class="name">{_e(preset.display_name)}</span></div>'
+            f'<div class="card" id="{_e(integration.key)}"><div class="card-head">'
+            f'{_integration_logo(integration)}<span class="name">{_e(integration.display_name)}</span></div>'
             '<div class="pad">'
-            + (f'<p class="muted">{_e(preset.notes)}</p>' if preset.notes else "")
+            + (f'<p class="muted">{_e(integration.notes)}</p>' if integration.notes else "")
             + "<p>Paste this block under <code>toolkits:</code> in "
             "<code>toolkits.yaml</code>, fill in the CHANGEME placeholders "
             "for your host and address range, then redeploy (FR-4.11) -- "
             "this page cannot write the file for you.</p>"
-            f'<pre class="mono">{_e(preset.toolkit_yaml)}</pre>'
+            f'<pre class="mono">{_e(integration.toolkit_yaml)}</pre>'
             "</div></div>"
         )
     return (
         _note(
             "Toolkit creation is a deploy-time decision and stays one "
             "(FR-4.11) &ndash; this page only saves you writing the YAML "
-            "block from scratch. Once a toolkit exists here, its presets "
-            "become actionable on the Presets page.",
+            "block from scratch. Once a toolkit exists here, its integrations "
+            "become actionable on the Integrations page.",
             icon="lock",
         )
         + "".join(sections)
@@ -3120,12 +3120,16 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         '<input name="name" required pattern="[a-z][a-z0-9_-]*"></div>'
         '<div class="field"><span>Kind'
         '<div class="hint">api_key_header/bearer/basic inject an HTTP header; '
-        "ws_api_key is used by the truenas executor's auth call; docker_tls "
+        "url_query injects a query parameter instead (only for a service with "
+        "no header option, e.g. SABnzbd -- FR-8.14 prefers a header wherever "
+        "one exists); ws_api_key is used by the truenas executor's auth call; "
+        "ssh_private_key is a PEM private key for the ssh executor; docker_tls "
         "is for a TLS-secured remote Docker destination (FR-8.3g).</div></span>"
         f'<select name="kind">{kind_options}</select></div>'
-        '<div class="field"><span>Header name'
-        '<div class="hint">Only for kind=api_key_header, e.g. '
-        "<code>X-Api-Key</code>. Ignored otherwise.</div></span>"
+        '<div class="field"><span>Header/param name'
+        '<div class="hint">Required for kind=api_key_header (the header name, '
+        "e.g. <code>X-Api-Key</code>) and kind=url_query (the query "
+        "parameter name, e.g. <code>apikey</code>). Ignored otherwise.</div></span>"
         '<input name="header"></div>'
         '<div class="field"><span>Value'
         '<div class="hint">Encrypted at rest, never shown again after this '
@@ -3673,68 +3677,68 @@ def build_ui_routes(
             )
         return RedirectResponse(f"{UI_PREFIX}/tools", status_code=303)
 
-    # -- Presets ---------------------------------------------------------
+    # -- Integrations ---------------------------------------------------------
     # Read-only browsing/picking; the actual write still goes through
-    # `tool_save` above -- a preset only ever pre-fills that same form.
+    # `tool_save` above -- an integration only ever pre-fills that same form.
 
-    async def preset_gallery(request: Request) -> Response:
+    async def integration_gallery(request: Request) -> Response:
         session = _current(request)
         if session is None:
             return _to_login()
         return _shell(
-            request, "Presets", _view_presets(service, session, store), session,
-            icon="package", active="/tools/presets",
-            subtitle="Starter definitions for common services, built on the http/truenas executors.",
+            request, "Integrations", _view_integrations(service, session, store), session,
+            icon="package", active="/tools/integrations",
+            subtitle="Starter definitions for common services, built on the http/truenas/docker/ssh executors.",
         )
 
-    async def preset_pick(request: Request) -> Response:
+    async def integration_pick(request: Request) -> Response:
         session = _current(request)
         if session is None:
             return _to_login()
-        preset = PRESETS.get(request.query_params.get("key", ""))
-        if preset is None:
-            return RedirectResponse(f"{UI_PREFIX}/tools/presets", status_code=303)
+        integration = INTEGRATIONS.get(request.query_params.get("key", ""))
+        if integration is None:
+            return RedirectResponse(f"{UI_PREFIX}/tools/integrations", status_code=303)
         return _shell(
-            request, preset.display_name,
-            _view_preset_picker(preset, service, session), session,
-            icon="package", active="/tools/presets",
+            request, integration.display_name,
+            _view_integration_picker(integration, service, session), session,
+            icon="package", active="/tools/integrations",
         )
 
-    async def preset_tool_new_form(request: Request) -> Response:
+    async def integration_tool_new_form(request: Request) -> Response:
         session = _current(request)
         if session is None:
             return _to_login()
         if store is None or not session.can_write:
-            return RedirectResponse(f"{UI_PREFIX}/tools/presets", status_code=303)
-        preset = PRESETS.get(request.query_params.get("key", ""))
-        if preset is None:
-            return RedirectResponse(f"{UI_PREFIX}/tools/presets", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/tools/integrations", status_code=303)
+        integration = INTEGRATIONS.get(request.query_params.get("key", ""))
+        if integration is None:
+            return RedirectResponse(f"{UI_PREFIX}/tools/integrations", status_code=303)
         tool_id = request.query_params.get("tool", "")
-        spec = next((s for s in preset.tool_specs if s["id"] == tool_id), None)
+        spec = next((s for s in integration.tool_specs if s["id"] == tool_id), None)
         if spec is None:
             return RedirectResponse(
-                f"{UI_PREFIX}/tools/presets/pick?key={preset.key}", status_code=303
+                f"{UI_PREFIX}/tools/integrations/pick?key={integration.key}", status_code=303
             )
-        if preset.key not in service.tier1.toolkits:
+        if integration.key not in service.tier1.toolkits:
             return _shell(
-                request, preset.display_name,
+                request, integration.display_name,
                 _note(
-                    f"<strong>The {_e(preset.key)!s} toolkit is not configured "
+                    f"<strong>The {_e(integration.key)!s} toolkit is not configured "
                     "yet.</strong> Add it from the reference page and redeploy "
-                    "before creating tools from this preset.",
+                    "before creating tools from this integration.",
                     tone="bad",
                 ),
-                session, icon="package", active="/tools/presets",
+                session, icon="package", active="/tools/integrations",
             )
         # The same editor, the same YAML textarea, the same save path as a
         # hand-written definition (`tool_save` -> `store.save_tool` ->
-        # `parse_tool_spec`) -- a preset never gets a shortcut around Tier 1.
+        # `parse_tool_spec`) -- an integration never gets a shortcut around Tier 1.
         return _shell(
-            request, f"New tool from {preset.display_name}",
+            request, f"New tool from {integration.display_name}",
             _tool_editor(service, session, yaml_text=tool_to_yaml(spec),
                          rev=store.tools_revision(), replaces=None),
-            session, icon="plus", active="/tools/presets",
-            subtitle="Pre-filled from the preset -- still checked against Tier 1 before it is stored.",
+            session, icon="plus", active="/tools/integrations",
+            subtitle="Pre-filled from the integration -- still checked against Tier 1 before it is stored.",
         )
 
     async def toolkit_reference(request: Request) -> Response:
@@ -4117,9 +4121,9 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/tools/toggle", writer(tool_toggle), methods=["POST"]),
         Route(f"{UI_PREFIX}/tools/delete", tool_delete_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/tools/delete", writer(tool_delete), methods=["POST"]),
-        Route(f"{UI_PREFIX}/tools/presets", preset_gallery, methods=["GET"]),
-        Route(f"{UI_PREFIX}/tools/presets/pick", preset_pick, methods=["GET"]),
-        Route(f"{UI_PREFIX}/tools/presets/new", preset_tool_new_form, methods=["GET"]),
+        Route(f"{UI_PREFIX}/tools/integrations", integration_gallery, methods=["GET"]),
+        Route(f"{UI_PREFIX}/tools/integrations/pick", integration_pick, methods=["GET"]),
+        Route(f"{UI_PREFIX}/tools/integrations/new", integration_tool_new_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/toolkits/reference", toolkit_reference, methods=["GET"]),
         Route(
             f"{UI_PREFIX}/identities",

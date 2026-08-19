@@ -17,7 +17,7 @@ import tempfile
 from collections import Counter
 from typing import Any
 
-from . import execute, execute_http, execute_truenas, validate
+from . import execute, execute_http, execute_ssh, execute_truenas, validate
 from .audit import AuditLog
 from .catalog import Catalog, ToolDef, load_catalog
 from .credentials import CredentialStore
@@ -272,12 +272,14 @@ class Service:
             env: dict[str, str] | None = None
             http_request: tuple[str, str, dict[str, str], dict[str, str] | None] | None = None
             rpc_call: tuple[str, dict[str, str]] | None = None
-            if toolkit.executor in ("docker", "local"):
+            if toolkit.executor in ("docker", "local", "ssh"):
                 argv = validate.build_argv(tool, values, toolkit)
                 # Resolved here, inside the same try/except as everything
                 # else: a missing/invalid TLS credential for a docker
                 # destination is a Denied, audited like any other denial,
-                # not an exception escaping call() (FR-8.3g).
+                # not an exception escaping call() (FR-8.3g). A no-op for
+                # ssh (`_environment` only builds a docker env), kept
+                # shared because ssh's argv-building is otherwise identical.
                 env = self._environment(toolkit)
             elif toolkit.executor == "http":
                 http_request = validate.build_http_request(tool, values, toolkit)
@@ -309,6 +311,12 @@ class Service:
                     max_output_bytes=max_output_bytes,
                     idempotent=tool.idempotent,
                     env=env,
+                )
+            elif toolkit.executor == "ssh":
+                result = await execute_ssh.run(
+                    argv, toolkit=toolkit, credentials=self.credentials,
+                    timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent, redact=self.audit.redact,
                 )
             elif toolkit.executor == "http":
                 assert http_request is not None
@@ -416,6 +424,8 @@ class Service:
             return await execute_http.probe(toolkit)
         if toolkit.executor == "truenas":
             return await execute_truenas.probe(toolkit)
+        if toolkit.executor == "ssh":
+            return await execute_ssh.probe(toolkit)
         return False
 
     def render_metrics(self) -> str:

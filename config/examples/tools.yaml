@@ -372,3 +372,38 @@ tools:
     required_scopes: ["dataset:{dataset}"]
     timeout_seconds: 30
     max_output_bytes: 8192
+
+  # -- ssh executor (REQUIREMENTS.md §17) ------------------------------------
+  # Same binary/argv shape as diag.* above -- the only difference is the
+  # toolkit's executor, which runs this argv on 'linux' (config/examples/
+  # toolkits.yaml) over SSH instead of the local container's /proc.
+
+  - id: linux.uptime
+    toolkit: linux
+    binary: /usr/bin/uptime
+    version: 1
+    title: Uptime and load (remote)
+    description: Uptime and load average of the remote host.
+    category: read
+    idempotent: true
+    enabled: true
+    argv: []
+    parameters: {}
+    required_scopes: []
+    timeout_seconds: 10
+    max_output_bytes: 4096
+
+  - id: linux.disk
+    toolkit: linux
+    binary: /usr/bin/df
+    version: 1
+    title: Disk usage (remote)
+    description: Filesystem usage of the remote host.
+    category: read
+    idempotent: true
+    enabled: true
+    argv: ["-h"]
+    parameters: {}
+    required_scopes: []
+    timeout_seconds: 10
+    max_output_bytes: 8192

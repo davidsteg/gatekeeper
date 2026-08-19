@@ -42,8 +42,9 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 |---|---|---|
 | `docker` | Docker operations | mounted Docker socket, `docker compose ...` |
 | `local` | Container-local diagnostics | direct subprocess, allowlisted binaries |
-| `http` | LAN/SaaS APIs (Sonarr, Radarr, Home Assistant, GitHub, …) | HTTP request; base URL, method, and path prefix come from the toolkit, never a parameter |
+| `http` | LAN/SaaS APIs (Sonarr, Radarr, Home Assistant, pfSense, GitHub, …) | HTTP request; base URL, method, and path prefix come from the toolkit, never a parameter |
 | `truenas` | ZFS, pool status, dataset management | JSON-RPC 2.0 over WebSocket (TrueNAS's REST v2.0 is deprecated) |
+| `ssh` | A remote Linux host's allowlisted binaries | binary + argv (same shape as `docker`/`local`), run over an SSH exec channel |
 
 `http` toolkit boundaries (`tier1.py`'s `Toolkit`): `base_url`,
 `allowed_methods`, `allowed_path_prefixes`, `allowed_cidrs`, `credential`,
@@ -56,6 +57,23 @@ would leave a DNS-rebinding gap between the check and the actual connect.
 The whitelist acts on JSON-RPC method *names* — a method not listed
 structurally does not exist for any tool, there is no separate "permission"
 to deny it (`execute_truenas.py`).
+
+`ssh` toolkit boundaries: `ssh_host`, `ssh_port`, `ssh_user`,
+`ssh_known_hosts` (required — the exact `ssh-keyscan` output pinning the
+host key, since an SSH connection with host-key checking disabled is
+trivially MITM-able), plus the same `binaries`/`denied_args`/`path_roots`
+allowlist `docker`/`local` already use. A tool on an `ssh` toolkit is
+shaped identically to one on `docker`/`local` (binary + argv) — the only
+difference is that `execute_ssh.py` runs the resolved argv on the remote
+host over an SSH exec channel instead of a local subprocess. That channel
+is unavoidably shell-interpreted on the server side (RFC 4254's exec
+request is a single command string, and essentially every sshd hands it to
+the login shell) — `execute_ssh.py` mitigates this the same way a
+parameter's regex allowlist does elsewhere, but as defense in depth on top
+of it: every argv element is `shlex.quote`d before being joined into that
+string. No general "Linux CLI"/arbitrary-command tool exists or is
+planned — only fixed, allowlisted binaries per tool, exactly like
+`docker`/`local` (REQUIREMENTS.md §17).
 
 ### Destinations (multi-host per toolkit)
 
@@ -83,9 +101,15 @@ for no role, ever returns a value (FR-10.2). The *binding* of toolkit/
 destination → credential name is Tier 1 (redeploy-only); the credential
 *value* is Tier 2 (rotatable at runtime, with an optional overlap window so
 in-flight calls with the old value don't break). Kinds: `api_key_header`,
-`bearer`, `basic`, `ws_api_key`, `url_path`, and `docker_tls` (a JSON
-`{cert, key, ca}` bundle for a TLS-secured remote Docker destination,
-materialized to a private temp dir by `service.py` on first use).
+`bearer`, `basic`, `ws_api_key`, `url_path`, `url_query` (FR-8.14's other
+documented exception besides `url_path` — a query-string param, for a
+service with no header-auth option at all, e.g. SABnzbd's classic API),
+`docker_tls` (a JSON `{cert, key, ca}` bundle for a TLS-secured remote
+Docker destination, materialized to a private temp dir by `service.py` on
+first use), and `ssh_private_key` (PEM private key text for the `ssh`
+executor — the matching public key must already be in the remote host's
+`authorized_keys`; gatekeeper is a credential *consumer*, it never pushes
+one).
 
 Master key: `GATEKEEPER_CREDENTIAL_KEY` (or `GATEKEEPER_CREDENTIAL_KEY_FILE`
 pointing at a mounted secret) — generate one with `gatekeeper credential-key`.
@@ -95,33 +119,40 @@ Masking: known credential values are scrubbed (`***`) out of tool output and
 audit log entries via `audit.Redactor`, refreshed whenever a credential is
 created or rotated.
 
-## Presets
+## Integrations
 
-`presets.py` — a small library of starter definitions (toolkit YAML block +
-2-3 starter tools + an inline-SVG logo) for common services: Sonarr, Radarr,
+`integrations.py` — a small library of starter definitions (toolkit YAML block +
+2-3 starter tools + an inline-SVG logo) for 20 services: Sonarr, Radarr,
 Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n, Uptime Kuma, Immich,
-Telegram, Google API (static-key subset), TrueNAS. Reachable from
-`/ui/tools/presets` — picking a preset's tool pre-fills the *existing* tool
-editor, then goes through the exact same Tier 1 validation as hand-written
-YAML. Presets never create a toolkit; `/ui/toolkits/reference` (or
-`gatekeeper preset show <key>`) prints the YAML block for a human to paste
-into `toolkits.yaml` by hand.
+Telegram, Google API (static-key subset), TrueNAS, pfSense, Jellystat,
+Netdata, SABnzbd, Paperless-ngx, Docker, and Linux-over-SSH. Most are
+`http`-shaped; Docker reuses the `docker` executor's own toolkit/tool shape
+(binaries/denied_args/path_roots, mirroring `config/examples/toolkits.yaml`)
+and Linux reuses the `ssh` executor's, via `_tool_argv()` rather than the
+http-shaped `_tool()` helper. Reachable from `/ui/tools/integrations` —
+picking an integration's tool pre-fills the *existing* tool editor, then
+goes through the exact same Tier 1 validation as hand-written YAML.
+Integrations never create a toolkit; `/ui/toolkits/reference` (or
+`gatekeeper integration show <key>`) prints the YAML block for a human to
+paste into `toolkits.yaml` by hand.
 
 Logos are each service's real mark (not a generic monogram), sourced from
 [homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
-(Apache License 2.0, attributed in `presets.py`'s `_BRAND_LOGOS`) — Tdarr is
-the one exception, with no usable SVG found there, and falls back to a
-plain colored-circle monogram. Every fetched SVG has its `style=""`
+(Apache License 2.0, attributed in `integrations.py`'s `_BRAND_LOGOS`) —
+Tdarr and Jellystat are the two exceptions (Jellystat's only available mark
+there turned out to be a raster PNG wrapped in an `<image>` tag, rejected
+by the same "no embedded bitmap" rule as an external one), and fall back to
+a plain colored-circle monogram. Every fetched SVG has its `style=""`
 attributes and any `<style>` block resolved into plain presentation
 attributes (`fill="#hex"`, not CSS) and its ids/classes namespaced per
-preset: the console's CSP (`style-src 'nonce-...'`) silently drops any
+integration: the console's CSP (`style-src 'nonce-...'`) silently drops any
 `style` it doesn't carry the nonce for, and the gallery renders every logo
 on one page at once, so an unnamespaced id or class in one service's SVG
 can collide with another's.
 
 No OAuth2 — the `http` executor supports static credentials only (bearer,
 API-key header, basic). Services that require an authorization-code flow are
-out of scope for their preset (documented per-preset in `Preset.notes`).
+out of scope for their integration (documented per-integration in `Integration.notes`).
 
 ## Project structure
 
@@ -130,12 +161,12 @@ src/gatekeeper/
   __init__.py       __version__, derived from pyproject.toml at import
                       time -- never a second hardcoded string to drift
   __main__.py        Entry point: CLI (serve/check/init/token/password/
-                      credential-key/preset), bootstrap, SIGHUP handler
+                      credential-key/integration), bootstrap, SIGHUP handler
   server.py           MCP protocol, ASGI middleware, health/metrics routes
   service.py          Call pipeline: auth -> authorize -> registry ->
                        validate -> build request -> execute -> audit;
                        dispatches to execute.py / execute_http.py /
-                       execute_truenas.py by toolkit.executor
+                       execute_truenas.py / execute_ssh.py by toolkit.executor
   tier1.py            Immutable deploy-time boundaries from toolkits.yaml
   catalog.py          Tool definitions, validation against Tier 1
   validate.py         Parameter validation, argv/HTTP-request/RPC-call
@@ -145,9 +176,11 @@ src/gatekeeper/
   execute_http.py      The `http` executor: SSRF-safe target resolution,
                        no-redirect-follow, credential-as-header injection
   execute_truenas.py   The `truenas` executor: JSON-RPC 2.0 over WebSocket
+  execute_ssh.py        The `ssh` executor: binary+argv over an SSH exec
+                       channel, mandatory host-key pinning
   credentials.py       The write-only, encrypted credential store
-  presets.py           Starter toolkit/tool definitions + logos for common
-                       services, used by /ui/tools/presets
+  integrations.py      Starter toolkit/tool definitions + logos for 20
+                       services, used by /ui/tools/integrations
   identity.py          scrypt token hashing, constant-time verify,
                        IdentityStore, roles
   audit.py             JSON Lines audit log with rotation and redaction
@@ -162,20 +195,20 @@ config/
   toolkits.yaml         Tier 1 -- immutable at runtime
   tools.yaml             Seed catalog -- mutable via UI
   examples/               Ready-made templates: identities.yaml,
-                         toolkits.yaml (incl. a working http + truenas
-                         entry), tools.yaml
+                         toolkits.yaml (incl. a working http + truenas +
+                         ssh entry), tools.yaml
 tests/
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_ui.py, test_ui_admin.py, test_credentials.py, test_execute_http.py,
-  test_execute_truenas.py, test_presets.py, test_ui_credentials.py,
-  test_ui_presets.py, conftest.py
+  test_execute_truenas.py, test_execute_ssh.py, test_integrations.py,
+  test_ui_credentials.py, test_ui_integrations.py, conftest.py
 ```
 
 ## UI architecture (`ui.py`)
 
 **No JavaScript.** CSP: `default-src 'none'; style-src 'nonce-...';
-img-src 'self' data:; form-action 'self'`. Any per-service logo (presets)
-ships as inline SVG in `presets.py`, never a hotlinked image.
+img-src 'self' data:; form-action 'self'`. Any per-service logo (integrations)
+ships as inline SVG in `integrations.py`, never a hotlinked image.
 
 All diagrams are server-rendered SVG:
 - **Access map** — `_access_graph()`: identities -> hub -> toolkits/blocked,
