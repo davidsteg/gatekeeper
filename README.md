@@ -2,7 +2,7 @@
 
 **A controlled MCP server for host operations.** Agents get a curated set of safe, audited actions instead of a shell. Each tool has its own token, granular permissions, and full audit trail.
 
-→ [Full requirements](REQUIREMENTS.md) | [For developers](AGENTS.md) | [Release notes](RELEASE.md)
+→ [Full requirements](REQUIREMENTS.md) | [Architecture](docs/ARCHITECTURE.md) | [Deployment](docs/DEPLOYMENT.md) | [Roadmap](docs/ROADMAP.md) | [For agents](AGENTS.md) | [Release notes](RELEASE.md)
 
 ---
 
@@ -24,6 +24,9 @@ No shell injection. No command confusion. No hidden side effects.
 - **Granular permissions** — per-tool, per-identity, scoped by resource
 - **Complete audit trail** — every call logged, even the rejected ones
 - **Empty on install** — nothing ships preconfigured; every capability is an audited decision
+- **Not just local commands** — `http` and `truenas` executors reach outside APIs the
+  same way, with SSRF-safe target checks and secrets kept in a write-only credential
+  store; see [Presets](#presets-add-sonarr-home-assistant-and-11-others-without-writing-yaml) below
 
 ---
 
@@ -61,7 +64,34 @@ Once started with `--ui`, gatekeeper hosts an admin dashboard at `/ui` where you
 
 ![](.readme-assets/tools.png)
 
-Each tool is a template: binary path, arguments, parameter rules. The editor shows Tier 1 limits (binaries, denied args, path roots) so you know what's allowed. Defining and granting are two steps — a tool with no grantees exists but is invisible to agents.
+Each tool is a template — a fixed action, not a free-form command. For a local binary that's a program path, arguments, and parameter rules; for an HTTP service (see Presets below) it's a method and path instead, shown as `REQUEST` on the card. Either way the editor shows the Tier 1 limits it has to stay inside, so you know what's allowed before you save. Defining and granting are two steps — a tool with no grantees exists but is invisible to every agent.
+
+### Presets: add Sonarr, Home Assistant, and 11 others without writing YAML
+
+![](.readme-assets/presets.png)
+
+Reaching an outside service (Sonarr, Radarr, Home Assistant, n8n, TrueNAS, …) used to mean nothing — gatekeeper could only run local commands and Docker. Now it has an `http` executor and a `truenas` executor, and a library of starter presets for 13 common homelab/SaaS services so you don't have to write the request shapes by hand:
+
+```
+ 1. Pick a card                2. Paste its YAML once           3. Create a tool
+ ┌─────────────┐               (deploy-time, one-time)          ┌─────────────┐
+ │  So Sonarr   │  ───────►    toolkits.yaml + redeploy  ──────►│ ✓ list_series │
+ └─────────────┘               (never done by the console)      └─────────────┘
+```
+
+The toolkit itself (which host, which address range, which credential) is still a
+deploy-time decision you paste into `toolkits.yaml` by hand and redeploy — the
+console can create *tools*, never *toolkits*, on purpose (that boundary is what
+keeps a compromised admin session from reaching an address nobody approved).
+Once a toolkit exists, picking one of its starter tools drops you straight into
+the same editor as above, pre-filled instead of blank — still checked against
+the same limits before it's saved.
+
+### Credentials: store a secret without ever showing it again
+
+![](.readme-assets/credentials.png)
+
+Sonarr's API key, a Home Assistant token, TrueNAS's key — each gets a name here, encrypted at rest. After it's saved there is no "view" button anywhere, for any role: create, rotate, and delete are the only three things you can do with it. gatekeeper injects it into the request itself when a tool calls out; it never comes back through the console, the audit log, or a tool's response.
 
 ### Identities: Manage access
 
@@ -231,8 +261,10 @@ Each request passes through 8 validation stages:
 3. **Authorize** — does this identity have permission?
 4. **Registry** — is the tool known?
 5. **Validate** — are the parameters OK?
-6. **Build argv** — substitute and check against denied args
-7. **Execute** — run the process, enforce timeout & output limits
+6. **Build the request** — substitute parameters into argv / an HTTP
+   request / a JSON-RPC call (whichever the toolkit's executor uses), and
+   check the result against denied args / target allowlist / RPC whitelist
+7. **Execute** — run the process or call, enforce timeout & output limits
 8. **Audit** — log the result
 
 Any layer can deny; all denials look the same to the agent ("Unknown tool, or not available"). The audit log knows the real reason.
@@ -252,7 +284,7 @@ Stored in `audit.dir` from `toolkits.yaml`. Automatically rotated (default: 10 f
 ## Security notes
 
 - **The Docker socket is root-equivalent on the host.** A bug here is a host compromise. That's why the config is two-tier (outer safety boundary) and the negative corpus of attack tests is kept.
-- **Container logs leak secrets.** Agents with `docker.compose_logs` see environment variables. Redaction is planned for Tier 2 (when gatekeeper knows which values are secrets).
+- **Container logs can leak secrets gatekeeper doesn't manage.** Agents with `docker.compose_logs` see that container's own environment variables verbatim — gatekeeper only knows to redact secrets it holds itself. Anything created through the credential store (Credentials page) *is* masked out of tool output and the audit log wherever it appears (FR-10.6); an arbitrary secret baked into a container's env is not, because gatekeeper has no way to know it's one.
 - **Admin access is powerful.** An admin can create any tool within Tier 1 bounds, grant it to agents, and they'll run. Treat console password like a host SSH key: one per person, changed regularly, `viewer` role for observers.
 - **No shell history in passwords.** Always use `gatekeeper password --identity <id>` without `--password <value>` to avoid the password landing in shell history.
 - **TLS required for `/ui`.** Console cookies run without `Secure` flag over HTTP. Deploy behind a reverse proxy with HTTPS, or on a private network only.
@@ -261,27 +293,26 @@ Stored in `audit.dir` from `toolkits.yaml`. Automatically rotated (default: 10 f
 
 ## Development & contribution
 
-See [AGENTS.md](AGENTS.md) for:
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for:
 - Code structure and invariants
-- Test organization
-- Security-critical modules
-- Gotchas from production incidents
+- The two-tier security model, executors, and credential store
+- Security-critical modules and the UI architecture
 
 See [REQUIREMENTS.md](REQUIREMENTS.md) for:
 - Complete feature list
 - Functional and non-functional requirements
 - Specification of each guarantee
 
+See [AGENTS.md](AGENTS.md) if you're an AI agent working in this repo — release
+workflow, testing, and known pitfalls.
+
 ---
 
 ## What's not here (yet)
 
-- **OAuth2** — the `http` executor supports static credentials only (bearer/API-key/basic);
-  services that require an authorization-code flow (most Google Workspace APIs) aren't reachable
-- **SSH executor** — optional per the spec, not built; `truenas` covers the case it was mainly for
-- **TrueNAS SCRAM-SHA-512** — API-key auth works; SCRAM mutual auth is a follow-up
-- **Multi-cluster** — designed for it, not tested yet
-- **API versioning** — MCP is the only interface; no separate HTTP API for tools
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the full list with rationale.
+Short version: no OAuth2 (static credentials only), no `ssh` executor, no
+TrueNAS SCRAM mutual auth, no multi-cluster testing.
 
 ---
 
