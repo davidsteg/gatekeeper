@@ -42,7 +42,7 @@ class _RecordingServer(asyncssh.SSHServer):
 async def _handle_process(process):
     command = process.command or ""
     process.last_command = command  # type: ignore[attr-defined]
-    if command == "true; slow":
+    if "slow" in command:
         await asyncio.sleep(2)
         process.stdout.write("late\n")
         process.exit(0)
