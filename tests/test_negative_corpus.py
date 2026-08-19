@@ -3,15 +3,11 @@
 Every test here describes an attack that **must fail**. A green run
 proves no security -- a red run proves its absence, and that is exactly
 what this corpus is for.
-
-The HTTP-related classes from NFR-8 (redirects, DNS rebinding, target allowlist)
-are deliberately missing: the `http` executor comes in stage 2. They are
-noted at the end as skipped tests, so the gap remains visible and does
-not fall into oblivion.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import os
 
 import pytest
@@ -21,6 +17,8 @@ from gatekeeper.errors import ConfigError, Denied, DenialReason, OPAQUE_DENIAL
 from gatekeeper.identity import verify_token
 from gatekeeper.validate import (
     build_argv,
+    build_http_request,
+    build_rpc_call,
     check_protected,
     resolve_parameters,
     resolve_scopes,
@@ -534,12 +532,202 @@ def test_secrets_masked_in_audit(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Not yet covered: stage 2
+# Class 10: HTTP target allowlist and path traversal (FR-8.5 to FR-8.15)
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="http executor comes in stage 2 (FR-8.5 to FR-8.12)")
-def test_http_target_allowlist():
-    """Placeholder for: host switching via parameter, redirect to foreign host,
-    DNS rebinding after the check. Deliberately visible as a gap.
+def _http_tier1(tmp_path, *, allowed_cidrs, allowed_path_prefixes=("/api/",)):
+    from gatekeeper.tier1 import load_tier1
+
+    prefixes = "\n".join(f'      - "{p}"' for p in allowed_path_prefixes)
+    cidrs = "\n".join(f'      - "{c}"' for c in allowed_cidrs)
+    path = tmp_path / "toolkits.yaml"
+    path.write_text(
+        "toolkits:\n"
+        "  demo_http:\n"
+        "    executor: http\n"
+        '    base_url: "http://127.0.0.1:1"\n'
+        '    allowed_methods: ["GET", "POST"]\n'
+        "    allowed_path_prefixes:\n"
+        f"{prefixes}\n"
+        "    allowed_cidrs:\n"
+        f"{cidrs}\n"
+        f"audit:\n  dir: {tmp_path / 'logs'}\n",
+        encoding="utf-8",
+    )
+    return load_tier1(str(path))
+
+
+def _http_tool(tier1, **overrides):
+    from gatekeeper.catalog import parse_tool_spec
+
+    spec = {
+        "id": "demo_http.get_thing", "toolkit": "demo_http", "version": 1,
+        "title": "Get thing", "description": "test", "category": "read",
+        "enabled": True, "method": "GET", "path": "/api/thing/{name}",
+        "parameters": {"name": {"type": "string", "pattern": "^.*$", "required": True}},
+        "timeout_seconds": 5, "max_output_bytes": 65536,
+    }
+    spec.update(overrides)
+    return parse_tool_spec(spec, tier1)
+
+
+def test_path_traversal_via_parameter_rejected(tmp_path):
+    """A parameter value cannot walk the resolved path outside the prefix (FR-8.7)."""
+    tier1 = _http_tier1(tmp_path, allowed_cidrs=["127.0.0.1/32"])
+    toolkit = tier1.toolkit("demo_http")
+    tool = _http_tool(tier1)
+    with pytest.raises(Denied) as exc:
+        build_http_request(tool, {"name": "../../../etc/passwd"}, toolkit)
+    assert exc.value.reason is DenialReason.PATH_ESCAPE
+
+
+def test_path_escape_is_rejected_not_normalized(tmp_path):
+    """FR-8.7: '..' is refused outright, never silently collapsed."""
+    tier1 = _http_tier1(tmp_path, allowed_cidrs=["127.0.0.1/32"])
+    toolkit = tier1.toolkit("demo_http")
+    tool = _http_tool(tier1)
+    with pytest.raises(Denied):
+        build_http_request(tool, {"name": ".."}, toolkit)
+
+
+def test_toolkit_credential_never_reachable_via_query_or_body_template():
+    """A tool definition's own query/body templates cannot smuggle a
+
+    credential-shaped key -- there is structurally no path from a tool
+    definition to `credential.value`: `execute_http.py`'s credential
+    injection is a separate step the tool's `query_template`/`body_template`
+    dicts are never consulted for (see `_credential_headers`, which reads
+    only from the resolved `ResolvedCredential`, never from `query`/`body`).
     """
+    from gatekeeper import execute_http
+
+    assert "query" not in execute_http._credential_headers.__code__.co_names
+    assert "body" not in execute_http._credential_headers.__code__.co_names
+
+
+@pytest.mark.parametrize(
+    "target_ip",
+    ["192.168.1.1", "10.0.0.1", "172.16.0.1", "169.254.169.254"],
+)
+def test_ssrf_blocked_for_addresses_outside_allowed_cidrs(tmp_path, target_ip):
+    """FR-8.9: the toolkit's CIDR allowlist, not a blanket private-range
+
+    ban, is what decides -- and it fails closed for anything not
+    explicitly listed, including the cloud metadata address.
+    """
+    tier1 = _http_tier1(tmp_path, allowed_cidrs=["203.0.113.1/32"])
+    toolkit = tier1.toolkit("demo_http")
+    assert not toolkit.in_allowed_cidrs(ipaddress.ip_address(target_ip))
+
+
+def test_narrow_cidr_does_not_cover_neighboring_host(tmp_path):
+    """FR-8.15: a /32 for one host must not accidentally cover its neighbor."""
+    tier1 = _http_tier1(tmp_path, allowed_cidrs=["192.168.1.42/32"])
+    toolkit = tier1.toolkit("demo_http")
+    assert toolkit.in_allowed_cidrs(ipaddress.ip_address("192.168.1.42"))
+    assert not toolkit.in_allowed_cidrs(ipaddress.ip_address("192.168.1.43"))
+
+
+def test_disallowed_http_method_rejected_at_load(tmp_path):
+    tier1 = _http_tier1(tmp_path, allowed_cidrs=["127.0.0.1/32"])
+    from gatekeeper.errors import Tier1Violation
+
+    with pytest.raises(Tier1Violation):
+        _http_tool(tier1, id="demo_http.delete_thing", method="DELETE")
+
+
+def test_path_outside_allowed_prefix_rejected_at_load(tmp_path):
+    tier1 = _http_tier1(tmp_path, allowed_cidrs=["127.0.0.1/32"])
+    from gatekeeper.errors import Tier1Violation
+
+    with pytest.raises(Tier1Violation):
+        _http_tool(tier1, id="demo_http.other", path="/other/{name}")
+
+
+def test_follow_redirects_true_is_rejected_at_load(tmp_path):
+    """FR-8.8 is not a configurable knob -- a toolkit cannot opt back in."""
+    path = tmp_path / "toolkits.yaml"
+    path.write_text(
+        "toolkits:\n"
+        "  demo_http:\n"
+        "    executor: http\n"
+        '    base_url: "http://127.0.0.1:1"\n'
+        '    allowed_methods: ["GET"]\n'
+        '    allowed_path_prefixes: ["/api/"]\n'
+        '    allowed_cidrs: ["127.0.0.1/32"]\n'
+        "    follow_redirects: true\n"
+        f"audit:\n  dir: {tmp_path / 'logs'}\n",
+        encoding="utf-8",
+    )
+    from gatekeeper.tier1 import load_tier1
+
+    with pytest.raises(ConfigError):
+        load_tier1(str(path))
+
+
+# --------------------------------------------------------------------------
+# Class 11: RPC method whitelist (FR-8.3c/FR-8.3d)
+# --------------------------------------------------------------------------
+
+
+def _truenas_tier1(tmp_path, allowed_rpc_methods):
+    from gatekeeper.tier1 import load_tier1
+
+    methods = "\n".join(f"      - {m}" for m in allowed_rpc_methods)
+    path = tmp_path / "toolkits.yaml"
+    path.write_text(
+        "toolkits:\n"
+        "  demo_truenas:\n"
+        "    executor: truenas\n"
+        '    ws_url: "wss://127.0.0.1:1/api/current"\n'
+        "    allowed_rpc_methods:\n"
+        f"{methods}\n"
+        f"audit:\n  dir: {tmp_path / 'logs'}\n",
+        encoding="utf-8",
+    )
+    return load_tier1(str(path))
+
+
+def test_rpc_method_not_on_whitelist_rejected_at_load(tmp_path):
+    from gatekeeper.catalog import parse_tool_spec
+    from gatekeeper.errors import Tier1Violation
+
+    tier1 = _truenas_tier1(tmp_path, ["pool.query"])
+    spec = {
+        "id": "demo_truenas.delete_dataset", "toolkit": "demo_truenas", "version": 1,
+        "title": "x", "description": "x", "category": "write", "enabled": True,
+        "method": "pool.dataset.delete", "params": {},
+        "parameters": {}, "required_scopes": [],
+        "timeout_seconds": 10, "max_output_bytes": 4096,
+    }
+    with pytest.raises(Tier1Violation):
+        parse_tool_spec(spec, tier1)
+
+
+@pytest.mark.parametrize(
+    "malicious_value",
+    ["tank; pool.dataset.delete", "tank\npool.dataset.delete", "tank\x00"],
+)
+def test_rpc_param_value_cannot_change_the_method(tmp_path, malicious_value):
+    from gatekeeper.catalog import parse_tool_spec
+
+    tier1 = _truenas_tier1(tmp_path, ["pool.dataset.create"])
+    spec = {
+        "id": "demo_truenas.create_dataset", "toolkit": "demo_truenas", "version": 1,
+        "title": "x", "description": "x", "category": "write", "enabled": True,
+        "method": "pool.dataset.create", "params": {"name": "{name}"},
+        "parameters": {"name": {"type": "string", "pattern": "^.*$", "required": True}},
+        "required_scopes": [], "timeout_seconds": 10, "max_output_bytes": 4096,
+    }
+    tool = parse_tool_spec(spec, tier1)
+    toolkit = tier1.toolkit("demo_truenas")
+    try:
+        resolved = resolve_parameters(tool, {"name": malicious_value})
+    except Denied:
+        # Control characters are rejected before ever reaching build_rpc_call --
+        # also a pass, since the method still cannot be changed.
+        return
+    method, params = build_rpc_call(tool, resolved, toolkit)
+    assert method == "pool.dataset.create"
+    assert params["name"] == malicious_value

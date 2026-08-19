@@ -13,9 +13,10 @@ import os
 from collections import Counter
 from typing import Any
 
-from . import execute, validate
+from . import execute, execute_http, execute_truenas, validate
 from .audit import AuditLog
 from .catalog import Catalog, ToolDef, load_catalog
+from .credentials import CredentialStore
 from .errors import Denied, DenialReason
 from .identity import Identity, load_identities
 from .ratelimit import RateLimiter
@@ -41,11 +42,13 @@ class Service:
         tier1: Tier1,
         catalog: Catalog,
         audit: AuditLog,
+        credentials: CredentialStore | None = None,
         docker_host: str | None = None,
     ) -> None:
         self.tier1 = tier1
         self.catalog = catalog
         self.audit = audit
+        self.credentials = credentials
         self.docker_host = docker_host
         self.locks = execute.ResourceLocks()
         self.limiter = RateLimiter(tier1.rate_limits)
@@ -133,7 +136,20 @@ class Service:
                         f"Scope {scope!r} is not covered by the profile",
                     )
 
-            argv = validate.build_argv(tool, values, toolkit)
+            # The executor-specific request is built here, inside the same
+            # try/except as everything else -- a bad parameter surfaces as
+            # a normal "denied" audit entry regardless of which executor
+            # the toolkit uses (FR-8.7 is the HTTP counterpart of FR-5.4,
+            # checked at the same point in the pipeline).
+            argv: list[str] = []
+            http_request: tuple[str, str, dict[str, str], dict[str, str] | None] | None = None
+            rpc_call: tuple[str, dict[str, str]] | None = None
+            if toolkit.executor in ("docker", "local"):
+                argv = validate.build_argv(tool, values, toolkit)
+            elif toolkit.executor == "http":
+                http_request = validate.build_http_request(tool, values, toolkit)
+            elif toolkit.executor == "truenas":
+                rpc_call = validate.build_rpc_call(tool, values, toolkit)
         except Denied as denial:
             self.metrics[(tool_id, identity.id, "denied")] += 1
             self.audit.call(
@@ -148,15 +164,37 @@ class Service:
             )
             raise
 
+        timeout_seconds = min(tool.timeout_seconds, toolkit.max_timeout_seconds)
+        max_output_bytes = min(tool.max_output_bytes, toolkit.max_output_bytes)
+
         lock_key = scopes[0] if scopes else tool.id
         async with self.locks.get(lock_key):
-            result = await execute.run(
-                argv,
-                timeout_seconds=min(tool.timeout_seconds, toolkit.max_timeout_seconds),
-                max_output_bytes=min(tool.max_output_bytes, toolkit.max_output_bytes),
-                idempotent=tool.idempotent,
-                env=self._environment(toolkit.executor),
-            )
+            if toolkit.executor in ("docker", "local"):
+                result = await execute.run(
+                    argv,
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent,
+                    env=self._environment(toolkit.executor),
+                )
+            elif toolkit.executor == "http":
+                assert http_request is not None
+                method, path, query, body = http_request
+                result = await execute_http.run(
+                    method=method, path=path, query=query, body=body,
+                    toolkit=toolkit, credentials=self.credentials,
+                    timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent, redact=self.audit.redact,
+                )
+            else:
+                assert toolkit.executor == "truenas" and rpc_call is not None
+                rpc_method, params = rpc_call
+                result = await execute_truenas.run(
+                    method=rpc_method, params=params, toolkit=toolkit,
+                    credentials=self.credentials,
+                    timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent, redact=self.audit.redact,
+                )
 
         self.metrics[(tool_id, identity.id, result.outcome)] += 1
         self.audit.call(
@@ -209,6 +247,16 @@ class Service:
                     seen["docker"] = result.outcome == execute.OUTCOME_OK
                 except Denied:
                     seen["docker"] = False
+                continue
+            if toolkit.executor == "http":
+                # TCP-connect only, no HTTP request: unlike `docker version`,
+                # there is no safe, universal "does nothing" request across
+                # arbitrary APIs. Reaching the validated IP:port is what
+                # /health/ready can honestly claim.
+                seen["http"] = await execute_http.probe(toolkit)
+                continue
+            if toolkit.executor == "truenas":
+                seen["truenas"] = await execute_truenas.probe(toolkit)
                 continue
             seen[toolkit.executor] = False
         self.executor_ready = seen

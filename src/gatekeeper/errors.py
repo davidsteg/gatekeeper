@@ -31,6 +31,9 @@ class DenialReason(str, enum.Enum):
     RATE_LIMITED = "rate_limited"
     TIMEOUT = "timeout"
     EXECUTOR_UNAVAILABLE = "executor_unavailable"
+    SSRF_BLOCKED = "ssrf_blocked"
+    RPC_METHOD_DENIED = "rpc_method_denied"
+    CREDENTIAL_UNAVAILABLE = "credential_unavailable"
 
 
 #: Uniform response for everything the agent should not know (FR-7.7).

@@ -207,9 +207,22 @@ def test_admin_cannot_use_a_denied_argument(admin_env):
 
 
 def test_no_route_writes_tier1(admin_env):
-    """There is no path through which toolkits.yaml is reachable."""
-    paths = [getattr(r, "path", "") for r in admin_env["app"].routes]
-    assert not [p for p in paths if "toolkit" in p.lower()]
+    """There is no path through which toolkits.yaml is written.
+
+    '/ui/toolkits/reference' is allowed: it is GET-only and renders
+    copy-pasteable YAML for a human to paste into toolkits.yaml by hand --
+    it holds no path to the file itself (FR-4.11 stays about writing, not
+    about the word 'toolkit' appearing in a URL).
+    """
+    toolkit_routes = [
+        r for r in admin_env["app"].routes if "toolkit" in getattr(r, "path", "").lower()
+    ]
+    for route in toolkit_routes:
+        methods = getattr(route, "methods", None) or set()
+        assert methods <= {"GET", "HEAD"}, (
+            f"{route.path} accepts {methods} -- only GET/HEAD may touch a "
+            "'toolkit' path"
+        )
     assert not hasattr(admin_env["store"], "save_toolkit")
     assert "toolkits" not in "".join(dir(admin_env["store"]))
 

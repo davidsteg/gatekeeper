@@ -60,6 +60,9 @@ from starlette.routing import Route
 from .__init__ import __version__
 from .audit import AuditLog
 from .catalog import ToolDef
+from .credentials import KINDS as CREDENTIAL_KINDS
+from .credentials import CredentialStore
+from .credentials import WriteRefused as CredentialWriteRefused
 from .errors import ConfigError
 from .identity import (
     ADMIN_ROLE,
@@ -68,6 +71,7 @@ from .identity import (
     UI_ROLES,
     IdentityStore,
 )
+from .presets import PRESETS, Preset
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
 
@@ -906,6 +910,15 @@ a.reset:hover { color: var(--accent); }
   padding: .7rem .8rem; font-size: .9rem; word-break: break-all; margin: .5rem 0;
 }
 
+/* -- Presets -- */
+.preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .8rem; }
+.preset-card { display: flex; flex-direction: column; gap: .5rem; min-height: 100%; }
+.preset-card-head { display: flex; align-items: center; gap: .6rem; }
+.preset-card-head .name { font-weight: 650; font-size: 1rem; }
+.preset-card-foot { margin-top: auto; }
+.preset-logo { display: inline-flex; flex: none; border-radius: 999px; overflow: hidden; }
+.preset-logo svg { display: block; width: 100%; height: 100%; }
+
 /* -- Login -- */
 .login { max-width: 390px; margin: 13vh auto; padding: 0 1.15rem; }
 .login .card { margin: 0; }
@@ -928,7 +941,9 @@ a.reset:hover { color: var(--accent); }
 _NAV = (
     ("", "Overview", "gauge"),
     ("/tools", "Tools", "sliders"),
+    ("/tools/presets", "Presets", "package"),
     ("/identities", "Identities", "key"),
+    ("/credentials", "Credentials", "lock"),
     ("/audit", "Audit", "clock"),
 )
 
@@ -1982,6 +1997,7 @@ def _view_tools(
     sections = []
     for tk_name in sorted(by_toolkit):
         tk_tools = by_toolkit[tk_name]
+        tk_executor_name = service.tier1.toolkits[tk_name].executor if tk_name in service.tier1.toolkits else ""
         n_read = sum(1 for t in tk_tools if t.category == "read")
         n_write = len(tk_tools) - n_read
         n_enabled = sum(1 for t in tk_tools if t.enabled)
@@ -2036,6 +2052,24 @@ def _view_tools(
                 else '<span class="pill deny">nobody</span>'
             )
 
+            # The primary-action row and the detail row are shaped by which
+            # executor the tool's toolkit uses -- an http/truenas tool has
+            # no binary/argv to show, and showing an empty one would read
+            # as a bug rather than as "this executor doesn't have that".
+            if tk_executor_name == "http":
+                action_label, action_value = "request", f"{tool.http_method} {tool.path_template}"
+                detail_label, detail_value = "query/body", " ".join(
+                    f"{k}={v}" for k, v in {**tool.query_template, **(tool.body_template or {})}.items()
+                ) or "-"
+            elif tk_executor_name == "truenas":
+                action_label, action_value = "rpc method", tool.rpc_method or ""
+                detail_label, detail_value = "params", " ".join(
+                    f"{k}={v}" for k, v in (tool.params_template or {}).items()
+                ) or "-"
+            else:
+                action_label, action_value = "binary", tool.binary or ""
+                detail_label, detail_value = "argv", " ".join(tool.argv)
+
             # Compact card: header row + expandable details
             cards.append(
                 f'<div class="t-card {"disabled" if not tool.enabled else ""}">'
@@ -2047,13 +2081,13 @@ def _view_tools(
                 f'<div class="t-card-marks">{" ".join(marks)}</div>'
                 f'</div>'
                 f'<div class="t-card-body">'
-                f'<div class="t-card-row"><span class="muted">binary</span>'
-                f'<code class="mono">{_e(tool.binary)}</code></div>'
+                f'<div class="t-card-row"><span class="muted">{action_label}</span>'
+                f'<code class="mono">{_e(action_value)}</code></div>'
                 f'<div class="t-card-row"><span class="muted">granted to</span>{granted}</div>'
                 f'<details class="t-detail"><summary>params, scopes &amp; limits</summary>'
                 f'<div class="t-detail-body">'
-                f'<div class="t-card-row"><span class="muted">argv</span>'
-                f'<code class="argv">{_e(" ".join(tool.argv))}</code></div>'
+                f'<div class="t-card-row"><span class="muted">{detail_label}</span>'
+                f'<code class="argv">{_e(detail_value)}</code></div>'
                 f'<div class="t-card-row"><span class="muted">params</span>{_param_cell(tool)}</div>'
                 f'<div class="t-card-row"><span class="muted">scopes</span>{_pills(tool.required_scopes, tone="accent")}</div>'
                 f'<div class="t-card-row"><span class="muted">limits</span>'
@@ -2144,6 +2178,79 @@ def _view_identities(
             + "</div>"
         )
     return "".join(parts)
+
+
+def _view_credentials(
+    service: Service, session: Session, store: ConfigStore | None,
+    credentials: CredentialStore | None,
+) -> str:
+    if credentials is None:
+        return _note(
+            "<strong>No credential store configured.</strong> Set "
+            "GATEKEEPER_CREDENTIAL_KEY (or GATEKEEPER_CREDENTIAL_KEY_FILE) and "
+            "restart to enable it.",
+            tone="bad",
+        )
+    used_by: dict[str, tuple[str, ...]] = {}
+    for tk in service.tier1.toolkits.values():
+        if tk.credential:
+            used_by.setdefault(tk.credential, ())
+            used_by[tk.credential] = (*used_by[tk.credential], tk.name)
+    rev = credentials.revision()
+    parts = []
+    for meta in credentials.names(used_by=used_by):
+        ops = ""
+        if session.can_write and store is not None:
+            fields = {"name": meta.name, "rev": rev}
+            ops = (
+                f'<a class="btn" href="{UI_PREFIX}/credentials/rotate?name={_e(meta.name)}">'
+                f'{_icon("refresh", 14)}Rotate</a>'
+                + f'<a class="btn" title="Delete" '
+                f'href="{UI_PREFIX}/credentials/delete?name={_e(meta.name)}">'
+                f'{_icon("trash", 14)}</a>'
+            )
+        overlap = (
+            '<span class="pill accent">rotation overlap active</span>'
+            if meta.in_overlap
+            else ""
+        )
+        parts.append(
+            '<div class="card">'
+            f'<div class="card-head"><span class="name mono">{_e(meta.name)}</span>'
+            f'<span class="pill">{_icon("lock", 12)}{_e(meta.kind)}</span>{overlap}'
+            + (
+                f'<span class="pill">{len(meta.used_by)} toolkit(s)</span>'
+                if meta.used_by
+                else '<span class="pill deny">unused</span>'
+            )
+            + f'<span class="spacer"></span>{ops}</div>'
+            '<div class="rows">'
+            + (
+                f'<div class="row"><div class="row-l">{_icon("terminal", 14)}Header</div>'
+                f'<div class="mono">{_e(meta.header)}</div></div>'
+                if meta.header
+                else ""
+            )
+            + f'<div class="row"><div class="row-l">{_icon("folder", 14)}Used by</div>'
+            f"<div>{_pills(sorted(meta.used_by), tone='ok')}</div></div>"
+            f'<div class="row"><div class="row-l">{_icon("clock", 14)}Created</div>'
+            f'<div class="mono">{_e(meta.created_at)}</div></div>'
+            + (
+                f'<div class="row"><div class="row-l">{_icon("refresh", 14)}Rotated</div>'
+                f'<div class="mono">{_e(meta.rotated_at)}</div></div>'
+                if meta.rotated_at
+                else ""
+            )
+            + "</div></div>"
+        )
+    return (
+        _note(
+            "The value is never shown here or anywhere else once saved "
+            "(FR-10.2). Create, rotate, and delete -- there is no 'view'.",
+            icon="lock",
+        )
+        + ("".join(parts) or '<p class="muted">No credentials yet.</p>')
+    )
 
 
 _OUTCOMES = ("", "ok", "denied", "failed", "unknown")
@@ -2334,6 +2441,121 @@ def _tier1_reference(service: Service) -> str:
     return "".join(cards)
 
 
+def _preset_logo(preset: Preset, size: int = 28) -> str:
+    """Renders a preset's inline-SVG brand mark.
+
+    Deliberately its own helper, not folded into `_icon()`/`_ICONS`: those
+    are generic Lucide-style UI chrome (nav, buttons) shared across every
+    page, whereas a preset logo is per-service and lives in `presets.py`,
+    not this module. Conflating the two dicts would make an unrelated icon
+    edit risk breaking every preset card.
+    """
+    return f'<span class="preset-logo" style="width:{size}px;height:{size}px">{preset.logo_svg}</span>'
+
+
+def _view_presets(service: Service, session: Session, store: ConfigStore | None) -> str:
+    configured = set(service.tier1.toolkits)
+    cards = []
+    for preset in sorted(PRESETS.values(), key=lambda p: p.display_name):
+        has_toolkit = preset.key in configured
+        if has_toolkit and session.can_write and store is not None:
+            action = (
+                f'<a class="btn primary" '
+                f'href="{UI_PREFIX}/tools/presets/pick?key={_e(preset.key)}">'
+                f'{_icon("plus", 14)}Create a tool</a>'
+            )
+        else:
+            action = (
+                f'<a class="btn" href="{UI_PREFIX}/toolkits/reference#{_e(preset.key)}">'
+                f'{_icon("lock", 14)}'
+                + ("View starter tools" if has_toolkit else "Add this toolkit first")
+                + "</a>"
+            )
+        cards.append(
+            '<div class="card"><div class="pad preset-card">'
+            f'<div class="preset-card-head">{_preset_logo(preset)}'
+            f'<span class="name">{_e(preset.display_name)}</span>'
+            + (
+                '<span class="pill ok">toolkit configured</span>'
+                if has_toolkit
+                else '<span class="pill">toolkit not configured</span>'
+            )
+            + "</div>"
+            + (f'<p class="muted">{_e(preset.notes)}</p>' if preset.notes else "")
+            + f'<div class="preset-card-foot">{action}</div>'
+            "</div></div>"
+        )
+    return (
+        _note(
+            "Picking a preset only pre-fills the tool editor -- it goes "
+            "through the exact same Tier 1 validation as hand-written YAML "
+            "(FR-4.6). The toolkit itself always stays a manual, deploy-time "
+            "edit (FR-4.11); use the reference page for its YAML.",
+            icon="package",
+        )
+        + f'<div class="preset-grid">{"".join(cards)}</div>'
+    )
+
+
+def _view_preset_picker(preset: Preset, service: Service, session: Session) -> str:
+    rows = []
+    for spec in preset.tool_specs:
+        exists = service.catalog.raw_of(spec["id"]) is not None
+        action = (
+            f'<span class="pill">already defined</span>'
+            if exists
+            else (
+                f'<a class="btn primary" href="{UI_PREFIX}/tools/presets/new'
+                f'?key={_e(preset.key)}&tool={_e(spec["id"])}">'
+                f'{_icon("plus", 14)}Use this</a>'
+            )
+        )
+        rows.append(
+            '<div class="card"><div class="card-head">'
+            f'<span class="name mono">{_e(spec["id"])}</span>'
+            f'<span class="pill {"accent" if spec.get("category") == "write_external" else ""}">'
+            f'{_e(spec.get("category", ""))}</span>'
+            f'<span class="spacer"></span>{action}</div>'
+            f'<div class="pad"><p class="muted">{_e(spec.get("description", ""))}</p></div>'
+            "</div>"
+        )
+    return (
+        f'<div class="preset-card-head">{_preset_logo(preset, 36)}'
+        f'<span class="name">{_e(preset.display_name)}</span></div>'
+        + (f'<p class="muted">{_e(preset.notes)}</p>' if preset.notes else "")
+        + "".join(rows)
+        + f'<p><a class="btn" href="{UI_PREFIX}/tools/presets">'
+        f'{_icon("back", 14)}Back to presets</a></p>'
+    )
+
+
+def _view_toolkit_reference() -> str:
+    sections = []
+    for preset in sorted(PRESETS.values(), key=lambda p: p.display_name):
+        sections.append(
+            f'<div class="card" id="{_e(preset.key)}"><div class="card-head">'
+            f'{_preset_logo(preset)}<span class="name">{_e(preset.display_name)}</span></div>'
+            '<div class="pad">'
+            + (f'<p class="muted">{_e(preset.notes)}</p>' if preset.notes else "")
+            + "<p>Paste this block under <code>toolkits:</code> in "
+            "<code>toolkits.yaml</code>, fill in the CHANGEME placeholders "
+            "for your host and address range, then redeploy (FR-4.11) -- "
+            "this page cannot write the file for you.</p>"
+            f'<pre class="mono">{_e(preset.toolkit_yaml)}</pre>'
+            "</div></div>"
+        )
+    return (
+        _note(
+            "Toolkit creation is a deploy-time decision and stays one "
+            "(FR-4.11) &ndash; this page only saves you writing the YAML "
+            "block from scratch. Once a toolkit exists here, its presets "
+            "become actionable on the Presets page.",
+            icon="lock",
+        )
+        + "".join(sections)
+    )
+
+
 def _tool_editor(
     service: Service, session: Session, *, yaml_text: str, rev: str,
     replaces: str | None, error: str = "",
@@ -2476,6 +2698,62 @@ def _identity_editor(
     )
 
 
+def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
+    kind_options = "".join(
+        f'<option value="{_e(k)}">{_e(k)}</option>' for k in sorted(CREDENTIAL_KINDS)
+    )
+    return (
+        (_note(f"<strong>Rejected.</strong> {_e(error)}", tone="bad") if error else "")
+        + '<div class="editor card"><div class="pad">'
+        f'<form method="post" action="{UI_PREFIX}/credentials/new">'
+        f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
+        f'<input type="hidden" name="rev" value="{_e(rev)}">'
+        '<div class="field"><span>Name'
+        '<div class="hint">What a toolkit\'s <code>credential:</code> field in '
+        "toolkits.yaml refers to -- e.g. <code>sonarr</code>.</div></span>"
+        '<input name="name" required pattern="[a-z][a-z0-9_-]*"></div>'
+        '<div class="field"><span>Kind'
+        '<div class="hint">api_key_header/bearer/basic inject an HTTP header; '
+        "ws_api_key is used by the truenas executor's auth call.</div></span>"
+        f'<select name="kind">{kind_options}</select></div>'
+        '<div class="field"><span>Header name'
+        '<div class="hint">Only for kind=api_key_header, e.g. '
+        "<code>X-Api-Key</code>. Ignored otherwise.</div></span>"
+        '<input name="header"></div>'
+        '<div class="field"><span>Value'
+        '<div class="hint">Encrypted at rest, never shown again after this '
+        "form (FR-10.2).</div></span>"
+        '<input type="password" name="value" autocomplete="new-password" required></div>'
+        f'<button type="submit">{_icon("save", 14)}Create</button> '
+        f'<a class="btn" href="{UI_PREFIX}/credentials">{_icon("back", 14)}Cancel</a>'
+        "</form></div></div>"
+    )
+
+
+def _credential_rotate_editor(
+    session: Session, *, name: str, rev: str, error: str = ""
+) -> str:
+    return (
+        (_note(f"<strong>Rejected.</strong> {_e(error)}", tone="bad") if error else "")
+        + '<div class="editor card"><div class="pad">'
+        f'<form method="post" action="{UI_PREFIX}/credentials/rotate">'
+        f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
+        f'<input type="hidden" name="rev" value="{_e(rev)}">'
+        f'<input type="hidden" name="name" value="{_e(name)}">'
+        f'<p>Rotating <code>{_e(name)}</code>.</p>'
+        '<div class="field"><span>New value</span>'
+        '<input type="password" name="value" autocomplete="new-password" required></div>'
+        '<div class="field"><span>Overlap window, seconds'
+        '<div class="hint">The previous value keeps resolving for this many '
+        "seconds after rotation (FR-10.5), so calls already in flight with the "
+        "old key do not break. 0 replaces it immediately.</div></span>"
+        '<input type="number" name="overlap_seconds" value="0" min="0"></div>'
+        f'<button type="submit">{_icon("refresh", 14)}Rotate</button> '
+        f'<a class="btn" href="{UI_PREFIX}/credentials">{_icon("back", 14)}Cancel</a>'
+        "</form></div></div>"
+    )
+
+
 def _confirm(
     session: Session, *, question: str, detail: str, action: str,
     fields: dict[str, str], back: str,
@@ -2558,6 +2836,7 @@ def build_ui_routes(
     identities: IdentityStore,
     audit: AuditLog,
     store: ConfigStore | None = None,
+    credentials: CredentialStore | None = None,
     sessions: SessionStore | None = None,
     throttle: LoginThrottle | None = None,
 ) -> list[Route]:
@@ -2977,6 +3256,80 @@ def build_ui_routes(
             )
         return RedirectResponse(f"{UI_PREFIX}/tools", status_code=303)
 
+    # -- Presets ---------------------------------------------------------
+    # Read-only browsing/picking; the actual write still goes through
+    # `tool_save` above -- a preset only ever pre-fills that same form.
+
+    async def preset_gallery(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        return _shell(
+            request, "Presets", _view_presets(service, session, store), session,
+            icon="package", active="/tools/presets",
+            subtitle="Starter definitions for common services, built on the http/truenas executors.",
+        )
+
+    async def preset_pick(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        preset = PRESETS.get(request.query_params.get("key", ""))
+        if preset is None:
+            return RedirectResponse(f"{UI_PREFIX}/tools/presets", status_code=303)
+        return _shell(
+            request, preset.display_name,
+            _view_preset_picker(preset, service, session), session,
+            icon="package", active="/tools/presets",
+        )
+
+    async def preset_tool_new_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or not session.can_write:
+            return RedirectResponse(f"{UI_PREFIX}/tools/presets", status_code=303)
+        preset = PRESETS.get(request.query_params.get("key", ""))
+        if preset is None:
+            return RedirectResponse(f"{UI_PREFIX}/tools/presets", status_code=303)
+        tool_id = request.query_params.get("tool", "")
+        spec = next((s for s in preset.tool_specs if s["id"] == tool_id), None)
+        if spec is None:
+            return RedirectResponse(
+                f"{UI_PREFIX}/tools/presets/pick?key={preset.key}", status_code=303
+            )
+        if preset.key not in service.tier1.toolkits:
+            return _shell(
+                request, preset.display_name,
+                _note(
+                    f"<strong>The {_e(preset.key)!s} toolkit is not configured "
+                    "yet.</strong> Add it from the reference page and redeploy "
+                    "before creating tools from this preset.",
+                    tone="bad",
+                ),
+                session, icon="package", active="/tools/presets",
+            )
+        # The same editor, the same YAML textarea, the same save path as a
+        # hand-written definition (`tool_save` -> `store.save_tool` ->
+        # `parse_tool_spec`) -- a preset never gets a shortcut around Tier 1.
+        return _shell(
+            request, f"New tool from {preset.display_name}",
+            _tool_editor(service, session, yaml_text=tool_to_yaml(spec),
+                         rev=store.tools_revision(), replaces=None),
+            session, icon="plus", active="/tools/presets",
+            subtitle="Pre-filled from the preset -- still checked against Tier 1 before it is stored.",
+        )
+
+    async def toolkit_reference(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        return _shell(
+            request, "Toolkit reference", _view_toolkit_reference(), session,
+            icon="lock", active="none",
+            subtitle="Copy-pasteable Tier 1 blocks. Toolkit creation stays a manual, deploy-time edit (FR-4.11).",
+        )
+
     # -- Write identities -------------------------------------------
 
     def _identities_actions(session: Session) -> str:
@@ -3161,6 +3514,119 @@ def build_ui_routes(
             return RedirectResponse(f"{UI_PREFIX}/login", status_code=303)
         return RedirectResponse(f"{UI_PREFIX}/identities", status_code=303)
 
+    # -- Write credentials -------------------------------------------
+
+    def _credentials_actions(session: Session) -> str:
+        if not (session.can_write and store is not None and credentials is not None):
+            return ""
+        return (
+            f'<a class="btn primary" href="{UI_PREFIX}/credentials/new">'
+            f'{_icon("plus", 14)}New credential</a>'
+        )
+
+    async def credential_new_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or credentials is None or not session.can_write:
+            return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+        return _shell(
+            request, "New credential",
+            _credential_editor(session, rev=credentials.revision()),
+            session, icon="plus", active="/credentials",
+        )
+
+    async def credential_create(request: Request, session: Session, form: FormData) -> Response:
+        if credentials is None:
+            return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+        rev = str(form.get("rev") or "")
+        try:
+            credentials.create(
+                str(form.get("name") or "").strip(),
+                kind=str(form.get("kind") or ""),
+                header=str(form.get("header") or "").strip() or None,
+                value=str(form.get("value") or ""),
+                actor=session.identity, rev=rev,
+            )
+        except (CredentialWriteRefused, ConfigError) as exc:
+            return _shell(
+                request, "New credential",
+                _credential_editor(session, rev=rev, error=str(exc)),
+                session, icon="plus", active="/credentials", status=400,
+            )
+        return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+
+    async def credential_rotate_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or credentials is None or not session.can_write:
+            return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+        name = request.query_params.get("name", "")
+        return _shell(
+            request, f"Rotate {name}",
+            _credential_rotate_editor(session, name=name, rev=credentials.revision()),
+            session, icon="refresh", active="/credentials",
+        )
+
+    async def credential_rotate(request: Request, session: Session, form: FormData) -> Response:
+        if credentials is None:
+            return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+        name = str(form.get("name") or "")
+        rev = str(form.get("rev") or "")
+        try:
+            overlap = int(form.get("overlap_seconds") or "0")
+        except ValueError:
+            overlap = 0
+        try:
+            credentials.rotate(
+                name, value=str(form.get("value") or ""), overlap_seconds=overlap,
+                actor=session.identity, rev=rev,
+            )
+        except (CredentialWriteRefused, ConfigError) as exc:
+            return _shell(
+                request, f"Rotate {name}",
+                _credential_rotate_editor(session, name=name, rev=rev, error=str(exc)),
+                session, icon="refresh", active="/credentials", status=400,
+            )
+        return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+
+    async def credential_delete_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or credentials is None or not session.can_write:
+            return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+        name = request.query_params.get("name", "")
+        return _shell(
+            request, "Delete credential",
+            _confirm(
+                session,
+                question=f"Delete {name}?",
+                detail=(
+                    "Any toolkit that references this credential can no longer "
+                    "authenticate -- its tools will fail at call time, not silently."
+                ),
+                action=f"{UI_PREFIX}/credentials/delete",
+                fields={"name": name, "rev": credentials.revision()},
+                back=f"{UI_PREFIX}/credentials",
+            ),
+            session, icon="trash", active="/credentials",
+        )
+
+    async def credential_delete(request: Request, session: Session, form: FormData) -> Response:
+        if credentials is None:
+            return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+        name = str(form.get("name") or "")
+        try:
+            credentials.delete(name, actor=session.identity, rev=str(form.get("rev") or ""))
+        except (CredentialWriteRefused, ConfigError) as exc:
+            return _shell(
+                request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
+                session, icon="ban", active="/credentials", status=400,
+            )
+        return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+
     async def probe_executors_action(request: Request) -> Response:
         # Not gated by `writer`: this reads reachability, it does not
         # touch config, so it works the same in a read-only deployment
@@ -3234,6 +3700,10 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/tools/toggle", writer(tool_toggle), methods=["POST"]),
         Route(f"{UI_PREFIX}/tools/delete", tool_delete_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/tools/delete", writer(tool_delete), methods=["POST"]),
+        Route(f"{UI_PREFIX}/tools/presets", preset_gallery, methods=["GET"]),
+        Route(f"{UI_PREFIX}/tools/presets/pick", preset_pick, methods=["GET"]),
+        Route(f"{UI_PREFIX}/tools/presets/new", preset_tool_new_form, methods=["GET"]),
+        Route(f"{UI_PREFIX}/toolkits/reference", toolkit_reference, methods=["GET"]),
         Route(
             f"{UI_PREFIX}/identities",
             guarded(
@@ -3254,6 +3724,24 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/identities/rotate", writer(identity_rotate), methods=["POST"]),
         Route(f"{UI_PREFIX}/identities/delete", identity_delete_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/identities/delete", writer(identity_delete), methods=["POST"]),
+        Route(
+            f"{UI_PREFIX}/credentials",
+            guarded(
+                lambda r, s: _view_credentials(service, s, store, credentials),
+                "Credentials", "/credentials", icon="lock", actions=_credentials_actions,
+                subtitle=(
+                    "Named secrets a toolkit's <code>credential:</code> field "
+                    "refers to. Write-only: create, rotate, delete -- never read."
+                ),
+            ),
+            methods=["GET"],
+        ),
+        Route(f"{UI_PREFIX}/credentials/new", credential_new_form, methods=["GET"]),
+        Route(f"{UI_PREFIX}/credentials/new", writer(credential_create), methods=["POST"]),
+        Route(f"{UI_PREFIX}/credentials/rotate", credential_rotate_form, methods=["GET"]),
+        Route(f"{UI_PREFIX}/credentials/rotate", writer(credential_rotate), methods=["POST"]),
+        Route(f"{UI_PREFIX}/credentials/delete", credential_delete_form, methods=["GET"]),
+        Route(f"{UI_PREFIX}/credentials/delete", writer(credential_delete), methods=["POST"]),
         Route(f"{UI_PREFIX}/account", account_form, methods=["GET"]),
         Route(
             f"{UI_PREFIX}/account/password",

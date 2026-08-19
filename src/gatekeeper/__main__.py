@@ -11,6 +11,7 @@ import uvicorn
 
 from .audit import AuditLog, Redactor
 from .catalog import load_catalog
+from .credentials import KEY_ENV, CredentialStore, generate_master_key
 from .errors import ConfigError
 from .identity import (
     UI_ROLES,
@@ -48,7 +49,11 @@ def _state_dir() -> str:
 def _config_path(name: str, args_value: str | None) -> str:
     if args_value:
         return args_value
-    base = _state_dir() if name in ("tools.yaml", "identities.yaml") else _config_dir()
+    base = (
+        _state_dir()
+        if name in ("tools.yaml", "identities.yaml", "credentials.yaml")
+        else _config_dir()
+    )
     return os.path.join(base, name)
 
 
@@ -98,10 +103,27 @@ def cmd_serve(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+
+    credentials_path = _config_path("credentials.yaml", args.credentials)
+    credentials = CredentialStore(path=credentials_path, audit=audit)
+    try:
+        # Forces a load and, if any credential exists, a decrypt -- a
+        # missing/wrong master key or a corrupt file fails startup here,
+        # not on the first agent call that happens to need a credential.
+        credentials.plaintext_values_for_masking()
+    except ConfigError as exc:
+        print(f"Configuration error: {credentials_path}: {exc}", file=sys.stderr)
+        return 2
+    audit.set_secrets(credentials.plaintext_values_for_masking())
+    credentials.on_change = lambda: audit.set_secrets(
+        credentials.plaintext_values_for_masking()
+    )
+
     service = Service(
         tier1=tier1,
         catalog=catalog,
         audit=audit,
+        credentials=credentials,
         docker_host=os.environ.get("DOCKER_HOST"),
     )
     log_startup(service, identities)
@@ -172,6 +194,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
                 "Console enabled at /ui (admins may write; %d admin(s) configured)",
                 sum(1 for i in identities.identities.values() if i.role == "admin"),
             )
+            if not credentials.writable():
+                logger.warning(
+                    "Credential writes will be refused: credentials.yaml not "
+                    "writable (read-only mount?)"
+                )
 
     app = build_app(
         service=service,
@@ -180,6 +207,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         host=args.host,
         ui=ui_enabled,
         store=store,
+        credentials=credentials if store is not None else None,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
@@ -508,6 +536,27 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_credential_key(args: argparse.Namespace) -> int:
+    """Generates the master key for the credential store (REQUIREMENTS.md §11).
+
+    Shown exactly once, like the token/password from `init` (FR-2.6). This
+    is deliberately a separate command, not something `init`/`serve`
+    generates on its own: the master key must sit outside the dataset that
+    holds the ciphertext it protects (FR-10.3), and gatekeeper cannot know
+    on its own where an operator wants that -- an env var here, a mounted
+    secret file there.
+    """
+    key = generate_master_key()
+    print(f"Credential master key (shown once):\n  {key}")
+    print(
+        f"\nSet it before starting gatekeeper, as {KEY_ENV} or in a file "
+        "referenced by GATEKEEPER_CREDENTIAL_KEY_FILE. Losing it makes every "
+        "stored credential unrecoverable -- back it up separately from "
+        "credentials.yaml, never next to it."
+    )
+    return 0
+
+
 def cmd_token(args: argparse.Namespace) -> int:
     """Generates a token and outputs plaintext plus hash.
 
@@ -520,11 +569,46 @@ def cmd_token(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preset(args: argparse.Namespace) -> int:
+    """Prints the same toolkit YAML the `/ui/toolkits/reference` page shows.
+
+    A terminal formatter around `presets.PRESETS`, nothing more -- useful
+    right after 'gatekeeper init', before --ui is even reachable, or for
+    anyone who would rather copy from a shell than a browser.
+    """
+    from .presets import PRESETS
+
+    if args.preset_action == "list":
+        for key in sorted(PRESETS):
+            preset = PRESETS[key]
+            print(f"{key:<14} {preset.display_name}")
+        return 0
+
+    preset = PRESETS.get(args.key)
+    if preset is None:
+        print(
+            f"ERROR: no preset named {args.key!r}. Run 'gatekeeper preset list' "
+            "to see the available ones.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"# {preset.display_name} -- paste under 'toolkits:' in toolkits.yaml,")
+    print("# fill in the CHANGEME placeholders, then redeploy (FR-4.11).")
+    if preset.notes:
+        print(f"# {preset.notes}")
+    print(preset.toolkit_yaml, end="")
+    print(f"\n# {len(preset.tool_specs)} starter tool(s), created via /ui/tools/presets:")
+    for spec in preset.tool_specs:
+        print(f"#   {spec['id']}: {spec.get('title', '')}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="gatekeeper")
     parser.add_argument("--toolkits")
     parser.add_argument("--tools")
     parser.add_argument("--identities")
+    parser.add_argument("--credentials")
     sub = parser.add_subparsers(dest="command", required=True)
 
     serve = sub.add_parser("serve", help="Start the server")
@@ -573,6 +657,23 @@ def main() -> int:
         "--force", action="store_true", help="Overwrite existing files"
     )
     init.set_defaults(func=cmd_init)
+
+    credential_key = sub.add_parser(
+        "credential-key", help="Generate the credential store's master key"
+    )
+    credential_key.set_defaults(func=cmd_credential_key)
+
+    preset = sub.add_parser(
+        "preset", help="Print starter toolkit YAML for a known service"
+    )
+    preset_sub = preset.add_subparsers(dest="preset_action", required=True)
+    preset_list = preset_sub.add_parser("list", help="List available presets")
+    preset_list.set_defaults(func=cmd_preset)
+    preset_show = preset_sub.add_parser(
+        "show", help="Print one preset's toolkit YAML and starter tools"
+    )
+    preset_show.add_argument("key", help="Preset key, e.g. sonarr (see 'preset list')")
+    preset_show.set_defaults(func=cmd_preset)
 
     token = sub.add_parser("token", help="Generate an API token")
     token.add_argument("--token", help="Hash an existing token instead of generating one")

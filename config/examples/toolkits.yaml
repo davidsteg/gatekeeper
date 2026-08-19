@@ -69,6 +69,44 @@ toolkits:
     max_timeout_seconds: 10
     max_output_bytes: 16384
 
+  # FR-8.5 to FR-8.15: an `http` toolkit. Scheme and host live exclusively
+  # here, never in a tool definition or a parameter. `allowed_cidrs` is
+  # GitHub's published API address range -- for a LAN service (Sonarr,
+  # Home Assistant, ...) this would instead be the narrow /32 or /24 that
+  # actually covers that one host, never a blanket private range (FR-8.15).
+  # `credential: github` refers to a credential created via /ui/credentials
+  # or 'gatekeeper credential-key' + the admin API -- the value is never in
+  # this file (FR-10.1).
+  github:
+    executor: http
+    base_url: "https://api.github.com"
+    allowed_methods: ["GET", "POST"]
+    allowed_path_prefixes:
+      - /repos/davidsteg/
+      - /user/repos
+    allowed_cidrs:
+      - 140.82.112.0/20
+      - 143.55.64.0/20
+      - 192.30.252.0/22
+    credential: github
+    max_timeout_seconds: 20
+    max_output_bytes: 131072
+
+  # FR-8.3a-f: `truenas` is its own executor -- JSON-RPC 2.0 over
+  # WebSocket, not REST (TrueNAS's REST v2.0 is deprecated as of 25.04).
+  # The whitelist here acts on method *names*: 'pool.dataset.delete'
+  # simply never appears, so no tool can ever call it.
+  truenas:
+    executor: truenas
+    ws_url: "wss://truenas.lan/api/current"
+    allowed_rpc_methods:
+      - pool.query
+      - pool.dataset.query
+      - pool.dataset.create
+    credential: truenas
+    max_timeout_seconds: 30
+    max_output_bytes: 65536
+
 # FR-6.8
 rate_limits:
   read:

@@ -182,8 +182,16 @@ Outcomes for `call`: `ok`, `denied`, `failed`, `unknown` (timeout on non-idempot
 
 ## What's Next
 
-- **Stage 2+4 open** — see REQUIREMENTS.md §14
-- **ZFS and TrueNAS API** — need `truenas` executor
-- **Service APIs** (Sonarr/Radarr/Jellyfin) — need `http` executor + credential store
-- **`write_external`** — not yet implemented
-- **Credential store** — for secret masking in container logs
+- **Stage 4 open** — see REQUIREMENTS.md §14
+- **`http` executor, `truenas` executor, and the credential store are implemented**
+  (`execute_http.py`, `execute_truenas.py`, `credentials.py`) — Sonarr, Radarr,
+  Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n, Uptime Kuma, Immich,
+  Telegram, Google (static-key subset), and TrueNAS have starter presets in
+  `presets.py`, reachable from `/ui/tools/presets`. See `/ui/toolkits/reference`
+  or `gatekeeper preset show <key>` for the toolkit YAML to add.
+- **OAuth2** — not implemented; the `http` executor supports static credentials
+  only (FR-8.11). Google APIs that require OAuth (Calendar, Gmail, Drive, …)
+  are out of scope for the `google_api` preset.
+- **`ssh` executor** — optional per §17, not implemented
+- **TrueNAS SCRAM-SHA-512 mutual auth** — API-key auth is implemented; SCRAM
+  is TrueNAS 26's preferred alternative and remains a follow-up

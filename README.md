@@ -276,7 +276,10 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for:
 
 ## What's not here (yet)
 
-- **Tier 2 stages** — Credential store, TrueNAS executor, HTTP executor (read-only), `write_external` category
+- **OAuth2** — the `http` executor supports static credentials only (bearer/API-key/basic);
+  services that require an authorization-code flow (most Google Workspace APIs) aren't reachable
+- **SSH executor** — optional per the spec, not built; `truenas` covers the case it was mainly for
+- **TrueNAS SCRAM-SHA-512** — API-key auth works; SCRAM mutual auth is a follow-up
 - **Multi-cluster** — designed for it, not tested yet
 - **API versioning** — MCP is the only interface; no separate HTTP API for tools
 
