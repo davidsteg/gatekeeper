@@ -4,7 +4,5 @@ tests/
 __pycache__/
 *.pyc
 .pytest_cache/
-REQUIREMENTS.md
-README.md
 compose.yaml
 config/identities.yaml
