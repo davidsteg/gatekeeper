@@ -60,6 +60,28 @@ cannot. It is in every release.
 
 ---
 
+## 0.9.1
+
+**Docs page — full project documentation in the console.**
+
+A new "Docs" tab in the sidebar renders the complete README,
+REQUIREMENTS.md, AGENTS.md, and RELEASE.md directly in the UI —
+no JavaScript, no external dependency, CSP-safe.
+
+- A minimal Markdown-to-HTML converter (`_md_to_html`) handles
+  headings, paragraphs, lists, fenced code blocks, tables,
+  blockquotes, inline code, bold/italic, links, and horizontal rules.
+  All input is HTML-escaped first; only safe constructs produce
+  live HTML — no raw passthrough.
+- The doc files are bundled into the Docker image at build time
+  (`COPY ... /opt/gatekeeper-docs/`) so the page works without
+  runtime file access or network.
+- Four tabs switch between documents via `?doc=<slug>`.
+- Styled with `.prose` CSS — readable typography, scrollable code
+  blocks, responsive tables, consistent with the design system.
+
+---
+
 ## 0.9.0
 
 **Self-service tool catalog management on a new, isolated `/admin/mcp` endpoint (REQUIREMENTS.md FR-2.8-3.7). Tool definitions are now versioned and append-only; deletion is a soft delete.**
