@@ -30,12 +30,27 @@ class Redactor:
     """
 
     secrets: tuple[str, ...] = ()
+    _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
     def __call__(self, text: str) -> str:
-        for secret in self.secrets:
+        with self._lock:
+            secrets = self.secrets
+        for secret in secrets:
             if secret and secret in text:
                 text = text.replace(secret, "***")
         return text
+
+    def set_secrets(self, secrets: tuple[str, ...]) -> None:
+        """Replaces the known-secret set (FR-10.6), e.g. after a credential
+
+        is created or rotated. Swapped under a lock so a concurrent audit
+        write never observes a half-updated tuple -- `tuple` assignment
+        itself is atomic in CPython, but the lock also documents the
+        invariant for readers instead of relying on that implementation
+        detail.
+        """
+        with self._lock:
+            self.secrets = secrets
 
 
 class AuditLog:
@@ -119,6 +134,22 @@ class AuditLog:
                 "credentials": credential_names or [],
             }
         )
+
+    def set_secrets(self, secrets: tuple[str, ...]) -> None:
+        """Refreshes the known-secret set used to mask output (FR-10.6),
+
+        e.g. after a credential is created or rotated in the store.
+        """
+        self._redact.set_secrets(secrets)
+
+    def redact(self, text: str) -> str:
+        """Masks known credential values in `text` (FR-10.6).
+
+        Used by `execute_http.py`/`execute_truenas.py` to scrub a response
+        *before* it reaches the agent -- not only when it is later written
+        to the audit log, which `write()` already does on its own.
+        """
+        return self._redact(text)
 
     def auth_failure(self, *, reason: str, detail: str = "") -> None:
         self.write({"kind": "auth_failure", "reason": reason, "detail": detail})

@@ -203,6 +203,7 @@ def build_app(
     host: str = "0.0.0.0",
     ui: bool = False,
     store: Any = None,
+    credentials: Any = None,
 ) -> Starlette:
     """Builds the complete ASGI application.
 
@@ -252,7 +253,8 @@ def build_app(
     if ui:
         routes.extend(
             build_ui_routes(
-                service=service, identities=identities, audit=audit, store=store
+                service=service, identities=identities, audit=audit, store=store,
+                credentials=credentials,
             )
         )
 

@@ -76,12 +76,33 @@ class ToolDef:
     category: str
     idempotent: bool
     enabled: bool
-    binary: str
-    argv: tuple[str, ...]
     parameters: dict[str, Parameter]
     required_scopes: tuple[str, ...]
     timeout_seconds: int
     max_output_bytes: int
+
+    # -- `docker`/`local` executors -----------------------------------
+    binary: str | None = None
+    argv: tuple[str, ...] = ()
+
+    # -- `http` executor (FR-8.5 to FR-8.7) ----------------------------
+    #: Scheme/host are never here -- they live exclusively on the toolkit
+    #: (FR-8.5). `query_template`/`body_template` are deliberately flat
+    #: string->string maps, not arbitrary nested JSON: every value is a
+    #: template resolved by the same `{param}` substitution as `argv` and
+    #: `path_template`, so "one parameter expands to exactly one value"
+    #: (FR-8.7, the HTTP counterpart of FR-5.4) holds without a separate
+    #: nested-structure case to reason about.
+    http_method: str | None = None
+    path_template: str | None = None
+    query_template: dict[str, str] = dataclasses.field(default_factory=dict)
+    body_template: dict[str, str] | None = None
+
+    # -- `truenas` executor (FR-8.3a-f) --------------------------------
+    #: JSON-RPC method name. Not agent-suppliable -- fixed per tool, exactly
+    #: like `binary` for the argv executors.
+    rpc_method: str | None = None
+    params_template: dict[str, str] | None = None
 
     @property
     def agent_parameters(self) -> dict[str, Parameter]:
@@ -176,31 +197,12 @@ def _parse_parameter(name: str, spec: dict[str, Any], where: str) -> Parameter:
     )
 
 
-def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
-    """FR-4.6: validation against Tier 1 -- at load time and again at execution time.
+def _validate_ceilings(tool: ToolDef, toolkit: Toolkit, where: str) -> None:
+    """FR-4.5: A tool may stay below the toolkit limits, never exceed them.
 
-    Doubled, because Tier 1 may have been tightened by a redeploy,
-    while older definitions still sit in the catalog.
+    Shared by every executor -- timeout and output ceilings are a
+    property of the toolkit's blast radius, independent of protocol.
     """
-    where = f"tool {tool.id!r}"
-    try:
-        toolkit.check_binary(tool.binary)
-    except ConfigError as exc:
-        raise Tier1Violation(str(exc)) from exc
-
-    if denied := toolkit.check_args(list(tool.argv)):
-        raise Tier1Violation(
-            f"{where}: argv template contains denied argument {denied!r}"
-        )
-
-    for param in tool.parameters.values():
-        if param.must_resolve_under:
-            try:
-                toolkit.check_path_root(param.must_resolve_under)
-            except ConfigError as exc:
-                raise Tier1Violation(f"{where}: {exc}") from exc
-
-    # FR-4.5: A tool may stay below the toolkit limits, never exceed them.
     if tool.timeout_seconds > toolkit.max_timeout_seconds:
         raise Tier1Violation(
             f"{where}: timeout_seconds={tool.timeout_seconds} exceeds the "
@@ -211,6 +213,62 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
             f"{where}: max_output_bytes={tool.max_output_bytes} exceeds the "
             f"toolkit maximum {toolkit.max_output_bytes}"
         )
+
+
+def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
+    """FR-4.6: validation against Tier 1 -- at load time and again at execution time.
+
+    Doubled, because Tier 1 may have been tightened by a redeploy,
+    while older definitions still sit in the catalog.
+    """
+    where = f"tool {tool.id!r}"
+
+    if toolkit.executor in ("docker", "local"):
+        try:
+            toolkit.check_binary(tool.binary or "")
+        except ConfigError as exc:
+            raise Tier1Violation(str(exc)) from exc
+
+        if denied := toolkit.check_args(list(tool.argv)):
+            raise Tier1Violation(
+                f"{where}: argv template contains denied argument {denied!r}"
+            )
+
+        for param in tool.parameters.values():
+            if param.must_resolve_under:
+                try:
+                    toolkit.check_path_root(param.must_resolve_under)
+                except ConfigError as exc:
+                    raise Tier1Violation(f"{where}: {exc}") from exc
+
+    elif toolkit.executor == "http":
+        if not toolkit.allows_method(tool.http_method or ""):
+            raise Tier1Violation(
+                f"{where}: method {tool.http_method!r} is not in the "
+                f"allowlist {list(toolkit.allowed_methods)} of toolkit "
+                f"{toolkit.name!r}"
+            )
+        # The literal portion of the template before its first placeholder
+        # is what a redeploy actually promised (FR-8.6); the placeholder
+        # itself is agent-controlled and re-checked on the *resolved* path
+        # at call time by `execute_http.py`, mirroring the argv double-check.
+        literal_prefix = (tool.path_template or "").split("{", 1)[0]
+        if not toolkit.allows_path(literal_prefix):
+            raise Tier1Violation(
+                f"{where}: path {tool.path_template!r} matches none of the "
+                f"allowed_path_prefixes {list(toolkit.allowed_path_prefixes)} "
+                f"of toolkit {toolkit.name!r}"
+            )
+
+    elif toolkit.executor == "truenas":
+        if not toolkit.allows_rpc_method(tool.rpc_method or ""):
+            raise Tier1Violation(
+                f"{where}: RPC method {tool.rpc_method!r} is not in the "
+                f"allowlist {list(toolkit.allowed_rpc_methods)} of toolkit "
+                f"{toolkit.name!r}"
+            )
+
+    _validate_ceilings(tool, toolkit, where)
 
 
 def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
@@ -246,26 +304,65 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
             f"{where}: category={category!r} is unknown (allowed: {sorted(CATEGORIES)})"
         )
 
-    binary = spec.get("binary")
-    if not isinstance(binary, str):
-        raise ConfigError(f"{where}: field 'binary' is missing")
-
-    raw_argv = spec.get("argv", [])
-    if not isinstance(raw_argv, list) or any(not isinstance(a, str) for a in raw_argv):
-        raise ConfigError(f"{where}: 'argv' must be a list of strings")
-
     parameters = {
         name: _parse_parameter(name, pspec, where)
         for name, pspec in (spec.get("parameters") or {}).items()
     }
-
     scopes = tuple(str(s) for s in (spec.get("required_scopes") or ()))
+
+    # The executor determines which action fields the definition needs --
+    # exactly one shape, selected by the toolkit, never mixed (FR-8.1: a
+    # tool does not choose its own executor).
+    binary: str | None = None
+    argv: tuple[str, ...] = ()
+    http_method: str | None = None
+    path_template: str | None = None
+    query_template: dict[str, str] = {}
+    body_template: dict[str, str] | None = None
+    rpc_method: str | None = None
+    params_template: dict[str, str] | None = None
+    #: Every template string that may contain a `{param}` placeholder --
+    #: collected here so the typo guard below covers all executor shapes
+    #: uniformly, the same way it already covers argv/scopes/derived.
+    all_templates: list[str] = []
+
+    if toolkit.executor in ("docker", "local"):
+        binary = spec.get("binary")
+        if not isinstance(binary, str):
+            raise ConfigError(f"{where}: field 'binary' is missing")
+        raw_argv = spec.get("argv", [])
+        if not isinstance(raw_argv, list) or any(not isinstance(a, str) for a in raw_argv):
+            raise ConfigError(f"{where}: 'argv' must be a list of strings")
+        argv = tuple(raw_argv)
+        all_templates.extend(argv)
+
+    elif toolkit.executor == "http":
+        http_method = spec.get("method")
+        if not isinstance(http_method, str):
+            raise ConfigError(f"{where}: field 'method' is missing")
+        path_template = spec.get("path")
+        if not isinstance(path_template, str) or not path_template.startswith("/"):
+            raise ConfigError(f"{where}: field 'path' must be a string starting with '/'")
+        query_template = _str_str_map(spec.get("query"), where, "query")
+        raw_body = spec.get("body")
+        if raw_body is not None:
+            body_template = _str_str_map(raw_body, where, "body")
+        all_templates.append(path_template)
+        all_templates.extend(query_template.values())
+        all_templates.extend((body_template or {}).values())
+
+    elif toolkit.executor == "truenas":
+        rpc_method = spec.get("method")
+        if not isinstance(rpc_method, str):
+            raise ConfigError(f"{where}: field 'method' is missing")
+        params_template = _str_str_map(spec.get("params"), where, "params")
+        all_templates.extend(params_template.values())
 
     # Every placeholder must point to a declared parameter. A typo
     # in the template would otherwise only surface at runtime -- and
-    # then land as an unresolvable placeholder in the command.
+    # then land as an unresolvable placeholder in the request.
     declared = set(parameters)
-    for template in (*raw_argv, *scopes, *(p.derived or "" for p in parameters.values())):
+    for template in (*all_templates, *scopes, *(p.derived or "" for p in parameters.values())):
         for placeholder in _placeholders(template):
             if placeholder not in declared:
                 raise ConfigError(
@@ -282,15 +379,38 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         category=category,
         idempotent=bool(spec.get("idempotent", False)),
         enabled=bool(spec.get("enabled", False)),
-        binary=binary,
-        argv=tuple(raw_argv),
         parameters=parameters,
         required_scopes=scopes,
         timeout_seconds=int(spec.get("timeout_seconds", 30)),
         max_output_bytes=int(spec.get("max_output_bytes", 65536)),
+        binary=binary,
+        argv=argv,
+        http_method=http_method,
+        path_template=path_template,
+        query_template=query_template,
+        body_template=body_template,
+        rpc_method=rpc_method,
+        params_template=params_template,
     )
     _validate_against_tier1(tool, toolkit)
     return tool
+
+
+def _str_str_map(value: Any, where: str, field: str) -> dict[str, str]:
+    """A flat string->string template map (query/body/params).
+
+    Deliberately flat, not arbitrary nested JSON -- see the note on
+    `ToolDef.query_template`. Keys are the field/param names sent to the
+    target service, values are `{param}` templates resolved exactly like
+    an argv element.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or any(
+        not isinstance(k, str) or not isinstance(v, str) for k, v in value.items()
+    ):
+        raise ConfigError(f"{where}: '{field}' must be a mapping of string to string")
+    return dict(value)
 
 
 def parse_tool_spec(spec: dict[str, Any], tier1: Tier1) -> ToolDef:

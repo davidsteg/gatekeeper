@@ -31,6 +31,11 @@ class Result:
     stderr: str
     truncated: bool
     duration_ms: int
+    #: FR-8.12: set by the `http`/`truenas` executors. Marks `stdout` as
+    #: data from outside gatekeeper's own logs -- it can contain prompt
+    #: injection, and the agent-facing rendering must say so rather than
+    #: present it as if it were as trustworthy as a docker/local result.
+    external_untrusted: bool = False
 
 
 class ResourceLocks:

@@ -225,6 +225,109 @@ def build_argv(tool: ToolDef, values: dict[str, str], toolkit: Toolkit) -> list[
     return argv
 
 
+def _reject_path_traversal(name: str, path: str) -> None:
+    """FR-8.7: `..` in a resolved path segment is rejected, not normalized.
+
+    Normalizing would mean gatekeeper decides what the segment "really"
+    meant -- exactly the ambiguity a target server could exploit. An
+    outright reject has no such interpretation to get wrong.
+    """
+    if ".." in path.split("/"):
+        raise Denied(
+            DenialReason.PATH_ESCAPE,
+            f"{name}: resolved path {path!r} contains a '..' segment.",
+        )
+
+
+def build_http_request(
+    tool: ToolDef, values: dict[str, str], toolkit: Toolkit
+) -> tuple[str, str, dict[str, str], dict[str, str] | None]:
+    """Builds (method, path, query, body) and checks the result against Tier 1.
+
+    The HTTP counterpart of `build_argv`: scheme and host are never built
+    here (FR-8.5, they live exclusively on the toolkit), and the second
+    Tier 1 check operates on the fully resolved path, not the template --
+    a parameter value cannot structurally point outside the toolkit's
+    allowed prefixes (FR-8.7, the HTTP equivalent of FR-5.4).
+    """
+    assert tool.http_method is not None and tool.path_template is not None
+
+    missing = _placeholders_missing(tool.path_template, values)
+    if missing:
+        raise Denied(
+            DenialReason.PARAM_MISSING, f"Path template needs {sorted(missing)}."
+        )
+    path = _substitute(tool.path_template, values)
+    _reject_path_traversal("path", path)
+
+    if not toolkit.allows_path(path):
+        raise Denied(
+            DenialReason.TIER1_VIOLATION,
+            f"Resolved path {path!r} is outside the toolkit's allowed prefixes.",
+        )
+    if not toolkit.allows_method(tool.http_method):
+        raise Denied(
+            DenialReason.TIER1_VIOLATION,
+            f"Method {tool.http_method!r} is not allowed for this toolkit.",
+        )
+
+    query: dict[str, str] = {}
+    for key, template in tool.query_template.items():
+        missing = _placeholders_missing(template, values)
+        if missing:
+            raise Denied(
+                DenialReason.PARAM_MISSING,
+                f"Query template {key!r} needs {sorted(missing)}.",
+            )
+        query[key] = _substitute(template, values)
+
+    body: dict[str, str] | None = None
+    if tool.body_template is not None:
+        body = {}
+        for key, template in tool.body_template.items():
+            missing = _placeholders_missing(template, values)
+            if missing:
+                raise Denied(
+                    DenialReason.PARAM_MISSING,
+                    f"Body template {key!r} needs {sorted(missing)}.",
+                )
+            body[key] = _substitute(template, values)
+
+    return tool.http_method, path, query, body
+
+
+def build_rpc_call(
+    tool: ToolDef, values: dict[str, str], toolkit: Toolkit
+) -> tuple[str, dict[str, str]]:
+    """Builds (method, params) for the truenas executor and re-checks the
+
+    method against Tier 1. `method` is fixed per tool (not agent-suppliable),
+    so this second check is an invariant assertion rather than a real gate --
+    kept anyway for the same reason `build_argv` re-checks `check_binary`:
+    consistency, and a defense against a future bug that makes it
+    parameterizable.
+    """
+    assert tool.rpc_method is not None
+
+    if not toolkit.allows_rpc_method(tool.rpc_method):
+        raise Denied(
+            DenialReason.RPC_METHOD_DENIED,
+            f"RPC method {tool.rpc_method!r} is not allowed for this toolkit.",
+        )
+
+    params: dict[str, str] = {}
+    for key, template in (tool.params_template or {}).items():
+        missing = _placeholders_missing(template, values)
+        if missing:
+            raise Denied(
+                DenialReason.PARAM_MISSING,
+                f"Params template {key!r} needs {sorted(missing)}.",
+            )
+        params[key] = _substitute(template, values)
+
+    return tool.rpc_method, params
+
+
 def resolve_scopes(tool: ToolDef, values: dict[str, str]) -> list[str]:
     """Resolves `required_scopes` with the validated parameter values."""
     scopes = []

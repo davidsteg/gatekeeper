@@ -27,14 +27,16 @@ guarantees underpin this layer:
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import os
-import tempfile
 import threading
 from typing import Any
 
 import yaml
 
+from ._atomic import atomic_write as _atomic_write
+from ._atomic import dump as _dump
+from ._atomic import revision
+from ._atomic import writable
 from .audit import AuditLog
 from .catalog import load_catalog, parse_tool_spec
 from .errors import ConfigError
@@ -53,62 +55,8 @@ from .identity import (
 )
 from .service import Service
 
-#: Header of every written file. Anyone who later opens it by hand should
-#: immediately see that a console is co-writing here.
-_HEADER = (
-    "# Managed by gatekeeper. The admin console writes this file;\n"
-    "# manual changes are possible but will be lost on the next write\n"
-    "# from the UI unless they have been reloaded beforehand.\n"
-)
-
-
 class WriteRefused(ConfigError):
     """A write attempt was refused -- with a human-readable reason."""
-
-
-def revision(path: str) -> str:
-    """Short fingerprint of the file content for the concurrency check."""
-    try:
-        with open(path, "rb") as handle:
-            return hashlib.sha256(handle.read()).hexdigest()[:16]
-    except OSError:
-        return ""
-
-
-def _atomic_write(path: str, text: str) -> None:
-    directory = os.path.dirname(os.path.abspath(path)) or "."
-    handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=directory, prefix=".gk-", suffix=".tmp", delete=False
-    )
-    try:
-        with handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(handle.name, path)
-    except BaseException:
-        try:
-            os.unlink(handle.name)
-        except OSError:
-            pass
-        raise
-
-
-def _dump(payload: dict[str, Any]) -> str:
-    return _HEADER + yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
-
-
-def writable(path: str) -> bool:
-    """Can anything be written here at all?
-
-    The directory is checked, not just the file: `os.replace` creates a
-    new file. A mount with `:ro` is thus caught before an admin fills
-    out a form and only discovers on submission that nothing arrives.
-    """
-    directory = os.path.dirname(os.path.abspath(path)) or "."
-    return os.access(directory, os.W_OK) and (
-        not os.path.exists(path) or os.access(path, os.W_OK)
-    )
 
 
 @dataclasses.dataclass(slots=True)
