@@ -2,196 +2,118 @@
 
 > **MCP server for controlled host operations.** Agents do not get a shell,
 > but a fixed set of validated actions — each with its own token, own
-> permissions, and full audit. Two security tiers: Tier 1 (immutable
-> deploy-time boundaries) and Tier 2 (runtime-mutable catalog + identities).
+> permissions, and full audit.
 
-## Quick Facts
+This file is for **agent behavior only** — what to do, in what order, and
+what has bitten a previous session. For what the project *is* (architecture,
+security model, executors, UI, audit format), see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For deployment/environment
+details, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). For what's built vs.
+not, see [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Quick facts
 
 | | |
 |---|---|
 | **Repo** | `davidsteg/gatekeeper` |
-| **Version** | 0.3.2 (see `pyproject.toml` + `src/gatekeeper/__init__.py`) |
-| **Language** | Python 3.12+, no optional dependencies at runtime |
-| **Tests** | 156 pytest, 1 skipped — all must pass before push |
-| **Local clone** | `/opt/data/gatekeeper` |
-| **Container** | `gatekeeper`, port `30221→8080`, image `davidsteg/gatekeeper:latest` |
-| **Deploy mounts** | `/mnt/raid/dev/gatekeeper/config → /etc/gatekeeper`, `/mnt/raid/dev/gatekeeper/logs`, `/var/run/docker.sock` |
-| **Config host** | `10.10.200.90`, UI at `http://10.10.200.90:30221/ui/` |
-| **Container user** | `568:568` (unprivileged), `group_add: 999` (docker.sock GID) |
+| **Language** | Python 3.12+ |
+| **Runtime deps** | `mcp`, `pyyaml`, `uvicorn`, `httpx`, `websockets`, `cryptography` — see `pyproject.toml` |
+| **Tests** | `python -m pytest -q` — all must pass before push |
 
-## Release Workflow (mandatory)
+Check the current version in `pyproject.toml`, not here — it changes every
+release and a hardcoded number in this file would just go stale.
 
-**Every change on `main` is a release.** No batch releases.
+## Release workflow (mandatory)
 
-1. **Version bump** — `pyproject.toml` + `src/gatekeeper/__init__.py` (both in the same commit)
-2. **RELEASE.md** — add section `## <version>` (without `v` prefix), newest first
-3. **Commit** — `git commit -m "description (vX.Y.Z)"`
-4. **Push** — `git push origin main`
-5. **GitHub Action** builds image → push to Docker Hub → tag `vX.Y.Z` → GitHub Release
+**Every change on `main` is a release.** No batch releases — see
+[RELEASE.md](RELEASE.md) for the full rule and rationale.
+
+1. **Version bump** — `pyproject.toml`, in the same commit as the change.
+2. **`RELEASE.md`** — add a section `## <version>` (no `v` prefix), above
+   the previous entry. **CI enforces this and fails the build if it's
+   missing** — see "Known pitfalls" below; this is not optional housekeeping.
+3. **Doc check** — before committing, check whether README.md,
+   `docs/ARCHITECTURE.md`, and `docs/ROADMAP.md` still describe reality. Keep
+   them updated *in the same commit* as the code change, not as a followup —
+   a stale "not implemented yet" line is worse than none.
+4. **Commit** — descriptive message, version in the subject if useful.
+5. **Push** — `git push origin main`. Prefer the `gh` CLI's own auth when
+   available. If it isn't and pushing needs a PAT, put it only in the
+   remote URL, never in a file: `git remote set-url origin
+   "https://<PAT>@github.com/davidsteg/gatekeeper.git"`.
+6. **Verify** — check the run, don't assume: `gh run list --limit 3` /
+   `gh run watch <id> --exit-status`. The GitHub Action runs tests first
+   (this is where the `RELEASE.md` check lives — see "Known pitfalls"),
+   then, if the version is new, builds the image, pushes to Docker Hub,
+   tags `vX.Y.Z`, and cuts a GitHub Release from the `RELEASE.md` section.
 
 ### Versioning
 
-- **MAJOR** — Tier 1 changes meaning, or existing deployment does not start anymore
-- **MINOR** — new toolkits, executors, UI features, new behavior
-- **PATCH** — bug fixes, including security-relevant ones
-
-### Git Remote (Token)
-
-The GitHub PAT is embedded in the git remote URL. Set it before pushing:
-
-```bash
-# Extract token from memory or existing remote URL
-git remote set-url origin "https://<PAT>@github.com/davidsteg/gatekeeper.git"
-```
-
-No `gh` CLI needed. Do NOT store the token in files — only in the remote URL.
+- **MAJOR** — Tier 1 changes meaning, or an existing deployment does not
+  start without adjustment.
+- **MINOR** — new toolkits, executors, UI features, new runtime behavior.
+- **PATCH** — bug fixes, including security-relevant ones.
 
 ## Testing
 
 ```bash
-cd /opt/data/gatekeeper
-uv run python -m pytest tests/ -q
+python -m pytest -q
 ```
 
-- 156 tests, ~45s runtime
-- No system pip — always use `uv run`
-- Target: all green before push
+All green before every push — no exceptions. If a test file references a
+loopback HTTP/WebSocket server (`test_execute_http.py`,
+`test_execute_truenas.py`), that's a real local listener the test starts
+itself, not a mock; no network access outside localhost is needed.
 
-## Project Structure
+## Known pitfalls
 
-```
-src/gatekeeper/
-  __init__.py      __version__ — ALWAYS keep in sync with pyproject.toml
-  __main__.py      Entry point: CLI (serve/check/token/init/password), SIGHUP handler
-  server.py        MCP protocol, ASGI middleware, health/metrics routes, CSP headers
-  service.py       Call pipeline: auth→authorize→registry→validate→argv→exec→audit
-  tier1.py         Immutable deploy-time boundaries from toolkits.yaml (Tier 1)
-  catalog.py       Tool definitions, validation against Tier 1
-  validate.py      Parameter validation, argv construction (NO shell, structured args)
-  execute.py       Process execution, timeouts, output caps, resource locks
-  identity.py      scrypt token hashing, constant-time verify, IdentityStore, roles
-  audit.py         JSON Lines audit log with rotation and redaction
-  store.py         Tier 2 write access (ConfigStore), atomic file writes
-  ui.py            Operations console at /ui — no JavaScript, CSP-locked, SVG diagrams
-  errors.py        DenialReason enum, opaque denial for catalog info
-  ratelimit.py     Per-identity, per-category sliding window rate limiter
-config/
-  toolkits.yaml    Tier 1 — immutable at runtime (binary allowlist, denied args, path roots, protected resources, ceilings)
-  tools.yaml       Seed catalog — mutable via UI
-  identities.example.yaml
-  examples/        Ready-made templates: identities.yaml, toolkits.yaml, tools.yaml
-tests/
-  test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
-  test_ui.py, test_ui_admin.py, conftest.py
-```
+- **RELEASE.md is checked by CI before anything builds.** A version bump in
+  `pyproject.toml` with no matching `## <version>` section in `RELEASE.md`
+  fails the `tests` job immediately with *"RELEASE.md has no '## X.Y.Z'
+  section."* — no image gets built or pushed. Add both files in the same
+  commit, always.
+- **Windows dev environment: `gatekeeper serve` crashes on Windows.**
+  `cmd_serve` registers a `SIGHUP` handler unconditionally
+  (`signal.signal(signal.SIGHUP, ...)`), and `SIGHUP` doesn't exist on
+  Windows. Don't try to smoke-test the CLI's `serve` command directly on a
+  Windows box — build the ASGI app yourself (`server.build_app(...)`) in a
+  throwaway script and run it with `uvicorn.run(...)`, bypassing
+  `cmd_serve`. See `docs/DEPLOYMENT.md` for the pattern.
+- **New dependency, new install.** After pulling a change that touches
+  `pyproject.toml`'s `dependencies`, re-run `pip install -e ".[dev]"` (or
+  the `uv` equivalent) before running tests — a stale venv will import-error
+  on `httpx`/`websockets`/`cryptography` instead of giving a useful test
+  failure.
+- **Credential-store tests/scripts need a master key.** Anything that
+  touches `credentials.py` beyond an empty store (creating, rotating,
+  resolving a credential) needs `GATEKEEPER_CREDENTIAL_KEY` set — generate
+  one with `gatekeeper credential-key`. Tests set this via `monkeypatch`
+  per-test; a manual smoke-test script needs to set the env var itself.
+- **`document.querySelector('form')` on an authenticated `/ui` page grabs
+  the sidebar's logout form, not the page's content form** — the sidebar
+  renders before `<main>` in the DOM. When scripting the console (browser
+  automation, CDP, screenshots), scope to `document.querySelector('main
+  form')` instead, or you'll silently log yourself out.
+- **No `v` prefix in `RELEASE.md`** — section headers are `## 0.4.0`, not
+  `## v0.4.0`.
+- **`latest` tag moves** — pin a fixed version + digest for production
+  deployments (NFR-5).
+- **Toolkit creation is UI-unreachable, on purpose.** If a task seems to
+  need a new/edited *toolkit* reachable from `/ui`, stop — that's FR-4.11,
+  not a bug. Toolkits are deploy-time only; only tools, identities, and
+  credentials are console-writable. `/ui/toolkits/reference` prints
+  copy-pasteable YAML for a human to paste in by hand, it does not write
+  the file.
 
-## Two-Tier Security Model
-
-| Tier | File | Mutable at runtime | Changed via |
-|------|------|:--:|-------------|
-| 1 | `toolkits.yaml` | ✗ | Redeploy only (FR-4.11) |
-| 2 | `tools.yaml`, `identities.yaml` | ✓ | Admin UI at `/ui` |
-
-**Key invariant:** `store.py` has NO function that writes `toolkits.yaml`. The UI can create tools but never toolkits.
-
-Tier 1 defines: binary allowlist, denied args, path roots, protected resources, ceilings.
-Tier 2 defines: tool catalog, identities, grants, scopes.
-
-## Roles
-
-| Role | MCP (`/mcp`) | Console (`/ui`) read | Tier 2 write |
-|---|:--:|:--:|:--:|
-| `agent` | ✓ | — | — |
-| `viewer` | — | ✓ | — |
-| `admin` | — | ✓ | ✓ |
-
-Login: console password (not API token). Token belongs to `/mcp`, password to `/ui`.
-
-## UI Architecture (`ui.py`)
-
-**No JavaScript.** CSP: `default-src 'none'; style-src 'nonce-...'; img-src 'self' data:; form-action 'self'`.
-
-All diagrams are server-rendered SVG:
-- **Access map** — `_access_graph()`: identities → hub → toolkits/blocked, with call counts from audit log, hover tooltips via `<title>`, hot-edge highlighting
-- **Call flow pipeline** — `_call_flow_pipeline()`: 8 layers as horizontal SVG
-- **Tool matrix** — `_tool_matrix()`: HTML table, one tool per row
-- **Activity chart** — `_activity_chart()`: calls/hour as stacked bars (ok/denied)
-- **Activity feed** — `_feed()`: recent calls as timeline
-
-CSS classes for graph: `.graph`, `.g-box`, `.g-t`, `.g-s`, `.g-e`, `.g-node`, `.g-edge-group`, `.g-count`, `.g-n`, `.legend`
-CSS classes for chart: `.chart`, `.c-ok`, `.c-deny`, `.c-base`, `.c-ax`
-
-Version is shown in sidebar and login page: `<span class="ver">vX.Y.Z</span>`.
-
-## SIGHUP Reload
+## CLI reference (agent-relevant subset)
 
 ```bash
-docker kill -s HUP gatekeeper
+gatekeeper check                       # validate config, no start
+gatekeeper init                        # empty config + one admin
+gatekeeper token                       # generate an API token
+gatekeeper password --identity <id>    # set a console password
+gatekeeper credential-key              # generate the credential-store master key
+gatekeeper preset list                 # list available service presets
+gatekeeper preset show <key>           # print one preset's toolkit YAML + starter tools
+gatekeeper serve --ui                  # start the server with the admin console
 ```
-
-Reloads all three config files atomically. On failure, previous state remains. Rate limiter is reset.
-
-## Deploy (local container)
-
-```bash
-# Pull + recreate
-docker pull davidsteg/gatekeeper:latest
-docker kill gatekeeper && docker rm gatekeeper
-docker run -d \
-  --name gatekeeper \
-  --user 568:568 \
-  --group-add 999 \
-  --restart unless-stopped \
-  -p 30221:8080 \
-  -v /var/run/docker.sock:/var/run/docker.sock:rw \
-  -v /mnt/raid/dev/gatekeeper/config:/etc/gatekeeper:rw \
-  -v /mnt/raid:/mnt/raid:rw \
-  -v /mnt/raid/dev/gatekeeper/logs:/mnt/raid/dev/gatekeeper/logs:rw \
-  -e GATEKEEPER_LOG_LEVEL=INFO \
-  davidsteg/gatekeeper:latest serve --ui
-```
-
-## Known Pitfalls
-
-- **`__init__.py` version drift** — bump both files (`pyproject.toml` + `__init__.py`) in the same commit
-- **RELEASE.md merge conflicts** — `git pull --rebase`, keep both sections in chronological order (newest first)
-- **No `v` prefix in RELEASE.md** — section headers are `## 0.3.2`, not `## v0.3.2`
-- **Stale local clone** — `git fetch origin && git log --oneline origin/main -5` before starting work
-- **Docker Hub Secrets** — `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` must be set in GitHub Repo Settings → Secrets, otherwise image push fails
-- **`latest` tag moves** — pin a fixed version for production (NFR-5)
-- **`/mnt/raid/misc` is read-only** — `write_file`/`patch` is blocked. Use `terminal` + Python `open().write()`
-
-## Docker Hub Secrets (status: missing)
-
-| Name | Value |
-|------|-------|
-| `DOCKERHUB_USERNAME` | `davidsteg` |
-| `DOCKERHUB_TOKEN` | Docker Hub access token (must be set) |
-
-Without these, the `image` job fails at "Log in to Docker Hub".
-
-## Audit Log Format
-
-JSON Lines, one record per line:
-```json
-{"kind": "call", "identity": "dev", "tool": "docker_ps", "tool_version": 1, "parameters": {}, "scopes": [], "outcome": "ok", "exit_code": 0, "duration_ms": 42, "ts": "2026-08-16T10:00:00+0000"}
-```
-
-Kinds: `call`, `auth_failure`, `startup`, `admin_change`, `ui_login`.
-Outcomes for `call`: `ok`, `denied`, `failed`, `unknown` (timeout on non-idempotent).
-
-## What's Next
-
-- **Stage 4 open** — see REQUIREMENTS.md §14
-- **`http` executor, `truenas` executor, and the credential store are implemented**
-  (`execute_http.py`, `execute_truenas.py`, `credentials.py`) — Sonarr, Radarr,
-  Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n, Uptime Kuma, Immich,
-  Telegram, Google (static-key subset), and TrueNAS have starter presets in
-  `presets.py`, reachable from `/ui/tools/presets`. See `/ui/toolkits/reference`
-  or `gatekeeper preset show <key>` for the toolkit YAML to add.
-- **OAuth2** — not implemented; the `http` executor supports static credentials
-  only (FR-8.11). Google APIs that require OAuth (Calendar, Gmail, Drive, …)
-  are out of scope for the `google_api` preset.
-- **`ssh` executor** — optional per §17, not implemented
-- **TrueNAS SCRAM-SHA-512 mutual auth** — API-key auth is implemented; SCRAM
-  is TrueNAS 26's preferred alternative and remains a follow-up
