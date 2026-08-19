@@ -47,6 +47,7 @@ import hmac
 import html
 import json
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -919,6 +920,41 @@ a.reset:hover { color: var(--accent); }
 .preset-logo { display: inline-flex; flex: none; border-radius: 999px; overflow: hidden; }
 .preset-logo svg { display: block; width: 100%; height: 100%; }
 
+/* -- Release notes popup --
+   CSS-only modal (:target), consistent with "no JavaScript" -- the
+   backdrop is a full-viewport <a href="#..."> so clicking outside the
+   box closes it (navigating away from the #release-notes fragment) with
+   no script, and the close link/Escape-via-navigation does the same. */
+a.ver { text-decoration: none; color: inherit; cursor: pointer; }
+a.ver:hover { text-decoration: underline; color: var(--accent); }
+.modal-backdrop {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 80;
+}
+#release-notes:target { display: block; }
+#release-notes:target ~ .modal-box { display: flex; }
+.modal-box {
+  display: none; position: fixed; inset: 0; z-index: 81; margin: auto;
+  width: min(640px, calc(100vw - 2.4rem)); max-height: min(80vh, 720px);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 1.4rem 1.6rem; flex-direction: column; overflow: hidden;
+}
+.modal-box h2 { margin: 0 0 .8rem; font-size: 1.1rem; display: flex; align-items: center; gap: .4rem; }
+.modal-close {
+  position: absolute; top: .7rem; right: .9rem; font-size: 1.3rem; line-height: 1;
+  color: var(--muted); text-decoration: none; padding: .2rem .5rem; border-radius: var(--radius-sm);
+}
+.modal-close:hover { color: var(--fg); background: var(--sunken); }
+.release-list { overflow-y: auto; }
+.release-entry { padding-bottom: 1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--line); }
+.release-entry:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.release-entry h3 {
+  display: flex; align-items: center; gap: .4rem; font-size: .95rem; margin: 0 0 .4rem;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+}
+.release-entry p { margin: .4rem 0; font-size: .87rem; color: var(--muted); line-height: 1.5; }
+.release-entry ul { margin: .4rem 0; padding-left: 1.2rem; font-size: .87rem; color: var(--muted); line-height: 1.5; }
+.release-entry code { background: var(--sunken); padding: .05rem .3rem; border-radius: 3px; font-size: .85em; }
+
 /* -- Login -- */
 .login { max-width: 390px; margin: 13vh auto; padding: 0 1.15rem; }
 .login .card { margin: 0; }
@@ -958,6 +994,161 @@ def _e(value: Any) -> str:
     return html.escape("" if value is None else str(value), quote=True)
 
 
+#: Cached per worker process: the file is small, read-only at runtime, and
+#: reread on every popup click would be wasteful for something that never
+#: changes without a redeploy anyway (RELEASE.md ships baked into the image).
+_release_notes_cache: list[tuple[str, str]] | None = None
+
+
+def _release_notes_path() -> str | None:
+    """Where RELEASE.md lives, checked in order:
+
+    1. `GATEKEEPER_RELEASE_NOTES` -- what the container image sets
+       (`/usr/share/gatekeeper/RELEASE.md`, baked in at build time, since
+       RELEASE.md is not part of the installed Python package).
+    2. Walking up from this file -- a dev checkout or an editable install
+       has the real `RELEASE.md` sitting next to `pyproject.toml`, the same
+       trick `__init__.py`'s version lookup uses and for the same reason:
+       always current, nothing to keep in sync by hand.
+
+    Returns `None` if neither exists -- the popup then says so plainly
+    instead of failing to render the page it's embedded in.
+    """
+    override = os.environ.get("GATEKEEPER_RELEASE_NOTES")
+    if override and os.path.isfile(override):
+        return override
+    here = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        candidate = os.path.join(here, "RELEASE.md")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(here)
+        if parent == here:
+            break
+        here = parent
+    return None
+
+
+def _inline_md(text: str) -> str:
+    """Minimal, safe inline markdown: escape first, then allow exactly
+
+    `**bold**` and `` `code` `` back in. No dependency, no HTML from the
+    file ever passes through unescaped -- the regexes only ever *add*
+    tags around already-escaped text, never interpret raw '<'/'>' in it.
+    """
+    escaped = _e(text)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+    return escaped
+
+
+def _render_release_body(text: str) -> str:
+    """Blank lines separate blocks; within a bullet-list block, an indented
+
+    continuation line belongs to the bullet above it rather than starting
+    a new paragraph -- RELEASE.md's own entries wrap long bullets across
+    several lines without a blank line between items (see e.g. the 0.4.0
+    entry), so treating every line as its own list item would have
+    flattened the whole list into one run-on paragraph.
+    """
+    blocks = re.split(r"\n\s*\n", text.strip())
+    parts = []
+    for block in blocks:
+        raw_lines = [line for line in block.splitlines() if line.strip()]
+        if not raw_lines:
+            continue
+        if raw_lines[0].strip().startswith(("- ", "* ")):
+            items: list[str] = []
+            current: list[str] = []
+            for line in raw_lines:
+                stripped = line.strip()
+                if stripped.startswith(("- ", "* ")):
+                    if current:
+                        items.append(" ".join(current))
+                    current = [stripped[2:].strip()]
+                else:
+                    current.append(stripped)
+            if current:
+                items.append(" ".join(current))
+            rendered = "".join(f"<li>{_inline_md(item)}</li>" for item in items)
+            parts.append(f"<ul>{rendered}</ul>")
+        else:
+            paragraph = " ".join(line.strip() for line in raw_lines)
+            parts.append(f"<p>{_inline_md(paragraph)}</p>")
+    return "".join(parts)
+
+
+#: Only headings that look like a version (`## 0.4.0`, optionally with a
+#: build/pre-release suffix) start a new entry -- RELEASE.md's own
+#: explanatory prose has `## Procedure` and `## Versioning` headings above
+#: the version list, and those must stay preamble, not become fake
+#: "releases" with no notes.
+_RELEASE_HEADING_RE = r"(?m)^## (\d+\.\d+\.\d+\S*)[ \t]*\n"
+
+
+def _parse_release_notes(text: str) -> list[tuple[str, str]]:
+    """Splits on `## <version>` headings -- the exact format RELEASE.md's
+
+    own procedure section mandates, and what the release workflow's CI
+    check parses too (see RELEASE.md). One format, read by both.
+    """
+    pieces = re.split(_RELEASE_HEADING_RE, text)
+    sections = []
+    # pieces[0] is the preamble before the first version heading; after
+    # that, version/body pairs alternate. A duplicate version heading
+    # (has happened once in this file's history) is kept as its own
+    # entry rather than silently merged -- the list is never deduplicated.
+    for i in range(1, len(pieces), 2):
+        version = pieces[i]
+        body = pieces[i + 1] if i + 1 < len(pieces) else ""
+        sections.append((version, _render_release_body(body)))
+    return sections
+
+
+def _load_release_notes() -> list[tuple[str, str]]:
+    global _release_notes_cache
+    if _release_notes_cache is not None:
+        return _release_notes_cache
+    path = _release_notes_path()
+    text = ""
+    if path is not None:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError:
+            text = ""
+    sections = _parse_release_notes(text)
+    _release_notes_cache = sections
+    return sections
+
+
+def _release_notes_modal() -> str:
+    sections = _load_release_notes()
+    if not sections:
+        entries = _note(
+            "Release notes are not available in this build -- RELEASE.md "
+            "was not found. This does not affect what the server does, only "
+            "this popup.",
+            tone="bad",
+        )
+    else:
+        entries = "".join(
+            f'<section class="release-entry"><h3>{_icon("layers", 13)}'
+            f'{_e(version)}</h3>{body}</section>'
+            for version, body in sections
+        )
+    return (
+        '<a href="#" id="release-notes" class="modal-backdrop" '
+        'aria-hidden="true" tabindex="-1"></a>'
+        '<div class="modal-box" role="dialog" aria-label="Release notes">'
+        '<a href="#" class="modal-close" title="Close" aria-label="Close">'
+        "&times;</a>"
+        f"<h2>{_icon('layers', 16)}Release notes</h2>"
+        f'<div class="release-list">{entries}</div>'
+        "</div>"
+    )
+
+
 def _page(
     title: str,
     body: str,
@@ -984,7 +1175,9 @@ def _page(
         f'<style nonce="{nonce}">{_STYLE}</style></head><body><div class="app">'
         '<aside class="side">'
         f'<div class="brand">{_icon("shield", 20)}'
-        f'<span class="name">gatekeeper</span><span class="ver">v{_e(__version__)}</span></div>'
+        f'<span class="name">gatekeeper</span>'
+        f'<a href="#release-notes" class="ver" title="Release notes">'
+        f"v{_e(__version__)}</a></div>"
         f"<nav>{nav}</nav>"
         '<div class="side-foot">'
         f'<form class="who" method="post" action="{UI_PREFIX}/logout">'
@@ -1005,7 +1198,9 @@ def _page(
         + (f"<p>{subtitle}</p>" if subtitle else "")
         + "</div>"
         + (f'<div class="actions">{actions}</div>' if actions else "")
-        + f"</div><main>{body}</main></div></div></body></html>"
+        + f"</div><main>{body}</main></div></div>"
+        + _release_notes_modal()
+        + "</body></html>"
     )
 
 
@@ -2812,7 +3007,8 @@ def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
         f'<style nonce="{nonce}">{_STYLE}</style></head><body>'
         '<main class="login"><div class="card"><div class="pad">'
         f'<div class="mark">{_icon("shield", 24)}</div>'
-        f'<h1>gatekeeper <span class="ver">v{_e(__version__)}</span></h1>'
+        f'<h1>gatekeeper <a href="#release-notes" class="ver" '
+        f'title="Release notes">v{_e(__version__)}</a></h1>'
         "<p>Operations console. Sign in with the console password of an "
         "identity with <code>role: viewer</code> or <code>role: admin</code>.</p>"
         f'<form method="post" action="{UI_PREFIX}/login">'
@@ -2826,7 +3022,9 @@ def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
         "An API token does not sign in here &ndash; it belongs in the "
         "<code>Authorization</code> header of an agent, never in a browser."
         "</p>"
-        "</div></div></main></body></html>"
+        "</div></div></main>"
+        + _release_notes_modal()
+        + "</body></html>"
     )
 
 

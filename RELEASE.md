@@ -60,6 +60,29 @@ cannot. It is in every release.
 
 ---
 
+## 0.5.0
+
+**Fix: the console showed a stale version after a release. New: a release-notes popup on the version badge.**
+
+- **Version drift, fixed at the root.** `__init__.py` used to carry a
+  second, hand-maintained `__version__ = "..."` string alongside
+  `pyproject.toml`'s -- and after shipping 0.4.0, it wasn't bumped, so the
+  console kept showing `v0.3.12`. `__init__.py` now derives `__version__`
+  instead of hardcoding it: it reads `pyproject.toml` directly when one is
+  reachable (dev checkouts, editable installs -- always current, no
+  reinstall needed), falling back to the installed package's own metadata
+  otherwise (the container image, rebuilt fresh every release). There is no
+  second copy left anywhere to forget. `tests/test_version.py` asserts
+  `gatekeeper.__version__` matches `pyproject.toml` on every run.
+- **Release-notes popup.** The version badge (sidebar and login page) is now
+  a link that opens a popup with the full `RELEASE.md` history -- newest
+  first, headings, bold, and inline code rendered, everything else escaped.
+  Pure CSS (`:target`), no JavaScript, consistent with the rest of the
+  console. `RELEASE.md` ships inside the container image
+  (`/usr/share/gatekeeper/RELEASE.md`, overridable via
+  `GATEKEEPER_RELEASE_NOTES`) so this works in production, not only from a
+  source checkout.
+
 ## 0.4.0
 
 **New: `http` and `truenas` executors, a credential store, and starter presets for

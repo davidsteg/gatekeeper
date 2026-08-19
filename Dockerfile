@@ -61,6 +61,13 @@ COPY --from=docker-cli /usr/bin/docker /usr/bin/docker
 COPY --from=docker-cli /usr/local/lib/docker/cli-plugins /usr/local/lib/docker/cli-plugins
 COPY --from=build /opt/venv /opt/venv
 
+# RELEASE.md is not part of the Python package (it lives at repo root, not
+# under src/gatekeeper/) -- the console's release-notes popup reads it from
+# this fixed path in production. GATEKEEPER_RELEASE_NOTES can override it;
+# a dev/editable checkout finds the file next to pyproject.toml instead and
+# never needs this at all (see ui.py's _release_notes()).
+COPY RELEASE.md /usr/share/gatekeeper/RELEASE.md
+
 # Verify at build time that 'docker compose' actually resolves. Without this
 # check, a missing plugin would only surface on the first agent call.
 RUN docker compose version
@@ -71,6 +78,7 @@ RUN groupadd -g 568 apps && useradd -u 568 -g 568 -M -s /usr/sbin/nologin apps
 ENV PATH="/opt/venv/bin:${PATH}" \
     GATEKEEPER_CONFIG_DIR=/etc/gatekeeper \
     GATEKEEPER_PORT=8080 \
+    GATEKEEPER_RELEASE_NOTES=/usr/share/gatekeeper/RELEASE.md \
     PYTHONUNBUFFERED=1
 
 USER 568:568
