@@ -942,7 +942,15 @@ a.reset:hover { color: var(--accent); }
 .preset-card-head { display: flex; align-items: center; gap: .6rem; }
 .preset-card-head .name { font-weight: 650; font-size: 1rem; }
 .preset-card-foot { margin-top: auto; }
-.preset-logo { display: inline-flex; flex: none; border-radius: 999px; overflow: hidden; }
+.preset-logo {
+  display: inline-flex; flex: none; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 999px; overflow: hidden;
+  /* Real brand marks are full-color and drawn for a light background; a
+     monogram fallback (Tdarr) paints its own full-bleed colored circle
+     over this, so the white never shows through for that case. */
+  background: #fff;
+}
+.preset-logo-lg { width: 36px; height: 36px; }
 .preset-logo svg { display: block; width: 100%; height: 100%; }
 
 /* -- Release notes popup --
@@ -2828,7 +2836,7 @@ def _tier1_reference(service: Service) -> str:
     return "".join(cards)
 
 
-def _preset_logo(preset: Preset, size: int = 28) -> str:
+def _preset_logo(preset: Preset, *, large: bool = False) -> str:
     """Renders a preset's inline-SVG brand mark.
 
     Deliberately its own helper, not folded into `_icon()`/`_ICONS`: those
@@ -2836,8 +2844,19 @@ def _preset_logo(preset: Preset, size: int = 28) -> str:
     page, whereas a preset logo is per-service and lives in `presets.py`,
     not this module. Conflating the two dicts would make an unrelated icon
     edit risk breaking every preset card.
+
+    Sizing is a named class (`.preset-logo`/`.preset-logo-lg`), not an
+    inline `style="width:...px"` -- the CSP's `style-src 'nonce-...'` does
+    not cover inline style attributes, so one silently does nothing
+    instead of erroring (see the `.caption` comment in `_STYLE`). The
+    fetched brand SVGs also carry no width/height of their own (only a
+    `viewBox`), unlike the old monogram fallback, so without a sized CSS
+    class every logo would render at the browser's default replaced-
+    element size -- large and inconsistent, exactly the bug this class
+    exists to avoid.
     """
-    return f'<span class="preset-logo" style="width:{size}px;height:{size}px">{preset.logo_svg}</span>'
+    cls = "preset-logo preset-logo-lg" if large else "preset-logo"
+    return f'<span class="{cls}">{preset.logo_svg}</span>'
 
 
 def _view_presets(service: Service, session: Session, store: ConfigStore | None) -> str:
@@ -2907,7 +2926,7 @@ def _view_preset_picker(preset: Preset, service: Service, session: Session) -> s
             "</div>"
         )
     return (
-        f'<div class="preset-card-head">{_preset_logo(preset, 36)}'
+        f'<div class="preset-card-head">{_preset_logo(preset, large=True)}'
         f'<span class="name">{_e(preset.display_name)}</span></div>'
         + (f'<p class="muted">{_e(preset.notes)}</p>' if preset.notes else "")
         + "".join(rows)

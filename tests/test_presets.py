@@ -66,6 +66,44 @@ def test_logo_is_inline_svg_with_no_external_reference(key):
 
 
 @pytest.mark.parametrize("key", sorted(PRESETS))
+def test_logo_has_no_csp_blocked_styling(key):
+    """The console's CSP is `style-src 'nonce-...'`, which covers inline
+
+    `style=""` attributes AND a bare `<style>` tag -- neither carries the
+    page's nonce, so the browser silently drops them and every element
+    that depended on one renders with default (black) fill instead of its
+    real color. A fetched brand SVG must have every declaration converted
+    to presentation attributes (`fill="#hex"`, not `style="fill:#hex"` or
+    a CSS class resolved via a `<style>` block) before it ever reaches
+    `presets.py` -- this is what actually failed the first time these
+    logos were added: several rendered as solid black circles.
+    """
+    svg = PRESETS[key].logo_svg
+    assert 'style="' not in svg, f"{key}: inline style= is dropped by CSP"
+    assert "<style" not in svg.lower(), f"{key}: <style> block is dropped by CSP"
+    assert 'class="' not in svg, f"{key}: class= implies a (dropped) stylesheet"
+
+
+def test_no_duplicate_svg_ids_or_gradient_targets_across_all_presets():
+    """The preset gallery renders every logo on one page at once -- an SVG
+
+    `id` (and the `url(#id)`/`href="#id"` that reference it, e.g. a
+    gradient or clip-path) is global to the whole document, not scoped per
+    `<svg>`. Two presets defining the same bare id (several of the source
+    files used generic names like 'a'/'b' before namespacing) would make
+    one logo silently borrow -- or corrupt -- another's gradient.
+    """
+    import re
+
+    seen: dict[str, str] = {}
+    for key, preset in PRESETS.items():
+        for svg_id in re.findall(r'\bid="([^"]+)"', preset.logo_svg):
+            owner = seen.get(svg_id)
+            assert owner is None, f"id {svg_id!r} used by both {owner!r} and {key!r}"
+            seen[svg_id] = key
+
+
+@pytest.mark.parametrize("key", sorted(PRESETS))
 def test_toolkit_yaml_is_a_mapping_under_the_preset_key(key):
     preset = PRESETS[key]
     parsed = yaml.safe_load(preset.toolkit_yaml)

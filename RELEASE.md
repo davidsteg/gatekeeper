@@ -60,6 +60,35 @@ cannot. It is in every release.
 
 ---
 
+## 0.7.0
+
+**Real service logos on the preset gallery, instead of plain letter monograms.**
+
+- **12 of the 13 presets now show their actual service mark** (Sonarr,
+  Radarr, Jellyfin, Bazarr, Prowlarr, Home Assistant, n8n, Uptime Kuma,
+  Immich, Telegram, Google, TrueNAS), sourced from
+  [homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
+  (Apache License 2.0, attributed in `presets.py`). Tdarr has no usable SVG
+  available there and keeps its colored-circle-with-initials fallback.
+- **Two rendering bugs found and fixed while adding these:**
+  - Several logos initially rendered as solid black circles. Their source
+    SVGs set color via `style="fill:#hex"` or a `<style>` block with CSS
+    classes -- both are governed by the console's CSP
+    (`style-src 'nonce-...'`), which the browser silently drops when
+    nothing carries that nonce, leaving the shape with no fill at all.
+    Every fetched logo is now stripped of `style=`/`<style>`/`class=` and
+    rewritten with plain presentation attributes (`fill="#hex"`) before it
+    ever reaches `presets.py` -- the same fix `_preset_logo()`'s own sizing
+    already had to learn once before (see 0.4.0's CSS-only-modal work).
+  - The logo badges briefly rendered oversized (filling most of the card)
+    because their container was sized via an inline
+    `style="width:28px;height:28px"` attribute -- also CSP-blocked. Sizing
+    is now two named classes, `.preset-logo`/`.preset-logo-lg`.
+- Added `test_logo_has_no_csp_blocked_styling` and
+  `test_no_duplicate_svg_ids_or_gradient_targets_across_all_presets` to
+  `test_presets.py` so both classes of bug fail a test run instead of only
+  showing up as a black circle in a screenshot.
+
 ## 0.6.0
 
 **New: a `docker`/`http`/`truenas` toolkit can now reach several named
