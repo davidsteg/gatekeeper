@@ -230,7 +230,7 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
     """
     where = f"tool {tool.id!r}"
 
-    if toolkit.executor in ("docker", "local"):
+    if toolkit.executor in ("docker", "local", "ssh"):
         try:
             toolkit.check_binary(tool.binary or "")
         except ConfigError as exc:
@@ -333,7 +333,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     #: uniformly, the same way it already covers argv/scopes/derived.
     all_templates: list[str] = []
 
-    if toolkit.executor in ("docker", "local"):
+    if toolkit.executor in ("docker", "local", "ssh"):
         binary = spec.get("binary")
         if not isinstance(binary, str):
             raise ConfigError(f"{where}: field 'binary' is missing")

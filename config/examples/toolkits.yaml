@@ -131,6 +131,26 @@ toolkits:
     max_timeout_seconds: 30
     max_output_bytes: 65536
 
+  # REQUIREMENTS.md §17: `ssh` reuses the docker/local binary+argv model
+  # (FR-5.3/5.4) exactly, just executed on a remote host over SSH instead
+  # of a local subprocess. Host-key verification is mandatory, not
+  # optional -- ssh_known_hosts is the output of
+  # 'ssh-keyscan -t ed25519 diag-host.lan', pinned here so a redeploy is
+  # required to point this toolkit at a different host key (same posture
+  # as FR-8.9's DNS-rebinding check for the http executor).
+  linux:
+    executor: ssh
+    ssh_host: diag-host.lan
+    ssh_port: 22
+    ssh_user: gatekeeper
+    ssh_known_hosts: "diag-host.lan ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."
+    binaries: ["/usr/bin/uptime", "/usr/bin/free", "/usr/bin/df"]
+    denied_args: []
+    path_roots: []
+    credential: linux
+    max_timeout_seconds: 15
+    max_output_bytes: 16384
+
 # FR-6.8
 rate_limits:
   read:

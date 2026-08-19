@@ -38,8 +38,21 @@ from .errors import ConfigError
 #: docker_tls's value is a JSON bundle {"cert", "key", "ca"} of PEM material
 #: for a TLS-secured remote Docker daemon (FR-8.3g) -- materialized to a
 #: private temp dir by Service, never written back through ui.py.
+#: ssh_private_key's value is PEM-format private key text (optionally
+#: passphrase-free -- gatekeeper has no prompt to type one into) for the
+#: `ssh` executor; the matching public key must already be in the remote
+#: host's authorized_keys, which is out of gatekeeper's control by design
+#: (a credential names a secret gatekeeper holds, not one it can push).
+#: url_query, like url_path, is a deliberately narrow exception to "a
+#: credential is always a header" (FR-8.14) -- for a service with no
+#: header-auth option at all (SABnzbd's classic API), injected as a query
+#: parameter (named by `header`) directly by execute_http.py, never
+#: through a tool's own query_template.
 KINDS = frozenset(
-    {"api_key_header", "bearer", "basic", "ws_api_key", "url_path", "docker_tls"}
+    {
+        "api_key_header", "bearer", "basic", "ws_api_key", "url_path",
+        "url_query", "docker_tls", "ssh_private_key",
+    }
 )
 
 #: Env var holding the base64 urlsafe Fernet key directly.
@@ -233,8 +246,8 @@ class CredentialStore:
     ) -> None:
         if kind not in KINDS:
             raise WriteRefused(f"Unknown credential kind {kind!r} (allowed: {sorted(KINDS)})")
-        if kind == "api_key_header" and not header:
-            raise WriteRefused("kind 'api_key_header' requires a header name")
+        if kind in ("api_key_header", "url_query") and not header:
+            raise WriteRefused(f"kind {kind!r} requires a header/param name")
         if not value:
             raise WriteRefused("A credential needs a value")
         with self._lock:

@@ -575,36 +575,36 @@ def cmd_token(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_preset(args: argparse.Namespace) -> int:
+def cmd_integration(args: argparse.Namespace) -> int:
     """Prints the same toolkit YAML the `/ui/toolkits/reference` page shows.
 
-    A terminal formatter around `presets.PRESETS`, nothing more -- useful
+    A terminal formatter around `integrations.INTEGRATIONS`, nothing more -- useful
     right after 'gatekeeper init', before --ui is even reachable, or for
     anyone who would rather copy from a shell than a browser.
     """
-    from .presets import PRESETS
+    from .integrations import INTEGRATIONS
 
-    if args.preset_action == "list":
-        for key in sorted(PRESETS):
-            preset = PRESETS[key]
-            print(f"{key:<14} {preset.display_name}")
+    if args.integration_action == "list":
+        for key in sorted(INTEGRATIONS):
+            integration = INTEGRATIONS[key]
+            print(f"{key:<14} {integration.display_name}")
         return 0
 
-    preset = PRESETS.get(args.key)
-    if preset is None:
+    integration = INTEGRATIONS.get(args.key)
+    if integration is None:
         print(
-            f"ERROR: no preset named {args.key!r}. Run 'gatekeeper preset list' "
+            f"ERROR: no integration named {args.key!r}. Run 'gatekeeper integration list' "
             "to see the available ones.",
             file=sys.stderr,
         )
         return 1
-    print(f"# {preset.display_name} -- paste under 'toolkits:' in toolkits.yaml,")
+    print(f"# {integration.display_name} -- paste under 'toolkits:' in toolkits.yaml,")
     print("# fill in the CHANGEME placeholders, then redeploy (FR-4.11).")
-    if preset.notes:
-        print(f"# {preset.notes}")
-    print(preset.toolkit_yaml, end="")
-    print(f"\n# {len(preset.tool_specs)} starter tool(s), created via /ui/tools/presets:")
-    for spec in preset.tool_specs:
+    if integration.notes:
+        print(f"# {integration.notes}")
+    print(integration.toolkit_yaml, end="")
+    print(f"\n# {len(integration.tool_specs)} starter tool(s), created via /ui/tools/integrations:")
+    for spec in integration.tool_specs:
         print(f"#   {spec['id']}: {spec.get('title', '')}")
     return 0
 
@@ -669,17 +669,17 @@ def main() -> int:
     )
     credential_key.set_defaults(func=cmd_credential_key)
 
-    preset = sub.add_parser(
-        "preset", help="Print starter toolkit YAML for a known service"
+    integration = sub.add_parser(
+        "integration", help="Print starter toolkit YAML for a known service"
     )
-    preset_sub = preset.add_subparsers(dest="preset_action", required=True)
-    preset_list = preset_sub.add_parser("list", help="List available presets")
-    preset_list.set_defaults(func=cmd_preset)
-    preset_show = preset_sub.add_parser(
-        "show", help="Print one preset's toolkit YAML and starter tools"
+    integration_sub = integration.add_subparsers(dest="integration_action", required=True)
+    integration_list = integration_sub.add_parser("list", help="List available integrations")
+    integration_list.set_defaults(func=cmd_integration)
+    integration_show = integration_sub.add_parser(
+        "show", help="Print one integration's toolkit YAML and starter tools"
     )
-    preset_show.add_argument("key", help="Preset key, e.g. sonarr (see 'preset list')")
-    preset_show.set_defaults(func=cmd_preset)
+    integration_show.add_argument("key", help="Integration key, e.g. sonarr (see 'integration list')")
+    integration_show.set_defaults(func=cmd_integration)
 
     token = sub.add_parser("token", help="Generate an API token")
     token.add_argument("--token", help="Hash an existing token instead of generating one")

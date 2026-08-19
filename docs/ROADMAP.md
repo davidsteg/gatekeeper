@@ -12,14 +12,26 @@ item.
   injection, response size/field capping, external-data marking (`execute_http.py`)
 - `truenas` executor — JSON-RPC 2.0 over WebSocket, RPC-method whitelist
   (`execute_truenas.py`)
-- Credential store — write-only, encrypted at rest (`credentials.py`)
+- `ssh` executor — reuses the `docker`/`local` binary+argv tool shape
+  exactly (REQUIREMENTS.md §17), executed on a remote host over SSH;
+  mandatory host-key pinning (`ssh_known_hosts`, no MITM-prone
+  `known_hosts=None`), each argv element `shlex.quote`d before joining
+  into the single command string SSH's exec channel requires
+  (`execute_ssh.py`). One toolkit = one host; no destinations support yet
+  (see below).
+- Credential store — write-only, encrypted at rest (`credentials.py`).
+  Kinds: `api_key_header`, `bearer`, `basic`, `ws_api_key`, `url_path`,
+  `url_query`, `docker_tls`, `ssh_private_key`
 - Destinations — a `docker`/`http`/`truenas` toolkit may declare several
   named targets (e.g. two Docker hosts); tools expand at catalog-load time
   into destination-qualified, independently-grantable IDs
   (`docker.compose_up@nas1`) — REQUIREMENTS.md FR-8.3g-j (`tier1.py`,
   `catalog.py`)
-- Presets — starter toolkit YAML + tools + logo for 13 services, reachable
-  from `/ui/tools/presets` (`presets.py`)
+- Integrations — starter toolkit YAML + tools + logo for 20 services
+  (Sonarr, Radarr, Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n,
+  Uptime Kuma, Immich, Telegram, Google API, TrueNAS, pfSense, Jellystat,
+  Netdata, SABnzbd, Paperless-ngx, Docker, Linux-over-SSH), reachable
+  from `/ui/tools/integrations` (`integrations.py`)
 - `write_external` category — distinct rate-limit bucket, agent-facing
   "cannot be undone" warning, requires an explicit grant
 - Operations console (`/ui`) — no JavaScript, CSP-locked, server-rendered SVG
@@ -29,13 +41,13 @@ item.
 - **OAuth2** — the `http` executor supports static credentials only
   (bearer / API-key header / basic — FR-8.11). Services that require an
   authorization-code flow (most Google Workspace APIs: Calendar, Gmail,
-  Drive, …) are out of scope for the `google_api` preset. Would need a
+  Drive, …) are out of scope for the `google_api` integration. Would need a
   separate subsystem (callback handling, token refresh/storage) — not
   justified until a concrete service requires it.
-- **`ssh` executor** — optional per REQUIREMENTS.md §17, not built. The
-  `truenas` executor covers the case it was mainly proposed for (`zpool
-  status`, dataset management); it remains relevant only for host
-  diagnostics with no API equivalent (`ps aux`, `top`).
+- **`ssh` destinations** — a `docker`/`http`/`truenas` toolkit can declare
+  several named destinations (see below); `ssh` toolkits can't yet
+  (`tier1.py` rejects a `destinations:` list on an `ssh` toolkit) — one
+  toolkit per host for now, add another toolkit for a second host.
 - **TrueNAS SCRAM-SHA-512 mutual auth** — API-key auth
   (`auth.login_with_api_key`) is implemented and is the baseline; SCRAM is
   TrueNAS 26's preferred alternative and is a follow-up, not a blocker.
@@ -59,7 +71,7 @@ item.
   pass that introduced it.
 - **`Toolkit`/`Destination` as a tagged union per executor** — both remain
   flat dataclasses carrying every executor's fields at once (docker/http/
-  truenas), relying on convention (irrelevant fields stay `None`/default)
+  truenas/ssh), relying on convention (irrelevant fields stay `None`/default)
   rather than the type system to keep e.g. a `docker` toolkit from also
   setting `base_url`. A `Toolkit.target: DockerTarget | HttpTarget |
   TruenasTarget` redesign would make that class of mistake unrepresentable,

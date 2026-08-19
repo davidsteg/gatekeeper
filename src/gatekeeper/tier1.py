@@ -19,8 +19,8 @@ import yaml
 
 from .errors import ConfigError, read_config_file
 
-#: Executor types implemented. `ssh` is optional per §17 and not yet built.
-KNOWN_EXECUTORS = frozenset({"docker", "local", "http", "truenas"})
+#: Executor types implemented.
+KNOWN_EXECUTORS = frozenset({"docker", "local", "http", "truenas", "ssh"})
 
 #: FR-8.6: methods an `http` toolkit may allow at all. A toolkit may
 #: narrow this further; it may never widen it.
@@ -89,6 +89,27 @@ class Toolkit:
     docker_host: str | None = None
     #: Paired with docker_host, for a TLS-secured remote Docker daemon.
     docker_tls: bool = False
+
+    # -- `ssh` executor only -------------------------------------------
+    #
+    # A tool on an `ssh` toolkit is shaped exactly like a `docker`/`local`
+    # one (binary + argv, FR-5.3/5.4) -- what differs is only the transport:
+    # `execute_ssh.py` runs the same resolved argv on a remote host over an
+    # SSH exec channel instead of a local subprocess. Deliberately fixed,
+    # allowlisted commands (this project's `local`/`docker` model), never
+    # an interactive shell or an arbitrary-command "Linux CLI" tool -- that
+    # class of tool has no boundary to validate against (REQUIREMENTS.md §17).
+
+    ssh_host: str | None = None
+    ssh_port: int = 22
+    ssh_user: str | None = None
+    #: `known_hosts`-file-format text (as `ssh-keyscan <host>` prints),
+    #: pinning the exact host key(s) accepted for this toolkit. Required,
+    #: not optional -- an SSH connection with host-key checking disabled
+    #: (asyncssh's `known_hosts=None`) is trivially MITM-able, which this
+    #: project's posture on target verification (FR-8.9's DNS-rebinding
+    #: check for `http`) argues squarely against accepting here instead.
+    ssh_known_hosts: str | None = None
 
     def check_binary(self, binary: str) -> None:
         """FR-4.1: the executable must be exactly in the allowlist."""
@@ -392,6 +413,11 @@ def _toolkit_destinations(
             f"{where}: 'local' toolkits cannot declare destinations -- "
             "there is nothing remote to connect to"
         )
+    if dest_names and executor == "ssh":
+        raise ConfigError(
+            f"{where}: 'ssh' toolkits cannot declare destinations yet -- "
+            "one toolkit, one host (use a separate toolkit per host)"
+        )
     for dest_name in dest_names:
         if dest_name not in destinations:
             raise ConfigError(
@@ -463,10 +489,14 @@ def load_tier1(path: str) -> Tier1:
         allowed_rpc_methods: tuple[str, ...] = ()
         docker_host: str | None = None
         docker_tls = False
+        ssh_host: str | None = None
+        ssh_port = 22
+        ssh_user: str | None = None
+        ssh_known_hosts: str | None = None
 
         dest_names = _toolkit_destinations(spec, executor, where, destinations)
 
-        if executor in ("docker", "local"):
+        if executor in ("docker", "local", "ssh"):
             binaries = _str_tuple(_require(spec, "binaries", where), where)
             if not binaries:
                 raise ConfigError(f"{where}: 'binaries' must not be empty")
@@ -481,6 +511,21 @@ def load_tier1(path: str) -> Tier1:
                 if raw_docker_host is not None:
                     docker_host = _validate_docker_host(str(raw_docker_host), where)
                 docker_tls = bool(spec.get("docker_tls", False))
+            elif executor == "ssh":
+                ssh_host = str(_require(spec, "ssh_host", where))
+                ssh_port = int(spec.get("ssh_port", 22))
+                if not 1 <= ssh_port <= 65535:
+                    raise ConfigError(f"{where}: ssh_port {ssh_port} is out of range")
+                ssh_user = str(_require(spec, "ssh_user", where))
+                ssh_known_hosts = str(_require(spec, "ssh_known_hosts", where)).strip()
+                if not ssh_known_hosts:
+                    raise ConfigError(
+                        f"{where}: 'ssh_known_hosts' must not be empty -- run "
+                        "'ssh-keyscan -t ed25519 <host>' and paste its output here. "
+                        "Host-key checking is not optional (FR-8.9's DNS-rebinding "
+                        "check exists for the same reason: verify the target, not "
+                        "just the name)."
+                    )
         elif executor == "http":
             base_url = str(_require(spec, "base_url", where))
             base_url = _validate_http_base_url(base_url, where)
@@ -553,6 +598,10 @@ def load_tier1(path: str) -> Tier1:
             destinations=dest_names,
             docker_host=docker_host,
             docker_tls=docker_tls,
+            ssh_host=ssh_host,
+            ssh_port=ssh_port,
+            ssh_user=ssh_user,
+            ssh_known_hosts=ssh_known_hosts,
         )
 
     limits = raw.get("rate_limits") or {}

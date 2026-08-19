@@ -149,6 +149,38 @@ async def test_successful_get(toolkit, credentials):
     assert payload["headers"].get("X-Api-Key") == "super-secret-abc"
 
 
+async def test_url_query_credential_injected_as_query_param(toolkit, tmp_path, monkeypatch):
+    """FR-8.14's narrow, documented exception: a service with no header
+
+    option at all (this project's SABnzbd preset) gets its credential
+    injected as a query parameter -- by execute_http.py directly, not
+    through the tool's own query_template.
+    """
+    tk, tier1 = toolkit
+    monkeypatch.setenv(KEY_ENV, generate_master_key())
+    from gatekeeper.audit import AuditLog
+
+    audit = AuditLog(str(tmp_path / "logs4"))
+    store = CredentialStore(path=str(tmp_path / "credentials4.yaml"), audit=audit)
+    store.create(
+        "demo_cred", kind="url_query", header="apikey",
+        value="super-secret-query-key", actor="test", rev="",
+    )
+    tool = _tool(tier1)
+    method, path, query, body = validate.build_http_request(tool, {"name": "widgets"}, tk)
+    result = await execute_http.run(
+        method=method, path=path, query=query, body=body, toolkit=tk,
+        credentials=store, timeout_seconds=5, max_output_bytes=65536,
+        idempotent=True,
+    )
+    assert result.outcome == OUTCOME_OK
+    payload = json.loads(result.stdout)
+    assert "apikey=super-secret-query-key" in payload["path"]
+    # Never also sent as a header -- the two injection paths are exclusive
+    # per credential kind.
+    assert "X-Api-Key" not in payload["headers"]
+
+
 async def test_credential_masked_when_redacted(toolkit, credentials):
     tk, tier1 = toolkit
     tool = _tool(tier1)

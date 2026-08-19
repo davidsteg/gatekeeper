@@ -154,6 +154,23 @@ def _credential_headers(credential: ResolvedCredential | None) -> dict[str, str]
     return {}
 
 
+def _credential_query(credential: ResolvedCredential | None) -> dict[str, str]:
+    """FR-8.14 says gatekeeper prefers a header over `?apikey=` because a
+
+    query string ends up in the target's own access logs -- but a handful
+    of real services (SABnzbd's classic API is the one in this project's
+    presets) offer no header alternative at all. `url_query` is the
+    deliberately narrow, documented exception: injected here, by this
+    module, exactly like a header would be -- never through a tool's own
+    `query_template`, which structurally cannot carry a credential either
+    way (FR-8.7: a parameter fills one value, and no tool definition ever
+    sees `credential.value` in the first place).
+    """
+    if credential is None or credential.kind != "url_query" or not credential.header:
+        return {}
+    return {credential.header: credential.value}
+
+
 async def run(
     *,
     method: str,
@@ -230,6 +247,7 @@ async def run(
 
     headers = {"Host": host if port in (80, 443) else f"{host}:{port}"}
     headers.update(_credential_headers(credential))
+    query = {**query, **_credential_query(credential)}
 
     # Connect to the *checked* IP directly rather than letting httpx do its
     # own DNS lookup a second time -- that second lookup is exactly the
