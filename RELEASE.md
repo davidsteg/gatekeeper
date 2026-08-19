@@ -60,6 +60,50 @@ cannot. It is in every release.
 
 ---
 
+## 0.4.0
+
+**New: `http` and `truenas` executors, a credential store, and starter presets for
+13 common services.**
+
+Until now gatekeeper could only run allowlisted local binaries or docker
+commands -- there was no way to reach an HTTP API or TrueNAS at all, so
+Sonarr, Radarr, Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n,
+Uptime Kuma, Immich, Telegram, Google APIs, and TrueNAS were simply
+impossible to add as tools. This closes that gap end to end:
+
+- **`http` executor** (`execute_http.py`) -- SSRF-safe: the resolved IP is
+  checked against the toolkit's `allowed_cidrs` immediately before
+  connecting, not just the hostname once, closing the DNS-rebinding gap.
+  Redirects are reported, never followed. Credentials are injected as
+  headers by the executor itself, never through a tool's own query/body
+  template. Responses are capped in size and field count and marked as
+  external, untrusted data for the agent.
+- **`truenas` executor** (`execute_truenas.py`) -- JSON-RPC 2.0 over
+  WebSocket, since TrueNAS's REST v2.0 is deprecated. The whitelist acts
+  on RPC method names instead of paths: a method not listed structurally
+  does not exist, there is no separate "permission" to deny it.
+- **Credential store** (`credentials.py`) -- named, encrypted-at-rest
+  secrets a toolkit references by name. Write-only: create, rotate,
+  delete -- no operation, for no role, ever returns a value back out.
+  Master key comes from `GATEKEEPER_CREDENTIAL_KEY`
+  (`gatekeeper credential-key` generates one) or
+  `GATEKEEPER_CREDENTIAL_KEY_FILE`, kept outside the encrypted dataset.
+  New `/ui/credentials` admin pages.
+- **Presets** (`presets.py`) -- a toolkit YAML block plus 2-3 starter
+  tools and an inline-SVG logo for each of the 13 services above. New
+  `/ui/tools/presets` gallery: pick a preset's starter tool and land on
+  the *existing* tool editor pre-filled, instead of a blank textarea --
+  the save still goes through the exact same Tier 1 validation as
+  hand-written YAML, presets never bypass it. Toolkit creation stays a
+  manual, deploy-time edit (unchanged, by design): `/ui/toolkits/reference`
+  and `gatekeeper preset list`/`show` print the copy-pasteable YAML.
+- Google/Telegram are covered only for their static-credential surface
+  (Telegram bot API, Google APIs that accept a plain API key) -- no
+  OAuth2 authorization-code flow is implemented.
+- 293 tests added/updated, including a negative corpus for SSRF,
+  DNS-rebinding, path-traversal, and disallowed-RPC-method attempts
+  against the new executors.
+
 ## 0.3.12
 
 **Access map: per-identity colors. Sidebar: dropped the read/write badge.**
