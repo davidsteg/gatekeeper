@@ -104,6 +104,13 @@ class ToolDef:
     rpc_method: str | None = None
     params_template: dict[str, str] | None = None
 
+    # -- Multi-destination (FR-8.3h) ------------------------------------
+    #: Set only on the destination-qualified copies produced by
+    #: `_expand_tool` (id = "<toolkit>.<action>@<destination>"). None on
+    #: the single ToolDef a toolkit with no declared destinations gets,
+    #: exactly as before this field existed.
+    destination: str | None = None
+
     @property
     def agent_parameters(self) -> dict[str, Parameter]:
         """Only the parameters settable by the agent."""
@@ -396,6 +403,26 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     return tool
 
 
+def _expand_tool(tool: ToolDef, toolkit: Toolkit) -> list[ToolDef]:
+    """Fans one parsed definition out into one ToolDef per destination the
+    toolkit declares (FR-8.3h).
+
+    The YAML entry itself keeps its bare id -- authors write the tool once.
+    A toolkit with no `destinations` produces the single, unmodified
+    ToolDef (destination=None), exactly today's behaviour. Each expansion
+    shares every other field (argv/parameters/limits/...); only `id` and
+    `destination` differ, so a grant on `docker.compose_up@nas1` and one on
+    `@nas2` are independent, concrete capabilities (FR-8.3i) -- there is no
+    parameter through which a call to one could reach the other.
+    """
+    if not toolkit.destinations:
+        return [tool]
+    return [
+        dataclasses.replace(tool, id=f"{tool.id}@{dest_name}", destination=dest_name)
+        for dest_name in toolkit.destinations
+    ]
+
+
 def _str_str_map(value: Any, where: str, field: str) -> dict[str, str]:
     """A flat string->string template map (query/body/params).
 
@@ -484,9 +511,11 @@ def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
             disabled.append(str(exc))
             rejected.append((spec if isinstance(spec, dict) else {}, str(exc)))
             continue
-        if tool.id in tools:
-            raise ConfigError(f"Duplicate tool ID {tool.id!r}")
-        tools[tool.id] = tool
+        toolkit = tier1.toolkit(tool.toolkit)
+        for expanded in _expand_tool(tool, toolkit):
+            if expanded.id in tools:
+                raise ConfigError(f"Duplicate tool ID {expanded.id!r}")
+            tools[expanded.id] = expanded
 
     return Catalog(
         tools=tools,

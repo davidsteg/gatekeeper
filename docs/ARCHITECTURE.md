@@ -57,14 +57,35 @@ The whitelist acts on JSON-RPC method *names* — a method not listed
 structurally does not exist for any tool, there is no separate "permission"
 to deny it (`execute_truenas.py`).
 
+### Destinations (multi-host per toolkit)
+
+A `docker`/`http`/`truenas` toolkit may declare several named **destinations**
+in `toolkits.yaml` (Tier 1, FR-8.3g) — each just a connection target
+(`docker_host`, `base_url`, or `ws_url`) plus an optional credential
+override; every other boundary (binaries, denied args, path roots, allowed
+methods/CIDRs, limits) stays on the toolkit and is identical across all its
+destinations (FR-4.9 — those answer "what," not "where"). At catalog-load
+time, a tool defined against such a toolkit expands into one
+independently-grantable ID per destination — `docker.compose_up` becomes
+`docker.compose_up@nas1` and `docker.compose_up@nas2` — with no change to
+how grants work (FR-8.3h). The agent can never select or influence which
+destination a call reaches: it's fixed in the tool ID itself at deploy/load
+time, the same principle as `http`'s "scheme and host live exclusively in
+the toolkit" (FR-8.3i extends FR-8.7). A toolkit with no `destinations`
+behaves exactly as before this existed (FR-8.3j).
+
 ## Credential store
 
-`credentials.py` — named, encrypted-at-rest secrets a toolkit references by
-name via its (Tier 1) `credential:` field. **Write-only**: create, rotate,
-delete — no operation, for no role, ever returns a value (FR-10.2). The
-*binding* of toolkit → credential name is Tier 1 (redeploy-only); the
-credential *value* is Tier 2 (rotatable at runtime, with an optional overlap
-window so in-flight calls with the old value don't break).
+`credentials.py` — named, encrypted-at-rest secrets a toolkit (or one of its
+destinations, overriding the toolkit's own) references by name via a
+`credential:` field. **Write-only**: create, rotate, delete — no operation,
+for no role, ever returns a value (FR-10.2). The *binding* of toolkit/
+destination → credential name is Tier 1 (redeploy-only); the credential
+*value* is Tier 2 (rotatable at runtime, with an optional overlap window so
+in-flight calls with the old value don't break). Kinds: `api_key_header`,
+`bearer`, `basic`, `ws_api_key`, `url_path`, and `docker_tls` (a JSON
+`{cert, key, ca}` bundle for a TLS-secured remote Docker destination,
+materialized to a private temp dir by `service.py` on first use).
 
 Master key: `GATEKEEPER_CREDENTIAL_KEY` (or `GATEKEEPER_CREDENTIAL_KEY_FILE`
 pointing at a mounted secret) — generate one with `gatekeeper credential-key`.

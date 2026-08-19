@@ -13,6 +13,11 @@ item.
 - `truenas` executor — JSON-RPC 2.0 over WebSocket, RPC-method whitelist
   (`execute_truenas.py`)
 - Credential store — write-only, encrypted at rest (`credentials.py`)
+- Destinations — a `docker`/`http`/`truenas` toolkit may declare several
+  named targets (e.g. two Docker hosts); tools expand at catalog-load time
+  into destination-qualified, independently-grantable IDs
+  (`docker.compose_up@nas1`) — REQUIREMENTS.md FR-8.3g-j (`tier1.py`,
+  `catalog.py`)
 - Presets — starter toolkit YAML + tools + logo for 13 services, reachable
   from `/ui/tools/presets` (`presets.py`)
 - `write_external` category — distinct rate-limit bucket, agent-facing
@@ -39,6 +44,24 @@ item.
   Simpler and correct for infrequent management calls; a pooled/reconnecting
   connection manager is a valid later optimization that would not change the
   tool definition contract (method + params).
-- **Multi-cluster** — designed for it, not tested yet.
 - **API versioning** — MCP is the only interface; no separate HTTP API for
   tools.
+- **Per-destination `allowed_cidrs`/`allowed_methods`/`allowed_path_prefixes`** —
+  an `http` toolkit's SSRF/target restrictions (FR-8.9/8.15) are still
+  toolkit-wide, shared across every destination it declares (`tier1.py`'s
+  `Destination` carries only the connection target, not the toolkit's other
+  boundaries — FR-4.9). Doesn't let a call to one destination reach another
+  (the target itself stays fixed per destination, FR-8.3i), but the CIDR
+  allowlist a single destination's SSRF check accepts is wider than
+  strictly necessary when destinations sit on different subnets. Narrowing
+  this per destination is a deliberate follow-up, not done here to avoid
+  widening `Destination`'s scope past "where," not "what," in the same
+  pass that introduced it.
+- **`Toolkit`/`Destination` as a tagged union per executor** — both remain
+  flat dataclasses carrying every executor's fields at once (docker/http/
+  truenas), relying on convention (irrelevant fields stay `None`/default)
+  rather than the type system to keep e.g. a `docker` toolkit from also
+  setting `base_url`. A `Toolkit.target: DockerTarget | HttpTarget |
+  TruenasTarget` redesign would make that class of mistake unrepresentable,
+  but touches every executor's call sites — a larger, riskier change than
+  fits alongside a feature addition; a candidate for its own pass.

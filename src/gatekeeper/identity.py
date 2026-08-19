@@ -167,6 +167,19 @@ class Identity:
         """
         return tool_id in self.tools
 
+    def holds_definition(self, base_tool_id: str) -> bool:
+        """Whether this identity holds a grant on the YAML definition
+
+        `base_tool_id` names -- either the bare id itself, or any of its
+        destination expansions (`base_tool_id@nas1`, FR-8.3h). For admin-UI
+        and audit display only ("who would be affected by editing/deleting
+        this definition") -- never for call authorization, which is
+        `may_call`'s exact, un-prefixed match against the concrete,
+        destination-qualified id the agent actually named (FR-8.3i).
+        """
+        prefix = base_tool_id + "@"
+        return base_tool_id in self.tools or any(t.startswith(prefix) for t in self.tools)
+
     def covers_scope(self, scope: str) -> bool:
         """Checks a resolved scope against the profile patterns."""
         return any(fnmatch.fnmatchcase(scope, pattern) for pattern in self.scopes)

@@ -198,10 +198,12 @@ class ConfigStore:
 
         No error: the right goes nowhere and is rejected at call time.
         But it is a silent deviation, and silent deviations belong
-        in the log.
+        in the log. `tool_id` is the bare definition id -- a grant on any
+        of its destination expansions (`tool_id@nas1`, FR-8.3h) is just as
+        dangling once the definition itself is gone.
         """
         holders = sorted(
-            i.id for i in self.identities.identities.values() if tool_id in i.tools
+            i.id for i in self.identities.identities.values() if i.holds_definition(tool_id)
         )
         if holders:
             self.audit.write(

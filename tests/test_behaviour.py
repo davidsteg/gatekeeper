@@ -314,7 +314,12 @@ def test_shipped_config_is_valid(repo_config_dir):
     catalog = load_catalog(
         os.path.join(repo_config_dir, "tools.yaml"), tier1, strict=True
     )
-    assert "docker.compose_up" in catalog.tools
+    # The shipped 'docker' toolkit declares two destinations (FR-8.3g), so
+    # every docker.* tool expands into @nas1/@nas2 pairs -- the bare ID no
+    # longer exists once a toolkit has destinations (FR-8.3h).
+    assert "docker.compose_up@nas1" in catalog.tools
+    assert "docker.compose_up@nas2" in catalog.tools
+    assert "docker.compose_up" not in catalog.tools
     assert "diag.uptime" in catalog.tools
     assert catalog.disabled_by_tier1 == []
 
@@ -492,7 +497,7 @@ def test_example_compose_ps_asks_for_json(repo_config_dir):
     """
     tier1 = load_tier1(os.path.join(repo_config_dir, "toolkits.yaml"))
     catalog = load_catalog(os.path.join(repo_config_dir, "tools.yaml"), tier1, strict=True)
-    argv = catalog.tools["docker.compose_ps"].argv
+    argv = catalog.tools["docker.compose_ps@nas1"].argv
     assert argv[-2:] == ("--format", "json")
 
     # The format must not come from a parameter -- otherwise an
