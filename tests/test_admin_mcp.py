@@ -391,6 +391,12 @@ async def test_approved_pending_change_becomes_callable_on_mcp(admin_mcp_env):
 
 
 def _python() -> str:
+    import os
     import sys
 
-    return sys.executable
+    # Must match `tests/conftest.py`'s `PYTHON` constant exactly -- on Linux
+    # `sys.executable` is often a symlink (e.g. .../bin/python -> .../bin/
+    # python3.12) that resolves to a different literal path than the one
+    # the `tier1` fixture's binary allowlist contains, so the realpath has
+    # to be taken here too or the allowlist check rejects it.
+    return os.path.realpath(sys.executable)
