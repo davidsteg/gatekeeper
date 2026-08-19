@@ -75,6 +75,7 @@ from .identity import (
 from .presets import PRESETS, Preset
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
+from .tier1 import Destination, Toolkit
 
 #: Prefix of all UI paths. `AuthMiddleware` lets exactly this prefix through
 #: without a Bearer token -- the handlers check the session instead.
@@ -375,6 +376,30 @@ _EXECUTOR_ICONS = {
 
 def _executor_icon(executor: str) -> str:
     return _EXECUTOR_ICONS.get(executor.strip().lower(), "package")
+
+
+def _target(obj: Toolkit | Destination) -> str:
+    """The one target field that's actually set on a Toolkit or a
+
+    Destination -- both carry the same three mutually-exclusive
+    per-executor fields (FR-8.3g: a Destination mirrors Toolkit's own
+    target fields), so picking "whichever one is set" is exactly the same
+    one-liner for either type.
+    """
+    return obj.docker_host or obj.base_url or obj.ws_url or ""
+
+
+def _base_tool_id(tool: ToolDef) -> str:
+    """The bare, un-expanded id (`docker.compose_up`) a destination-qualified
+
+    ToolDef (`docker.compose_up@nas1`) was fanned out from -- what
+    `catalog.raw_of`/`store.py`'s write ops key on (FR-8.3h expands the
+    YAML entry in memory only; the entry on disk keeps its bare id).
+    Identical to `tool.id` when the tool has no destination.
+    """
+    if tool.destination is None:
+        return tool.id
+    return tool.id[: -(len(tool.destination) + 1)]
 
 
 def _icon(name: str, size: int = 16) -> str:
@@ -1433,8 +1458,28 @@ def _access_graph(
     )
 
     tools_by_kit: dict[str, set[str]] = {name: set() for name, _ in toolkits}
+    #: toolkit -> destination -> tool IDs, for the third tier below (FR-8.3g).
+    tools_by_kit_and_dest: dict[str, dict[str, set[str]]] = {name: {} for name, _ in toolkits}
     for tool in service.catalog.tools.values():
         tools_by_kit.setdefault(tool.toolkit, set()).add(tool.id)
+        if tool.destination:
+            tools_by_kit_and_dest.setdefault(tool.toolkit, {}).setdefault(
+                tool.destination, set()
+            ).add(tool.id)
+
+    # Every destination any toolkit declares, deduplicated by name -- a
+    # destination is a Tier1-global entity, so two toolkits referencing the
+    # same one share a single node, not two.
+    dest_names = sorted({d for _, tk in toolkits for d in tk.destinations})
+    has_destinations = bool(dest_names)
+    dest_granted: dict[str, set[str]] = {
+        d: {
+            tid
+            for name, _ in toolkits
+            for tid in tools_by_kit_and_dest.get(name, {}).get(d, set())
+        }
+        for d in dest_names
+    }
 
     audit_records = records or []
     ident_stats = _call_stats(audit_records)
@@ -1451,17 +1496,39 @@ def _access_graph(
     )
 
     nw, nh, gap = 132.0, 52.0, 14.0
-    right_items = len(toolkits) + len(protected)
-    lanes = max(len(idents), right_items, 1)
+    if has_destinations:
+        # Three columns: toolkits get their own, destinations+protected
+        # share the last one.
+        mid_items = len(toolkits)
+        right_items = len(dest_names) + len(protected)
+    else:
+        # No toolkit declares a destination anywhere -- exactly the
+        # original two-column layout, toolkits and protected resources
+        # sharing one column and one lane count.
+        mid_items = len(toolkits) + len(protected)
+        right_items = mid_items
+    lanes = max(len(idents), mid_items, right_items, 1)
     height = max(lanes * (nh + gap) + 30, 210.0)
-    # Just the two columns now, no hub in between -- rx sits close enough
-    # for a direct curve to read as one line, not three stitched together.
-    lx, rx = 8.0, 360.0
-    width = rx + nw + 8.0
+    lx, mx = 8.0, 360.0
+    dx = mx + nw + 220.0
+    rightmost_x = dx if has_destinations else mx
+    width = rightmost_x + nw + 8.0
 
     def lane_y(index: int, count: int) -> float:
         span = count * nh + max(count - 1, 0) * gap
         return (height - span) / 2 + index * (nh + gap)
+
+    def _curve(x1: float, y1: float, x2: float, y2: float) -> str:
+        """A single cubic curve between two node edges -- the same shape
+        regardless of how far apart the columns sit, so a longer
+        identity->destination edge still reads as one line, not several
+        stitched together.
+        """
+        span = (x2 - x1) / 2
+        return (
+            f"M{x1:.0f} {y1:.0f} C{x1 + span:.0f} {y1:.0f} "
+            f"{x2 - span:.0f} {y2:.0f} {x2:.0f} {y2:.0f}"
+        )
 
     def _tooltip_line(label: str, value: int) -> str:
         return f"  {label}: {value}\n" if value else ""
@@ -1523,8 +1590,8 @@ def _access_graph(
             + "</g>"
         )
 
-    for index, (name, _tk) in enumerate(toolkits):
-        y = lane_y(index, right_items)
+    for index, (name, tk) in enumerate(toolkits):
+        y = lane_y(index, mid_items)
         kit_mark = _mark(name)
         any_match = any_match or kit_mark == " match"
         tool_count = len(tools_by_kit.get(name, ()))
@@ -1544,47 +1611,109 @@ def _access_graph(
         nodes.append(
             f'<g class="g-node{kit_mark}">'
             + _svg_node(
-                rx, y, nw, nh, name, sub, "",
+                mx, y, nw, nh, name, sub, "",
                 tooltip=tooltip, count_text=count_text,
             )
             + "</g>"
         )
 
-        # One direct edge per identity holding at least one tool in this
-        # toolkit -- straight from the identity's box to the toolkit's,
-        # nothing routed through a third point in between.
+        y2 = y + nh / 2
+        if tk.destinations:
+            # A toolkit that fans out to destinations is no longer the
+            # terminal claim (FR-8.3h): the structural edge to each
+            # destination is always drawn (deploy-time fact), and the
+            # per-identity grant edges are drawn straight to the
+            # destination below instead of stopping here.
+            x1 = mx + nw
+            for dest_name in tk.destinations:
+                dest_mark = _mark(dest_name)
+                if not q:
+                    struct_mark = ""
+                elif kit_mark == " match" or dest_mark == " match":
+                    struct_mark = " match"
+                else:
+                    struct_mark = " dim"
+                dy2 = lane_y(dest_names.index(dest_name), right_items) + nh / 2
+                edges.append(
+                    f'<g class="g-edge-group{struct_mark}">'
+                    f'<path class="g-e none" d="{_curve(x1, y2, dx, dy2)}"/>'
+                    f"<title>{_e(f'{name} reaches {dest_name}')}</title></g>"
+                )
+        else:
+            # No destinations: today's behaviour, unchanged -- one direct
+            # edge per identity holding at least one tool in this toolkit.
+            x1 = lx + nw
+            for identity in idents:
+                if not (identity.tools & kit_tools):
+                    continue
+                id_mark = _mark(identity.id)
+                if not q:
+                    edge_mark = ""
+                elif kit_mark == " match" or id_mark == " match":
+                    edge_mark = " match"
+                else:
+                    edge_mark = " dim"
+                pair = pair_stats.get(
+                    (identity.id, name), {"ok": 0, "denied": 0, "failed": 0, "total": 0}
+                )
+                pair_total = pair["total"]
+                y1 = ident_y[identity.id] + nh / 2
+                edge_css = f"g-e {ident_color[identity.id]}"
+                if pair_total >= hot_threshold and pair_total > 0:
+                    edge_css += " hot"
+                edge_tooltip = f"{identity.id} -> {name}\n  {pair_total} calls"
+                if pair["denied"]:
+                    edge_tooltip += f"  ({pair['denied']} denied)"
+                edges.append(
+                    f'<g class="g-edge-group{edge_mark}"><path class="{edge_css}" '
+                    f'd="{_curve(x1, y1, mx, y2)}"/>'
+                    f"<title>{_e(edge_tooltip)}</title></g>"
+                )
+
+    for index, dest_name in enumerate(dest_names):
+        y = lane_y(index, right_items)
+        dest_mark = _mark(dest_name)
+        any_match = any_match or dest_mark == " match"
+        dest = service.tier1.destination(dest_name)
+        target = _target(dest)
+        granted_tools = dest_granted.get(dest_name, set())
+        sub = f"{len(granted_tools)} tools"
+        tooltip = f"{dest_name}\n  target: {target}\n  tools: {len(granted_tools)}\n"
+        tooltip += _tooltip_tools(granted_tools)
+        nodes.append(
+            f'<g class="g-node{dest_mark}">'
+            + _svg_node(dx, y, nw, nh, dest_name, sub, "", tooltip=tooltip)
+            + "</g>"
+        )
+
+        # Grant edges straight from identity to destination (FR-8.3h) --
+        # not routed through the toolkit node, since the grant itself is on
+        # the destination-qualified tool ID, not on the toolkit.
         y2 = y + nh / 2
         for identity in idents:
-            if not (identity.tools & kit_tools):
+            if not (identity.tools & granted_tools):
                 continue
             id_mark = _mark(identity.id)
             if not q:
                 edge_mark = ""
-            elif kit_mark == " match" or id_mark == " match":
+            elif dest_mark == " match" or id_mark == " match":
                 edge_mark = " match"
             else:
                 edge_mark = " dim"
-            pair = pair_stats.get(
-                (identity.id, name), {"ok": 0, "denied": 0, "failed": 0, "total": 0}
-            )
-            pair_total = pair["total"]
-            x1, y1 = lx + nw, ident_y[identity.id] + nh / 2
+            y1 = ident_y[identity.id] + nh / 2
             edge_css = f"g-e {ident_color[identity.id]}"
-            if pair_total >= hot_threshold and pair_total > 0:
-                edge_css += " hot"
-            edge_tooltip = f"{identity.id} -> {name}\n  {pair_total} calls"
-            if pair["denied"]:
-                edge_tooltip += f"  ({pair['denied']} denied)"
+            edge_tooltip = f"{identity.id} -> {dest_name}"
             edges.append(
                 f'<g class="g-edge-group{edge_mark}"><path class="{edge_css}" '
-                f'd="M{x1:.0f} {y1:.0f} '
-                f"C{x1 + 110:.0f} {y1:.0f} {rx - 110:.0f} {y2:.0f} "
-                f'{rx:.0f} {y2:.0f}"/>'
+                f'd="{_curve(lx + nw, y1, dx, y2)}"/>'
                 f"<title>{_e(edge_tooltip)}</title></g>"
             )
 
+    protected_x = dx if has_destinations else mx
+    protected_count = right_items if has_destinations else mid_items
+    protected_start = len(dest_names) if has_destinations else len(toolkits)
     for index, resource in enumerate(protected):
-        y = lane_y(len(toolkits) + index, right_items)
+        y = lane_y(protected_start + index, protected_count)
         mark = _mark(resource)
         any_match = any_match or mark == " match"
         self_ref = resource == SELF_NAME
@@ -1601,16 +1730,24 @@ def _access_graph(
         # drawn from somewhere would have to invent a source for it.
         nodes.append(
             f'<g class="g-node{mark}">'
-            + _svg_node(rx, y, nw, nh, resource, sub, "deny", tooltip=tooltip)
+            + _svg_node(protected_x, y, nw, nh, resource, sub, "deny", tooltip=tooltip)
             + "</g>"
         )
+
+    labels = [f'<text class="g-n" x="{lx:.0f}" y="14">IDENTITIES</text>']
+    if has_destinations:
+        labels.append(f'<text class="g-n" x="{mx:.0f}" y="14">TOOLKITS</text>')
+        labels.append(
+            f'<text class="g-n" x="{dx:.0f}" y="14">DESTINATIONS AND BLOCKED</text>'
+        )
+    else:
+        labels.append(f'<text class="g-n" x="{mx:.0f}" y="14">TOOLKITS AND BLOCKED</text>')
 
     svg = (
         f'<svg class="graph" viewBox="0 0 {width:.0f} {height:.0f}" '
         f'role="img" aria-label="Access map">'
         f'{"".join(edges)}{"".join(nodes)}'
-        f'<text class="g-n" x="{lx:.0f}" y="14">IDENTITIES</text>'
-        f'<text class="g-n" x="{rx:.0f}" y="14">TOOLKITS AND BLOCKED</text>'
+        f'{"".join(labels)}'
         "</svg>"
     )
     return svg, (any_match if q else True)
@@ -1853,9 +1990,19 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
                 grant_cells += '<td class="cell-grant"><span class="pill ok">✓</span></td>'
             else:
                 grant_cells += '<td class="cell-grant"><span class="pill">—</span></td>'
+        # The @destination suffix rendered dimmed and separate -- at a
+        # glance it reads as "docker.compose_up, at nas1", not as a typo'd
+        # tool ID (FR-8.3g).
+        if tool.destination:
+            id_html = (
+                f'<code class="tool-id">{_e(_base_tool_id(tool))}'
+                f'<span class="muted">@{_e(tool.destination)}</span></code>'
+            )
+        else:
+            id_html = f'<code class="tool-id">{_e(tool.id)}</code>'
         rows.append(
             f"<tr>"
-            f'<td><code class="tool-id">{_e(tool.id)}</code></td>'
+            f"<td>{id_html}</td>"
             f"<td>{status}</td>"
             f"<td>{category}</td>"
             f"<td>{idem}</td>"
@@ -2191,7 +2338,10 @@ def _view_tools(
 
     sections = []
     for tk_name in sorted(by_toolkit):
-        tk_tools = by_toolkit[tk_name]
+        # No-destination tools first, then clustered by destination -- so
+        # e.g. compose_up@nas1/compose_down@nas1 sit together instead of
+        # interleaving alphabetically with the @nas2 pair (FR-8.3g).
+        tk_tools = sorted(by_toolkit[tk_name], key=lambda t: (t.destination or "", t.id))
         tk_executor_name = service.tier1.toolkits[tk_name].executor if tk_name in service.tier1.toolkits else ""
         n_read = sum(1 for t in tk_tools if t.category == "read")
         n_write = len(tk_tools) - n_read
@@ -2224,13 +2374,26 @@ def _view_tools(
                 marks.append('<span class="pill deny">not idempotent</span>')
             if not tool.enabled:
                 marks.append('<span class="pill deny">disabled</span>')
+            if tool.destination:
+                marks.append(
+                    f'<span class="pill accent">{_icon("server", 12)}'
+                    f'{_e(tool.destination)}</span>'
+                )
 
             ops = ""
             if can_write:
-                fields = {"id": tool.id, "rev": rev}
+                # Edit/toggle/delete act on the underlying YAML definition,
+                # which is written once under its bare id -- a destination
+                # expansion (tool.id = "docker.compose_up@nas1") has no
+                # matching raw spec of its own (catalog.raw_of only knows
+                # the bare id), and store.py's write ops match on that same
+                # bare id. All destinations of one definition are therefore
+                # edited/enabled/deleted together, which is correct: they
+                # share one `enabled:` flag and one YAML entry.
+                fields = {"id": _base_tool_id(tool), "rev": rev}
                 ops = (
                     f'<a class="btn" title="Edit" '
-                    f'href="{UI_PREFIX}/tools/edit?id={_e(tool.id)}">{_icon("pencil", 14)}</a>'
+                    f'href="{UI_PREFIX}/tools/edit?id={_e(fields["id"])}">{_icon("pencil", 14)}</a>'
                     + _post_button(
                         f"{UI_PREFIX}/tools/toggle",
                         "Disable" if tool.enabled else "Enable",
@@ -2239,7 +2402,7 @@ def _view_tools(
                         fields={**fields, "enabled": "0" if tool.enabled else "1"},
                     )
                     + f'<a class="btn" title="Delete" '
-                    f'href="{UI_PREFIX}/tools/delete?id={_e(tool.id)}">{_icon("trash", 14)}</a>'
+                    f'href="{UI_PREFIX}/tools/delete?id={_e(fields["id"])}">{_icon("trash", 14)}</a>'
                 )
 
             granted = (
@@ -2295,12 +2458,30 @@ def _view_tools(
 
         tk_executor = service.tier1.toolkits.get(tk_name)
         tk_icon = _executor_icon(tk_executor.executor) if tk_executor else "package"
+        # Destination badges (FR-8.3g): a toolkit with declared destinations
+        # lists each by name; one without still shows its single implicit
+        # target if it has one (docker_host/base_url/ws_url), closing the
+        # "where does this toolkit actually reach" visibility gap even
+        # without multi-host.
+        dest_badges = ""
+        if tk_executor and tk_executor.destinations:
+            dest_badges = "".join(
+                f'<span class="pill accent">{_icon("server", 12)}{_e(d)}</span>'
+                for d in tk_executor.destinations
+            )
+        elif tk_executor:
+            single_target = _target(tk_executor)
+            if single_target:
+                dest_badges = (
+                    f'<span class="pill quiet">{_icon("server", 12)}'
+                    f'{_e(single_target)}</span>'
+                )
         sections.append(
             f'<div class="tk-section">'
             f'<div class="tk-head">'
             f'<h3>{_icon(tk_icon, 14)}{_e(tk_name)}</h3>'
             f'<span class="tk-count">{n_enabled} tool{"s" if n_enabled != 1 else ""}</span>'
-            f'<div class="tk-summary">{summary}</div>'
+            f'<div class="tk-summary">{summary}{dest_badges}</div>'
             f'</div>'
             f'<div class="t-grid">{" ".join(cards)}</div>'
             f'</div>'
@@ -2387,10 +2568,21 @@ def _view_credentials(
             tone="bad",
         )
     used_by: dict[str, tuple[str, ...]] = {}
+
+    def _add_user(credential_name: str, label: str) -> None:
+        used_by.setdefault(credential_name, ())
+        used_by[credential_name] = (*used_by[credential_name], label)
+
     for tk in service.tier1.toolkits.values():
         if tk.credential:
-            used_by.setdefault(tk.credential, ())
-            used_by[tk.credential] = (*used_by[tk.credential], tk.name)
+            _add_user(tk.credential, tk.name)
+    # A destination's own `credential:` overrides the toolkit's (FR-8.3g) --
+    # missing it here would let an admin delete/rotate a credential that a
+    # destination still depends on with no warning (the toolkit-level loop
+    # above only ever sees a toolkit-wide credential, never a per-destination one).
+    for dest in service.tier1.destinations.values():
+        if dest.credential:
+            _add_user(dest.credential, f"{dest.name} (destination)")
     rev = credentials.revision()
     parts = []
     for meta in credentials.names(used_by=used_by):
@@ -2909,7 +3101,8 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         '<input name="name" required pattern="[a-z][a-z0-9_-]*"></div>'
         '<div class="field"><span>Kind'
         '<div class="hint">api_key_header/bearer/basic inject an HTTP header; '
-        "ws_api_key is used by the truenas executor's auth call.</div></span>"
+        "ws_api_key is used by the truenas executor's auth call; docker_tls "
+        "is for a TLS-secured remote Docker destination (FR-8.3g).</div></span>"
         f'<select name="kind">{kind_options}</select></div>'
         '<div class="field"><span>Header name'
         '<div class="hint">Only for kind=api_key_header, e.g. '
@@ -2917,7 +3110,9 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         '<input name="header"></div>'
         '<div class="field"><span>Value'
         '<div class="hint">Encrypted at rest, never shown again after this '
-        "form (FR-10.2).</div></span>"
+        "form (FR-10.2). For kind=docker_tls, a JSON object: "
+        "<code>{&quot;cert&quot;: ..., &quot;key&quot;: ..., "
+        "&quot;ca&quot;: ...}</code> (PEM text, ca optional).</div></span>"
         '<input type="password" name="value" autocomplete="new-password" required></div>'
         f'<button type="submit">{_icon("save", 14)}Create</button> '
         f'<a class="btn" href="{UI_PREFIX}/credentials">{_icon("back", 14)}Cancel</a>'
@@ -3416,7 +3611,12 @@ def build_ui_routes(
         if store is None or not session.can_write:
             return RedirectResponse(f"{UI_PREFIX}/tools", status_code=303)
         tool_id = request.query_params.get("id", "")
-        holders = sorted(i.id for i in identities.identities.values() if tool_id in i.tools)
+        # tool_id here is the bare definition id (FR-8.3h); a destination
+        # expansion of it (tool_id@nas1) counts as a holder too, since
+        # deleting/disabling the definition takes every destination with it.
+        holders = sorted(
+            i.id for i in identities.identities.values() if i.holds_definition(tool_id)
+        )
         detail = (
             "The full definition is written to the audit log, so it can be "
             "restored from there."

@@ -12,6 +12,12 @@
 # Basic rule for every definition: argv is a LIST. Each element resolves to
 # exactly one argument. A parameter value structurally cannot
 # produce a second argument (FR-5.4).
+#
+# The 'docker' entries below are written once with a bare id (e.g.
+# 'docker.compose_ps'), but examples/toolkits.yaml gives 'docker' two
+# destinations (nas1, nas2) -- so at catalog-load time each one expands into
+# 'docker.compose_ps@nas1' and 'docker.compose_ps@nas2', two independently
+# grantable tool IDs (FR-8.3h). Grant per destination in identities.yaml.
 
 tools:
   # -- Docker: read-only ----------------------------------------------------

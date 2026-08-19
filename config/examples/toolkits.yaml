@@ -17,9 +17,33 @@
 #
 # Adopting means: read, adapt, understand - not copy.
 
+# FR-8.3g: named destinations a toolkit may reach, in addition to (or
+# instead of) the single implicit target it would otherwise use. A
+# destination carries only connection info and an optional credential
+# override -- never binaries/denied_args/path_roots/limits, which stay on
+# the toolkit and are identical across every destination it declares
+# (FR-4.9: those answer "what is allowed", not "where"). A toolkit that
+# lists no destinations behaves exactly as before this section existed.
+destinations:
+  # The host gatekeeper itself runs on -- same socket the 'docker' toolkit
+  # would use with no destinations declared at all.
+  nas1:
+    docker_host: "unix:///var/run/docker.sock"
+  # A second, remote Docker host, reached over TLS. 'docker-nas2-tls' is a
+  # credential of kind 'docker_tls' (a JSON bundle of cert/key/ca PEM
+  # material) created via /ui/credentials -- never in this file (FR-10.1).
+  nas2:
+    docker_host: "tcp://nas2.lan:2376"
+    docker_tls: true
+    credential: docker-nas2-tls
+
 toolkits:
   docker:
     executor: docker
+    # FR-8.3h: docker.compose_up etc. below expand at catalog-load time
+    # into docker.compose_up@nas1 and docker.compose_up@nas2 -- two
+    # independently grantable tool IDs, see identities.yaml.
+    destinations: [nas1, nas2]
     binaries:
       - /usr/bin/docker
     # FR-4.2: blocked subcommands and flags. The *resolved* argv is checked

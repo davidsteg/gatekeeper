@@ -8,9 +8,10 @@ The one requirement everything else here serves: **no operation, for no
 role, ever returns a credential value** (FR-10.2). Create, rotate, delete --
 yes. Read -- never. Enforcement is structural, not just a convention: the
 only function in this module that can see a plaintext value is `_resolve`,
-and it is used by nothing outside the two HTTP/WebSocket executors (and
-this module's own tests, which never assert its return value crosses back
-out through `CredentialStore`'s public surface).
+and it is used by nothing outside the HTTP/WebSocket executors and
+`service.py`'s docker TLS materialization (and this module's own tests,
+which never assert its return value crosses back out through
+`CredentialStore`'s public surface).
 """
 
 from __future__ import annotations
@@ -28,13 +29,18 @@ from ._atomic import atomic_write, dump, revision, writable
 from .audit import AuditLog
 from .errors import ConfigError
 
-#: Kinds understood by the http/truenas executors. `header` names the HTTP
-#: header for api_key_header; bearer/basic build their own header value;
+#: Kinds understood by the http/truenas/docker executors. `header` names the
+#: HTTP header for api_key_header; bearer/basic build their own header value;
 #: ws_api_key is consumed by the truenas JSON-RPC auth call, not a header;
 #: url_path is substituted into a toolkit's `base_url` (the Telegram bot
 #: API embeds its token in the path, not a header) and emits no header at
 #: all -- `execute_http.py`'s `_credential_headers` returns {} for it.
-KINDS = frozenset({"api_key_header", "bearer", "basic", "ws_api_key", "url_path"})
+#: docker_tls's value is a JSON bundle {"cert", "key", "ca"} of PEM material
+#: for a TLS-secured remote Docker daemon (FR-8.3g) -- materialized to a
+#: private temp dir by Service, never written back through ui.py.
+KINDS = frozenset(
+    {"api_key_header", "bearer", "basic", "ws_api_key", "url_path", "docker_tls"}
+)
 
 #: Env var holding the base64 urlsafe Fernet key directly.
 KEY_ENV = "GATEKEEPER_CREDENTIAL_KEY"

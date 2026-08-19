@@ -60,6 +60,42 @@ cannot. It is in every release.
 
 ---
 
+## 0.6.0
+
+**New: a `docker`/`http`/`truenas` toolkit can now reach several named
+destinations instead of exactly one host.**
+
+Until now every toolkit was bound to a single target -- one Docker socket,
+one `base_url`, one `ws_url` -- reaching a second host meant hand-duplicating
+an entire toolkit definition (binaries, denied args, path roots, limits) just
+to change *where* it connects. Destinations close that gap:
+
+- **`destinations:` in `toolkits.yaml`** (Tier 1, FR-8.3g) -- a named target
+  (`docker_host`/`docker_tls`, `base_url`, or `ws_url`) plus an optional
+  credential override. Every other boundary stays on the toolkit, identical
+  across all its destinations (FR-4.9: those answer "what," not "where").
+- **Tools expand at catalog-load time** into one independently-grantable ID
+  per destination -- `docker.compose_up` becomes `docker.compose_up@nas1`
+  and `docker.compose_up@nas2` -- with no change to the grant model
+  (FR-8.3h). The agent can never choose a destination: it's fixed in the
+  tool ID itself, the same principle as `http`'s "scheme and host live
+  exclusively in the toolkit" (FR-8.3i extends FR-8.7). A toolkit with no
+  `destinations` behaves exactly as before this existed (FR-8.3j).
+- **TLS-secured remote Docker hosts** -- a new `docker_tls` credential kind
+  (a JSON `{cert, key, ca}` bundle) is materialized to a private, 0700 temp
+  directory on first use and re-materialized on rotation; the previous
+  directory is now actually removed from disk, not just forgotten.
+- **Admin console**: destination pills on tool cards (grouped per
+  destination within a toolkit), a destination column in the tool matrix,
+  and a real third tier in the access map -- identity → toolkit →
+  destination, with structural edges for what a toolkit *can* reach and
+  grant edges for what an identity actually holds.
+- 29 new tests (`tests/test_destinations.py`) covering Tier 1 validation,
+  catalog expansion, grant isolation between destinations, the docker TLS
+  credential path, per-destination health probing, and the admin-UI write
+  path (edit/enable/disable/delete correctly target the one YAML definition
+  behind every destination-qualified tool).
+
 ## 0.5.0
 
 **Fix: the console showed a stale version after a release. New: a release-notes popup on the version badge.**

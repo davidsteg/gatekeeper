@@ -169,10 +169,13 @@ async def run(
 ) -> Result:
     """`credentials`/`toolkit.credential` rather than a pre-resolved value:
 
-    this module is one of exactly two places in the codebase allowed to
-    call `CredentialStore._resolve` (the other is `execute_truenas.py`) --
-    keeping the decrypt call itself here, not in `service.py`, is what
-    makes that invariant grep-able instead of merely documented.
+    this module is one of exactly three places in the codebase allowed to
+    call `CredentialStore._resolve` (the others are `execute_truenas.py`
+    and `service.py`'s `_docker_tls_env` -- the docker executor has no
+    per-call request object to thread a resolved credential through, so
+    that one materialization has to live in `service.py` itself) --
+    keeping the decrypt call here for http, not duplicated elsewhere, is
+    what makes that invariant grep-able instead of merely documented.
     """
     assert toolkit.base_url is not None
     started = time.monotonic()

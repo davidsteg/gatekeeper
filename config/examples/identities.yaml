@@ -59,13 +59,19 @@ identities:
     # FR-7.5: permissions are granted to individual tool IDs, never to a toolkit.
     # Wildcards are deliberately not permitted here - otherwise this
     # identity would automatically possess every tool created in the future.
+    #
+    # FR-8.3h: examples/toolkits.yaml gives 'docker' two destinations
+    # (nas1, nas2), so every docker.* tool ID here needs the '@nas1' or
+    # '@nas2' suffix -- a bare 'docker.compose_up' no longer exists once a
+    # toolkit declares destinations. This identity gets nas1 (the local
+    # host) only; a separate grant would be needed for nas2.
     tools:
-      - docker.compose_ps
-      - docker.compose_logs
-      - docker.compose_up
-      - docker.compose_down
-      - docker.compose_restart
-      - docker.compose_pull
+      - docker.compose_ps@nas1
+      - docker.compose_logs@nas1
+      - docker.compose_up@nas1
+      - docker.compose_down@nas1
+      - docker.compose_restart@nas1
+      - docker.compose_pull@nas1
       - diag.uptime
       - diag.memory
       - diag.disk
@@ -77,8 +83,8 @@ identities:
     role: agent
     token_hash: "scrypt$REPLACE_ME"
     tools:
-      - docker.compose_ps
-      - docker.compose_logs
+      - docker.compose_ps@nas1
+      - docker.compose_logs@nas1
       - diag.uptime
       - diag.memory
       - diag.disk
@@ -92,11 +98,11 @@ identities:
     role: agent
     token_hash: "scrypt$REPLACE_ME"
     tools:
-      - docker.compose_ps
-      - docker.compose_logs
-      - docker.compose_up
-      - docker.compose_down
-      - docker.compose_restart
+      - docker.compose_ps@nas1
+      - docker.compose_logs@nas1
+      - docker.compose_up@nas1
+      - docker.compose_down@nas1
+      - docker.compose_restart@nas1
       - diag.uptime
       - diag.memory
       - diag.disk

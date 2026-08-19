@@ -115,9 +115,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"Configuration error: {credentials_path}: {exc}", file=sys.stderr)
         return 2
     audit.set_secrets(credentials.plaintext_values_for_masking())
-    credentials.on_change = lambda: audit.set_secrets(
-        credentials.plaintext_values_for_masking()
-    )
 
     service = Service(
         tier1=tier1,
@@ -126,6 +123,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
         credentials=credentials,
         docker_host=os.environ.get("DOCKER_HOST"),
     )
+
+    def _on_credentials_change() -> None:
+        audit.set_secrets(credentials.plaintext_values_for_masking())
+        # A rotated docker_tls credential must not keep serving a stale
+        # cert/key from service.py's temp-dir cache (FR-8.3g).
+        service.invalidate_docker_tls_cache()
+
+    credentials.on_change = _on_credentials_change
+
     log_startup(service, identities)
 
     # SIGHUP reloads all three configuration files without restarting

@@ -75,6 +75,21 @@ class Toolkit:
     #: just named differently by their respective protocols.
     allowed_rpc_methods: tuple[str, ...] = ()
 
+    # -- Multi-destination (FR-8.3g-j) --------------------------------------
+
+    #: Names into Tier1.destinations. Empty (the default) means "single
+    #: implicit destination" -- exactly today's behaviour: docker falls
+    #: back to the process-wide DOCKER_HOST, http/truenas use base_url/ws_url
+    #: below directly. Every existing toolkits.yaml needs zero changes.
+    destinations: tuple[str, ...] = ()
+    #: The docker executor's own explicit target, mirroring base_url/ws_url
+    #: above -- gives docker toolkits the same Tier1-visible target field
+    #: http/truenas already had. None falls back to Service.docker_host
+    #: (the process-wide DOCKER_HOST), exactly as before this field existed.
+    docker_host: str | None = None
+    #: Paired with docker_host, for a TLS-secured remote Docker daemon.
+    docker_tls: bool = False
+
     def check_binary(self, binary: str) -> None:
         """FR-4.1: the executable must be exactly in the allowlist."""
         if binary not in self.binaries:
@@ -175,6 +190,36 @@ class Toolkit:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class Destination:
+    """A concrete place a toolkit's actions may run (FR-8.3g, deploy-time).
+
+    Mirrors Toolkit's own per-executor target fields -- exactly one of
+    docker_host/base_url/ws_url is set, matching whichever executor the
+    toolkit(s) referencing this destination use. Never carries
+    binaries/allowed_methods/path_roots/limits -- those answer "what is
+    allowed" and stay on the Toolkit, identical across all its destinations
+    (FR-4.9). A tool defined against a toolkit with N declared destinations
+    is expanded at catalog-load time into N independently-grantable tool
+    IDs (FR-8.3h) -- see catalog.py.
+    """
+
+    name: str
+    docker_host: str | None = None
+    #: None (not declared) is distinct from an explicit `false` -- both
+    #: must fall back to the toolkit's own docker_tls differently: unset
+    #: inherits it, an explicit `false` overrides it even when the toolkit
+    #: itself defaults to true. A plain `bool` couldn't tell these apart,
+    #: which was a real bug (a destination could never opt out of a
+    #: toolkit-level `docker_tls: true`).
+    docker_tls: bool | None = None
+    base_url: str | None = None
+    ws_url: str | None = None
+    #: Overrides the toolkit's own `credential` for this destination only.
+    #: None means "use the toolkit's credential".
+    credential: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class RateLimit:
     count: int
     window_seconds: int
@@ -185,6 +230,7 @@ class Tier1:
     """The complete deploy-time configuration."""
 
     toolkits: dict[str, Toolkit]
+    destinations: dict[str, Destination]
     rate_limits: dict[str, RateLimit]
     max_concurrent: int
     audit_dir: str
@@ -196,6 +242,12 @@ class Tier1:
             return self.toolkits[name]
         except KeyError:
             raise ConfigError(f"Unknown toolkit {name!r}") from None
+
+    def destination(self, name: str) -> Destination:
+        try:
+            return self.destinations[name]
+        except KeyError:
+            raise ConfigError(f"Unknown destination {name!r}") from None
 
 
 def _is_absolute(path: str) -> bool:
@@ -222,6 +274,132 @@ def _str_tuple(value: Any, where: str) -> tuple[str, ...]:
     if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
         raise ConfigError(f"{where}: expects a list of strings")
     return tuple(value)
+
+
+def _validate_url(
+    value: str, where: str, field: str, schemes: tuple[str, ...], example: str,
+    *, allow_path: bool = False,
+) -> str:
+    """Shared shape check behind `_validate_docker_host`/`_http_base_url`/
+
+    `_ws_url` below -- same three steps for every `<scheme>://...` config
+    field: split it, check the scheme is one of the allowed ones, check
+    there's an address to connect to. `allow_path` is docker_host's
+    `unix:///path/to/socket` case, where the address is a filesystem path
+    rather than a network authority (`netloc`).
+    """
+    parsed = urlsplit(value)
+    has_address = bool(parsed.netloc) or (allow_path and bool(parsed.path))
+    if parsed.scheme not in schemes or not has_address:
+        raise ConfigError(f"{where}: {field} {value!r} must be {example}")
+    return value
+
+
+def _validate_docker_host(value: str, where: str) -> str:
+    return _validate_url(
+        value, where, "docker_host", ("tcp", "unix"),
+        "a 'tcp://host:port' or 'unix:///path/to/socket' URL", allow_path=True,
+    )
+
+
+def _validate_http_base_url(value: str, where: str, field: str = "base_url") -> str:
+    return _validate_url(
+        value, where, field, ("http", "https"),
+        "an absolute http(s) URL, e.g. 'http://sonarr.lan:8989'",
+    )
+
+
+def _validate_ws_url(value: str, where: str, field: str = "ws_url") -> str:
+    return _validate_url(
+        value, where, field, ("ws", "wss"),
+        "an absolute ws(s) URL, e.g. 'wss://truenas.lan/api/current'",
+    )
+
+
+def _parse_destinations(raw: dict[str, Any]) -> dict[str, Destination]:
+    """Parses the top-level `destinations:` section (FR-8.3g).
+
+    Shape validation against a *particular* executor happens where a
+    toolkit references a destination (below) -- a bare destination spec
+    here doesn't yet know which executor(s) will use it.
+    """
+    section = raw.get("destinations")
+    if section is None:
+        section = {}
+    if not isinstance(section, dict):
+        raise ConfigError("toolkits.yaml: section 'destinations' must be a mapping")
+
+    destinations: dict[str, Destination] = {}
+    for name, spec in section.items():
+        where = f"destination {name!r}"
+        if not isinstance(spec, dict):
+            raise ConfigError(f"{where}: expects a mapping")
+
+        docker_host = spec.get("docker_host")
+        if docker_host is not None:
+            docker_host = _validate_docker_host(str(docker_host), where)
+        base_url = spec.get("base_url")
+        if base_url is not None:
+            base_url = _validate_http_base_url(str(base_url), where)
+        ws_url = spec.get("ws_url")
+        if ws_url is not None:
+            ws_url = _validate_ws_url(str(ws_url), where)
+        credential = spec.get("credential")
+        if credential is not None and not isinstance(credential, str):
+            raise ConfigError(f"{where}: 'credential' must be a string name")
+        raw_docker_tls = spec.get("docker_tls")
+        docker_tls = None if raw_docker_tls is None else bool(raw_docker_tls)
+
+        destinations[name] = Destination(
+            name=name,
+            docker_host=docker_host,
+            docker_tls=docker_tls,
+            base_url=base_url,
+            ws_url=ws_url,
+            credential=credential,
+        )
+    return destinations
+
+
+def _check_destination_shape(
+    dest: Destination, executor: str, toolkit_where: str
+) -> None:
+    """A toolkit's destinations must carry the target field its executor
+    reads (FR-8.3g) -- a `docker` toolkit pointed at a destination with only
+    `base_url` set would silently connect nowhere.
+    """
+    where = f"{toolkit_where}: destination {dest.name!r}"
+    if executor == "docker" and dest.docker_host is None:
+        raise ConfigError(f"{where} has no 'docker_host', required for a docker toolkit")
+    if executor == "http" and dest.base_url is None:
+        raise ConfigError(f"{where} has no 'base_url', required for an http toolkit")
+    if executor == "truenas" and dest.ws_url is None:
+        raise ConfigError(f"{where} has no 'ws_url', required for a truenas toolkit")
+
+
+def _toolkit_destinations(
+    spec: dict[str, Any], executor: str, where: str, destinations: dict[str, Destination]
+) -> tuple[str, ...]:
+    """Resolves and validates one toolkit's `destinations:` list (FR-8.3g):
+
+    `local` may not declare any (nothing remote to connect to), every name
+    must exist in the top-level `destinations` section, and each must carry
+    the field its executor needs.
+    """
+    dest_names = _str_tuple(spec.get("destinations"), where)
+    if dest_names and executor == "local":
+        raise ConfigError(
+            f"{where}: 'local' toolkits cannot declare destinations -- "
+            "there is nothing remote to connect to"
+        )
+    for dest_name in dest_names:
+        if dest_name not in destinations:
+            raise ConfigError(
+                f"{where}: destination {dest_name!r} is not declared in "
+                "the top-level 'destinations' section"
+            )
+        _check_destination_shape(destinations[dest_name], executor, where)
+    return dest_names
 
 
 def load_tier1(path: str) -> Tier1:
@@ -252,6 +430,8 @@ def load_tier1(path: str) -> Tier1:
     if not isinstance(toolkit_section, dict):
         raise ConfigError("toolkits.yaml: section 'toolkits' must be a mapping")
 
+    destinations = _parse_destinations(raw)
+
     toolkits: dict[str, Toolkit] = {}
     for name, spec in toolkit_section.items():
         where = f"toolkit {name!r}"
@@ -281,6 +461,10 @@ def load_tier1(path: str) -> Tier1:
         allowed_cidrs: tuple[str, ...] = ()
         ws_url: str | None = None
         allowed_rpc_methods: tuple[str, ...] = ()
+        docker_host: str | None = None
+        docker_tls = False
+
+        dest_names = _toolkit_destinations(spec, executor, where, destinations)
 
         if executor in ("docker", "local"):
             binaries = _str_tuple(_require(spec, "binaries", where), where)
@@ -292,14 +476,14 @@ def load_tier1(path: str) -> Tier1:
                         f"{where}: binary {binary!r} must be an absolute path -- "
                         "otherwise PATH decides what gets executed"
                     )
+            if executor == "docker":
+                raw_docker_host = spec.get("docker_host")
+                if raw_docker_host is not None:
+                    docker_host = _validate_docker_host(str(raw_docker_host), where)
+                docker_tls = bool(spec.get("docker_tls", False))
         elif executor == "http":
             base_url = str(_require(spec, "base_url", where))
-            parsed = urlsplit(base_url)
-            if parsed.scheme not in ("http", "https") or not parsed.netloc:
-                raise ConfigError(
-                    f"{where}: base_url {base_url!r} must be an absolute "
-                    "http(s) URL, e.g. 'http://sonarr.lan:8989'"
-                )
+            base_url = _validate_http_base_url(base_url, where)
             allowed_methods = _str_tuple(_require(spec, "allowed_methods", where), where)
             if not allowed_methods:
                 raise ConfigError(f"{where}: 'allowed_methods' must not be empty")
@@ -343,12 +527,7 @@ def load_tier1(path: str) -> Tier1:
                 )
         elif executor == "truenas":
             ws_url = str(_require(spec, "ws_url", where))
-            parsed = urlsplit(ws_url)
-            if parsed.scheme not in ("ws", "wss") or not parsed.netloc:
-                raise ConfigError(
-                    f"{where}: ws_url {ws_url!r} must be an absolute ws(s) URL, "
-                    "e.g. 'wss://truenas.lan/api/current'"
-                )
+            ws_url = _validate_ws_url(ws_url, where)
             allowed_rpc_methods = _str_tuple(
                 _require(spec, "allowed_rpc_methods", where), where
             )
@@ -371,6 +550,9 @@ def load_tier1(path: str) -> Tier1:
             allowed_cidrs=allowed_cidrs,
             ws_url=ws_url,
             allowed_rpc_methods=allowed_rpc_methods,
+            destinations=dest_names,
+            docker_host=docker_host,
+            docker_tls=docker_tls,
         )
 
     limits = raw.get("rate_limits") or {}
@@ -387,6 +569,7 @@ def load_tier1(path: str) -> Tier1:
     audit = raw.get("audit") or {}
     return Tier1(
         toolkits=toolkits,
+        destinations=destinations,
         rate_limits=rate_limits,
         max_concurrent=int(raw.get("max_concurrent", 4)),
         audit_dir=str(audit.get("dir", "/mnt/raid/gatekeeper/logs")),

@@ -312,7 +312,7 @@ workflow, testing, and known pitfalls.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full list with rationale.
 Short version: no OAuth2 (static credentials only), no `ssh` executor, no
-TrueNAS SCRAM mutual auth, no multi-cluster testing.
+TrueNAS SCRAM mutual auth.
 
 ---
 
