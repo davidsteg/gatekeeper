@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 import yaml
@@ -440,6 +441,193 @@ def _str_str_map(value: Any, where: str, field: str) -> dict[str, str]:
     return dict(value)
 
 
+#: Bookkeeping keys that live on a raw `tools.yaml` entry (versioned shape)
+#: rather than inside a version's own `spec` -- never part of a `ToolDef`'s
+#: input to `_parse_tool`.
+_ENTRY_KEYS = frozenset({"id", "enabled", "current_version", "deleted", "versions"})
+#: Additionally stripped from a version's stored `spec` -- `id`/`enabled`
+#: live on the entry, `version` is the version record's own field.
+_VERSION_SPEC_STRIP = frozenset({"id", "enabled", "version"})
+
+
+def now_iso() -> str:
+    """Timestamp for a new tool version / pending action record."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _is_versioned(entry: dict[str, Any]) -> bool:
+    return isinstance(entry.get("versions"), list)
+
+
+def _current_version_spec(
+    entry: dict[str, Any],
+) -> tuple[dict[str, Any], int, bool, bool] | None:
+    """Resolves one raw `tools.yaml` entry to `(spec, version, enabled, deleted)`.
+
+    `spec` is the flat, `parse_tool_spec`-shaped mapping (with `id`,
+    `enabled` and `version` filled in) that today's flat entries always
+    were -- callers do not need to know whether the entry on disk is the
+    legacy flat shape or the nested `versions:` shape (FR-3.3). Returns
+    `None` if a versioned entry's `current_version` does not match any of
+    its `versions` -- a malformed file, not a policy question.
+    """
+    tool_id = entry.get("id")
+    if not _is_versioned(entry):
+        spec = dict(entry)
+        spec.setdefault("version", 1)
+        return spec, int(spec.get("version", 1)), bool(entry.get("enabled", False)), False
+
+    versions = entry.get("versions") or []
+    current = entry.get("current_version")
+    match = next(
+        (v for v in versions if isinstance(v, dict) and v.get("version") == current),
+        None,
+    )
+    if match is None:
+        return None
+    spec = dict(match.get("spec") or {})
+    spec["id"] = tool_id
+    version_num = int(match.get("version", current))
+    spec["version"] = version_num
+    enabled = bool(entry.get("enabled", False))
+    deleted = bool(entry.get("deleted", False))
+    return spec, version_num, enabled, deleted
+
+
+def new_tool_entry(tool_id: str, spec: dict[str, Any], *, actor: str, created_at: str) -> dict[str, Any]:
+    """The raw `tools.yaml` entry for a brand-new tool -- version 1."""
+    fields = {k: v for k, v in spec.items() if k not in _VERSION_SPEC_STRIP}
+    return {
+        "id": tool_id,
+        "enabled": bool(spec.get("enabled", False)),
+        "current_version": 1,
+        "deleted": False,
+        "versions": [
+            {
+                "version": 1,
+                "spec": fields,
+                "created_at": created_at,
+                "created_by": actor,
+                "superseded": False,
+            }
+        ],
+    }
+
+
+def append_tool_version(
+    existing_entry: dict[str, Any],
+    tool_id: str,
+    spec: dict[str, Any],
+    *,
+    actor: str,
+    created_at: str,
+) -> dict[str, Any]:
+    """Appends a new version to an existing raw entry -- never overwrites
+    (FR-3.1/3.3). A legacy flat entry is converted in place: its current
+    content becomes version 1 (marked superseded), and the new spec
+    becomes version 2. Old versions are retained in full.
+    """
+    if _is_versioned(existing_entry):
+        versions = [dict(v) for v in (existing_entry.get("versions") or [])]
+        next_version = max((int(v.get("version", 0)) for v in versions), default=0) + 1
+        current = existing_entry.get("current_version")
+        for v in versions:
+            if v.get("version") == current:
+                v["superseded"] = True
+    else:
+        old_fields = {k: v for k, v in existing_entry.items() if k not in _VERSION_SPEC_STRIP}
+        versions = [
+            {
+                "version": 1,
+                "spec": old_fields,
+                "created_at": None,
+                "created_by": None,
+                "superseded": True,
+            }
+        ]
+        next_version = 2
+
+    new_fields = {k: v for k, v in spec.items() if k not in _VERSION_SPEC_STRIP}
+    versions.append(
+        {
+            "version": next_version,
+            "spec": new_fields,
+            "created_at": created_at,
+            "created_by": actor,
+            "superseded": False,
+        }
+    )
+    return {
+        "id": tool_id,
+        "enabled": bool(spec.get("enabled", existing_entry.get("enabled", False))),
+        "current_version": next_version,
+        "deleted": False,
+        "versions": versions,
+    }
+
+
+def soft_delete_entry(existing_entry: dict[str, Any]) -> dict[str, Any]:
+    """Marks a raw entry deleted without discarding its version history
+    (FR-3.1). Converts a legacy flat entry to versioned shape first, the
+    same as `append_tool_version`, so the pre-deletion definition is not
+    lost either.
+    """
+    if _is_versioned(existing_entry):
+        entry = dict(existing_entry)
+        entry["versions"] = [dict(v) for v in (existing_entry.get("versions") or [])]
+        entry["deleted"] = True
+        return entry
+    tool_id = existing_entry.get("id")
+    old_fields = {k: v for k, v in existing_entry.items() if k not in _VERSION_SPEC_STRIP}
+    return {
+        "id": tool_id,
+        "enabled": bool(existing_entry.get("enabled", False)),
+        "current_version": 1,
+        "deleted": True,
+        "versions": [
+            {
+                "version": 1,
+                "spec": old_fields,
+                "created_at": None,
+                "created_by": None,
+                "superseded": False,
+            }
+        ],
+    }
+
+
+def normalize_tool_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """A JSON-serializable, version-shape-agnostic view of one raw entry --
+    for `admin.tool_get`/`admin.tool_list`. Always returns the full
+    `versions:` list (a legacy flat entry is reported as its implicit,
+    single version 1) plus `current_version`/`enabled`/`deleted`.
+    """
+    resolved = _current_version_spec(entry)
+    if _is_versioned(entry):
+        versions = [dict(v) for v in (entry.get("versions") or [])]
+        current_version = entry.get("current_version")
+    else:
+        fields = {k: v for k, v in entry.items() if k not in _VERSION_SPEC_STRIP}
+        versions = [
+            {
+                "version": 1,
+                "spec": fields,
+                "created_at": None,
+                "created_by": None,
+                "superseded": False,
+            }
+        ]
+        current_version = 1
+    return {
+        "id": entry.get("id"),
+        "enabled": bool(entry.get("enabled", False)),
+        "deleted": bool(entry.get("deleted", False)),
+        "current_version": current_version,
+        "category": (resolved[0].get("category") if resolved else None),
+        "versions": versions,
+    }
+
+
 def parse_tool_spec(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     """Public entry point for a single definition.
 
@@ -474,6 +662,24 @@ class Catalog:
                 return spec
         return None
 
+    def flat_spec_of(self, tool_id: str) -> dict[str, Any] | None:
+        """The effective, editable flat spec for `tool_id` -- the shape
+        `parse_tool_spec`/the `/ui` YAML editor/`admin.tool_update` all
+        expect, regardless of whether the raw entry on disk is today's
+        legacy flat shape or the nested `versions:` shape (FR-3.3). `None`
+        for an unknown id, a deleted tool, or a versioned entry whose
+        `current_version` does not match any stored version.
+        """
+        raw = self.raw_of(tool_id)
+        if raw is None or raw.get("deleted"):
+            return None
+        resolved = _current_version_spec(raw)
+        if resolved is None:
+            return None
+        spec, _version, enabled, _deleted = resolved
+        spec["enabled"] = enabled
+        return spec
+
 
 def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
     """Loads the seed catalog.
@@ -502,14 +708,31 @@ def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
     tools: dict[str, ToolDef] = {}
     disabled: list[str] = []
     rejected: list[tuple[dict[str, Any], str]] = []
-    for spec in entries:
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ConfigError("tools.yaml: every entry must be a mapping")
+
+        resolved = _current_version_spec(entry)
+        if resolved is None:
+            raise ConfigError(
+                f"tools.yaml: entry {entry.get('id')!r} has a 'current_version' "
+                "that matches none of its 'versions'"
+            )
+        spec, _version, enabled, deleted = resolved
+        if deleted:
+            # Excluded from the live catalog entirely (FR-3.1), but the raw
+            # entry -- full version history included -- stays in `raw` for
+            # admin.tool_get/tool_list.
+            continue
+        spec["enabled"] = enabled
+
         try:
             tool = _parse_tool(spec, tier1)
         except Tier1Violation as exc:
             if strict:
                 raise
             disabled.append(str(exc))
-            rejected.append((spec if isinstance(spec, dict) else {}, str(exc)))
+            rejected.append((spec, str(exc)))
             continue
         toolkit = tier1.toolkit(tool.toolkit)
         for expanded in _expand_tool(tool, toolkit):

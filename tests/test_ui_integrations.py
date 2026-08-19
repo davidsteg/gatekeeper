@@ -16,6 +16,7 @@ from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
 from gatekeeper.identity import generate_token, hash_token, load_identities
 from gatekeeper.integrations import INTEGRATIONS
+from gatekeeper.pending import PendingStore
 from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore
@@ -70,7 +71,11 @@ def integrations_env(tmp_path):
         service=service, identities=identities, audit=audit,
         tools_path=str(tools_path), identities_path=str(identities_path),
     )
-    app = build_app(service=service, identities=identities, audit=audit, ui=True, store=store)
+    pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=audit)
+    app = build_app(
+        service=service, identities=identities, audit=audit, ui=True,
+        store=store, pending=pending,
+    )
     return {"app": app, "store": store, "service": service}
 
 

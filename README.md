@@ -251,6 +251,40 @@ From the `/ui` console (when logged in):
 
 ---
 
+## Self-service catalog management via `/admin/mcp`
+
+A second MCP endpoint, `/admin/mcp`, lets an `admin`-role agent (e.g. an
+always-on orchestrator like Hermes) manage the tool catalog and grants the
+same way a human does at `/ui`, without a human being the bottleneck for
+every routine change.
+
+- **Isolated by construction, not by filter.** `/admin/mcp` is a second,
+  hand-written `admin.*` tool list on its own `Server` instance, sharing no
+  catalog with `/mcp`. `admin`-role tokens are rejected outright on `/mcp`;
+  every other role is rejected outright on `/admin/mcp`.
+- **Low-risk changes apply immediately:** read-only queries, creating a new
+  tool (always created disabled), disabling a tool, and enabling/updating a
+  `read`-category tool.
+- **Everything that expands what an agent can do goes to a pending queue**
+  at `/ui/pending` instead: enabling/updating a `write`/`write_external`
+  tool, deleting a tool, and granting access. A human approves or rejects
+  from the console — the applied change and its audit entry are identical
+  to a human doing the same edit directly.
+- **Self-approval is impossible, structurally.** `approve`/`reject` are not
+  part of the `admin.*` tool list and have no code path from `/admin/mcp` —
+  there is no permission check to bypass, because the capability doesn't
+  exist there.
+- **Tool definitions are versioned and append-only** (`tool_update` never
+  overwrites; old versions stay fetchable) and deletions are soft
+  (`admin.tool_delete` marks a definition deleted with its history intact,
+  rather than erasing it).
+
+See [`admin_service.py`](src/gatekeeper/admin_service.py) for the exact
+per-action rules and [REQUIREMENTS.md §3](REQUIREMENTS.md) (FR-2.8–FR-3.7)
+for the full spec.
+
+---
+
 ## Audit & visibility
 
 ### Call flow (8 layers every request passes)

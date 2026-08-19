@@ -60,6 +60,45 @@ cannot. It is in every release.
 
 ---
 
+## 0.9.0
+
+**Self-service tool catalog management on a new, isolated `/admin/mcp` endpoint (REQUIREMENTS.md FR-2.8-3.7). Tool definitions are now versioned and append-only; deletion is a soft delete.**
+
+- **New `/admin/mcp` endpoint** -- a second `mcp.server.lowlevel.Server`
+  instance with a hand-written, fixed `admin.*` tool list
+  (`admin_server.py`), sharing no catalog/tool registry with `/mcp`
+  (`admin_service.py`). `AuthMiddleware` role-gates each mount:
+  `admin`-role tokens are rejected on `/mcp`, every other role is rejected
+  on `/admin/mcp`. `server.py`'s `build_app` composes both
+  `streamable_http_app()` results (each with its own
+  `StreamableHTTPSessionManager`) into one Starlette app with a combined
+  lifespan -- Starlette does not propagate the ASGI `lifespan` scope into a
+  mounted sub-app on its own, so both session managers are started
+  explicitly.
+- **Low-risk admin actions apply immediately; the rest goes to a pending
+  queue.** Read-only queries, creating a tool (always created disabled),
+  disabling a tool, and enabling/updating a `read`-category tool auto-apply.
+  Enabling/updating a `write`/`write_external` tool, deleting a tool, and
+  setting an identity's tool grants (`admin.grant_set`) are written to a
+  new `pending.yaml` (`pending.py`) instead, reviewed at the new `/ui/pending`
+  console page. Approving re-checks the proposal's captured revision against
+  the live one and marks it `stale` -- never silently re-based -- if the
+  config moved since it was proposed.
+- **Self-approval is structurally impossible.** `approve`/`reject` are not
+  part of `AdminService`'s dispatch table and have no MCP tool entry --
+  there is no code path from `/admin/mcp` that reaches a decision on a
+  pending item; only `/ui/pending` (human session, CSRF) can.
+- **Tool definitions are now append-only and versioned** (FR-3.3): each
+  `tools.yaml` entry can carry a nested `versions:` list with a
+  `current_version` pointer; `tool_update` (via `/ui` or `admin.tool_update`)
+  appends a version and never overwrites one. Today's flat entries still
+  load unchanged, as an implicit version 1 -- no migration step.
+  `tool_delete` is now a soft delete (`deleted: true`, full history kept)
+  instead of removing the entry.
+- **New `gatekeeper serve --pending`** CLI flag / `pending.yaml` state file,
+  constructed alongside `tools.yaml`/`identities.yaml` whenever `--ui` runs
+  with a writable Tier 2.
+
 ## 0.8.0
 
 **Renamed "presets" to "integrations". New `ssh` executor. 7 new integrations: pfSense, Jellystat, Netdata, SABnzbd, Paperless-ngx, Docker, and Linux-over-SSH.**

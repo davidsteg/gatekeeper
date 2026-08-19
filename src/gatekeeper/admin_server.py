@@ -1,0 +1,255 @@
+"""The second MCP server: the `admin.*` namespace (REQUIREMENTS.md FR-2.8/2.9).
+
+A hand-written, fixed tool list wired straight to `AdminService` -- this
+`Server` instance shares no `Catalog`/tool registry with the agent-facing
+one in `server.py`, so admin tools cannot leak into `/mcp` (or vice versa)
+by construction. `server.py` mounts this at `/admin/mcp`, under the same
+`AuthMiddleware` that role-gates each mount so a non-admin token is
+rejected here outright.
+
+`approve` and `reject` are not on `_TOOLS` and have no handler here --
+`admin_service.apply_pending` (the only function that turns a pending item
+into a live change) is called exclusively from `ui.py`. There is no code
+path from this file that reaches it.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import mcp.types as types
+from mcp.server.lowlevel import Server
+
+from ._authctx import identity_from as _identity_from
+from .admin_service import AdminActionError, AdminService, EXPOSED_ACTIONS
+from .errors import ConfigError
+from .store import WriteRefused
+
+_OPEN_OBJECT: dict[str, Any] = {"type": "object", "additionalProperties": True}
+_ID_ONLY: dict[str, Any] = {
+    "type": "object",
+    "properties": {"id": {"type": "string"}},
+    "required": ["id"],
+    "additionalProperties": False,
+}
+
+#: The fixed `admin.*` tool list (FR-2.8/2.9, REQUIREMENTS.md §17's
+#: middle-ground resolution). Every entry's bare name must appear in
+#: `admin_service.EXPOSED_ACTIONS` -- checked once at import time below --
+#: and nothing else does: `approve`/`reject` are absent from both.
+_TOOLS: list[types.Tool] = [
+    types.Tool(
+        name="admin.tool_list",
+        title="List tool definitions",
+        description=(
+            "Lists every tool definition (id, enabled, deleted, current "
+            "version, category, full version history). Read-only."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"include_deleted": {"type": "boolean"}},
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.tool_get",
+        title="Get one tool definition",
+        description="Returns one tool's full record, including its version history. Read-only.",
+        inputSchema=_ID_ONLY,
+    ),
+    types.Tool(
+        name="admin.tool_create",
+        title="Create a tool definition",
+        description=(
+            "Creates a new tool definition. Always applies immediately, but "
+            "the tool is always created disabled (enabled: false) regardless "
+            "of what 'spec' says -- enabling it is a separate, auditable "
+            "step via admin.tool_enable."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"spec": _OPEN_OBJECT},
+            "required": ["spec"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.tool_update",
+        title="Update a tool definition",
+        description=(
+            "Appends a new version to an existing tool definition (never "
+            "overwrites -- old versions remain fetchable via admin.tool_get). "
+            "Applies immediately if the resulting category is 'read'; "
+            "otherwise it is written to the pending queue for a human to "
+            "approve at /ui/pending."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"id": {"type": "string"}, "spec": _OPEN_OBJECT},
+            "required": ["id", "spec"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.tool_enable",
+        title="Enable a tool",
+        description=(
+            "Enables a tool. Applies immediately if its category is 'read'; "
+            "otherwise it is written to the pending queue for a human to "
+            "approve at /ui/pending."
+        ),
+        inputSchema=_ID_ONLY,
+    ),
+    types.Tool(
+        name="admin.tool_disable",
+        title="Disable a tool",
+        description="Disables a tool. Always applies immediately -- disabling only narrows access.",
+        inputSchema=_ID_ONLY,
+    ),
+    types.Tool(
+        name="admin.tool_delete",
+        title="Delete a tool definition",
+        description=(
+            "Soft-deletes a tool definition (version history is retained). "
+            "Always written to the pending queue for a human to approve."
+        ),
+        inputSchema=_ID_ONLY,
+    ),
+    types.Tool(
+        name="admin.tool_validate",
+        title="Validate a tool definition",
+        description=(
+            "Checks a tool definition against Tier 1 without storing "
+            "anything -- the same validation path startup and every write "
+            "use. Read-only."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"spec": _OPEN_OBJECT},
+            "required": ["spec"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.grant_list",
+        title="List grants",
+        description="Lists identities and the tool IDs/scopes each holds. Read-only.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "tool_id": {"type": "string"},
+                "identity_id": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.grant_set",
+        title="Set an identity's tool grants",
+        description=(
+            "Replaces an existing identity's tool grants (and, if given, its "
+            "scopes). Cannot create a new identity. Always written to the "
+            "pending queue for a human to approve -- this is the only "
+            "identity mutation exposed on /admin/mcp."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "identity_id": {"type": "string"},
+                "tools": {"type": "array", "items": {"type": "string"}},
+                "scopes": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["identity_id", "tools"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.audit_query",
+        title="Query the audit log",
+        description="Reads recent audit log entries, optionally filtered. Read-only.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "identity": {"type": "string"},
+                "tool": {"type": "string"},
+                "outcome": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.pending_list",
+        title="List pending actions",
+        description=(
+            "Lists proposals in the pending queue, optionally filtered by "
+            "status (pending/approved/rejected/stale). Read-only -- approving "
+            "or rejecting a proposal is only possible through /ui/pending, "
+            "never from here."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    ),
+]
+
+# Kept honest at import time, not merely by convention: if these two lists
+# ever drift apart, building the admin server fails loudly instead of
+# quietly exposing (or hiding) a tool.
+_names = {t.name.removeprefix("admin.") for t in _TOOLS}
+if _names != set(EXPOSED_ACTIONS):
+    raise AssertionError(
+        f"admin_server._TOOLS and admin_service.EXPOSED_ACTIONS have drifted "
+        f"apart: {_names!r} != {set(EXPOSED_ACTIONS)!r}"
+    )
+
+
+def build_admin_mcp_server(admin_service: AdminService) -> Server[None]:
+    async def on_list_tools(
+        ctx: Any, _params: types.PaginatedRequestParams | None
+    ) -> types.ListToolsResult:
+        # Requires a valid identity like the agent-facing server does, even
+        # though `AuthMiddleware` has already role-gated this mount -- an
+        # unauthenticated context should still see nothing.
+        _identity_from(ctx)
+        return types.ListToolsResult(tools=list(_TOOLS), cacheScope="private")
+
+    async def on_call_tool(
+        ctx: Any, params: types.CallToolRequestParams
+    ) -> types.CallToolResult:
+        identity = _identity_from(ctx)
+        name = params.name.removeprefix("admin.")
+        try:
+            result = admin_service.call(identity.id, name, params.arguments or {})
+        except (AdminActionError, WriteRefused, ConfigError) as exc:
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=str(exc))],
+                isError=True,
+            )
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=json.dumps(result, default=str))],
+            isError=False,
+        )
+
+    return Server(
+        "gatekeeper-admin",
+        version="0.1.0",
+        instructions=(
+            "Self-service catalog and grant management for gatekeeper. "
+            "Read-only queries and low-risk changes (creating a disabled "
+            "tool, disabling a tool, enabling/updating a read-category "
+            "tool) apply immediately. Anything that expands what an agent "
+            "can do -- enabling/updating a write tool, deleting a tool, "
+            "granting access -- is written to a pending queue and takes "
+            "effect only once a human approves it at /ui/pending. There is "
+            "no way to approve your own proposal from this endpoint."
+        ),
+        on_list_tools=on_list_tools,
+        on_call_tool=on_call_tool,
+    )
+
+
+__all__ = ["build_admin_mcp_server"]

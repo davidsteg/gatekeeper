@@ -24,6 +24,7 @@ from conftest import PYTHON
 from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
 from gatekeeper.identity import generate_token, hash_token, load_identities
+from gatekeeper.pending import PendingStore
 from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore, WriteRefused, load_tool_yaml
@@ -89,12 +90,15 @@ def admin_env(tmp_path, tier1, tool_specs):
         tools_path=str(tools_path),
         identities_path=str(identities_path),
     )
+    pending = PendingStore(path=str(tmp_path / "pending-rw.yaml"), audit=audit)
     app = build_app(
-        service=service, identities=identities, audit=audit, ui=True, store=store
+        service=service, identities=identities, audit=audit, ui=True, store=store,
+        pending=pending,
     )
     return {
         "app": app,
         "store": store,
+        "pending": pending,
         "service": service,
         "identities": identities,
         "tokens": tokens,

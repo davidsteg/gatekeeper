@@ -38,7 +38,14 @@ from ._atomic import dump as _dump
 from ._atomic import revision
 from ._atomic import writable
 from .audit import AuditLog
-from .catalog import load_catalog, parse_tool_spec
+from .catalog import (
+    append_tool_version,
+    load_catalog,
+    new_tool_entry,
+    now_iso,
+    parse_tool_spec,
+    soft_delete_entry,
+)
 from .errors import ConfigError
 from .identity import (
     ADMIN_ROLE,
@@ -133,10 +140,17 @@ class ConfigStore:
             if replaces is not None and tool.id != replaces and tool.id in existing:
                 raise WriteRefused(f"A tool with ID {tool.id!r} already exists.")
 
+            now = now_iso()
             if replaces is None:
-                specs.append(spec)
+                specs.append(new_tool_entry(tool.id, spec, actor=actor, created_at=now))
             else:
-                specs = [spec if s.get("id") == replaces else s for s in specs]
+                old_entry = next((s for s in specs if s.get("id") == replaces), None)
+                if old_entry is None:
+                    raise WriteRefused(f"No tool with ID {replaces!r}.")
+                new_entry = append_tool_version(
+                    old_entry, tool.id, spec, actor=actor, created_at=now
+                )
+                specs = [new_entry if s.get("id") == replaces else s for s in specs]
 
             self._write_tools(specs)
             self.audit.write(
@@ -173,13 +187,21 @@ class ConfigStore:
             )
 
     def delete_tool(self, tool_id: str, *, actor: str, rev: str) -> None:
+        """Soft-deletes: the entry is marked `deleted: true` and excluded
+        from the live catalog, but its full version history stays on disk
+        (FR-3.1) -- unlike a hard removal, it is not only recoverable from
+        the audit log but directly inspectable via `admin.tool_get`.
+        """
         with self._lock:
             self._check(self.tools_path, rev)
             specs = self._specs()
-            removed = [s for s in specs if s.get("id") == tool_id]
-            if not removed:
+            target = next((s for s in specs if s.get("id") == tool_id), None)
+            if target is None or target.get("deleted"):
                 raise WriteRefused(f"No tool with ID {tool_id!r}.")
-            self._write_tools([s for s in specs if s.get("id") != tool_id])
+            deleted_entry = soft_delete_entry(target)
+            self._write_tools(
+                [deleted_entry if s.get("id") == tool_id else s for s in specs]
+            )
             self.audit.write(
                 {
                     "kind": "admin_change",
@@ -188,7 +210,7 @@ class ConfigStore:
                     "target": tool_id,
                     # Record the full definition: a deletion
                     # can thus be restored from the log.
-                    "spec": removed[0],
+                    "spec": target,
                 }
             )
             self._orphan_warning(tool_id)

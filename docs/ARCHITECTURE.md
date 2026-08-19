@@ -10,7 +10,7 @@ rationale behind every design decision, see [REQUIREMENTS.md](../REQUIREMENTS.md
 | Tier | File | Mutable at runtime | Changed via |
 |------|------|:--:|-------------|
 | 1 | `toolkits.yaml` | ✗ | Redeploy only (FR-4.11) |
-| 2 | `tools.yaml`, `identities.yaml`, `credentials.yaml` | ✓ | Admin UI at `/ui` |
+| 2 | `tools.yaml`, `identities.yaml`, `credentials.yaml`, `pending.yaml` | ✓ | Admin UI at `/ui`, or `admin.*` on `/admin/mcp` for low-risk changes (queued to `pending.yaml` otherwise -- see below) |
 
 **Key invariant:** `store.py` has no function that writes `toolkits.yaml`. The
 console can create tools, identities, and credentials — never a toolkit.
@@ -23,15 +23,26 @@ console can create tools, identities, and credentials — never a toolkit.
 
 ## Roles
 
-| Role | MCP (`/mcp`) | Console (`/ui`) read | Tier 2 write |
-|---|:--:|:--:|:--:|
-| `agent` | ✓ | — | — |
-| `viewer` | — | ✓ | — |
-| `admin` | — | ✓ | ✓ |
+| Role | MCP (`/mcp`) | Admin MCP (`/admin/mcp`) | Console (`/ui`) read | Tier 2 write |
+|---|:--:|:--:|:--:|:--:|
+| `agent` | ✓ | ✗ | — | — |
+| `viewer` | — | ✗ | ✓ | — |
+| `admin` | ✗ | ✓ | ✓ | ✓ |
 
 Console login uses the console password, not the API token. The token
 authenticates `/mcp`; the password opens `/ui`. Losing one does not expose
 the other.
+
+`/admin/mcp` is a second MCP endpoint, isolated by construction (FR-2.8/2.9):
+a separate `Server` instance with a hand-written, fixed `admin.*` tool list
+that shares no catalog/tool registry with `/mcp`. `AuthMiddleware` role-gates
+each mount -- an `admin`-role token is rejected outright on `/mcp`, and every
+other role is rejected outright on `/admin/mcp`, so a token never opens the
+"wrong" endpoint even in principle. See [`admin_service.py`](../src/gatekeeper/admin_service.py)
+for which `admin.*` actions apply immediately versus land in the
+`pending.yaml` queue for a human to approve at `/ui/pending` -- `approve`/
+`reject` are not reachable from `/admin/mcp` at all, so an agent cannot
+approve its own proposal.
 
 ## Executors
 
@@ -162,13 +173,33 @@ src/gatekeeper/
                       time -- never a second hardcoded string to drift
   __main__.py        Entry point: CLI (serve/check/init/token/password/
                       credential-key/integration), bootstrap, SIGHUP handler
-  server.py           MCP protocol, ASGI middleware, health/metrics routes
+  server.py           MCP protocol, ASGI middleware, health/metrics routes;
+                       composes /mcp and /admin/mcp into one Starlette app
+                       with a combined lifespan (two independent
+                       StreamableHTTPSessionManagers, one per Server)
+  _authctx.py          Shared "identity out of the MCP request context"
+                       helper -- used by server.py and admin_server.py so
+                       neither imports the other
+  admin_server.py      The `admin.*` MCP surface -- a second, fixed-tool-list
+                       Server wired to AdminService, sharing no catalog/tool
+                       registry with the agent-facing one (FR-2.8/2.9)
+  admin_service.py     Dispatch for every admin.* action: read-only /
+                       always-auto-apply / always-pending / category-
+                       conditional (tool_enable, tool_update). approve/reject
+                       are not methods here and not reachable from
+                       /admin/mcp -- see pending.py
+  pending.py            The pending-actions queue (pending.yaml) an
+                       admin-role agent's higher-risk admin.* calls land in;
+                       approved only via /ui/pending (human + CSRF)
   service.py          Call pipeline: auth -> authorize -> registry ->
                        validate -> build request -> execute -> audit;
                        dispatches to execute.py / execute_http.py /
                        execute_truenas.py / execute_ssh.py by toolkit.executor
   tier1.py            Immutable deploy-time boundaries from toolkits.yaml
-  catalog.py          Tool definitions, validation against Tier 1
+  catalog.py          Tool definitions, validation against Tier 1;
+                       append-only version history per tool id (nested
+                       `versions:`/`current_version`, FR-3.3) -- a legacy
+                       flat tools.yaml entry loads as an implicit version 1
   validate.py         Parameter validation, argv/HTTP-request/RPC-call
                        construction (no shell, structured args/requests)
   execute.py           Process execution (docker/local): timeouts, output
@@ -184,7 +215,9 @@ src/gatekeeper/
   identity.py          scrypt token hashing, constant-time verify,
                        IdentityStore, roles
   audit.py             JSON Lines audit log with rotation and redaction
-  store.py             Tier 2 write access (ConfigStore), atomic file writes
+  store.py             Tier 2 write access (ConfigStore), atomic file writes;
+                       save_tool appends a version (never overwrites),
+                       delete_tool soft-deletes (deleted: true, history kept)
   _atomic.py           Shared atomic-write/revision helpers (store.py and
                        credentials.py both use these, independently)
   ui.py                Operations console at /ui -- no JavaScript,
@@ -201,7 +234,8 @@ tests/
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_ui.py, test_ui_admin.py, test_credentials.py, test_execute_http.py,
   test_execute_truenas.py, test_execute_ssh.py, test_integrations.py,
-  test_ui_credentials.py, test_ui_integrations.py, conftest.py
+  test_ui_credentials.py, test_ui_integrations.py, test_admin_mcp.py,
+  test_catalog_versioning.py, test_pending.py, conftest.py
 ```
 
 ## UI architecture (`ui.py`)
