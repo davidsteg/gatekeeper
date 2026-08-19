@@ -14,6 +14,7 @@ from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
 from gatekeeper.credentials import KEY_ENV, CredentialStore, generate_master_key
 from gatekeeper.identity import generate_token, hash_token, load_identities
+from gatekeeper.pending import PendingStore
 from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore
@@ -66,9 +67,10 @@ def credentials_env(tmp_path, tier1, tool_specs, monkeypatch):
         tools_path=str(tools_path), identities_path=str(identities_path),
     )
     credentials = CredentialStore(path=str(tmp_path / "credentials.yaml"), audit=audit)
+    pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=audit)
     app = build_app(
         service=service, identities=identities, audit=audit, ui=True, store=store,
-        credentials=credentials,
+        credentials=credentials, pending=pending,
     )
     return {"app": app, "credentials": credentials, "tier1": tier1}
 
@@ -231,9 +233,10 @@ async def test_used_by_toolkit_shown(tmp_path, tool_specs, tier1, monkeypatch):
         "sonarr", kind="api_key_header", header="X-Api-Key", value=SECRET_VALUE,
         actor="test", rev="",
     )
+    pending = PendingStore(path=str(tmp_path / "pending2.yaml"), audit=audit)
     app = build_app(
         service=service, identities=identities, audit=audit, ui=True, store=store,
-        credentials=credentials,
+        credentials=credentials, pending=pending,
     )
     async with _client(app) as client:
         await _login(client)

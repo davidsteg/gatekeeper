@@ -21,6 +21,7 @@ from .identity import (
     hash_token,
     load_identities,
 )
+from .pending import PendingStore
 from .server import build_app, log_startup
 from .service import Service
 from .store import ConfigStore, set_password_in_file
@@ -51,7 +52,7 @@ def _config_path(name: str, args_value: str | None) -> str:
         return args_value
     base = (
         _state_dir()
-        if name in ("tools.yaml", "identities.yaml", "credentials.yaml")
+        if name in ("tools.yaml", "identities.yaml", "credentials.yaml", "pending.yaml")
         else _config_dir()
     )
     return os.path.join(base, name)
@@ -174,6 +175,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         assert has_ui_identity(identities)
 
     store = None
+    pending = None
     if ui_enabled:
         read_only = args.ui_read_only or os.environ.get(
             "GATEKEEPER_UI_READ_ONLY", ""
@@ -188,6 +190,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
                 tools_path=_config_path("tools.yaml", args.tools),
                 identities_path=_config_path("identities.yaml", args.identities),
             )
+            # A third Tier 2 file, alongside tools.yaml/identities.yaml --
+            # proposals from /admin/mcp that a human has not yet approved
+            # (or rejected) at /ui/pending.
+            pending = PendingStore(
+                path=_config_path("pending.yaml", args.pending),
+                audit=audit,
+            )
             stuck = sorted(n for n, ok in store.writability().items() if not ok)
             if stuck:
                 # No startup abort: reading remains useful. But it must be in
@@ -197,7 +206,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
                     ", ".join(f"{n}.yaml" for n in stuck),
                 )
             logger.info(
-                "Console enabled at /ui (admins may write; %d admin(s) configured)",
+                "Console enabled at /ui (admins may write; %d admin(s) configured); "
+                "admin MCP endpoint enabled at /admin/mcp",
                 sum(1 for i in identities.identities.values() if i.role == "admin"),
             )
             if not credentials.writable():
@@ -214,6 +224,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         ui=ui_enabled,
         store=store,
         credentials=credentials if store is not None else None,
+        pending=pending,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
@@ -615,6 +626,7 @@ def main() -> int:
     parser.add_argument("--tools")
     parser.add_argument("--identities")
     parser.add_argument("--credentials")
+    parser.add_argument("--pending")
     sub = parser.add_subparsers(dest="command", required=True)
 
     serve = sub.add_parser("serve", help="Start the server")

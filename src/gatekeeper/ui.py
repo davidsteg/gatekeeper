@@ -59,6 +59,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from .__init__ import __version__
+from .admin_service import apply_pending
 from .audit import AuditLog
 from .catalog import ToolDef
 from .credentials import KINDS as CREDENTIAL_KINDS
@@ -73,6 +74,7 @@ from .identity import (
     IdentityStore,
 )
 from .integrations import INTEGRATIONS, Integration
+from .pending import PendingAction, PendingStore, PendingWriteRefused
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
 from .tier1 import Destination, Toolkit
@@ -1013,6 +1015,7 @@ _NAV = (
     ("/tools/integrations", "Integrations", "package"),
     ("/identities", "Identities", "key"),
     ("/credentials", "Credentials", "lock"),
+    ("/pending", "Pending", "share"),
     ("/audit", "Audit", "clock"),
 )
 
@@ -2648,6 +2651,121 @@ def _view_credentials(
     )
 
 
+#: Rendering tone for each pending status -- matches the note/pill
+#: vocabulary already used for call outcomes elsewhere in this file.
+_PENDING_TONE = {
+    "pending": "warn",
+    "approved": "ok",
+    "rejected": "",
+    "stale": "deny",
+}
+
+
+def _pending_payload_summary(item: PendingAction) -> str:
+    """A short, human-scannable rendering of what was proposed -- the full
+    payload is available in the audit log; here it only needs to be enough
+    for a reviewer to judge whether to approve.
+    """
+    if item.action in ("tool_enable", "tool_disable", "tool_delete"):
+        return f"tool <code>{_e(item.payload.get('id', ''))}</code>"
+    if item.action in ("tool_create", "tool_update"):
+        target = item.payload.get("replaces") or item.payload.get("spec", {}).get("id", "")
+        spec = item.payload.get("spec") or {}
+        return (
+            f"tool <code>{_e(target)}</code> &rarr; "
+            f"category <code>{_e(spec.get('category', ''))}</code>, "
+            f"enabled=<code>{_e(spec.get('enabled', False))}</code>"
+        )
+    if item.action == "grant_set":
+        tools = item.payload.get("tools") or []
+        return (
+            f"identity <code>{_e(item.payload.get('identity_id', ''))}</code> "
+            f"&rarr; {len(tools)} tool grant(s)"
+        )
+    return _e(json.dumps(item.payload, default=str))
+
+
+def _view_pending(session: Session, store: ConfigStore | None, pending: PendingStore | None) -> str:
+    if pending is None:
+        return _note(
+            "<strong>No pending queue configured.</strong> This deployment "
+            "runs without a writable console (or /admin/mcp is disabled), "
+            "so there is nothing an agent could have proposed.",
+            tone="bad",
+        )
+    items = pending.list()
+    if not items:
+        return _note(
+            "No proposals yet. This fills up when an admin-role agent on "
+            "/admin/mcp calls a tool that expands what it can do -- "
+            "enabling/updating a write tool, deleting a tool, or setting a "
+            "grant.",
+            icon="share",
+        )
+    can_decide = session.can_write and store is not None
+    rows = []
+    for item in reversed(items):
+        tone = _PENDING_TONE.get(item.status, "")
+        ops = ""
+        if item.status == "pending" and can_decide:
+            ops = (
+                _post_button(
+                    f"{UI_PREFIX}/pending/approve", "Approve", "check", session,
+                    css="ghost", fields={"id": item.id},
+                )
+                + f'<a class="btn" href="{UI_PREFIX}/pending/reject?id={_e(item.id)}">'
+                f'{_icon("ban", 14)}Reject</a>'
+            )
+        detail = ""
+        if item.status != "pending":
+            detail = (
+                f'<div class="row-l">{_icon("users", 12)}'
+                f"{_e(item.decided_by or '')} &middot; {_e(item.decided_at or '')}"
+                + (f" &mdash; {_e(item.reason)}" if item.reason else "")
+                + "</div>"
+            )
+        rows.append(
+            '<div class="card"><div class="card-head">'
+            f'<span class="name mono">{_e(item.action)}</span>'
+            f'<span class="pill {tone}">{_e(item.status)}</span>'
+            f'<span class="spacer"></span>{ops}</div>'
+            '<div class="rows">'
+            f'<div class="row"><div class="row-l">{_icon("users", 14)}Proposed by</div>'
+            f'<div class="mono">{_e(item.actor)}</div></div>'
+            f'<div class="row"><div class="row-l">{_icon("clock", 14)}Proposed</div>'
+            f'<div class="mono">{_e(item.created_at)}</div></div>'
+            f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Change</div>'
+            f"<div>{_pending_payload_summary(item)}</div></div>"
+            + (f'<div class="row"><div class="row-l">Decision</div>{detail}</div>' if detail else "")
+            + "</div></div>"
+        )
+    return (
+        _note(
+            "Only a human can approve or reject a proposal here -- there is "
+            "no path from /admin/mcp that reaches this decision (FR-2.8).",
+            icon="share",
+        )
+        + "".join(rows)
+    )
+
+
+def _pending_reject_confirm(session: Session, item: PendingAction) -> str:
+    return (
+        '<div class="editor card"><div class="pad">'
+        f"<p><strong>Reject proposal {_e(item.id)}?</strong></p>"
+        f"<p class='muted'>{_e(item.action)} proposed by {_e(item.actor)}. "
+        "This leaves the current configuration unchanged.</p>"
+        f'<form method="post" action="{UI_PREFIX}/pending/reject">'
+        f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
+        f'<input type="hidden" name="id" value="{_e(item.id)}">'
+        '<div class="field"><span>Reason (optional)</span>'
+        '<input name="reason" maxlength="240"></div>'
+        f'<button class="solid-danger" type="submit">{_icon("ban", 14)}Reject</button> '
+        f'<a class="btn" href="{UI_PREFIX}/pending">{_icon("back", 14)}Cancel</a>'
+        "</form></div></div>"
+    )
+
+
 _OUTCOMES = ("", "ok", "denied", "failed", "unknown")
 
 
@@ -3253,6 +3371,7 @@ def build_ui_routes(
     audit: AuditLog,
     store: ConfigStore | None = None,
     credentials: CredentialStore | None = None,
+    pending: PendingStore | None = None,
     sessions: SessionStore | None = None,
     throttle: LoginThrottle | None = None,
 ) -> list[Route]:
@@ -3584,7 +3703,7 @@ def build_ui_routes(
         if store is None or not session.can_write:
             return RedirectResponse(f"{UI_PREFIX}/tools", status_code=303)
         tool_id = request.query_params.get("id", "")
-        spec = service.catalog.raw_of(tool_id)
+        spec = service.catalog.flat_spec_of(tool_id)
         if spec is None:
             return RedirectResponse(f"{UI_PREFIX}/tools", status_code=303)
         return _shell(
@@ -4048,6 +4167,54 @@ def build_ui_routes(
             )
         return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
 
+    # -- Pending (FR-2.8/2.9) --------------------------------------------
+    # Approve/reject go through `writer`, exactly like every other admin
+    # write: session, `role: admin`, CSRF. `apply_pending`/`pending.reject`
+    # are the only functions that decide a proposal -- neither is reachable
+    # from `/admin/mcp` (see `admin_service.py`).
+
+    async def pending_reject_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or not session.can_write or pending is None:
+            return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+        item = pending.get(request.query_params.get("id", ""))
+        if item is None or item.status != "pending":
+            return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+        return _shell(
+            request, "Reject proposal", _pending_reject_confirm(session, item),
+            session, icon="ban", active="/pending",
+        )
+
+    async def pending_approve(request: Request, session: Session, form: FormData) -> Response:
+        assert store is not None
+        if pending is None:
+            return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+        action_id = str(form.get("id") or "")
+        try:
+            apply_pending(store, pending, action_id, decided_by=session.identity)
+        except (PendingWriteRefused, WriteRefused, ConfigError) as exc:
+            return _shell(
+                request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
+                session, icon="ban", active="/pending", status=400,
+            )
+        return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+
+    async def pending_reject(request: Request, session: Session, form: FormData) -> Response:
+        if pending is None:
+            return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+        action_id = str(form.get("id") or "")
+        reason = str(form.get("reason") or "")
+        try:
+            pending.reject(action_id, decided_by=session.identity, reason=reason)
+        except PendingWriteRefused as exc:
+            return _shell(
+                request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
+                session, icon="ban", active="/pending", status=400,
+            )
+        return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+
     async def probe_executors_action(request: Request) -> Response:
         # Not gated by `writer`: this reads reachability, it does not
         # touch config, so it works the same in a read-only deployment
@@ -4163,6 +4330,22 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/credentials/rotate", writer(credential_rotate), methods=["POST"]),
         Route(f"{UI_PREFIX}/credentials/delete", credential_delete_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/credentials/delete", writer(credential_delete), methods=["POST"]),
+        Route(
+            f"{UI_PREFIX}/pending",
+            guarded(
+                lambda r, s: _view_pending(s, store, pending),
+                "Pending", "/pending", icon="share",
+                subtitle=(
+                    "Proposals from an admin-role agent on /admin/mcp that "
+                    "expand what it can do. Only a human can approve or "
+                    "reject one."
+                ),
+            ),
+            methods=["GET"],
+        ),
+        Route(f"{UI_PREFIX}/pending/reject", pending_reject_form, methods=["GET"]),
+        Route(f"{UI_PREFIX}/pending/approve", writer(pending_approve), methods=["POST"]),
+        Route(f"{UI_PREFIX}/pending/reject", writer(pending_reject), methods=["POST"]),
         Route(f"{UI_PREFIX}/account", account_form, methods=["GET"]),
         Route(
             f"{UI_PREFIX}/account/password",

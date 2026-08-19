@@ -7,6 +7,7 @@ streaming responses of the Streamable HTTP transport.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from typing import Any
@@ -19,10 +20,13 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ._authctx import SCOPE_IDENTITY, identity_from as _identity_from
+from .admin_server import build_admin_mcp_server
+from .admin_service import AdminService
 from .audit import AuditLog
 from .errors import Denied, DenialReason
 from .execute import OUTCOME_OK, OUTCOME_UNKNOWN
-from .identity import Identity, IdentityStore
+from .identity import ADMIN_ROLE, IdentityStore
 from .service import Service
 from .ui import UI_COMPANION_PATHS, UI_PREFIX, build_ui_routes
 
@@ -32,11 +36,13 @@ logger = logging.getLogger("gatekeeper")
 #: nothing about catalog or identities.
 PUBLIC_PATHS = frozenset({"/health/live", "/health/ready", "/health/startup"})
 
-#: Key under which the identity sits in the ASGI scope. The scope is the
-#: only object that is reliably passed through from the middleware to the
-#: MCP handler -- contextvars do not reliably survive the task switch of
-#: the transport.
-SCOPE_IDENTITY = "gatekeeper.identity"
+#: The agent-facing and admin MCP mount points. Isolation between them
+#: (FR-2.8/2.9) is structural: two separate `Server` instances sharing no
+#: tool registry, mounted at these two fixed paths, with `AuthMiddleware`
+#: role-gating each one so a token for one endpoint is simply rejected on
+#: the other -- not filtered, rejected outright.
+MCP_PATH = "/mcp"
+ADMIN_MCP_PATH = "/admin/mcp"
 
 
 class AuthMiddleware:
@@ -103,6 +109,29 @@ class AuthMiddleware:
             await response(scope, receive, send)
             return
 
+        # FR-2.8/2.9: isolation between the agent-facing and admin MCP
+        # mounts is enforced here, per request, not only by which tools
+        # each `Server` instance happens to expose. An `admin` token on
+        # `/mcp` and any non-admin token on `/admin/mcp` are both rejected
+        # outright -- the same response an unknown token gets, so neither
+        # endpoint's existence nor the caller's role is disclosed by the
+        # shape of the denial.
+        role_mismatch = (path == ADMIN_MCP_PATH and identity.role != ADMIN_ROLE) or (
+            path == MCP_PATH and identity.role == ADMIN_ROLE
+        )
+        if role_mismatch:
+            self.audit.auth_failure(
+                reason=DenialReason.UNKNOWN_TOKEN.value,
+                detail=f"role {identity.role!r} on {path} ({identity.id!r})",
+            )
+            response = JSONResponse(
+                {"error": "unauthorized"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            await response(scope, receive, send)
+            return
+
         scope[SCOPE_IDENTITY] = identity
         await self.app(scope, receive, send)
 
@@ -115,17 +144,6 @@ def _bearer_token(scope: Scope) -> str | None:
             if prefix.lower() == "bearer" and token:
                 return token.strip()
     return None
-
-
-def _identity_from(ctx: Any) -> Identity:
-    request = getattr(ctx, "request", None)
-    scope = getattr(request, "scope", None)
-    identity = (scope or {}).get(SCOPE_IDENTITY)
-    if identity is None:
-        # Can only occur if the middleware was bypassed. Then the
-        # safe outcome is to show nothing at all.
-        raise Denied(DenialReason.UNKNOWN_TOKEN, "No identity in the request scope")
-    return identity
 
 
 def build_mcp_server(service: Service) -> Server[None]:
@@ -204,6 +222,7 @@ def build_app(
     ui: bool = False,
     store: Any = None,
     credentials: Any = None,
+    pending: Any = None,
 ) -> Starlette:
     """Builds the complete ASGI application.
 
@@ -213,6 +232,13 @@ def build_app(
 
     `store=None` means: read only. Only a `ConfigStore` enables the
     write functions -- and even then only for `role: admin`.
+
+    `/admin/mcp` (FR-2.8) is mounted under exactly the same condition as
+    `/ui`'s write functions: a writable `ConfigStore`. `pending` (a
+    `PendingStore`) must be supplied whenever `store` is -- `__main__.py`
+    constructs both together; a caller passing one without the other is a
+    programming error, not a runtime configuration to degrade gracefully
+    from.
     """
     mcp_server = build_mcp_server(service)
 
@@ -254,16 +280,51 @@ def build_app(
         routes.extend(
             build_ui_routes(
                 service=service, identities=identities, audit=audit, store=store,
-                credentials=credentials,
+                credentials=credentials, pending=pending,
             )
         )
 
-    app = mcp_server.streamable_http_app(
-        streamable_http_path="/mcp",
+    primary_app = mcp_server.streamable_http_app(
+        streamable_http_path=MCP_PATH,
         host=host,
         stateless_http=True,
         custom_starlette_routes=routes,
     )
+
+    all_routes = list(primary_app.routes)
+    # Every `streamable_http_app()` result carries its own session manager,
+    # started by its own `lifespan`. Starlette does not propagate the
+    # "lifespan" ASGI scope into a mounted sub-application on its own (only
+    # "http"/"websocket" scopes are dispatched by path) -- so composing two
+    # of these into one outer app means running both lifespans explicitly,
+    # not just merging routes.
+    sub_apps = [primary_app]
+
+    if store is not None:
+        if pending is None:
+            raise ValueError(
+                "build_app(store=...) requires pending=... as well -- "
+                "__main__.py constructs a PendingStore alongside the "
+                "ConfigStore for exactly this."
+            )
+        admin_service = AdminService(store=store, pending=pending)
+        admin_mcp_server = build_admin_mcp_server(admin_service)
+        admin_app = admin_mcp_server.streamable_http_app(
+            streamable_http_path=ADMIN_MCP_PATH,
+            host=host,
+            stateless_http=True,
+        )
+        all_routes.extend(admin_app.routes)
+        sub_apps.append(admin_app)
+
+    @contextlib.asynccontextmanager
+    async def combined_lifespan(_app: Starlette) -> Any:
+        async with contextlib.AsyncExitStack() as stack:
+            for sub_app in sub_apps:
+                await stack.enter_async_context(sub_app.router.lifespan_context(sub_app))
+            yield
+
+    app = Starlette(routes=all_routes, lifespan=combined_lifespan)
     app.add_middleware(
         AuthMiddleware, identities=identities, audit=audit, ui_enabled=ui
     )
