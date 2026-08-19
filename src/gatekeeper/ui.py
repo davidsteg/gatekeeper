@@ -341,6 +341,7 @@ _ICONS = {
     "back": '<path d="M20 12H4.5"/><path d="m10 6-6 6 6 6"/>',
     "pencil": '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/>',
     "chevron": '<path d="m9 5 7 7-7 7"/>',
+    "book": '<path d="M4 19.5v-15A1.5 1.5 0 0 1 5.5 3H11v18H5.5A1.5 1.5 0 0 1 4 19.5z"/><path d="M20 19.5v-15A1.5 1.5 0 0 0 18.5 3H13v18h5.5a1.5 1.5 0 0 0 1.5-1.5z"/>',
     # Generic executor/tooling glyphs -- deliberately schematic rather than
     # brand marks: a toolkit's own logo would be trademarked and would also
     # need refreshing whenever the toolkit doesn't map to a real product.
@@ -1002,6 +1003,39 @@ a.ver:hover { text-decoration: underline; color: var(--accent); }
 .login button { padding: .55rem .7rem; justify-content: center; }
 .login p.foot { font-size: .8rem; margin: .9rem 0 0; }
 .err { display: flex; align-items: center; gap: .4rem; color: var(--deny); font-size: .85rem; margin: .9rem 0 0; }
+
+/* -- Docs page -- */
+.docs-tabs { display: flex; gap: .3rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.docs-tabs a {
+  padding: .45rem .9rem; border-radius: 8px; text-decoration: none;
+  font-size: .87rem; font-weight: 500; color: var(--muted);
+  border: 1px solid var(--line); background: var(--surface);
+}
+.docs-tabs a:hover { color: var(--fg); }
+.docs-tabs a.active { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.prose { max-width: 86ch; font-size: .9rem; line-height: 1.62; }
+.prose h1 { font-size: 1.35rem; margin: 1.4rem 0 .5rem; letter-spacing: -.02em; }
+.prose h2 { font-size: 1.05rem; margin: 1.6rem 0 .5rem; text-transform: none; letter-spacing: -.01em; color: var(--fg); font-weight: 650; }
+.prose h3 { font-size: .93rem; margin: 1.3rem 0 .4rem; font-weight: 600; }
+.prose h4 { font-size: .87rem; margin: 1.1rem 0 .35rem; font-weight: 600; color: var(--muted); }
+.prose p { margin: .5rem 0; }
+.prose ul, .prose ol { margin: .5rem 0; padding-left: 1.5rem; }
+.prose li { margin: .2rem 0; }
+.prose pre {
+  background: var(--sunken); border: 1px solid var(--line); border-radius: 8px;
+  padding: .7rem .9rem; overflow-x: auto; margin: .7rem 0; font-size: .82rem;
+}
+.prose code { font-size: .84em; }
+.prose pre code { background: none; border: none; padding: 0; }
+.prose blockquote {
+  border-left: 3px solid var(--accent); margin: .7rem 0; padding: .3rem .8rem;
+  color: var(--muted); background: var(--accent-soft); border-radius: 0 6px 6px 0;
+}
+.prose table { margin: .8rem 0; font-size: .85rem; }
+.prose table th, .prose table td { padding: .4rem .6rem; }
+.prose hr { border: none; border-top: 1px solid var(--line); margin: 1.4rem 0; }
+.prose a { color: var(--accent); }
+.prose img { max-width: 100%; }
 """
 
 #: The console is entirely in English -- comments and docs remain
@@ -1017,6 +1051,7 @@ _NAV = (
     ("/credentials", "Credentials", "lock"),
     ("/pending", "Pending", "share"),
     ("/audit", "Audit", "clock"),
+    ("/docs", "Docs", "book"),
 )
 
 
@@ -3364,6 +3399,251 @@ def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
     )
 
 
+#: ---------------------------------------------------------------------------
+#: Docs page — full project documentation, readable in the console.
+#: ---------------------------------------------------------------------------
+
+_DOCS_DIR_CANDIDATES = (
+    "/opt/gatekeeper-docs",
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", ".."),
+    "/opt/data/gatekeeper",
+    ".",
+)
+
+
+def _read_doc_file(name: str) -> str:
+    """Read a doc file from the repo root, best-effort.
+
+    The source tree lives next to the package; in the container the docs
+    are bundled at /opt/gatekeeper-docs by the Dockerfile.  Returns empty
+    string if not found.
+    """
+    for base in _DOCS_DIR_CANDIDATES:
+        candidate = os.path.join(base, name)
+        try:
+            with open(candidate, encoding="utf-8") as fh:
+                return fh.read()
+        except (OSError, FileNotFoundError):
+            continue
+    return ""
+
+
+def _md_to_html(text: str) -> str:
+    """Minimal Markdown → HTML converter.
+
+    Handles the subset used by the gatekeeper docs: headings (h1-h4),
+    paragraphs, unordered/ordered lists, fenced code blocks, inline code,
+    bold, italic, blockquotes, tables, hr, and links.
+
+    Everything is escaped first; only safe constructs produce live HTML.
+    No raw HTML passthrough — no external dependency, CSP-clean.
+    """
+    import re
+
+    esc = html.escape
+
+    def inline(text: str) -> str:
+        parts: list[str] = []
+        counter = [0]
+
+        def _code(m: re.Match) -> str:
+            tag = f"\x00CODE{counter[0]}\x00"
+            parts.append(f"<code>{esc(m.group(1))}</code>")
+            counter[0] += 1
+            return tag
+
+        text = re.sub(r"`([^`]+)`", _code, text)
+        text = esc(text)
+        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+        text = re.sub(r"(?<!\*)\*(?!\*)(.+?)\*(?!\*)", r"<em>\1</em>", text)
+
+        def _link(m: re.Match) -> str:
+            url = m.group(2)
+            if url.startswith(("http://", "https://", "#", "/")):
+                return f'<a href="{esc(url)}" rel="noopener">{esc(m.group(1))}</a>'
+            return esc(m.group(0))
+
+        text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link, text)
+        for i, part in enumerate(parts):
+            text = text.replace(f"\x00CODE{i}\x00", part)
+        return text
+
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    in_list: str | None = None
+    in_blockquote = False
+    in_code = False
+    code_buf: list[str] = []
+    table_buf: list[str] = []
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            out.append(f"</{in_list}>")
+            in_list = None
+
+    def close_blockquote() -> None:
+        nonlocal in_blockquote
+        if in_blockquote:
+            out.append("</blockquote>")
+            in_blockquote = False
+
+    def close_table() -> None:
+        nonlocal table_buf
+        if table_buf:
+            rows = table_buf
+            if len(rows) >= 2 and re.match(r"^\s*\|?[\s\-:|]+\|?\s*$", rows[1]):
+                header = [c.strip() for c in rows[0].strip().strip("|").split("|")]
+                body = rows[2:]
+            else:
+                header = None
+                body = rows
+            parts = ['<div class="wrap"><table>']
+            if header:
+                parts.append("<thead><tr>" + "".join(f"<th>{inline(h)}</th>" for h in header) + "</tr></thead>")
+            parts.append("<tbody>")
+            for row in body:
+                cells = [c.strip() for c in row.strip().strip("|").split("|")]
+                parts.append("<tr>" + "".join(f"<td>{inline(c)}</td>" for c in cells) + "</tr>")
+            parts.append("</tbody></table></div>")
+            out.append("".join(parts))
+            table_buf = []
+
+    while i < len(lines):
+        line = lines[i]
+
+        if line.strip().startswith("```"):
+            if in_code:
+                out.append(f'<pre><code>{esc(chr(10).join(code_buf))}</code></pre>')
+                code_buf = []
+                in_code = False
+            else:
+                close_list()
+                close_blockquote()
+                close_table()
+                in_code = True
+            i += 1
+            continue
+        if in_code:
+            code_buf.append(line)
+            i += 1
+            continue
+
+        if line.strip().startswith("|") and line.strip().endswith("|"):
+            close_list()
+            close_blockquote()
+            table_buf.append(line)
+            i += 1
+            continue
+        elif table_buf:
+            close_table()
+
+        if not line.strip():
+            close_list()
+            close_blockquote()
+            i += 1
+            continue
+
+        m = re.match(r"^(#{1,4})\s+(.+)$", line)
+        if m:
+            close_list()
+            close_blockquote()
+            level = len(m.group(1))
+            out.append(f"<h{level}>{inline(m.group(2))}</h{level}>")
+            i += 1
+            continue
+
+        if re.match(r"^(-{3,}|\*{3,}|_{3,})\s*$", line):
+            close_list()
+            close_blockquote()
+            out.append("<hr>")
+            i += 1
+            continue
+
+        if line.strip().startswith(">"):
+            close_list()
+            content = re.sub(r"^\s*>\s?", "", line)
+            if not in_blockquote:
+                out.append("<blockquote>")
+                in_blockquote = True
+            out.append(f"<p>{inline(content)}</p>")
+            i += 1
+            continue
+        elif in_blockquote:
+            close_blockquote()
+
+        m = re.match(r"^(\s*)[-*+]\s+(.+)$", line)
+        if m:
+            if in_list != "ul":
+                close_list()
+                out.append("<ul>")
+                in_list = "ul"
+            out.append(f"<li>{inline(m.group(2))}</li>")
+            i += 1
+            continue
+
+        m = re.match(r"^(\s*)\d+\.\s+(.+)$", line)
+        if m:
+            if in_list != "ol":
+                close_list()
+                out.append("<ol>")
+                in_list = "ol"
+            out.append(f"<li>{inline(m.group(2))}</li>")
+            i += 1
+            continue
+
+        close_list()
+        para_lines = [line]
+        while i + 1 < len(lines) and lines[i + 1].strip() and not re.match(
+            r"^(#{1,4}\s|[-*+]\s|\d+\.\s|>|\|)",
+            lines[i + 1].strip(),
+        ) and not lines[i + 1].strip().startswith("```"):
+            i += 1
+            para_lines.append(lines[i])
+        out.append(f"<p>{inline(' '.join(l.strip() for l in para_lines))}</p>")
+        i += 1
+
+    if in_code:
+        out.append(f'<pre><code>{esc(chr(10).join(code_buf))}</code></pre>')
+    close_list()
+    close_blockquote()
+    close_table()
+    return "".join(out)
+
+
+_DOC_FILES = (
+    ("readme", "README", "README.md"),
+    ("requirements", "Requirements", "REQUIREMENTS.md"),
+    ("agents", "AGENTS", "AGENTS.md"),
+    ("release", "Release Notes", "RELEASE.md"),
+)
+
+
+def _view_docs(request: Request) -> str:
+    """Full project documentation, rendered as HTML in the console."""
+    slug = request.query_params.get("doc", "readme")
+    docs = [(s, label, _read_doc_file(filename)) for s, label, filename in _DOC_FILES]
+    selected = next((d for d in docs if d[0] == slug), docs[0])
+    tabs = "".join(
+        f'<a href="{UI_PREFIX}/docs?doc={_e(s)}"'
+        f'{" class=\"active\"" if s == selected[0] else ""}>'
+        f"{_e(label)}</a>"
+        for s, label, _ in docs
+    )
+    body_html = _md_to_html(selected[2]) if selected[2] else (
+        '<div class="note"><div>'
+        "<strong>Document not found.</strong> The source files are bundled "
+        "into the Docker image at build time. If you are running from a "
+        "container image, the docs may not be included."
+        "</div></div>"
+    )
+    return (
+        f'<div class="docs-tabs">{tabs}</div>'
+        f'<div class="card"><div class="pad prose">{body_html}</div></div>'
+    )
+
+
 def build_ui_routes(
     *,
     service: Service,
@@ -4361,6 +4641,19 @@ def build_ui_routes(
                     "The real reason for a denial is recorded here in full &ndash; "
                     "even when the agent only received an opaque answer. Admin "
                     "changes land here too."
+                ),
+            ),
+            methods=["GET"],
+        ),
+        Route(
+            f"{UI_PREFIX}/docs",
+            guarded(
+                lambda r, s: _view_docs(r),
+                "Docs", "/docs", icon="book",
+                subtitle=(
+                    "Full project documentation &mdash; README, requirements, "
+                    "agents guide, and release notes. Readable in the console "
+                    "so agents and operators have the same reference."
                 ),
             ),
             methods=["GET"],

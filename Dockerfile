@@ -68,6 +68,11 @@ COPY --from=build /opt/venv /opt/venv
 # never needs this at all (see ui.py's _release_notes()).
 COPY RELEASE.md /usr/share/gatekeeper/RELEASE.md
 
+# Project documentation — bundled into the image so the /ui/docs page
+# has the full docs without runtime file access or network.
+COPY README.md REQUIREMENTS.md AGENTS.md /opt/gatekeeper-docs/
+COPY RELEASE.md /opt/gatekeeper-docs/RELEASE.md
+
 # Verify at build time that 'docker compose' actually resolves. Without this
 # check, a missing plugin would only surface on the first agent call.
 RUN docker compose version
