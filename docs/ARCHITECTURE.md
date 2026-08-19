@@ -94,7 +94,8 @@ out of scope for their preset (documented per-preset in `Preset.notes`).
 
 ```
 src/gatekeeper/
-  __init__.py       __version__ -- keep in sync with pyproject.toml
+  __init__.py       __version__, derived from pyproject.toml at import
+                      time -- never a second hardcoded string to drift
   __main__.py        Entry point: CLI (serve/check/init/token/password/
                       credential-key/preset), bootstrap, SIGHUP handler
   server.py           MCP protocol, ASGI middleware, health/metrics routes
@@ -151,6 +152,15 @@ All diagrams are server-rendered SVG:
 - **Tool matrix** — `_tool_matrix()`: HTML table, one tool per row
 - **Activity chart** — `_activity_chart()`: calls/hour as stacked bars
 - **Activity feed** — `_feed()`: recent calls as a timeline
+
+The version badge (sidebar and login page) is a link into a **release-notes
+popup** (`_release_notes_modal()`): a pure-CSS modal using the `:target`
+selector, no JavaScript needed to open/close it. Content comes from
+`RELEASE.md`, parsed by `_parse_release_notes()`/`_render_release_body()`
+(only `## <version>` headings start a new entry; bold/inline-code render,
+everything else is escaped). The file ships inside the container image
+(`GATEKEEPER_RELEASE_NOTES`, default `/usr/share/gatekeeper/RELEASE.md`) or
+is found next to `pyproject.toml` in a dev checkout.
 
 ## Audit log format
 

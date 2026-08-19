@@ -12,6 +12,7 @@ workflow, see [AGENTS.md](../AGENTS.md).
 | `GATEKEEPER_STATE_DIR` | Where `tools.yaml`, `identities.yaml`, `credentials.yaml` live (Tier 2, must be writable if `--ui` writes are enabled) |
 | `GATEKEEPER_CREDENTIAL_KEY` | Fernet master key for the credential store (generate with `gatekeeper credential-key`) |
 | `GATEKEEPER_CREDENTIAL_KEY_FILE` | Path to a file holding that same key, for a separately mounted secret instead of a plain env var |
+| `GATEKEEPER_RELEASE_NOTES` | Path to `RELEASE.md`, for the console's release-notes popup. Defaults to `/usr/share/gatekeeper/RELEASE.md` in the container image; a dev checkout finds the file next to `pyproject.toml` on its own and never needs this set |
 | `GATEKEEPER_LOG_LEVEL` | Python logging level, default `INFO` |
 | `GATEKEEPER_UI` | `1`/`true` enables the console without passing `--ui` |
 | `GATEKEEPER_UI_READ_ONLY` | `1`/`true` disables console writes regardless of role |
