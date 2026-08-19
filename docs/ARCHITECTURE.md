@@ -107,6 +107,18 @@ YAML. Presets never create a toolkit; `/ui/toolkits/reference` (or
 `gatekeeper preset show <key>`) prints the YAML block for a human to paste
 into `toolkits.yaml` by hand.
 
+Logos are each service's real mark (not a generic monogram), sourced from
+[homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
+(Apache License 2.0, attributed in `presets.py`'s `_BRAND_LOGOS`) — Tdarr is
+the one exception, with no usable SVG found there, and falls back to a
+plain colored-circle monogram. Every fetched SVG has its `style=""`
+attributes and any `<style>` block resolved into plain presentation
+attributes (`fill="#hex"`, not CSS) and its ids/classes namespaced per
+preset: the console's CSP (`style-src 'nonce-...'`) silently drops any
+`style` it doesn't carry the nonce for, and the gallery renders every logo
+on one page at once, so an unnamespaced id or class in one service's SVG
+can collide with another's.
+
 No OAuth2 — the `http` executor supports static credentials only (bearer,
 API-key header, basic). Services that require an authorization-code flow are
 out of scope for their preset (documented per-preset in `Preset.notes`).
