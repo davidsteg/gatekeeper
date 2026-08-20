@@ -373,6 +373,58 @@ tools:
     timeout_seconds: 30
     max_output_bytes: 8192
 
+  - id: truenas.list_datasets
+    toolkit: truenas
+    version: 1
+    title: List datasets
+    description: Lists ZFS datasets across all pools.
+    category: read
+    idempotent: true
+    enabled: true
+    method: pool.dataset.query
+    params: {}
+    required_scopes: []
+    timeout_seconds: 15
+    max_output_bytes: 65536
+
+  - id: truenas.list_snapshots
+    toolkit: truenas
+    version: 1
+    title: List snapshots
+    description: Lists ZFS snapshots across all datasets.
+    category: read
+    idempotent: true
+    enabled: true
+    method: zfs.snapshot.query
+    params: {}
+    required_scopes: []
+    timeout_seconds: 15
+    max_output_bytes: 65536
+
+  - id: truenas.delete_snapshot
+    toolkit: truenas
+    version: 1
+    title: Delete a snapshot
+    description: >-
+      Destroys one ZFS snapshot (dataset@name). Removes only that
+      point-in-time copy, not the live dataset -- still irreversible for
+      the data captured in it.
+    category: write_external
+    idempotent: false
+    enabled: true
+    method: zfs.snapshot.delete
+    params:
+      id: "{id}"
+    parameters:
+      id:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,200}@[A-Za-z0-9][A-Za-z0-9_.:-]{0,200}$"
+        description: Full snapshot id, e.g. tank/data@backup.
+    required_scopes: ["dataset:{id}"]
+    timeout_seconds: 15
+    max_output_bytes: 4096
+
   # -- ssh executor (REQUIREMENTS.md §17) ------------------------------------
   # Same binary/argv shape as diag.* above -- the only difference is the
   # toolkit's executor, which runs this argv on 'linux' (config/examples/

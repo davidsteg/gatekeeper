@@ -60,6 +60,36 @@ cannot. It is in every release.
 
 ---
 
+## 0.11.0
+
+**TrueNAS starter integration gains dataset and snapshot tools: list datasets, list snapshots, delete a snapshot.**
+
+Researched against TrueNAS's real JSON-RPC API (api.truenas.com), not
+guessed:
+
+- `truenas.list_datasets` — `pool.dataset.query`, no arguments.
+- `truenas.list_snapshots` — `zfs.snapshot.query`, no arguments.
+- `truenas.delete_snapshot` — `zfs.snapshot.delete`, one positional `id`
+  argument (`dataset@name`) validated by pattern; category
+  `write_external` since destroying a snapshot is irreversible for the
+  data it captured. `required_scopes: ["dataset:{id}"]`, same
+  per-dataset scoping convention as the existing `truenas.create_dataset`
+  reference example.
+
+`zfs.snapshot.create` is deliberately **not** included: its real signature
+takes one nested object argument (`{dataset, name, recursive}`), and this
+project's `params_template` mechanism (`validate.py`'s `build_rpc_call`)
+only substitutes flat string values into a positional list — it cannot
+build a nested object today. Documented as a known gap in
+`docs/ROADMAP.md` rather than worked around with an inaccurate call
+shape. Dataset/pool creation and deletion remain out of the starter set
+too, on purpose — much larger blast radius than a snapshot.
+
+The `truenas` toolkit's `allowed_rpc_methods` whitelist (both the starter
+default in `integrations.py` and the fuller worked example in
+`config/examples/toolkits.yaml`) is extended to include
+`zfs.snapshot.query` and `zfs.snapshot.delete`.
+
 ## 0.10.0
 
 **Interactive access map, replacing the fixed server-drawn graph on the overview page. New `/ui/access-map`.**

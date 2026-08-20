@@ -127,6 +127,8 @@ toolkits:
       - pool.query
       - pool.dataset.query
       - pool.dataset.create
+      - zfs.snapshot.query
+      - zfs.snapshot.delete
     credential: truenas
     max_timeout_seconds: 30
     max_output_bytes: 65536

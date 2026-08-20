@@ -601,6 +601,8 @@ _INTEGRATIONS_LIST: list[Integration] = [
             "    allowed_rpc_methods:\n"
             "      - pool.query\n"
             "      - pool.dataset.query\n"
+            "      - zfs.snapshot.query\n"
+            "      - zfs.snapshot.delete\n"
             "    credential: truenas\n"
             "    max_timeout_seconds: 30\n"
             "    max_output_bytes: 65536\n"
@@ -609,7 +611,16 @@ _INTEGRATIONS_LIST: list[Integration] = [
         notes=(
             "JSON-RPC 2.0 over WebSocket, not REST (TrueNAS's REST v2.0 is "
             "deprecated as of 25.04). See config/examples/toolkits.yaml and "
-            "tools.yaml for a full worked example including a write tool."
+            "tools.yaml for a full worked example including a write tool. "
+            "Snapshot creation (`zfs.snapshot.create`) isn't a starter tool "
+            "here: its real signature takes one nested object argument "
+            "(`{dataset, name, recursive}`), and this project's "
+            "`params_template` only substitutes flat string values into a "
+            "positional argument list -- it can't build a nested object yet. "
+            "Dataset/pool creation and deletion are likewise left out "
+            "on purpose (much larger blast radius than a snapshot); add "
+            "either by hand the same way config/examples/toolkits.yaml "
+            "demonstrates for `pool.dataset.create`."
         ),
         # truenas tool specs are `method`/`params`, not the http `method`/
         # `path` shape -- built directly rather than through the http-shaped
@@ -623,6 +634,44 @@ _INTEGRATIONS_LIST: list[Integration] = [
                 "method": "pool.query", "params": {},
                 "parameters": {}, "required_scopes": [],
                 "timeout_seconds": 15, "max_output_bytes": 32768,
+            },
+            {
+                "id": "truenas.list_datasets", "toolkit": "truenas", "version": 1,
+                "title": "List datasets",
+                "description": "Lists ZFS datasets across all pools.",
+                "category": "read", "idempotent": True, "enabled": False,
+                "method": "pool.dataset.query", "params": {},
+                "parameters": {}, "required_scopes": [],
+                "timeout_seconds": 15, "max_output_bytes": 65536,
+            },
+            {
+                "id": "truenas.list_snapshots", "toolkit": "truenas", "version": 1,
+                "title": "List snapshots",
+                "description": "Lists ZFS snapshots across all datasets.",
+                "category": "read", "idempotent": True, "enabled": False,
+                "method": "zfs.snapshot.query", "params": {},
+                "parameters": {}, "required_scopes": [],
+                "timeout_seconds": 15, "max_output_bytes": 65536,
+            },
+            {
+                "id": "truenas.delete_snapshot", "toolkit": "truenas", "version": 1,
+                "title": "Delete a snapshot",
+                "description": (
+                    "Destroys one ZFS snapshot (dataset@name). Removes only "
+                    "that point-in-time copy, not the live dataset -- still "
+                    "irreversible for the data captured in it."
+                ),
+                "category": "write_external", "idempotent": False, "enabled": False,
+                "method": "zfs.snapshot.delete", "params": {"id": "{id}"},
+                "parameters": {
+                    "id": {
+                        "type": "string", "required": True,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,200}@[A-Za-z0-9][A-Za-z0-9_.:-]{0,200}$",
+                        "description": "Full snapshot id, e.g. tank/data@backup.",
+                    },
+                },
+                "required_scopes": ["dataset:{id}"],
+                "timeout_seconds": 15, "max_output_bytes": 4096,
             },
         ),
     ),
