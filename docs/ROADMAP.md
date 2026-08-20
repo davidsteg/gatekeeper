@@ -31,13 +31,27 @@ item.
   (Sonarr, Radarr, Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n,
   Uptime Kuma, Immich, Telegram, Google API, TrueNAS, pfSense, Jellystat,
   Netdata, SABnzbd, Paperless-ngx, Docker, Linux-over-SSH), reachable
-  from `/ui/tools/integrations` (`integrations.py`)
+  from `/ui/tools/integrations` (`integrations.py`). TrueNAS's starter set
+  covers pool listing, dataset listing, snapshot listing, and snapshot
+  deletion (`pool.query`/`pool.dataset.query`/`zfs.snapshot.query`/
+  `zfs.snapshot.delete`) — snapshot *creation* isn't included; see
+  "Not implemented" below.
 - `write_external` category — distinct rate-limit bucket, agent-facing
   "cannot be undone" warning, requires an explicit grant
 - Operations console (`/ui`) — no JavaScript, CSP-locked, server-rendered SVG
 
 ## Not implemented (by design or not yet)
 
+- **Nested `params_template` values** — the `truenas` executor's
+  `params_template` (`validate.py`'s `build_rpc_call`) only substitutes
+  flat string placeholders into a positional argument list; it cannot
+  build a single positional argument that is itself an object. This is
+  why the TrueNAS starter integration ships `zfs.snapshot.delete` (single
+  string `id` argument) but not `zfs.snapshot.create`, whose real
+  signature takes one nested object (`{dataset, name, recursive}`).
+  Extending `params_template` to accept nested dict values, substituting
+  their leaves the same way, would close this — not done here to avoid
+  changing shared validation code alongside an integrations-only change.
 - **OAuth2** — the `http` executor supports static credentials only
   (bearer / API-key header / basic — FR-8.11). Services that require an
   authorization-code flow (most Google Workspace APIs: Calendar, Gmail,

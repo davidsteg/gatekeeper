@@ -133,7 +133,7 @@ created or rotated.
 ## Integrations
 
 `integrations.py` — a small library of starter definitions (toolkit YAML block +
-2-3 starter tools + an inline-SVG logo) for 20 services: Sonarr, Radarr,
+2-4 starter tools + an inline-SVG logo) for 20 services: Sonarr, Radarr,
 Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n, Uptime Kuma, Immich,
 Telegram, Google API (static-key subset), TrueNAS, pfSense, Jellystat,
 Netdata, SABnzbd, Paperless-ngx, Docker, and Linux-over-SSH. Most are
