@@ -240,13 +240,28 @@ tests/
 
 ## UI architecture (`ui.py`)
 
-**No JavaScript.** CSP: `default-src 'none'; style-src 'nonce-...';
-img-src 'self' data:; form-action 'self'`. Any per-service logo (integrations)
-ships as inline SVG in `integrations.py`, never a hotlinked image.
+**Script-free by default.** CSP: `default-src 'none'; style-src
+'nonce-...'; img-src 'self' data:; form-action 'self'`. Any per-service logo
+(integrations) ships as inline SVG in `integrations.py`, never a hotlinked
+image. The **one exception** is the interactive access map: the two routes
+that render it (Overview and `/ui/access-map`) opt into a nonce-scoped
+`script-src`/`connect-src 'self'` (see `_shell`'s `allow_script` param,
+`_respond`) for a small vendored JS file, `access-map.js`
+(`_ACCESS_MAP_JS`) — never widened beyond those two routes; every other
+page still gets no `script-src` at all (enforced by
+`test_access_map_scopes_script_src_to_itself` in `test_ui.py`).
 
-All diagrams are server-rendered SVG:
-- **Access map** — `_access_graph()`: identities -> hub -> toolkits/blocked,
-  call counts from the audit log, hover tooltips via `<title>`
+Most diagrams are still server-rendered SVG or HTML built with no client
+code:
+- **Access map** — `_access_graph_data()` on the server serializes the
+  identity/toolkit/destination/protected-resource graph (plus live call
+  counts from the audit log) to JSON at `/ui/access-map/data`;
+  `access-map.js` fetches it and renders a pannable, zoomable SVG
+  client-side (wheel/drag/pinch, `+`/`−`/Fit controls), groups nodes into
+  clusters past a threshold, and opens a detail side panel on click.
+  Embedded directly on Overview and as a larger dedicated page at
+  `/ui/access-map` (which also offers a dense identity×toolkit table,
+  `_toolkit_access_matrix()`, once past `ACCESS_MAP_TABLE_THRESHOLD` nodes).
 - **Call flow pipeline** — `_call_flow_pipeline()`: the layers a request
   passes, as a horizontal SVG
 - **Tool matrix** — `_tool_matrix()`: HTML table, one tool per row

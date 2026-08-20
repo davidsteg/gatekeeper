@@ -498,9 +498,10 @@ def test_ui_renders_destination_pills_and_third_tier(tmp_path):
     service = Service(tier1=tier1, catalog=catalog, audit=audit)
     identities = IdentityStore(identities={"agent1": _identity("docker.compose_up@nas1")})
 
-    svg, _ = ui._access_graph(service, identities)
-    assert "nas1" in svg and "nas2" in svg
-    assert "DESTINATIONS" in svg
+    data = ui._access_graph_data(service, identities)
+    assert data["meta"]["has_destinations"] is True
+    dest_ids = {n["id"] for n in data["nodes"] if n["kind"] == "destination"}
+    assert dest_ids == {"destination:nas1", "destination:nas2"}
 
     matrix = ui._tool_matrix(service, identities)
     assert "@nas1" in matrix and "@nas2" in matrix
