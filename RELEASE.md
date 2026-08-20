@@ -60,6 +60,46 @@ cannot. It is in every release.
 
 ---
 
+## 0.10.0
+
+**Interactive access map, replacing the fixed server-drawn graph on the overview page. New `/ui/access-map`.**
+
+The overview page's access map (identity → toolkit → destination) was already
+computed live from `identities.yaml`/`toolkits.yaml`/the catalog/the audit
+log, but rendered as one hand-laid-out SVG whose canvas grew linearly with
+node count -- unreadable well before real-world scale, no icons or service
+logos, and no way to click through to detail.
+
+- **New `/ui/access-map` page** with a client-side renderer
+  (`access-map.js`, vendored, no dependencies, no build step) fetching JSON
+  from a new `/ui/access-map/data` endpoint. The overview page's original
+  map is unchanged for now -- it gained a link to the new page rather than
+  being replaced, so the page every session hits by default carries zero
+  risk from this change.
+- **Scales past a fixed canvas.** Toolkits group by executor and identities
+  by role once past a threshold (8 / 20), collapsing into cluster nodes
+  clicked open one lane at a time instead of rendering hundreds of nodes at
+  once. Past 80 combined nodes the page defaults to a dense identity ×
+  toolkit table (`?view=table`) instead of the graph.
+- **Click a node for detail** -- a slide-in panel with call stats
+  (ok/denied/failed), granted tools, executor/role, and destinations,
+  without leaving the page. Search narrows and dims live as you type,
+  no page reload.
+- **The one narrowly-scoped exception to the console's script-free CSP.**
+  Every other route keeps exactly the `default-src 'none'`, no-`script-src`
+  policy as before (asserted by a new test,
+  `test_access_map_scopes_script_src_to_itself`); `/ui/access-map` alone
+  gets a nonce-scoped `script-src` (plus the `connect-src 'self'` its own
+  same-origin `fetch()` needs), generated fresh per response and never
+  widened to `'self'` or `'unsafe-inline'`. With scripts disabled, the page
+  falls back to the original server-rendered SVG via `<noscript>`.
+- The JS never uses `innerHTML` on server-derived data -- every label, tool
+  ID, and identity name is set through `textContent`/`createElement`, so
+  nothing rendered client-side can execute even if it originated from an
+  agent's unvalidated audit-log data.
+
+---
+
 ## 0.9.1
 
 **Docs page — full project documentation in the console.**
@@ -79,8 +119,6 @@ no JavaScript, no external dependency, CSP-safe.
 - Four tabs switch between documents via `?doc=<slug>`.
 - Styled with `.prose` CSS — readable typography, scrollable code
   blocks, responsive tables, consistent with the design system.
-
----
 
 ## 0.9.0
 
