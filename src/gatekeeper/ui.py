@@ -3445,13 +3445,40 @@ _PENDING_TONE = {
 }
 
 
-def _pending_payload_summary(item: PendingAction) -> str:
+def _resolved_tool_badge(store: ConfigStore | None, tool_id: str) -> str:
+    """One tool, resolved against the live catalog -- so a reviewer sees
+    whether it exists and what it currently is, not just a bare id.
+
+    A pending proposal (especially `grant_set`) can name a tool that was
+    never created, or that exists but is disabled -- approving that
+    silently grants a right to nothing. This is the fix for exactly that:
+    every tool id rendered on `/ui/pending` is looked up here, and a
+    missing tool gets a distinct, unmissable warning state instead of
+    looking identical to a real one.
+    """
+    flat = store.service.catalog.flat_spec_of(tool_id) if store is not None else None
+    if flat is None:
+        return (
+            f'<div class="row"><span class="pill deny">missing</span> '
+            f'<code>{_e(tool_id)}</code> &mdash; no such tool in the catalog</div>'
+        )
+    tone = "ok" if flat.get("enabled") else "warn"
+    state = "enabled" if flat.get("enabled") else "disabled"
+    return (
+        f'<div class="row"><span class="pill {tone}">{_e(state)}</span> '
+        f'<code>{_e(tool_id)}</code> &mdash; {_e(flat.get("title") or tool_id)} '
+        f'(<code>{_e(flat.get("category", ""))}</code>)</div>'
+    )
+
+
+def _pending_payload_summary(item: PendingAction, store: ConfigStore | None = None) -> str:
     """A short, human-scannable rendering of what was proposed -- the full
     payload is available in the audit log; here it only needs to be enough
     for a reviewer to judge whether to approve.
     """
     if item.action in ("tool_enable", "tool_disable", "tool_delete"):
-        return f"tool <code>{_e(item.payload.get('id', ''))}</code>"
+        tool_id = item.payload.get("id", "")
+        return _resolved_tool_badge(store, tool_id)
     if item.action in ("tool_create", "tool_update"):
         target = item.payload.get("replaces") or item.payload.get("spec", {}).get("id", "")
         spec = item.payload.get("spec") or {}
@@ -3462,10 +3489,10 @@ def _pending_payload_summary(item: PendingAction) -> str:
         )
     if item.action == "grant_set":
         tools = item.payload.get("tools") or []
-        return (
-            f"identity <code>{_e(item.payload.get('identity_id', ''))}</code> "
-            f"&rarr; {len(tools)} tool grant(s)"
-        )
+        header = f'identity <code>{_e(item.payload.get("identity_id", ""))}</code> &rarr; {len(tools)} tool grant(s)'
+        if not tools:
+            return header
+        return header + "".join(_resolved_tool_badge(store, t) for t in sorted(tools))
     return _e(json.dumps(item.payload, default=str))
 
 
@@ -3519,7 +3546,7 @@ def _view_pending(session: Session, store: ConfigStore | None, pending: PendingS
             f'<div class="row"><div class="row-l">{_icon("clock", 14)}Proposed</div>'
             f'<div class="mono">{_e(item.created_at)}</div></div>'
             f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Change</div>'
-            f"<div>{_pending_payload_summary(item)}</div></div>"
+            f"<div>{_pending_payload_summary(item, store)}</div></div>"
             + (f'<div class="row"><div class="row-l">Decision</div>{detail}</div>' if detail else "")
             + "</div></div>"
         )
