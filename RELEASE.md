@@ -60,6 +60,40 @@ cannot. It is in every release.
 
 ---
 
+## 0.12.0
+
+**The interactive access map is now the default; the old fixed-size SVG map is gone. Real pan/zoom.**
+
+`0.10.0` shipped a JS-driven access map, but only as a side door
+(`/ui/access-map`) — the dashboard still showed the original static SVG by
+default, and even the interactive version had no real zoom: its `viewBox`
+was sized to exactly fit its own content, so nothing was actually
+scale-adjustable.
+
+- **Overview embeds the live map directly** — no more click-through. The
+  dashboard's "Access map" card now mounts the same JS renderer as the
+  dedicated page; `/ui/access-map` remains as a larger, separate view (more
+  room to zoom) linked from the card.
+- **`_access_graph`/`_svg_node` deleted.** The server no longer renders the
+  map as SVG at all — only JSON (`_access_graph_data`, unchanged) for the
+  client to draw. With scripts disabled, a plain notice ("Enable
+  JavaScript to view the access map") replaces the old `<noscript>` SVG
+  fallback.
+- **Real pan/zoom**, entirely hand-written vanilla JS, no library: node/edge
+  layout now renders into a `<g class="g-content">` inside a
+  transform-driven `<g class="g-viewport">`, decoupled from a fixed-height
+  `.map-root` container. Mouse wheel zooms to the cursor, drag pans,
+  two-finger touch pinch-zooms, and `+`/`−`/Fit buttons give explicit
+  control — all via the SVG's own `getScreenCTM()`, not naive pixel deltas,
+  so the math stays correct regardless of how CSS scales the rendered
+  `<svg>`. A `userAdjusted` flag means the user's own pan/zoom survives
+  re-renders triggered by live search or cluster expand/collapse instead of
+  snapping back to fit-to-content every time.
+- **CSP stays narrowly scoped** — the `script-src`/`connect-src 'self'`
+  exception now applies to both routes that render the map (Overview and
+  `/ui/access-map`), and to no others; a widened
+  `test_access_map_scopes_script_src_to_itself` asserts this explicitly.
+
 ## 0.11.0
 
 **TrueNAS starter integration gains dataset and snapshot tools: list datasets, list snapshots, delete a snapshot.**

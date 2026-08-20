@@ -27,11 +27,18 @@ Five design decisions underpin this layer:
    not in every constellation -- a page on the same site does not count
    as foreign. The token in the form closes the gap.
 
-4. **No JavaScript.** The CSP forbids scripts entirely. This follows from
-   the data situation: the audit log shows parameter values from agents,
-   for denied calls, unvalidated ones. Without script execution, an
-   injected `<script>` is harmless, even if the escaping fails.
-   Graph, chart, and all forms therefore manage without code in the browser.
+4. **Script-free by default.** The CSP forbids scripts entirely on every
+   page. This follows from the data situation: the audit log shows
+   parameter values from agents, for denied calls, unvalidated ones.
+   Without script execution, an injected `<script>` is harmless, even if
+   the escaping fails. Chart, forms, and most of the console therefore
+   manage without code in the browser. The one narrow exception is the
+   interactive access map (Overview and `/ui/access-map`), whose
+   `script-src`/`connect-src 'self'` is nonce-scoped to those two routes
+   only and never widened -- its client-side JS (`_ACCESS_MAP_JS`) builds
+   every DOM node from server-JSON via `textContent`/`createElement`,
+   never `innerHTML`, so the same untrusted-audit-data guarantee holds
+   there too.
 
 5. **Reading and writing are separate roles.** `viewer` sees everything,
    `admin` may change. Without this separation, anyone who can view the audit
@@ -814,7 +821,7 @@ td.ops { white-space: nowrap; }
 td.ops form { display: inline; }
 
 /* -- Access map -- */
-.graph { width: 100%; height: auto; display: block; }
+.graph { width: 100%; height: 100%; display: block; touch-action: none; }
 .graph text { font-family: inherit; }
 .g-box { fill: var(--sunken); stroke: var(--line); transition: fill .18s, stroke .18s, stroke-width .18s; }
 .g-box.deny { fill: var(--deny-soft); stroke: var(--deny); }
@@ -864,10 +871,27 @@ td.ops form { display: inline; }
 
 /* -- Interactive access map (access-map.js) -- */
 .btn.active { color: var(--fg); border-color: var(--accent); background: var(--accent-soft); }
-.map-root { position: relative; }
+/* A fixed, resizable box -- the map's content no longer dictates the
+   <svg>'s own size (that would defeat zooming, the whole point of this
+   view); pan/zoom happens inside this fixed viewport instead. */
+.map-root {
+  position: relative; height: 52vh; min-height: 380px; max-height: 780px;
+  overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius);
+  cursor: grab; background: var(--sunken);
+}
+.map-root:active { cursor: grabbing; }
+.map-root.map-root-full { height: 78vh; min-height: 520px; }
 .map-root .g-node { cursor: pointer; }
 .map-root .g-node.cluster .g-box { stroke-dasharray: 3 3; }
 .map-root .g-logo { pointer-events: none; }
+.map-root .map-loading { position: absolute; top: .8rem; left: .9rem; margin: 0; }
+.map-controls {
+  position: absolute; right: .6rem; bottom: .6rem; display: flex; gap: .3rem; z-index: 2;
+}
+.map-control-btn {
+  width: 2rem; height: 2rem; padding: 0; font-size: 1rem; line-height: 1;
+  border-radius: 6px; background: var(--surface);
+}
 .map-panel {
   position: fixed; top: 0; right: 0; bottom: 0; width: min(26rem, 92vw);
   background: var(--surface); border-left: 1px solid var(--line);
@@ -1287,6 +1311,11 @@ _ACCESS_MAP_JS = """
   var NW = 132, NH = 52, GAP = 14;
   var TOOLKIT_GROUP_THRESHOLD = 8;
   var IDENTITY_GROUP_THRESHOLD = 20;
+  //: Pan/zoom bounds and the drag-vs-click threshold, all in client pixels
+  //: except MIN_K/MAX_K which are unitless scale factors.
+  var MIN_K = 0.15, MAX_K = 6, CLICK_THRESHOLD_PX = 4;
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
   function el(tag, attrs, ns) {
     var node = ns ? document.createElementNS(ns, tag) : document.createElement(tag);
@@ -1366,6 +1395,19 @@ _ACCESS_MAP_JS = """
     this.data = null;
     this.panel = null;
     this.backdrop = null;
+    // Pan/zoom state -- world (SVG user unit) coordinates, independent of
+    // the container's own CSS pixel size. `userAdjusted` is what lets a
+    // re-render (search, cluster expand/collapse, window resize) preserve
+    // the current view instead of snapping back to fit-to-content every
+    // time the underlying data changes.
+    this.tx = 0; this.ty = 0; this.k = 1;
+    this.viewW = 100; this.viewH = 100;
+    this.userAdjusted = false;
+    this.pointers = {};
+    this.dragStart = null;
+    this.dragMoved = 0;
+    this.pinchDist = null;
+    this.resizeTimer = null;
   }
 
   App.prototype.load = function () {
@@ -1399,16 +1441,44 @@ _ACCESS_MAP_JS = """
       : visible.toolkits.length + visible.protected.length;
     var rightItems = hasDestinations ? visible.destinations.length + visible.protected.length : midItems;
     var lanes = Math.max(visible.identities.length, midItems, rightItems, 1);
-    var height = Math.max(lanes * (NH + GAP) + 30, 210);
+    // "World" size -- the content's own layout extent, unrelated to how
+    // much of it is currently visible on screen (that's viewW/viewH below).
+    var worldH = Math.max(lanes * (NH + GAP) + 30, 210);
     var lx = 8, mx = 360;
     var dx = mx + NW + 220;
     var rightmostX = hasDestinations ? dx : mx;
-    var width = rightmostX + NW + 8;
+    var worldW = rightmostX + NW + 8;
+
+    // The <svg>'s own viewBox is sized to the container's rendered CSS
+    // box, not to content -- 1 viewBox unit == 1 CSS pixel. Zoom/pan is
+    // entirely the g-viewport transform below; the outer svg never
+    // resizes itself to fit content the way the old renderer's did.
+    var rect = this.root.getBoundingClientRect();
+    this.viewW = Math.max(rect.width, 100);
+    this.viewH = Math.max(rect.height, 100);
 
     var svg = svgEl("svg", {
-      "class": "graph", viewBox: "0 0 " + width + " " + height,
+      "class": "graph", viewBox: "0 0 " + this.viewW + " " + this.viewH,
       role: "img", "aria-label": "Access map",
     });
+
+    var viewport = svgEl("g", { "class": "g-viewport" });
+    // A transparent full-extent rect so drag-to-pan works starting from
+    // empty space, not just from directly grabbing a node. Kept OUTSIDE
+    // g-content: its own huge extent would otherwise dominate
+    // g-content's getBBox() and break fitToContent's scale calculation.
+    var catcher = svgEl("rect", {
+      "class": "g-pan-catcher", x: -100000, y: -100000, width: 200000, height: 200000,
+      fill: "transparent",
+    });
+    var content = svgEl("g", { "class": "g-content" });
+    var edgeLayer = svgEl("g", {});
+    var nodeLayer = svgEl("g", {});
+    content.appendChild(edgeLayer);
+    content.appendChild(nodeLayer);
+    viewport.appendChild(catcher);
+    viewport.appendChild(content);
+    svg.appendChild(viewport);
 
     var idPos = {}; // node id -> {x, y}
     var byId = {};
@@ -1437,30 +1507,36 @@ _ACCESS_MAP_JS = """
       var title = svgEl("title", {});
       title.textContent = node.label + (node.sub ? " \\u2013 " + node.sub : "");
       g.appendChild(title);
-      g.addEventListener("click", function () { self.onNodeClick(node); });
-      svg.appendChild(g);
+      // A drag that happened to pass over this node must not also open it
+      // -- dragMoved (tracked by the pointer handlers below) is the signal
+      // that this "click" was really the tail end of a pan gesture.
+      g.addEventListener("click", function () {
+        if (self.dragMoved > CLICK_THRESHOLD_PX) { self.dragMoved = 0; return; }
+        self.onNodeClick(node);
+      });
+      nodeLayer.appendChild(g);
     }
 
     visible.identities.forEach(function (node, i) {
-      drawNode(node, lx, laneY(i, visible.identities.length, height), node.kind === "cluster" ? " cluster" : "");
+      drawNode(node, lx, laneY(i, visible.identities.length, worldH), node.kind === "cluster" ? " cluster" : "");
     });
     visible.toolkits.forEach(function (node, i) {
-      drawNode(node, mx, laneY(i, midItems, height), node.kind === "cluster" ? " cluster" : "");
+      drawNode(node, mx, laneY(i, midItems, worldH), node.kind === "cluster" ? " cluster" : "");
     });
     var rightIndex = 0;
     if (hasDestinations) {
       visible.destinations.forEach(function (node) {
-        drawNode(node, dx, laneY(rightIndex, rightItems, height));
+        drawNode(node, dx, laneY(rightIndex, rightItems, worldH));
         rightIndex += 1;
       });
       visible.protected.forEach(function (node) {
-        drawNode(node, dx, laneY(rightIndex, rightItems, height));
+        drawNode(node, dx, laneY(rightIndex, rightItems, worldH));
         rightIndex += 1;
       });
     } else {
       visible.toolkits.forEach(function () { rightIndex += 1; });
       visible.protected.forEach(function (node) {
-        drawNode(node, mx, laneY(rightIndex, rightItems, height));
+        drawNode(node, mx, laneY(rightIndex, rightItems, worldH));
         rightIndex += 1;
       });
     }
@@ -1513,19 +1589,220 @@ _ACCESS_MAP_JS = """
       title.textContent = (byId[e.from] ? byId[e.from].label : "") + " -> "
         + (byId[e.to] ? byId[e.to].label : "") + (e.total ? " (" + e.total + " calls)" : "");
       group.appendChild(title);
-      svg.insertBefore(group, svg.firstChild);
+      // Edges live in edgeLayer, appended before nodeLayer above -- SVG
+      // paints in document order, so they sit behind nodes without an
+      // insertBefore trick.
+      edgeLayer.appendChild(group);
     });
 
-    svg.appendChild(text("text", { "class": "g-n", x: lx, y: 14 }, "IDENTITIES"));
+    nodeLayer.appendChild(text("text", { "class": "g-n", x: lx, y: 14 }, "IDENTITIES"));
     if (hasDestinations) {
-      svg.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS"));
-      svg.appendChild(text("text", { "class": "g-n", x: dx, y: 14 }, "DESTINATIONS AND BLOCKED"));
+      nodeLayer.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS"));
+      nodeLayer.appendChild(text("text", { "class": "g-n", x: dx, y: 14 }, "DESTINATIONS AND BLOCKED"));
     } else {
-      svg.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS AND BLOCKED"));
+      nodeLayer.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS AND BLOCKED"));
     }
 
-    while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
+    // Narrow teardown: only the previous <svg>, never the whole root --
+    // the loading notice (removed once, below) and the control bar
+    // (added once, before the first render) are siblings that must survive
+    // every subsequent render() call triggered by search or cluster-expand.
+    var loading = this.root.querySelector(".map-loading");
+    if (loading) this.root.removeChild(loading);
+    var old = this.root.querySelector("svg.graph");
+    if (old) this.root.removeChild(old);
     this.root.appendChild(svg);
+
+    // Preserve the user's own pan/zoom across data-driven re-renders;
+    // only fit-to-content on the very first render (or after an explicit
+    // Fit click resets nothing -- see ensureControls).
+    if (this.userAdjusted) {
+      this.applyTransform();
+    } else {
+      this.fitToContent();
+    }
+  };
+
+  // -- Pan/zoom --------------------------------------------------------
+
+  App.prototype.svgEl_ = function () {
+    return this.root.querySelector("svg.graph");
+  };
+
+  App.prototype.applyTransform = function () {
+    var svg = this.svgEl_();
+    if (!svg) return;
+    var g = svg.querySelector(".g-viewport");
+    if (g) {
+      g.setAttribute("transform", "translate(" + this.tx + " " + this.ty + ") scale(" + this.k + ")");
+    }
+  };
+
+  // Converts a client-space point (e.g. straight from a mouse/pointer
+  // event) into the <svg>'s own coordinate system via its screen CTM --
+  // NOT a naive pixel delta, since CSS can render the svg at any size
+  // independent of its viewBox.
+  App.prototype.clientToSvg = function (clientX, clientY) {
+    var svg = this.svgEl_();
+    if (!svg) return { x: 0, y: 0 };
+    var ctm = svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    var pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    return pt.matrixTransform(ctm.inverse());
+  };
+
+  // Zoom by `factor`, keeping the world point under (clientX, clientY)
+  // visually fixed -- the standard "zoom to cursor" (or pinch midpoint)
+  // math, incremental so wheel and pinch can both call it per-step.
+  App.prototype.zoomAt = function (clientX, clientY, factor) {
+    var pre = this.clientToSvg(clientX, clientY);
+    var newK = clamp(this.k * factor, MIN_K, MAX_K);
+    var applied = newK / this.k;
+    this.tx = pre.x - (pre.x - this.tx) * applied;
+    this.ty = pre.y - (pre.y - this.ty) * applied;
+    this.k = newK;
+    this.userAdjusted = true;
+    this.applyTransform();
+  };
+
+  App.prototype.zoomBy = function (factor) {
+    var rect = this.root.getBoundingClientRect();
+    this.zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, factor);
+  };
+
+  // Fits the full rendered content into the current viewport (a
+  // `contain`-style scale + centered translate), padded so nodes at the
+  // very edge aren't flush against the container's border.
+  App.prototype.fitToContent = function () {
+    var svg = this.svgEl_();
+    if (!svg) return;
+    // .g-content, not .g-viewport -- the viewport also holds the
+    // full-extent pan-catcher rect, which would otherwise dominate the
+    // bounding box and force the scale to its minimum every time.
+    var g = svg.querySelector(".g-content");
+    if (!g) return;
+    var bbox;
+    try {
+      bbox = g.getBBox();
+    } catch (err) {
+      return;
+    }
+    if (!bbox || !bbox.width || !bbox.height) return;
+    var pad = 24;
+    var k = Math.min(
+      this.viewW / (bbox.width + pad * 2),
+      this.viewH / (bbox.height + pad * 2),
+      MAX_K
+    );
+    this.k = Math.max(k, MIN_K);
+    this.tx = this.viewW / 2 - (bbox.x + bbox.width / 2) * this.k;
+    this.ty = this.viewH / 2 - (bbox.y + bbox.height / 2) * this.k;
+    this.applyTransform();
+  };
+
+  App.prototype.ensureControls = function () {
+    var self = this;
+    var bar = document.createElement("div");
+    bar.className = "map-controls";
+    [
+      ["+", "Zoom in", function () { self.zoomBy(1.3); }],
+      ["\\u2212", "Zoom out", function () { self.zoomBy(1 / 1.3); }],
+      ["Fit", "Fit to content", function () {
+        self.fitToContent();
+        // A one-time action, not a persistent mode: the next unrelated
+        // re-render (search, cluster expand) must not silently re-fit
+        // again on its own -- only another explicit Fit click does that.
+        self.userAdjusted = true;
+      }],
+    ].forEach(function (spec) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "ghost map-control-btn";
+      b.title = spec[1];
+      b.textContent = spec[0];
+      b.addEventListener("click", spec[2]);
+      bar.appendChild(b);
+    });
+    this.root.appendChild(bar);
+  };
+
+  // Wheel-zoom, drag-to-pan, and touch (single-finger pan, two-finger
+  // pinch-zoom) all wired once on the container -- it survives every
+  // render() call, unlike the <svg> element itself, which gets replaced
+  // on each one.
+  App.prototype.wireZoomPan = function () {
+    var self = this;
+    var root = this.root;
+
+    root.addEventListener("wheel", function (e) {
+      e.preventDefault();
+      var factor = Math.pow(1.0015, -e.deltaY);
+      self.zoomAt(e.clientX, e.clientY, factor);
+    }, { passive: false });
+
+    root.addEventListener("pointerdown", function (e) {
+      self.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      try { root.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      if (Object.keys(self.pointers).length >= 2) {
+        self.dragStart = null;
+        self.pinchDist = null;
+      } else {
+        self.dragStart = { x: e.clientX, y: e.clientY, tx: self.tx, ty: self.ty };
+        self.dragMoved = 0;
+      }
+    });
+
+    root.addEventListener("pointermove", function (e) {
+      if (!(e.pointerId in self.pointers)) return;
+      self.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      var ids = Object.keys(self.pointers);
+      if (ids.length >= 2) {
+        var a = self.pointers[ids[0]], b = self.pointers[ids[1]];
+        var dist = Math.hypot(a.x - b.x, a.y - b.y);
+        var mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        if (self.pinchDist) self.zoomAt(mid.x, mid.y, dist / self.pinchDist);
+        self.pinchDist = dist;
+        return;
+      }
+      if (!self.dragStart) return;
+      var dxClient = e.clientX - self.dragStart.x;
+      var dyClient = e.clientY - self.dragStart.y;
+      self.dragMoved = Math.max(self.dragMoved, Math.hypot(dxClient, dyClient));
+      var svg = self.svgEl_();
+      var ctm = svg && svg.getScreenCTM();
+      if (!ctm) return;
+      // Client-pixel deltas -> viewBox-unit deltas via the CTM's own x/y
+      // scale, cheaper than a full clientToSvg point conversion per move.
+      self.tx = self.dragStart.tx + dxClient / ctm.a;
+      self.ty = self.dragStart.ty + dyClient / ctm.d;
+      self.userAdjusted = true;
+      self.applyTransform();
+    });
+
+    function endPointer(e) {
+      delete self.pointers[e.pointerId];
+      try { root.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      self.pinchDist = null;
+      var ids = Object.keys(self.pointers);
+      if (ids.length === 1) {
+        var remaining = self.pointers[ids[0]];
+        self.dragStart = { x: remaining.x, y: remaining.y, tx: self.tx, ty: self.ty };
+        self.dragMoved = 0;
+      } else {
+        self.dragStart = null;
+      }
+    }
+    root.addEventListener("pointerup", endPointer);
+    root.addEventListener("pointercancel", endPointer);
+
+    window.addEventListener("resize", function () {
+      window.clearTimeout(self.resizeTimer);
+      self.resizeTimer = window.setTimeout(function () {
+        if (self.data) self.render();
+      }, 120);
+    });
   };
 
   App.prototype.onNodeClick = function (node) {
@@ -1650,6 +1927,8 @@ _ACCESS_MAP_JS = """
     var root = document.getElementById("access-map-root");
     if (!root) return;
     var app = new App(root);
+    app.ensureControls();
+    app.wireZoomPan();
     app.wireSearch();
     app.load();
   }
@@ -1772,11 +2051,12 @@ def _respond(
 ) -> Response:
     response = HTMLResponse(html_text, status_code=status)
     # No scripts and no external sources by default. The nonce applies only
-    # to the single <style> block. Graph, chart, and forms are inline
-    # HTML/SVG and therefore need neither an image source nor code in the
-    # browser. The one exception is `script_nonce`, opted into by exactly
-    # one route (the interactive access map) -- nonce-scoped to that single
-    # response, never widened to 'self' or a blanket default-src relaxation.
+    # to the single <style> block. Most pages are inline HTML/SVG and
+    # therefore need neither an image source nor code in the browser. The
+    # one exception is `script_nonce`, opted into only by the routes that
+    # render the interactive access map (Overview and /ui/access-map) --
+    # nonce-scoped to that single response, never widened to 'self' or a
+    # blanket default-src relaxation.
     directives = [
         "default-src 'none'",
         f"style-src 'nonce-{nonce}'",
@@ -1801,35 +2081,6 @@ def _respond(
 
 
 # -- Access map ---------------------------------------------------------
-
-
-def _svg_node(
-    x: float, y: float, w: float, h: float, label: str, sub: str, css: str,
-    *, tooltip: str = "", count_text: str = "",
-) -> str:
-    """A node of the access map with optional tooltip and counter.
-
-    The tooltip runs via a native SVG ``<title>`` element: the browser
-    shows it on hover, without scripts being necessary. The
-    counter appears as a third text line when ``count_text`` is not empty.
-    """
-    title = f"<title>{_e(tooltip)}</title>" if tooltip else ""
-    count = (
-        f'<text class="g-count" x="{x + w / 2:.0f}" y="{y + h / 2 + 22:.0f}" '
-        f'text-anchor="middle">{_e(count_text)}</text>'
-        if count_text
-        else ""
-    )
-    return (
-        f'<rect class="g-box {css}" x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" '
-        f'height="{h:.0f}" rx="8"/>'
-        f'<text class="g-t" x="{x + w / 2:.0f}" y="{y + h / 2 - 2:.0f}" '
-        f'text-anchor="middle">{_e(label)}</text>'
-        f'<text class="g-s" x="{x + w / 2:.0f}" y="{y + h / 2 + 11:.0f}" '
-        f'text-anchor="middle">{_e(sub)}</text>'
-        f"{count}"
-        f"{title}"
-    )
 
 
 def _call_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -1916,359 +2167,17 @@ def _pair_call_stats(
     return stats
 
 
-def _access_graph(
-    service: Service, identities: IdentityStore,
-    records: list[dict[str, Any]] | None = None,
-    *, highlight: str = "",
-) -> tuple[str, bool]:
-    """Who reaches what -- as a server-side-computed SVG.
-
-    Direct edges, identity to toolkit. Every call already goes through
-    gatekeeper by definition -- a hub node in the middle repeated that fact
-    without adding one, and cost every edge an extra hop to trace. What is
-    actually worth a look is which identity reaches which toolkit, and
-    which resource no identity reaches at all.
-
-    With ``records`` (audit log), the following are additionally shown: call
-    counters per identity-toolkit pair, success/rejection/error breakdown
-    in the tooltip, and highlighted edges for heavily trafficked pairs.
-
-    ``highlight`` is a case-insensitive substring match against identity IDs,
-    toolkit names, and protected resource names -- the "search" for a graph
-    that has no script to filter it live. A match dims everything else
-    instead of removing it, so the overall shape stays visible.
-    Returns ``(svg, any_match)`` -- the caller uses the second value to show
-    a "nothing matched" note without duplicating the match logic.
-    """
-    q = highlight.strip().lower()
-    # A protected resource can be named "gatekeeper" too -- typically its
-    # own container, guarded against the docker toolkit -- and would
-    # otherwise carry the exact same bold label as nothing in particular.
-    # Disambiguated below regardless of whether a hub node exists.
-    SELF_NAME = "gatekeeper"
-
-    def _mark(name: str) -> str:
-        """CSS class for a node: '', ' match', or ' dim'."""
-        if not q:
-            return ""
-        return " match" if q in name.lower() else " dim"
-
-    idents = sorted(
-        (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
-        key=lambda i: i.id,
-    ) or sorted(identities.identities.values(), key=lambda i: i.id)
-    toolkits = sorted(service.tier1.toolkits.items())
-    protected = sorted(
-        {r for tk in service.tier1.toolkits.values() for r in tk.protected_resources}
-    )
-
-    tools_by_kit: dict[str, set[str]] = {name: set() for name, _ in toolkits}
-    #: toolkit -> destination -> tool IDs, for the third tier below (FR-8.3g).
-    tools_by_kit_and_dest: dict[str, dict[str, set[str]]] = {name: {} for name, _ in toolkits}
-    for tool in service.catalog.tools.values():
-        tools_by_kit.setdefault(tool.toolkit, set()).add(tool.id)
-        if tool.destination:
-            tools_by_kit_and_dest.setdefault(tool.toolkit, {}).setdefault(
-                tool.destination, set()
-            ).add(tool.id)
-
-    # Every destination any toolkit declares, deduplicated by name -- a
-    # destination is a Tier1-global entity, so two toolkits referencing the
-    # same one share a single node, not two.
-    dest_names = sorted({d for _, tk in toolkits for d in tk.destinations})
-    has_destinations = bool(dest_names)
-    dest_granted: dict[str, set[str]] = {
-        d: {
-            tid
-            for name, _ in toolkits
-            for tid in tools_by_kit_and_dest.get(name, {}).get(d, set())
-        }
-        for d in dest_names
-    }
-
-    audit_records = records or []
-    ident_stats = _call_stats(audit_records)
-    kit_stats = _tool_call_stats(audit_records, tools_by_kit)
-    pair_stats = _pair_call_stats(audit_records, tools_by_kit)
-
-    # Threshold for "hot" edges: the 75th percentile of the per-pair total,
-    # but at least 3 calls -- otherwise with little traffic there is
-    # no highlighting, which is correct because there is nothing to highlight.
-    all_totals = [s["total"] for s in pair_stats.values()]
-    hot_threshold = max(
-        sorted(all_totals)[int(len(all_totals) * 0.75)] if all_totals else 0,
-        3,
-    )
-
-    nw, nh, gap = 132.0, 52.0, 14.0
-    if has_destinations:
-        # Three columns: toolkits get their own, destinations+protected
-        # share the last one.
-        mid_items = len(toolkits)
-        right_items = len(dest_names) + len(protected)
-    else:
-        # No toolkit declares a destination anywhere -- exactly the
-        # original two-column layout, toolkits and protected resources
-        # sharing one column and one lane count.
-        mid_items = len(toolkits) + len(protected)
-        right_items = mid_items
-    lanes = max(len(idents), mid_items, right_items, 1)
-    height = max(lanes * (nh + gap) + 30, 210.0)
-    lx, mx = 8.0, 360.0
-    dx = mx + nw + 220.0
-    rightmost_x = dx if has_destinations else mx
-    width = rightmost_x + nw + 8.0
-
-    def lane_y(index: int, count: int) -> float:
-        span = count * nh + max(count - 1, 0) * gap
-        return (height - span) / 2 + index * (nh + gap)
-
-    def _curve(x1: float, y1: float, x2: float, y2: float) -> str:
-        """A single cubic curve between two node edges -- the same shape
-        regardless of how far apart the columns sit, so a longer
-        identity->destination edge still reads as one line, not several
-        stitched together.
-        """
-        span = (x2 - x1) / 2
-        return (
-            f"M{x1:.0f} {y1:.0f} C{x1 + span:.0f} {y1:.0f} "
-            f"{x2 - span:.0f} {y2:.0f} {x2:.0f} {y2:.0f}"
-        )
-
-    def _tooltip_line(label: str, value: int) -> str:
-        return f"  {label}: {value}\n" if value else ""
-
-    def _tooltip_tools(tool_ids: set[str], limit: int = 8) -> str:
-        """Lists the actual tool IDs, not just their count.
-
-        A hover is the only drill-down this page offers without a script --
-        so it has to answer "which four tools", not just repeat the "4" the
-        node already shows. Capped so one toolkit with sixty tools cannot
-        turn the tooltip into a second scrollbar.
-        """
-        ordered = sorted(tool_ids)
-        shown = ordered[:limit]
-        rest = len(ordered) - len(shown)
-        lines = "".join(f"    {t}\n" for t in shown)
-        if rest > 0:
-            lines += f"    (+{rest} more)\n"
-        return lines
-
-    edges, nodes = [], []
-    any_match = False
-    ident_y: dict[str, float] = {}
-    # One color per identity that actually holds a grant -- cycles if there
-    # are more identities than colors. An identity with no tool rights has
-    # no edges to color and stays neutral instead of spending a color on
-    # nothing.
-    ident_color: dict[str, str] = {}
-    for identity in idents:
-        if identity.tools:
-            ident_color[identity.id] = f"c{len(ident_color) % 6 + 1}"
-
-    for index, identity in enumerate(idents):
-        y = lane_y(index, len(idents))
-        ident_y[identity.id] = y
-        mark = _mark(identity.id)
-        any_match = any_match or mark == " match"
-        granted = len(identity.tools)
-        stats = ident_stats.get(identity.id, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
-        total = stats["total"]
-        sub = f"{granted} tools" if granted else "no tool rights"
-        count_text = f"{total} calls" if total else ""
-        tooltip = identity.id
-        if granted:
-            tooltip += f"\n  tools: {granted}\n" + _tooltip_tools(identity.tools)
-        tooltip += "\n  calls:"
-        tooltip += _tooltip_line("ok", stats["ok"])
-        tooltip += _tooltip_line("denied", stats["denied"])
-        tooltip += _tooltip_line("failed", stats["failed"])
-        if not total:
-            tooltip += "  (none in log)"
-        nodes.append(
-            f'<g class="g-node{mark}">'
-            + _svg_node(
-                lx, y, nw, nh, identity.id, sub,
-                ident_color.get(identity.id, ""),
-                tooltip=tooltip, count_text=count_text,
-            )
-            + "</g>"
-        )
-
-    for index, (name, tk) in enumerate(toolkits):
-        y = lane_y(index, mid_items)
-        kit_mark = _mark(name)
-        any_match = any_match or kit_mark == " match"
-        tool_count = len(tools_by_kit.get(name, ()))
-        kit_tools = tools_by_kit.get(name, set())
-        stats = kit_stats.get(name, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
-        total = stats["total"]
-        sub = f"{tool_count} tools"
-        count_text = f"{total} calls" if total else ""
-        tooltip = f"{name}\n  tools: {tool_count}\n"
-        tooltip += _tooltip_tools(kit_tools)
-        tooltip += "\n  calls:"
-        tooltip += _tooltip_line("ok", stats["ok"])
-        tooltip += _tooltip_line("denied", stats["denied"])
-        tooltip += _tooltip_line("failed", stats["failed"])
-        if not total:
-            tooltip += "  (none in log)"
-        nodes.append(
-            f'<g class="g-node{kit_mark}">'
-            + _svg_node(
-                mx, y, nw, nh, name, sub, "",
-                tooltip=tooltip, count_text=count_text,
-            )
-            + "</g>"
-        )
-
-        y2 = y + nh / 2
-        if tk.destinations:
-            # A toolkit that fans out to destinations is no longer the
-            # terminal claim (FR-8.3h): the structural edge to each
-            # destination is always drawn (deploy-time fact), and the
-            # per-identity grant edges are drawn straight to the
-            # destination below instead of stopping here.
-            x1 = mx + nw
-            for dest_name in tk.destinations:
-                dest_mark = _mark(dest_name)
-                if not q:
-                    struct_mark = ""
-                elif kit_mark == " match" or dest_mark == " match":
-                    struct_mark = " match"
-                else:
-                    struct_mark = " dim"
-                dy2 = lane_y(dest_names.index(dest_name), right_items) + nh / 2
-                edges.append(
-                    f'<g class="g-edge-group{struct_mark}">'
-                    f'<path class="g-e none" d="{_curve(x1, y2, dx, dy2)}"/>'
-                    f"<title>{_e(f'{name} reaches {dest_name}')}</title></g>"
-                )
-        else:
-            # No destinations: today's behaviour, unchanged -- one direct
-            # edge per identity holding at least one tool in this toolkit.
-            x1 = lx + nw
-            for identity in idents:
-                if not (identity.tools & kit_tools):
-                    continue
-                id_mark = _mark(identity.id)
-                if not q:
-                    edge_mark = ""
-                elif kit_mark == " match" or id_mark == " match":
-                    edge_mark = " match"
-                else:
-                    edge_mark = " dim"
-                pair = pair_stats.get(
-                    (identity.id, name), {"ok": 0, "denied": 0, "failed": 0, "total": 0}
-                )
-                pair_total = pair["total"]
-                y1 = ident_y[identity.id] + nh / 2
-                edge_css = f"g-e {ident_color[identity.id]}"
-                if pair_total >= hot_threshold and pair_total > 0:
-                    edge_css += " hot"
-                edge_tooltip = f"{identity.id} -> {name}\n  {pair_total} calls"
-                if pair["denied"]:
-                    edge_tooltip += f"  ({pair['denied']} denied)"
-                edges.append(
-                    f'<g class="g-edge-group{edge_mark}"><path class="{edge_css}" '
-                    f'd="{_curve(x1, y1, mx, y2)}"/>'
-                    f"<title>{_e(edge_tooltip)}</title></g>"
-                )
-
-    for index, dest_name in enumerate(dest_names):
-        y = lane_y(index, right_items)
-        dest_mark = _mark(dest_name)
-        any_match = any_match or dest_mark == " match"
-        dest = service.tier1.destination(dest_name)
-        target = _target(dest)
-        granted_tools = dest_granted.get(dest_name, set())
-        sub = f"{len(granted_tools)} tools"
-        tooltip = f"{dest_name}\n  target: {target}\n  tools: {len(granted_tools)}\n"
-        tooltip += _tooltip_tools(granted_tools)
-        nodes.append(
-            f'<g class="g-node{dest_mark}">'
-            + _svg_node(dx, y, nw, nh, dest_name, sub, "", tooltip=tooltip)
-            + "</g>"
-        )
-
-        # Grant edges straight from identity to destination (FR-8.3h) --
-        # not routed through the toolkit node, since the grant itself is on
-        # the destination-qualified tool ID, not on the toolkit.
-        y2 = y + nh / 2
-        for identity in idents:
-            if not (identity.tools & granted_tools):
-                continue
-            id_mark = _mark(identity.id)
-            if not q:
-                edge_mark = ""
-            elif dest_mark == " match" or id_mark == " match":
-                edge_mark = " match"
-            else:
-                edge_mark = " dim"
-            y1 = ident_y[identity.id] + nh / 2
-            edge_css = f"g-e {ident_color[identity.id]}"
-            edge_tooltip = f"{identity.id} -> {dest_name}"
-            edges.append(
-                f'<g class="g-edge-group{edge_mark}"><path class="{edge_css}" '
-                f'd="{_curve(lx + nw, y1, dx, y2)}"/>'
-                f"<title>{_e(edge_tooltip)}</title></g>"
-            )
-
-    protected_x = dx if has_destinations else mx
-    protected_count = right_items if has_destinations else mid_items
-    protected_start = len(dest_names) if has_destinations else len(toolkits)
-    for index, resource in enumerate(protected):
-        y = lane_y(protected_start + index, protected_count)
-        mark = _mark(resource)
-        any_match = any_match or mark == " match"
-        self_ref = resource == SELF_NAME
-        sub = "own container" if self_ref else "blocked"
-        tooltip = (
-            f"{resource}\n  this service's own container -- protected for all "
-            "identities (FR-4.12)"
-            if self_ref
-            else f"{resource}\n  protected for all identities (FR-4.12), "
-            "reachable by no identity"
-        )
-        # No incoming edge: unlike a toolkit, nothing points here from any
-        # identity, and that absence is the fact worth showing -- an edge
-        # drawn from somewhere would have to invent a source for it.
-        nodes.append(
-            f'<g class="g-node{mark}">'
-            + _svg_node(protected_x, y, nw, nh, resource, sub, "deny", tooltip=tooltip)
-            + "</g>"
-        )
-
-    labels = [f'<text class="g-n" x="{lx:.0f}" y="14">IDENTITIES</text>']
-    if has_destinations:
-        labels.append(f'<text class="g-n" x="{mx:.0f}" y="14">TOOLKITS</text>')
-        labels.append(
-            f'<text class="g-n" x="{dx:.0f}" y="14">DESTINATIONS AND BLOCKED</text>'
-        )
-    else:
-        labels.append(f'<text class="g-n" x="{mx:.0f}" y="14">TOOLKITS AND BLOCKED</text>')
-
-    svg = (
-        f'<svg class="graph" viewBox="0 0 {width:.0f} {height:.0f}" '
-        f'role="img" aria-label="Access map">'
-        f'{"".join(edges)}{"".join(nodes)}'
-        f'{"".join(labels)}'
-        "</svg>"
-    )
-    return svg, (any_match if q else True)
-
-
 def _access_graph_data(
     service: Service, identities: IdentityStore,
     records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The access map's node/edge model as JSON, for the interactive view.
 
-    Gathers the same identities, toolkits, destinations, protected
-    resources, and live call stats as `_access_graph`, but returns plain
-    structures instead of laid-out SVG coordinates -- `access-map.js` does
-    the layout, grouping, and filtering client-side, which is what lets it
-    scale past the point a fixed server-rendered canvas can.
+    Gathers identities, toolkits, destinations, protected resources, and
+    live call stats, and returns plain structures rather than laid-out
+    coordinates -- `access-map.js` does the layout, grouping, filtering,
+    and pan/zoom client-side, which is what lets it scale past the point a
+    fixed server-rendered canvas could.
     """
     idents = sorted(
         (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
@@ -2310,9 +2219,7 @@ def _access_graph_data(
     def _zero() -> dict[str, int]:
         return {"ok": 0, "denied": 0, "failed": 0, "total": 0}
 
-    # One color per identity that actually holds a grant, cycling past 6 --
-    # same rule as `_access_graph`, so the two views agree on which
-    # identity is which color.
+    # One color per identity that actually holds a grant, cycling past 6.
     ident_color: dict[str, str] = {}
     for identity in idents:
         if identity.tools:
@@ -2743,25 +2650,50 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
 ACCESS_MAP_TABLE_THRESHOLD = 80
 
 
+def _access_map_legend() -> str:
+    return (
+        '<div class="legend">'
+        "<span>each color is one identity</span>"
+        '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
+        '<span class="l-hot"><i></i>high traffic</span>'
+        "<span>scroll/pinch to zoom, drag to pan, click a node for detail</span>"
+        "</div>"
+    )
+
+
+def _access_map_mount(query: str, *, height_class: str = "") -> str:
+    """The live map's mount point: a container `access-map.js` renders
+
+    into, plus a plain-text notice for the no-script case. Shared by the
+    Overview embed and the dedicated `/ui/access-map` page so the two
+    can't drift out of sync -- there is only one map renderer now, entirely
+    client-side (see `_ACCESS_MAP_JS`).
+    """
+    return (
+        f'<div id="access-map-root" class="map-root{height_class}" '
+        f'data-endpoint="{UI_PREFIX}/access-map/data" data-query="{_e(query)}">'
+        '<p class="muted map-loading">Loading access map&hellip;</p>'
+        '<noscript><p class="muted">Enable JavaScript to view the '
+        "access map.</p></noscript>"
+        "</div>"
+    )
+
+
 def _view_access_map(
     service: Service, identities: IdentityStore, request: Request,
 ) -> str:
     """The interactive access map page.
 
-    Server-renders a filter/view-toggle form and a `<noscript>` fallback
-    (the original server-computed `_access_graph` SVG, unchanged) so the
-    page still works with scripts disabled. With scripts allowed --
-    `access-map.js`, loaded only on this route via a scoped CSP
-    `script-src` nonce (see `_shell`) -- the client fetches
+    Server-renders a filter/view-toggle form and the map's mount point
+    (`_access_map_mount`); `access-map.js` -- loaded only on this route and
+    `/ui/` via a scoped CSP `script-src` nonce (see `_shell`) -- fetches
     `{UI_PREFIX}/access-map/data`, groups nodes by executor/role once past a
-    threshold, and renders a graph the fixed SVG layout could not: nodes
-    expand on click, search narrows to matches plus neighbors instead of
-    just dimming the rest, and a side panel shows detail without leaving
-    the page.
+    threshold, and renders a pannable/zoomable graph: nodes expand on
+    click, search narrows live instead of just dimming, and a side panel
+    shows detail without leaving the page.
     """
     query = request.query_params.get("q", "").strip()
     view = request.query_params.get("view", "").strip()
-    records, _ = read_audit(os.path.join(service.tier1.audit_dir, "audit.jsonl"), limit=400)
 
     dest_names = {d for _, tk in service.tier1.toolkits.items() for d in tk.destinations}
     protected = {r for tk in service.tier1.toolkits.values() for r in tk.protected_resources}
@@ -2793,30 +2725,7 @@ def _view_access_map(
     if show_table:
         body = f'<div class="pad">{_toolkit_access_matrix(service, identities, highlight=query)}</div>'
     else:
-        graph_svg, graph_matched = _access_graph(service, identities, records, highlight=query)
-        no_match_note = (
-            _note(
-                f"No identity, toolkit, or protected resource matches "
-                f"&ldquo;{_e(query)}&rdquo;.",
-                icon="search",
-            )
-            if query and not graph_matched
-            else ""
-        )
-        body = (
-            f"{no_match_note}"
-            '<div id="access-map-root" class="map-root" '
-            f'data-endpoint="{UI_PREFIX}/access-map/data" data-query="{_e(query)}">'
-            f'<p class="muted">Loading access map&hellip;</p>'
-            f"<noscript>{graph_svg}</noscript>"
-            "</div>"
-            '<div class="legend">'
-            "<span>each color is one identity</span>"
-            '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
-            '<span class="l-hot"><i></i>high traffic</span>'
-            "<span>click a node for detail, click a cluster to expand it</span>"
-            "</div>"
-        )
+        body = _access_map_mount(query, height_class=" map-root-full") + _access_map_legend()
 
     return (
         '<div class="card">'
@@ -2836,8 +2745,11 @@ def _view_overview(
     blocked = len(catalog.disabled_by_tier1)
     protected = {r for tk in service.tier1.toolkits.values() for r in tk.protected_resources}
     records, _ = read_audit(os.path.join(service.tier1.audit_dir, "audit.jsonl"), limit=400)
-    # The access map has no script to filter itself live, so it filters on
-    # reload instead: a GET with '?q=' like the audit page's own filters.
+    # Seeds the map's search box on load (?q=) and its GET form remains a
+    # working fallback if scripts are off (a plain reload, filtering
+    # nothing -- the map itself only renders with scripts, see
+    # `_access_map_mount`); `App.prototype.wireSearch` takes over live
+    # filtering client-side once access-map.js runs.
     query = request.query_params.get("q", "").strip() if request is not None else ""
 
     parts = []
@@ -2926,16 +2838,6 @@ def _view_overview(
             "call <code>/health/ready</code></span>"
         )
 
-    graph_svg, graph_matched = _access_graph(service, identities, records, highlight=query)
-    no_match_note = (
-        _note(
-            f"No identity, toolkit, or protected resource matches "
-            f"&ldquo;{_e(query)}&rdquo;.",
-            icon="search",
-        )
-        if query and not graph_matched
-        else ""
-    )
     has_call_activity = any(r.get("kind") == "call" for r in records)
     # With no traffic yet, every edge is thin and every "hot path" feature
     # has nothing to show -- the map can read as broken rather than as a
@@ -2955,23 +2857,18 @@ def _view_overview(
         f'<div class="card-head"><h3>{_icon("share", 14)}Access map</h3>'
         '<span class="spacer"></span>'
         f'<a class="btn" href="{UI_PREFIX}/access-map" title="Open the '
-        f'interactive access map">{_icon("share", 13)}Open interactive map</a>'
-        # GET, not a script: the same query-param pattern the audit filters
-        # already use. Submitting reloads the page with the map re-drawn,
-        # everything that does not match dimmed instead of removed -- so
-        # the shape stays legible at a glance even with one hit selected.
-        f'<form method="get" action="{UI_PREFIX}/" class="filter-row">'
-        f'<input type="text" name="q" value="{_e(query)}" '
+        f'full-page access map">{_icon("share", 13)}Open full page</a>'
+        # GET form: still a working no-script fallback (a plain reload of
+        # this page with ?q= seeded); `App.prototype.wireSearch` intercepts
+        # it and filters live once access-map.js runs.
+        f'<form method="get" action="{UI_PREFIX}/" class="filter-row" id="map-filter">'
+        f'<input type="text" name="q" id="map-search" value="{_e(query)}" '
         'placeholder="Filter identity or toolkit&hellip;">'
         f'<button class="ghost" type="submit" title="Filter">{_icon("search", 14)}</button>'
         + (f'<a class="reset" href="{UI_PREFIX}/">reset</a>' if query else "")
         + "</form></div>"
-        f'<div class="pad">{no_match_note}{graph_svg}'
-        '<div class="legend">'
-        '<span>each color is one identity</span>'
-        '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
-        '<span class="l-hot"><i></i>high traffic</span>'
-        f"</div>{no_traffic_caption}</div></div>"
+        f'<div class="pad">{_access_map_mount(query)}'
+        f"{_access_map_legend()}{no_traffic_caption}</div></div>"
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("server", 14)}Executors</h3></div>'
         f'<div class="pad">{exec_cells}</div></div>'
@@ -4454,9 +4351,10 @@ def build_ui_routes(
         allow_script: bool = False,
     ) -> Response:
         nonce = _nonce()
-        # `allow_script` is opted into by exactly one route (the interactive
-        # access map, see `build_ui_routes`) -- everywhere else this stays
-        # False and the page gets no `script-src` at all, same as before.
+        # `allow_script` is opted into only by the routes that render the
+        # interactive access map (Overview and /ui/access-map, see
+        # `build_ui_routes`) -- everywhere else this stays False and the
+        # page gets no `script-src` at all, same as before.
         script_nonce = _nonce() if allow_script else None
         script_tag = (
             f'<script nonce="{script_nonce}" src="{ACCESS_MAP_JS_PATH}"></script>'
@@ -5355,7 +5253,7 @@ def build_ui_routes(
             f"{UI_PREFIX}/",
             guarded(
                 lambda r, s: _view_overview(service, identities, store, r, s),
-                "Overview", "", icon="gauge",
+                "Overview", "", icon="gauge", allow_script=True,
                 subtitle=(
                     "What actually applies at runtime. The Tier 1 boundaries come "
                     "from <code>toolkits.yaml</code> and cannot change until the "

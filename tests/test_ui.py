@@ -378,31 +378,33 @@ async def test_pages_forbid_scripts(ui_app, ui_identities):
 
 
 async def test_access_map_scopes_script_src_to_itself(ui_app, ui_identities):
-    """The interactive access map is the one route allowed a `script-src`.
+    """The interactive access map is the only thing allowed a `script-src`.
 
-    Every other route must stay exactly as script-free as before -- a
-    future change that widens this by accident should fail here, not get
-    noticed later in a security review.
+    Both routes that render it -- Overview (which now embeds the live map
+    directly) and the dedicated /ui/access-map page -- get a matching
+    nonce'd `script-src`. Every other route must stay exactly as
+    script-free as before -- a future change that widens this by accident
+    should fail here, not get noticed later in a security review.
     """
     _, tokens = ui_identities
     async with _client(ui_app) as client:
         await _login(client)
-        map_page = await client.get(f"{UI_PREFIX}/access-map")
         overview = await client.get(f"{UI_PREFIX}/")
+        map_page = await client.get(f"{UI_PREFIX}/access-map")
         tools = await client.get(f"{UI_PREFIX}/tools")
 
-    map_csp = map_page.headers["content-security-policy"]
-    assert "default-src 'none'" in map_csp
-    assert "script-src 'nonce-" in map_csp
-    assert map_page.headers["cache-control"] == "no-store"
-    # The script tag on the page must carry that exact nonce.
-    nonce = map_csp.split("script-src 'nonce-")[1].split("'")[0]
-    assert f'nonce="{nonce}"' in map_page.text
-
-    for page in (overview, tools):
+    for page in (overview, map_page):
         csp = page.headers["content-security-policy"]
         assert "default-src 'none'" in csp
-        assert "script-src" not in csp
+        assert "script-src 'nonce-" in csp
+        assert page.headers["cache-control"] == "no-store"
+        # The script tag on the page must carry that exact nonce.
+        nonce = csp.split("script-src 'nonce-")[1].split("'")[0]
+        assert f'nonce="{nonce}"' in page.text
+
+    tools_csp = tools.headers["content-security-policy"]
+    assert "default-src 'none'" in tools_csp
+    assert "script-src" not in tools_csp
 
 
 async def test_access_map_data_endpoint(ui_app, ui_identities):
@@ -420,9 +422,26 @@ async def test_access_map_data_endpoint(ui_app, ui_identities):
     assert "toolkit" in kinds
     node_ids = {n["id"] for n in data["nodes"]}
     # `root` is admin with no tool grants -- filtered out the same way
-    # `_tool_matrix`/`_access_graph` omit UI-role identities with nothing
-    # granted. `bot` has grants, so it stays.
+    # `_tool_matrix` omits UI-role identities with nothing granted.
+    # `bot` has grants, so it stays.
     assert "identity:bot" in node_ids
+
+
+async def test_overview_embeds_the_live_map(ui_app, ui_identities):
+    """Overview shows the interactive map directly -- no separate click,
+
+    no server-rendered SVG fallback (that renderer was removed; a plain
+    notice covers the no-script case instead).
+    """
+    _, tokens = ui_identities
+    async with _client(ui_app) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/")
+    assert 'id="access-map-root"' in page.text
+    assert f'data-endpoint="{UI_PREFIX}/access-map/data"' in page.text
+    assert "Enable JavaScript to view the access map." in page.text
+    # The map itself is no longer server-rendered SVG -- only icons are.
+    assert 'aria-label="Access map"' not in page.text
 
 
 async def test_access_map_js_requires_session(ui_app):
