@@ -1893,10 +1893,15 @@ _ACCESS_MAP_JS = """
       this.panelBody.appendChild(label);
       var pills = document.createElement("div");
       pills.className = "pills";
+      // Identity nodes carry {id, scopes} per tool (which scope THIS
+      // grant needs); toolkit/destination nodes carry plain id strings
+      // (just "what exists here") -- one loop handles both shapes.
       node.granted_tools.forEach(function (t) {
         var pill = document.createElement("span");
         pill.className = "pill mono quiet";
-        pill.textContent = t;
+        var id = (t && typeof t === "object") ? t.id : t;
+        var scopes = (t && typeof t === "object") ? t.scopes : null;
+        pill.textContent = scopes && scopes.length ? id + " \\u00b7 " + scopes.join(", ") : id;
         pills.appendChild(pill);
       });
       this.panelBody.appendChild(pills);
@@ -2243,7 +2248,17 @@ def _access_graph_data(
             "sub": f"{len(identity.tools)} tools" if identity.tools else "no tool rights",
             "group": identity.role,
             "icon": "key", "logo_key": None, "color_class": ident_color.get(identity.id, ""),
-            "calls": stats, "granted_tools": sorted(identity.tools)[:20],
+            "calls": stats,
+            # Each tool paired with the scope(s) it requires -- not just
+            # the identity's own scopes as a flat list, but which scope
+            # each concrete grant actually needs (a tool not in the
+            # catalog, if the grant outlived a delete/rename, is skipped
+            # rather than guessed at).
+            "granted_tools": [
+                {"id": tid, "scopes": list(service.catalog.tools[tid].required_scopes)}
+                for tid in sorted(identity.tools)[:20]
+                if tid in service.catalog.tools
+            ],
         })
 
     for name, tk in toolkits:
@@ -2255,6 +2270,9 @@ def _access_graph_data(
             "icon": _executor_icon(tk.executor), "logo_key": _guess_integration(name),
             "color_class": "", "calls": stats, "granted_tools": sorted(kit_tools)[:20],
             "destinations": list(tk.destinations),
+            # Where this toolkit itself connects to -- distinct from its
+            # `destinations` fan-out, and shown even when it has none.
+            "target": _target(tk),
         })
         if tk.destinations:
             for dest_name in tk.destinations:

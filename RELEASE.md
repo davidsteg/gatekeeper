@@ -60,6 +60,26 @@ cannot. It is in every release.
 
 ---
 
+## 0.13.1
+
+**Access map: a toolkit's connection target, and per-tool scopes on the identity panel.**
+
+Two things the map's detail panel never showed, on any version: where a
+toolkit actually connects to, and which scope a specific granted tool
+needs (as opposed to the identity's scopes as a flat, undifferentiated
+list).
+
+- **Toolkit nodes now carry a `target`** (`docker_host`/`base_url`/`ws_url`
+  — whichever the toolkit sets), reusing the same `_target()` helper
+  already computing this for multi-destination nodes. The detail panel's
+  existing generic `Target` row picks it up automatically — no JS change
+  needed for this half.
+- **An identity's granted-tool pills now show that tool's own
+  `required_scopes` inline** (`tool.id · scope:pattern`), not just the
+  identity's scopes as a separate list. Toolkit/destination nodes' tool
+  pills are unaffected -- scopes only apply to what an identity actually
+  holds.
+
 ## 0.13.0
 
 **Hermes can now propose a brand-new Tier 1 toolkit through `/admin/mcp`; a human's one click validates, writes `toolkits.yaml`, and reloads it live — no redeploy, no restart.**
