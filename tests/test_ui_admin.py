@@ -830,3 +830,37 @@ def test_a_password_on_an_agent_role_never_reaches_the_file(admin_env):
     assert admin_env["identities_path"].read_text(encoding="utf-8") == before
     # The file still loads -- that is the actual finding.
     assert load_identities(str(admin_env["identities_path"])).identities["eye"].role == "viewer"
+
+
+async def test_pending_page_distinguishes_real_from_missing_tools_in_a_grant(admin_env):
+    """A `grant_set` proposal naming a tool that doesn't exist must not look
+    the same on /ui/pending as one naming a real, enabled tool -- otherwise
+    a human can approve a grant to nothing without ever noticing (the gap
+    found and fixed after the first real-world use of /admin/mcp).
+    """
+    pending = admin_env["pending"]
+    pending.propose(
+        action="grant_set",
+        actor="hermes",
+        payload={
+            "identity_id": "bot",
+            "role": "agent",
+            "tools": ["demo.show", "demo.ghost"],
+            "scopes": ["stack:*"],
+        },
+        base_rev=admin_env["store"].identities_revision(),
+    )
+
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/pending")
+
+    assert "demo.show" in page.text
+    assert "demo.ghost" in page.text
+    # The real, enabled tool is marked as such -- not lumped in with the
+    # missing one under a single "2 tool grant(s)" count.
+    assert "enabled" in page.text
+    # The nonexistent tool is unmistakably flagged, not silently accepted.
+    assert "missing" in page.text
+    assert "no such tool in the catalog" in page.text
