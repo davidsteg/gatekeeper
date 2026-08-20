@@ -223,6 +223,7 @@ def build_app(
     store: Any = None,
     credentials: Any = None,
     pending: Any = None,
+    toolkit_proposals: Any = None,
 ) -> Starlette:
     """Builds the complete ASGI application.
 
@@ -235,8 +236,9 @@ def build_app(
 
     `/admin/mcp` (FR-2.8) is mounted under exactly the same condition as
     `/ui`'s write functions: a writable `ConfigStore`. `pending` (a
-    `PendingStore`) must be supplied whenever `store` is -- `__main__.py`
-    constructs both together; a caller passing one without the other is a
+    `PendingStore`) and `toolkit_proposals` (a `ToolkitProposalStore`) must
+    both be supplied whenever `store` is -- `__main__.py` constructs all
+    three together; a caller passing `store` without either is a
     programming error, not a runtime configuration to degrade gracefully
     from.
     """
@@ -281,6 +283,7 @@ def build_app(
             build_ui_routes(
                 service=service, identities=identities, audit=audit, store=store,
                 credentials=credentials, pending=pending,
+                toolkit_proposals=toolkit_proposals,
             )
         )
 
@@ -307,7 +310,15 @@ def build_app(
                 "__main__.py constructs a PendingStore alongside the "
                 "ConfigStore for exactly this."
             )
-        admin_service = AdminService(store=store, pending=pending)
+        if toolkit_proposals is None:
+            raise ValueError(
+                "build_app(store=...) requires toolkit_proposals=... as "
+                "well -- __main__.py constructs a ToolkitProposalStore "
+                "alongside the ConfigStore/PendingStore for exactly this."
+            )
+        admin_service = AdminService(
+            store=store, pending=pending, toolkit_proposals=toolkit_proposals
+        )
         admin_mcp_server = build_admin_mcp_server(admin_service)
         admin_app = admin_mcp_server.streamable_http_app(
             streamable_http_path=ADMIN_MCP_PATH,

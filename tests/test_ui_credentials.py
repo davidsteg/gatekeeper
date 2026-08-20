@@ -18,6 +18,7 @@ from gatekeeper.pending import PendingStore
 from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore
+from gatekeeper.toolkit_proposals import ToolkitProposalStore
 from gatekeeper.ui import UI_PREFIX
 import yaml
 
@@ -68,9 +69,17 @@ def credentials_env(tmp_path, tier1, tool_specs, monkeypatch):
     )
     credentials = CredentialStore(path=str(tmp_path / "credentials.yaml"), audit=audit)
     pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "toolkit-proposals.yaml"),
+        audit=audit,
+        service=service,
+        toolkits_path=str(tmp_path / "toolkits.yaml"),
+        tools_path=str(tools_path),
+        identities_path=str(identities_path),
+    )
     app = build_app(
         service=service, identities=identities, audit=audit, ui=True, store=store,
-        credentials=credentials, pending=pending,
+        credentials=credentials, pending=pending, toolkit_proposals=toolkit_proposals,
     )
     return {"app": app, "credentials": credentials, "tier1": tier1}
 
@@ -234,9 +243,17 @@ async def test_used_by_toolkit_shown(tmp_path, tool_specs, tier1, monkeypatch):
         actor="test", rev="",
     )
     pending = PendingStore(path=str(tmp_path / "pending2.yaml"), audit=audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "toolkit-proposals2.yaml"),
+        audit=audit,
+        service=service,
+        toolkits_path=str(toolkits_path),
+        tools_path=str(tools_path),
+        identities_path=str(identities_path),
+    )
     app = build_app(
         service=service, identities=identities, audit=audit, ui=True, store=store,
-        credentials=credentials, pending=pending,
+        credentials=credentials, pending=pending, toolkit_proposals=toolkit_proposals,
     )
     async with _client(app) as client:
         await _login(client)

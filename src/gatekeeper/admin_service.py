@@ -42,6 +42,7 @@ from .catalog import normalize_tool_entry, parse_tool_spec
 from .errors import ConfigError
 from .pending import PendingAction, PendingStore
 from .store import ConfigStore, WriteRefused
+from .toolkit_proposals import ToolkitProposalStore
 
 # Imported lazily inside `audit_query` (not at module level): `ui.py`
 # imports `apply_pending` from this module for its `/ui/pending` routes,
@@ -70,6 +71,7 @@ def _require_dict(args: dict[str, Any], name: str) -> dict[str, Any]:
 class AdminService:
     store: ConfigStore
     pending: PendingStore
+    toolkit_proposals: ToolkitProposalStore
 
     #: Exact set of action names reachable via `call` -- deliberately an
     #: explicit allowlist rather than a raw `getattr`, so a private helper
@@ -149,6 +151,29 @@ class AdminService:
         status = args.get("status") or None
         items = self.pending.list(status=status)
         return {"pending": [i.to_spec() for i in items]}
+
+    def toolkit_list(self, _actor: str, _args: dict[str, Any]) -> dict[str, Any]:
+        """Lists live Tier 1 toolkits + destinations, so Hermes can check
+        reality (what toolkit/destination names already exist, what a
+        toolkit's executor/limits are) instead of guessing before drafting
+        a proposal. Read-only -- Tier 1 itself is never written from here.
+        """
+        tier1 = self.store.service.tier1
+        toolkits = [
+            {
+                "name": name,
+                "executor": tk.executor,
+                "binaries": list(tk.binaries),
+                "denied_args": list(tk.denied_args),
+                "path_roots": list(tk.path_roots),
+                "protected_resources": list(tk.protected_resources),
+                "max_timeout_seconds": tk.max_timeout_seconds,
+                "max_output_bytes": tk.max_output_bytes,
+                "destinations": list(tk.destinations),
+            }
+            for name, tk in sorted(tier1.toolkits.items())
+        ]
+        return {"toolkits": toolkits, "destinations": sorted(tier1.destinations)}
 
     # -- Always auto-apply ---------------------------------------------------
 
@@ -263,6 +288,20 @@ class AdminService:
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
 
+    def toolkit_propose(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Always writes to `ToolkitProposalStore`, never auto-applies --
+        unlike every other action in this class, a toolkit changes Tier 1
+        (REQUIREMENTS.md §6), so there is no "low-risk" variant of this at
+        all, not even a read-category one. Deliberately not written to
+        `PendingStore`: a toolkit proposal must never be reachable through
+        the same review surface as an ordinary tool/grant change (see
+        `toolkit_proposals.py`).
+        """
+        name = _require_str(args, "name")
+        spec = dict(_require_dict(args, "spec"))
+        item = self.toolkit_proposals.propose(name=name, spec=spec, actor=actor)
+        return {"applied": False, "pending": True, "proposal_id": item.id}
+
 
 #: The complete, fixed set of `admin.*` actions reachable from `/admin/mcp`
 #: (FR-2.8/2.9). `admin_server.py`'s tool list is asserted to match this
@@ -280,6 +319,8 @@ _EXPOSED: tuple[str, ...] = (
     "grant_set",
     "audit_query",
     "pending_list",
+    "toolkit_list",
+    "toolkit_propose",
 )
 
 EXPOSED_ACTIONS: frozenset[str] = frozenset(_EXPOSED)
