@@ -83,6 +83,13 @@ from .tier1 import Destination, Toolkit
 #: without a Bearer token -- the handlers check the session instead.
 UI_PREFIX = "/ui"
 
+#: Served from under `UI_PREFIX` (session-gated like every other UI route,
+#: see `build_ui_routes`) rather than as a public static asset -- the page
+#: that references it already requires a session, so nothing is gained by
+#: making the script fetchable without one, and it avoids adding another
+#: entry to `UI_COMPANION_PATHS`/`AuthMiddleware` for a single small file.
+ACCESS_MAP_JS_PATH = f"{UI_PREFIX}/access-map.js"
+
 #: Paths that a browser hits on its own as soon as someone types the
 #: address. Without special handling, every visit would run into the token requirement
 #: and produce two `auth_failure` entries -- but the failed attempt is the
@@ -379,6 +386,23 @@ _EXECUTOR_ICONS = {
 
 def _executor_icon(executor: str) -> str:
     return _EXECUTOR_ICONS.get(executor.strip().lower(), "package")
+
+
+def _guess_integration(toolkit_name: str) -> str | None:
+    """Best-effort match of an admin-named toolkit to a known integration.
+
+    `Toolkit` has no field linking back to `Integration` -- the name in
+    `toolkits.yaml` is free text the admin chose -- so this is containment
+    matching against known integration keys, not a guarantee. Used only to
+    pick a service logo for the access map; falls back to the executor icon
+    (`_executor_icon`) when nothing matches, same fallback spirit as
+    `_view_tools`'s own icon lookup.
+    """
+    name = toolkit_name.strip().lower()
+    for key in INTEGRATIONS:
+        if key in name:
+            return key
+    return None
 
 
 def _target(obj: Toolkit | Destination) -> str:
@@ -837,6 +861,36 @@ td.ops form { display: inline; }
 .g-node.dim, .g-edge-group.dim { opacity: .2; }
 .g-node.match .g-box { stroke: var(--accent); stroke-width: 2; }
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
+
+/* -- Interactive access map (access-map.js) -- */
+.btn.active { color: var(--fg); border-color: var(--accent); background: var(--accent-soft); }
+.map-root { position: relative; }
+.map-root .g-node { cursor: pointer; }
+.map-root .g-node.cluster .g-box { stroke-dasharray: 3 3; }
+.map-root .g-logo { pointer-events: none; }
+.map-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(26rem, 92vw);
+  background: var(--surface); border-left: 1px solid var(--line);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, .18);
+  transform: translateX(100%); transition: transform .18s ease-out;
+  z-index: 40; overflow-y: auto;
+}
+.map-panel.open { transform: translateX(0); }
+.map-panel-head {
+  display: flex; align-items: center; gap: .5rem; padding: .9rem 1rem;
+  border-bottom: 1px solid var(--line); position: sticky; top: 0;
+  background: var(--surface);
+}
+.map-panel-head h4 { margin: 0; font-size: .95rem; flex: 1; }
+.map-panel-close { cursor: pointer; background: none; border: none; color: var(--muted); }
+.map-panel-close:hover { color: var(--fg); }
+.map-panel-body { padding: 1rem; font-size: .85rem; }
+.map-panel-body .row-l { color: var(--muted); }
+.map-backdrop {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, .25); z-index: 39;
+  opacity: 0; pointer-events: none; transition: opacity .18s ease-out;
+}
+.map-backdrop.open { opacity: 1; pointer-events: auto; }
 /* CSP is `style-src 'nonce-...'`, which does not cover inline `style=""`
    attributes -- only a `<style>` block with the nonce runs. An inline
    style is silently dropped, not an error the eye catches, so one-off
@@ -1220,6 +1274,395 @@ def _release_notes_modal() -> str:
     )
 
 
+#: The interactive access map's client-side renderer. Vanilla ES2019, no
+#: dependencies, no build step -- loaded only by `/ui/access-map` via a
+#: script-src nonce scoped to that one route (see `_shell`/`_respond`).
+#: Never touches `innerHTML` with server-derived data: every label, tool
+#: ID, and identity name that could contain hostile audit-log-sourced text
+#: is set through `textContent`, so nothing rendered here can execute.
+_ACCESS_MAP_JS = """
+(function () {
+  "use strict";
+
+  var NW = 132, NH = 52, GAP = 14;
+  var TOOLKIT_GROUP_THRESHOLD = 8;
+  var IDENTITY_GROUP_THRESHOLD = 20;
+
+  function el(tag, attrs, ns) {
+    var node = ns ? document.createElementNS(ns, tag) : document.createElement(tag);
+    for (var k in attrs) {
+      if (Object.prototype.hasOwnProperty.call(attrs, k)) node.setAttribute(k, attrs[k]);
+    }
+    return node;
+  }
+
+  function svgEl(tag, attrs) {
+    return el(tag, attrs, "http://www.w3.org/2000/svg");
+  }
+
+  function text(tag, attrs, value) {
+    var node = svgEl(tag, attrs);
+    node.textContent = value;
+    return node;
+  }
+
+  function laneY(index, count, height) {
+    var span = count * NH + Math.max(count - 1, 0) * GAP;
+    return (height - span) / 2 + index * (NH + GAP);
+  }
+
+  function curve(x1, y1, x2, y2) {
+    var span = (x2 - x1) / 2;
+    return "M" + x1 + " " + y1 + " C" + (x1 + span) + " " + y1 + " "
+      + (x2 - span) + " " + y2 + " " + x2 + " " + y2;
+  }
+
+  function callTotal(calls) {
+    return calls && calls.total ? calls.total : 0;
+  }
+
+  // -- Grouping: collapse toolkits by executor and identities by role once
+  // past a threshold, so hundreds of nodes render as a handful of clusters
+  // by default. Expanding one cluster (click) only ever affects that lane.
+  function groupNodes(nodes, kind, threshold, expanded) {
+    var of_kind = nodes.filter(function (n) { return n.kind === kind; });
+    if (of_kind.length <= threshold) return of_kind;
+    var byGroup = {};
+    var order = [];
+    of_kind.forEach(function (n) {
+      var g = n.group || "(none)";
+      if (!byGroup[g]) { byGroup[g] = []; order.push(g); }
+      byGroup[g].push(n);
+    });
+    var out = [];
+    order.sort().forEach(function (g) {
+      var members = byGroup[g];
+      if (expanded[kind + ":" + g] || members.length === 1) {
+        out = out.concat(members);
+        return;
+      }
+      var calls = { ok: 0, denied: 0, failed: 0, total: 0 };
+      members.forEach(function (m) {
+        calls.ok += m.calls.ok; calls.denied += m.calls.denied;
+        calls.failed += m.calls.failed; calls.total += m.calls.total;
+      });
+      var noun = kind === "identity" ? "identit" + (members.length === 1 ? "y" : "ies")
+        : kind + (members.length === 1 ? "" : "s");
+      out.push({
+        id: "cluster:" + kind + ":" + g, kind: "cluster", label: g,
+        sub: members.length + " " + noun,
+        group: g, icon: members[0].icon, logo_key: null, color_class: "",
+        calls: calls, granted_tools: [], cluster_kind: kind, members: members,
+      });
+    });
+    return out;
+  }
+
+  function App(root) {
+    this.root = root;
+    this.endpoint = root.getAttribute("data-endpoint");
+    this.query = (root.getAttribute("data-query") || "").toLowerCase();
+    this.expanded = {};
+    this.data = null;
+    this.panel = null;
+    this.backdrop = null;
+  }
+
+  App.prototype.load = function () {
+    var self = this;
+    fetch(this.endpoint, { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(function (r) { if (!r.ok) throw new Error("fetch failed"); return r.json(); })
+      .then(function (data) { self.data = data; self.render(); })
+      .catch(function () {
+        var p = document.createElement("p");
+        p.className = "muted";
+        p.textContent = "Could not load the interactive map. The page below still works without scripts.";
+        self.root.insertBefore(p, self.root.firstChild);
+      });
+  };
+
+  App.prototype.visibleNodes = function () {
+    var identities = groupNodes(this.data.nodes, "identity", IDENTITY_GROUP_THRESHOLD, this.expanded);
+    var toolkits = groupNodes(this.data.nodes, "toolkit", TOOLKIT_GROUP_THRESHOLD, this.expanded);
+    var destinations = this.data.nodes.filter(function (n) { return n.kind === "destination"; });
+    var protected_ = this.data.nodes.filter(function (n) { return n.kind === "protected"; });
+    return { identities: identities, toolkits: toolkits, destinations: destinations, protected: protected_ };
+  };
+
+  App.prototype.render = function () {
+    var self = this;
+    var q = this.query;
+    var visible = this.visibleNodes();
+    var hasDestinations = this.data.meta.has_destinations;
+
+    var midItems = hasDestinations ? visible.toolkits.length
+      : visible.toolkits.length + visible.protected.length;
+    var rightItems = hasDestinations ? visible.destinations.length + visible.protected.length : midItems;
+    var lanes = Math.max(visible.identities.length, midItems, rightItems, 1);
+    var height = Math.max(lanes * (NH + GAP) + 30, 210);
+    var lx = 8, mx = 360;
+    var dx = mx + NW + 220;
+    var rightmostX = hasDestinations ? dx : mx;
+    var width = rightmostX + NW + 8;
+
+    var svg = svgEl("svg", {
+      "class": "graph", viewBox: "0 0 " + width + " " + height,
+      role: "img", "aria-label": "Access map",
+    });
+
+    var idPos = {}; // node id -> {x, y}
+    var byId = {};
+    this.data.nodes.forEach(function (n) { byId[n.id] = n; });
+
+    function matches(node) {
+      if (!q) return null;
+      return (node.label || "").toLowerCase().indexOf(q) !== -1 ? "match" : "dim";
+    }
+
+    function drawNode(node, x, y, extraCls) {
+      idPos[node.id] = { x: x, y: y };
+      var mark = matches(node);
+      var g = svgEl("g", { "class": "g-node" + (mark ? " " + mark : "") + (extraCls || "") });
+      g.dataset.nodeId = node.id;
+      var box = svgEl("rect", {
+        "class": "g-box " + (node.color_class || ""), x: x, y: y, width: NW, height: NH, rx: 8,
+      });
+      g.appendChild(box);
+      g.appendChild(text("text", { "class": "g-t", x: x + NW / 2, y: y + NH / 2 - 2, "text-anchor": "middle" }, node.label));
+      g.appendChild(text("text", { "class": "g-s", x: x + NW / 2, y: y + NH / 2 + 11, "text-anchor": "middle" }, node.sub));
+      var total = callTotal(node.calls);
+      if (total) {
+        g.appendChild(text("text", { "class": "g-count", x: x + NW / 2, y: y + NH / 2 + 22, "text-anchor": "middle" }, total + " calls"));
+      }
+      var title = svgEl("title", {});
+      title.textContent = node.label + (node.sub ? " \\u2013 " + node.sub : "");
+      g.appendChild(title);
+      g.addEventListener("click", function () { self.onNodeClick(node); });
+      svg.appendChild(g);
+    }
+
+    visible.identities.forEach(function (node, i) {
+      drawNode(node, lx, laneY(i, visible.identities.length, height), node.kind === "cluster" ? " cluster" : "");
+    });
+    visible.toolkits.forEach(function (node, i) {
+      drawNode(node, mx, laneY(i, midItems, height), node.kind === "cluster" ? " cluster" : "");
+    });
+    var rightIndex = 0;
+    if (hasDestinations) {
+      visible.destinations.forEach(function (node) {
+        drawNode(node, dx, laneY(rightIndex, rightItems, height));
+        rightIndex += 1;
+      });
+      visible.protected.forEach(function (node) {
+        drawNode(node, dx, laneY(rightIndex, rightItems, height));
+        rightIndex += 1;
+      });
+    } else {
+      visible.toolkits.forEach(function () { rightIndex += 1; });
+      visible.protected.forEach(function (node) {
+        drawNode(node, mx, laneY(rightIndex, rightItems, height));
+        rightIndex += 1;
+      });
+    }
+
+    // Edges: only drawn between two currently-visible endpoints -- a
+    // collapsed cluster's member edges fold into one edge from/to the
+    // cluster node instead of disappearing.
+    function resolve(rawId) {
+      if (idPos[rawId]) return rawId;
+      var node = byId[rawId];
+      if (!node) return null;
+      var prefix = node.kind + ":" + (node.group || "(none)");
+      var clusterId = "cluster:" + prefix;
+      return idPos[clusterId] ? clusterId : null;
+    }
+
+    var drawnPairs = {};
+    this.data.edges.forEach(function (edge) {
+      var fromId = resolve(edge.from);
+      var toId = resolve(edge.to);
+      if (!fromId || !toId || fromId === toId) return;
+      var pairKey = fromId + ">" + toId;
+      var already = drawnPairs[pairKey];
+      if (already) {
+        already.total += callTotal(edge.calls);
+        return;
+      }
+      var rec = { total: callTotal(edge.calls), hot: edge.hot, kind: edge.kind, from: fromId, to: toId };
+      drawnPairs[pairKey] = rec;
+    });
+
+    Object.keys(drawnPairs).forEach(function (key) {
+      var e = drawnPairs[key];
+      var p1 = idPos[e.from], p2 = idPos[e.to];
+      if (!p1 || !p2) return;
+      var y1 = p1.y + NH / 2, y2 = p2.y + NH / 2;
+      var x1 = p1.x + NW, x2 = p2.x;
+      var fromNode = byId[e.from] || { color_class: "" };
+      var cls = "g-e " + (e.kind === "structural" ? "none" : (fromNode.color_class || ""));
+      if (e.hot) cls += " hot";
+      var mark = "";
+      if (q) {
+        var f = matches(byId[e.from] || {}), t = matches(byId[e.to] || {});
+        mark = (f === "match" || t === "match") ? " match" : " dim";
+      }
+      var group = svgEl("g", { "class": "g-edge-group" + mark });
+      var path = svgEl("path", { "class": cls, d: curve(x1, y1, x2, y2) });
+      group.appendChild(path);
+      var title = svgEl("title", {});
+      title.textContent = (byId[e.from] ? byId[e.from].label : "") + " -> "
+        + (byId[e.to] ? byId[e.to].label : "") + (e.total ? " (" + e.total + " calls)" : "");
+      group.appendChild(title);
+      svg.insertBefore(group, svg.firstChild);
+    });
+
+    svg.appendChild(text("text", { "class": "g-n", x: lx, y: 14 }, "IDENTITIES"));
+    if (hasDestinations) {
+      svg.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS"));
+      svg.appendChild(text("text", { "class": "g-n", x: dx, y: 14 }, "DESTINATIONS AND BLOCKED"));
+    } else {
+      svg.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS AND BLOCKED"));
+    }
+
+    while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
+    this.root.appendChild(svg);
+  };
+
+  App.prototype.onNodeClick = function (node) {
+    if (node.kind === "cluster") {
+      this.expanded[node.cluster_kind + ":" + node.group] = true;
+      this.render();
+      return;
+    }
+    this.openPanel(node);
+  };
+
+  App.prototype.ensurePanel = function () {
+    if (this.panel) return;
+    var self = this;
+    var backdrop = document.createElement("div");
+    backdrop.className = "map-backdrop";
+    backdrop.addEventListener("click", function () { self.closePanel(); });
+    document.body.appendChild(backdrop);
+
+    var panel = document.createElement("div");
+    panel.className = "map-panel";
+    var head = document.createElement("div");
+    head.className = "map-panel-head";
+    var h4 = document.createElement("h4");
+    var closeBtn = document.createElement("button");
+    closeBtn.className = "map-panel-close";
+    closeBtn.type = "button";
+    closeBtn.setAttribute("aria-label", "Close");
+    closeBtn.textContent = "\\u00d7";
+    closeBtn.addEventListener("click", function () { self.closePanel(); });
+    head.appendChild(h4);
+    head.appendChild(closeBtn);
+    var body = document.createElement("div");
+    body.className = "map-panel-body";
+    panel.appendChild(head);
+    panel.appendChild(body);
+    document.body.appendChild(panel);
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") self.closePanel();
+    });
+
+    this.panel = panel;
+    this.backdrop = backdrop;
+    this.panelTitle = h4;
+    this.panelBody = body;
+  };
+
+  function row(label, value) {
+    var r = document.createElement("div");
+    r.className = "row";
+    var l = document.createElement("div");
+    l.className = "row-l";
+    l.textContent = label;
+    var v = document.createElement("div");
+    v.textContent = value;
+    r.appendChild(l);
+    r.appendChild(v);
+    return r;
+  }
+
+  App.prototype.openPanel = function (node) {
+    this.ensurePanel();
+    this.panelTitle.textContent = node.label;
+    while (this.panelBody.firstChild) this.panelBody.removeChild(this.panelBody.firstChild);
+    this.panelBody.appendChild(row("Kind", node.kind));
+    this.panelBody.appendChild(row("Detail", node.sub));
+    if (node.group) this.panelBody.appendChild(row(node.kind === "identity" ? "Role" : "Executor", node.group));
+    if (node.target) this.panelBody.appendChild(row("Target", node.target));
+    var calls = node.calls || { ok: 0, denied: 0, failed: 0, total: 0 };
+    this.panelBody.appendChild(row("Calls", calls.total + " total (" + calls.ok + " ok, "
+      + calls.denied + " denied, " + calls.failed + " failed)"));
+    if (node.destinations && node.destinations.length) {
+      this.panelBody.appendChild(row("Destinations", node.destinations.join(", ")));
+    }
+    if (node.granted_tools && node.granted_tools.length) {
+      var label = document.createElement("div");
+      label.className = "row-l";
+      label.textContent = "Tools";
+      this.panelBody.appendChild(label);
+      var pills = document.createElement("div");
+      pills.className = "pills";
+      node.granted_tools.forEach(function (t) {
+        var pill = document.createElement("span");
+        pill.className = "pill mono quiet";
+        pill.textContent = t;
+        pills.appendChild(pill);
+      });
+      this.panelBody.appendChild(pills);
+    }
+    this.panel.classList.add("open");
+    this.backdrop.classList.add("open");
+  };
+
+  App.prototype.closePanel = function () {
+    if (!this.panel) return;
+    this.panel.classList.remove("open");
+    this.backdrop.classList.remove("open");
+  };
+
+  App.prototype.wireSearch = function () {
+    var self = this;
+    var input = document.getElementById("map-search");
+    var form = document.getElementById("map-filter");
+    if (!input || !form) return;
+    form.addEventListener("submit", function (e) {
+      // Once the client-side renderer is live, filtering happens without a
+      // reload -- the GET form is only the no-script fallback.
+      e.preventDefault();
+    });
+    var timer = null;
+    input.addEventListener("input", function () {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(function () {
+        self.query = input.value.toLowerCase();
+        self.render();
+      }, 150);
+    });
+  };
+
+  function boot() {
+    var root = document.getElementById("access-map-root");
+    if (!root) return;
+    var app = new App(root);
+    app.wireSearch();
+    app.load();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+"""
+
+
 def _page(
     title: str,
     body: str,
@@ -1231,6 +1674,7 @@ def _page(
     nonce: str,
     actions: str = "",
     account: bool = False,
+    script_tag: str = "",
 ) -> str:
     nav = "".join(
         f'<a href="{UI_PREFIX}{path or "/"}"'
@@ -1271,6 +1715,7 @@ def _page(
         + (f'<div class="actions">{actions}</div>' if actions else "")
         + f"</div><main>{body}</main></div></div>"
         + _release_notes_modal()
+        + script_tag
         + "</body></html>"
     )
 
@@ -1321,19 +1766,33 @@ def _post_button(
     )
 
 
-def _respond(request: Request, html_text: str, nonce: str, status: int = 200) -> Response:
+def _respond(
+    request: Request, html_text: str, nonce: str, status: int = 200,
+    *, script_nonce: str | None = None,
+) -> Response:
     response = HTMLResponse(html_text, status_code=status)
-    # No scripts and no external sources. The nonce applies only to the single
-    # <style> block. Graph, chart, and forms are inline HTML/SVG and
-    # therefore need neither an image source nor code in the browser.
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; "
-        f"style-src 'nonce-{nonce}'; "
-        "img-src 'self' data:; "
-        "form-action 'self'; "
-        "frame-ancestors 'none'; "
-        "base-uri 'none'"
-    )
+    # No scripts and no external sources by default. The nonce applies only
+    # to the single <style> block. Graph, chart, and forms are inline
+    # HTML/SVG and therefore need neither an image source nor code in the
+    # browser. The one exception is `script_nonce`, opted into by exactly
+    # one route (the interactive access map) -- nonce-scoped to that single
+    # response, never widened to 'self' or a blanket default-src relaxation.
+    directives = [
+        "default-src 'none'",
+        f"style-src 'nonce-{nonce}'",
+        "img-src 'self' data:",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+    ]
+    if script_nonce:
+        directives.append(f"script-src 'nonce-{script_nonce}'")
+        # The map's own fetch() to its same-origin JSON endpoint would
+        # otherwise fall back to `default-src 'none'` and be blocked like
+        # any other network access -- still same-origin only, not 'self'
+        # on every route.
+        directives.append("connect-src 'self'")
+    response.headers["Content-Security-Policy"] = "; ".join(directives)
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     # A UI with permission and audit data does not belong in any cache.
@@ -1799,6 +2258,204 @@ def _access_graph(
     return svg, (any_match if q else True)
 
 
+def _access_graph_data(
+    service: Service, identities: IdentityStore,
+    records: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The access map's node/edge model as JSON, for the interactive view.
+
+    Gathers the same identities, toolkits, destinations, protected
+    resources, and live call stats as `_access_graph`, but returns plain
+    structures instead of laid-out SVG coordinates -- `access-map.js` does
+    the layout, grouping, and filtering client-side, which is what lets it
+    scale past the point a fixed server-rendered canvas can.
+    """
+    idents = sorted(
+        (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
+        key=lambda i: i.id,
+    ) or sorted(identities.identities.values(), key=lambda i: i.id)
+    toolkits = sorted(service.tier1.toolkits.items())
+    protected = sorted(
+        {r for tk in service.tier1.toolkits.values() for r in tk.protected_resources}
+    )
+
+    tools_by_kit: dict[str, set[str]] = {name: set() for name, _ in toolkits}
+    tools_by_kit_and_dest: dict[str, dict[str, set[str]]] = {name: {} for name, _ in toolkits}
+    for tool in service.catalog.tools.values():
+        tools_by_kit.setdefault(tool.toolkit, set()).add(tool.id)
+        if tool.destination:
+            tools_by_kit_and_dest.setdefault(tool.toolkit, {}).setdefault(
+                tool.destination, set()
+            ).add(tool.id)
+
+    dest_names = sorted({d for _, tk in toolkits for d in tk.destinations})
+    dest_granted: dict[str, set[str]] = {
+        d: {
+            tid
+            for name, _ in toolkits
+            for tid in tools_by_kit_and_dest.get(name, {}).get(d, set())
+        }
+        for d in dest_names
+    }
+
+    audit_records = records or []
+    ident_stats = _call_stats(audit_records)
+    kit_stats = _tool_call_stats(audit_records, tools_by_kit)
+    pair_stats = _pair_call_stats(audit_records, tools_by_kit)
+    all_totals = [s["total"] for s in pair_stats.values()]
+    hot_threshold = max(
+        sorted(all_totals)[int(len(all_totals) * 0.75)] if all_totals else 0, 3,
+    )
+
+    def _zero() -> dict[str, int]:
+        return {"ok": 0, "denied": 0, "failed": 0, "total": 0}
+
+    # One color per identity that actually holds a grant, cycling past 6 --
+    # same rule as `_access_graph`, so the two views agree on which
+    # identity is which color.
+    ident_color: dict[str, str] = {}
+    for identity in idents:
+        if identity.tools:
+            ident_color[identity.id] = f"c{len(ident_color) % 6 + 1}"
+
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+
+    for identity in idents:
+        stats = ident_stats.get(identity.id, _zero())
+        nodes.append({
+            "id": f"identity:{identity.id}", "kind": "identity", "label": identity.id,
+            "sub": f"{len(identity.tools)} tools" if identity.tools else "no tool rights",
+            "group": identity.role,
+            "icon": "key", "logo_key": None, "color_class": ident_color.get(identity.id, ""),
+            "calls": stats, "granted_tools": sorted(identity.tools)[:20],
+        })
+
+    for name, tk in toolkits:
+        stats = kit_stats.get(name, _zero())
+        kit_tools = tools_by_kit.get(name, set())
+        nodes.append({
+            "id": f"toolkit:{name}", "kind": "toolkit", "label": name,
+            "sub": f"{len(kit_tools)} tools", "group": tk.executor,
+            "icon": _executor_icon(tk.executor), "logo_key": _guess_integration(name),
+            "color_class": "", "calls": stats, "granted_tools": sorted(kit_tools)[:20],
+            "destinations": list(tk.destinations),
+        })
+        if tk.destinations:
+            for dest_name in tk.destinations:
+                edges.append({
+                    "from": f"toolkit:{name}", "to": f"destination:{dest_name}",
+                    "kind": "structural", "calls": _zero(), "hot": False,
+                })
+        else:
+            for identity in idents:
+                if not (identity.tools & kit_tools):
+                    continue
+                pair = pair_stats.get((identity.id, name), _zero())
+                edges.append({
+                    "from": f"identity:{identity.id}", "to": f"toolkit:{name}",
+                    "kind": "grant", "calls": pair,
+                    "hot": bool(pair["total"] >= hot_threshold and pair["total"] > 0),
+                })
+
+    for dest_name in dest_names:
+        dest = service.tier1.destination(dest_name)
+        granted_tools = dest_granted.get(dest_name, set())
+        nodes.append({
+            "id": f"destination:{dest_name}", "kind": "destination", "label": dest_name,
+            "sub": f"{len(granted_tools)} tools", "group": "",
+            "icon": "cloud", "logo_key": None, "color_class": "",
+            "calls": _zero(), "granted_tools": sorted(granted_tools)[:20],
+            "target": _target(dest) if dest else "",
+        })
+        for identity in idents:
+            if not (identity.tools & granted_tools):
+                continue
+            edges.append({
+                "from": f"identity:{identity.id}", "to": f"destination:{dest_name}",
+                "kind": "grant", "calls": _zero(), "hot": False,
+            })
+
+    for resource in protected:
+        nodes.append({
+            "id": f"protected:{resource}", "kind": "protected", "label": resource,
+            "sub": "own container" if resource == "gatekeeper" else "blocked",
+            "group": "",
+            "icon": "lock", "logo_key": None, "color_class": "deny",
+            "calls": _zero(), "granted_tools": [],
+        })
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "meta": {
+            "hot_threshold": hot_threshold,
+            "has_destinations": bool(dest_names),
+            "identity_count": len(idents),
+            "toolkit_count": len(toolkits),
+            "destination_count": len(dest_names),
+            "protected_count": len(protected),
+        },
+    }
+
+
+def _toolkit_access_matrix(
+    service: Service, identities: IdentityStore, *, highlight: str = "",
+) -> str:
+    """Identity x toolkit grant matrix -- the access map's alternate, denser
+
+    view for real scale (many toolkits/identities). Generalizes
+    `_tool_matrix`'s per-tool table one level up to per-toolkit, so it stays
+    legible with hundreds of tools where a tool-per-row table would not.
+    """
+    q = highlight.strip().lower()
+    toolkits = sorted(service.tier1.toolkits.items())
+    if not toolkits:
+        return '<p class="muted">No toolkits configured yet.</p>'
+    idents = sorted(
+        (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
+        key=lambda i: i.id,
+    ) or sorted(identities.identities.values(), key=lambda i: i.id)
+
+    tools_by_kit: dict[str, set[str]] = {name: set() for name, _ in toolkits}
+    for tool in service.catalog.tools.values():
+        tools_by_kit.setdefault(tool.toolkit, set()).add(tool.id)
+
+    rows = []
+    for name, tk in toolkits:
+        if q and q not in name.lower():
+            continue
+        kit_tools = tools_by_kit.get(name, set())
+        cells = "".join(
+            f'<td class="cell-grant"><span class="pill ok">{len(i.tools & kit_tools)}'
+            "</span></td>"
+            if (i.tools & kit_tools)
+            else '<td class="cell-grant"><span class="pill">&mdash;</span></td>'
+            for i in idents
+        )
+        rows.append(
+            f'<tr><td><code class="tool-id">{_e(name)}</code></td>'
+            f'<td><span class="pill accent">{_icon(_executor_icon(tk.executor), 12)}'
+            f'{_e(tk.executor)}</span></td>'
+            f"<td>{len(kit_tools)}</td>{cells}</tr>"
+        )
+
+    if not rows:
+        return _note(
+            f"No toolkit matches &ldquo;{_e(highlight)}&rdquo;.", icon="search",
+        )
+
+    id_cols = "".join(
+        f'<th class="col-ident" title="{_e(i.id)}">{_e(i.id[:8])}</th>' for i in idents
+    )
+    return (
+        '<div class="wrap"><table class="tool-matrix">'
+        "<thead><tr><th>Toolkit</th><th>Executor</th><th>Tools</th>"
+        f"{id_cols}</tr></thead>"
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+    )
+
+
 # -- Activity ------------------------------------------------------------
 
 
@@ -2079,6 +2736,96 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
     )
 
 
+#: Above this many combined identities/toolkits/destinations/protected
+#: resources, the access map defaults to the dense table view instead of
+#: the graph -- a single SVG canvas stops being legible well before this,
+#: while the table stays scannable (FR: access map redesign).
+ACCESS_MAP_TABLE_THRESHOLD = 80
+
+
+def _view_access_map(
+    service: Service, identities: IdentityStore, request: Request,
+) -> str:
+    """The interactive access map page.
+
+    Server-renders a filter/view-toggle form and a `<noscript>` fallback
+    (the original server-computed `_access_graph` SVG, unchanged) so the
+    page still works with scripts disabled. With scripts allowed --
+    `access-map.js`, loaded only on this route via a scoped CSP
+    `script-src` nonce (see `_shell`) -- the client fetches
+    `{UI_PREFIX}/access-map/data`, groups nodes by executor/role once past a
+    threshold, and renders a graph the fixed SVG layout could not: nodes
+    expand on click, search narrows to matches plus neighbors instead of
+    just dimming the rest, and a side panel shows detail without leaving
+    the page.
+    """
+    query = request.query_params.get("q", "").strip()
+    view = request.query_params.get("view", "").strip()
+    records, _ = read_audit(os.path.join(service.tier1.audit_dir, "audit.jsonl"), limit=400)
+
+    dest_names = {d for _, tk in service.tier1.toolkits.items() for d in tk.destinations}
+    protected = {r for tk in service.tier1.toolkits.values() for r in tk.protected_resources}
+    total_nodes = (
+        len(identities.identities) + len(service.tier1.toolkits)
+        + len(dest_names) + len(protected)
+    )
+    table_default = total_nodes > ACCESS_MAP_TABLE_THRESHOLD
+    show_table = view == "table" or (view != "graph" and table_default)
+    q_param = f"&q={_e(query)}" if query else ""
+
+    filter_form = (
+        f'<form method="get" action="{UI_PREFIX}/access-map" class="filter-row" '
+        'id="map-filter">'
+        f'<input type="text" name="q" id="map-search" value="{_e(query)}" '
+        'placeholder="Filter identity, toolkit, or resource&hellip;">'
+        f'<button class="ghost" type="submit" title="Filter">{_icon("search", 14)}</button>'
+        + (f'<a class="reset" href="{UI_PREFIX}/access-map">reset</a>' if query else "")
+        + '<span class="spacer"></span>'
+        + f'<a class="btn{"" if show_table else " active"}" '
+        f'href="{UI_PREFIX}/access-map?view=graph{q_param}">'
+        f'{_icon("share", 13)}Graph</a>'
+        + f'<a class="btn{" active" if show_table else ""}" '
+        f'href="{UI_PREFIX}/access-map?view=table{q_param}">'
+        f'{_icon("sliders", 13)}Table</a>'
+        "</form>"
+    )
+
+    if show_table:
+        body = f'<div class="pad">{_toolkit_access_matrix(service, identities, highlight=query)}</div>'
+    else:
+        graph_svg, graph_matched = _access_graph(service, identities, records, highlight=query)
+        no_match_note = (
+            _note(
+                f"No identity, toolkit, or protected resource matches "
+                f"&ldquo;{_e(query)}&rdquo;.",
+                icon="search",
+            )
+            if query and not graph_matched
+            else ""
+        )
+        body = (
+            f"{no_match_note}"
+            '<div id="access-map-root" class="map-root" '
+            f'data-endpoint="{UI_PREFIX}/access-map/data" data-query="{_e(query)}">'
+            f'<p class="muted">Loading access map&hellip;</p>'
+            f"<noscript>{graph_svg}</noscript>"
+            "</div>"
+            '<div class="legend">'
+            "<span>each color is one identity</span>"
+            '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
+            '<span class="l-hot"><i></i>high traffic</span>'
+            "<span>click a node for detail, click a cluster to expand it</span>"
+            "</div>"
+        )
+
+    return (
+        '<div class="card">'
+        f'<div class="card-head"><h3>{_icon("share", 14)}Access map</h3></div>'
+        f"<div class=\"pad\">{filter_form}{body}</div>"
+        "</div>"
+    )
+
+
 def _view_overview(
     service: Service, identities: IdentityStore, store: ConfigStore | None,
     request: Request | None = None, session: Session | None = None,
@@ -2207,6 +2954,8 @@ def _view_overview(
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("share", 14)}Access map</h3>'
         '<span class="spacer"></span>'
+        f'<a class="btn" href="{UI_PREFIX}/access-map" title="Open the '
+        f'interactive access map">{_icon("share", 13)}Open interactive map</a>'
         # GET, not a script: the same query-param pattern the audit filters
         # already use. Submitting reloads the page with the map re-drawn,
         # everything that does not match dimmed instead of removed -- so
@@ -3675,22 +4424,33 @@ def build_ui_routes(
     def _shell(
         request: Request, title: str, body: str, session: Session, *,
         icon: str, active: str, subtitle: str = "", actions: str = "", status: int = 200,
+        allow_script: bool = False,
     ) -> Response:
         nonce = _nonce()
+        # `allow_script` is opted into by exactly one route (the interactive
+        # access map, see `build_ui_routes`) -- everywhere else this stays
+        # False and the page gets no `script-src` at all, same as before.
+        script_nonce = _nonce() if allow_script else None
+        script_tag = (
+            f'<script nonce="{script_nonce}" src="{ACCESS_MAP_JS_PATH}"></script>'
+            if script_nonce else ""
+        )
         return _respond(
             request,
             _page(title, body, session=session, subtitle=subtitle, icon=icon,
                   active=active, nonce=nonce, actions=actions,
                   # Without writable Tier 2 there is no account page: it
                   # could offer nothing but an error message.
-                  account=store is not None),
+                  account=store is not None, script_tag=script_tag),
             nonce,
             status,
+            script_nonce=script_nonce,
         )
 
     def guarded(view: Callable[[Request, Session], str], title: str, active: str, *,
                 icon: str, subtitle: str = "",
-                actions: Callable[[Session], str] | None = None):
+                actions: Callable[[Session], str] | None = None,
+                allow_script: bool = False):
         """Binds a view to a valid session.
 
         Every read handler runs through this wrapper, every write
@@ -3707,6 +4467,7 @@ def build_ui_routes(
                 request, title, view(request, session), session, icon=icon,
                 active=active, subtitle=subtitle,
                 actions=actions(session) if actions else "",
+                allow_script=allow_script,
             )
 
         return handler
@@ -4529,6 +5290,34 @@ def build_ui_routes(
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
+    async def access_map_data(request: Request) -> Response:
+        """JSON node/edge model behind the interactive access map.
+
+        Session-gated like every other read route (see `guarded`), just
+        without the HTML shell around it -- this is an XHR sibling of
+        `/ui/access-map`, not a public API.
+        """
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        records, _ = read_audit(
+            os.path.join(service.tier1.audit_dir, "audit.jsonl"), limit=400
+        )
+        data = _access_graph_data(service, identities, records)
+        return Response(
+            json.dumps(data), media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def access_map_js(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        return Response(
+            _ACCESS_MAP_JS, media_type="application/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
+
     return [
         Route("/", root, methods=["GET"]),
         Route("/favicon.ico", favicon, methods=["GET"]),
@@ -4549,6 +5338,16 @@ def build_ui_routes(
             methods=["GET"],
         ),
         Route(f"{UI_PREFIX}/probe-executors", probe_executors_action, methods=["POST"]),
+        Route(
+            f"{UI_PREFIX}/access-map",
+            guarded(
+                lambda r, s: _view_access_map(service, identities, r),
+                "Access map", "none", icon="share", allow_script=True,
+            ),
+            methods=["GET"],
+        ),
+        Route(f"{UI_PREFIX}/access-map/data", access_map_data, methods=["GET"]),
+        Route(ACCESS_MAP_JS_PATH, access_map_js, methods=["GET"]),
         Route(
             f"{UI_PREFIX}/tools",
             guarded(

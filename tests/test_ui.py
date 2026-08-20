@@ -377,6 +377,71 @@ async def test_pages_forbid_scripts(ui_app, ui_identities):
     assert page.headers["cache-control"] == "no-store"
 
 
+async def test_access_map_scopes_script_src_to_itself(ui_app, ui_identities):
+    """The interactive access map is the one route allowed a `script-src`.
+
+    Every other route must stay exactly as script-free as before -- a
+    future change that widens this by accident should fail here, not get
+    noticed later in a security review.
+    """
+    _, tokens = ui_identities
+    async with _client(ui_app) as client:
+        await _login(client)
+        map_page = await client.get(f"{UI_PREFIX}/access-map")
+        overview = await client.get(f"{UI_PREFIX}/")
+        tools = await client.get(f"{UI_PREFIX}/tools")
+
+    map_csp = map_page.headers["content-security-policy"]
+    assert "default-src 'none'" in map_csp
+    assert "script-src 'nonce-" in map_csp
+    assert map_page.headers["cache-control"] == "no-store"
+    # The script tag on the page must carry that exact nonce.
+    nonce = map_csp.split("script-src 'nonce-")[1].split("'")[0]
+    assert f'nonce="{nonce}"' in map_page.text
+
+    for page in (overview, tools):
+        csp = page.headers["content-security-policy"]
+        assert "default-src 'none'" in csp
+        assert "script-src" not in csp
+
+
+async def test_access_map_data_endpoint(ui_app, ui_identities):
+    _, tokens = ui_identities
+    async with _client(ui_app) as client:
+        await _login(client)
+        response = await client.get(f"{UI_PREFIX}/access-map/data")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.headers["cache-control"] == "no-store"
+    data = response.json()
+    assert "nodes" in data and "edges" in data and "meta" in data
+    kinds = {n["kind"] for n in data["nodes"]}
+    assert "identity" in kinds
+    assert "toolkit" in kinds
+    node_ids = {n["id"] for n in data["nodes"]}
+    # `root` is admin with no tool grants -- filtered out the same way
+    # `_tool_matrix`/`_access_graph` omit UI-role identities with nothing
+    # granted. `bot` has grants, so it stays.
+    assert "identity:bot" in node_ids
+
+
+async def test_access_map_js_requires_session(ui_app):
+    async with _client(ui_app) as client:
+        response = await client.get(f"{UI_PREFIX}/access-map.js", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/login")
+
+
+async def test_access_map_js_served_with_session(ui_app, ui_identities):
+    _, tokens = ui_identities
+    async with _client(ui_app) as client:
+        await _login(client)
+        response = await client.get(f"{UI_PREFIX}/access-map.js")
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+    assert "access-map-root" in response.text
+
+
 async def test_token_hashes_are_never_rendered(ui_app, ui_identities):
     store, tokens = ui_identities
     async with _client(ui_app) as client:
