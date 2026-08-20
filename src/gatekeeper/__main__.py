@@ -26,6 +26,7 @@ from .server import build_app, log_startup
 from .service import Service
 from .store import ConfigStore, set_password_in_file
 from .tier1 import load_tier1
+from .toolkit_proposals import ToolkitProposalStore
 from .ui import has_ui_identity
 
 logger = logging.getLogger("gatekeeper")
@@ -52,7 +53,10 @@ def _config_path(name: str, args_value: str | None) -> str:
         return args_value
     base = (
         _state_dir()
-        if name in ("tools.yaml", "identities.yaml", "credentials.yaml", "pending.yaml")
+        if name in (
+            "tools.yaml", "identities.yaml", "credentials.yaml", "pending.yaml",
+            "toolkit_proposals.yaml",
+        )
         else _config_dir()
     )
     return os.path.join(base, name)
@@ -176,6 +180,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     store = None
     pending = None
+    toolkit_proposals = None
     if ui_enabled:
         read_only = args.ui_read_only or os.environ.get(
             "GATEKEEPER_UI_READ_ONLY", ""
@@ -196,6 +201,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
             pending = PendingStore(
                 path=_config_path("pending.yaml", args.pending),
                 audit=audit,
+            )
+            # A fourth, deliberately separate file: toolkit proposals are a
+            # different severity of change from anything in pending.yaml --
+            # they touch Tier 1, not Tier 2 -- so they get their own store
+            # and their own /ui/toolkits review surface (see
+            # toolkit_proposals.py).
+            toolkit_proposals = ToolkitProposalStore(
+                path=_config_path("toolkit_proposals.yaml", args.toolkit_proposals),
+                audit=audit,
+                service=service,
+                toolkits_path=_config_path("toolkits.yaml", args.toolkits),
+                tools_path=_config_path("tools.yaml", args.tools),
+                identities_path=_config_path("identities.yaml", args.identities),
             )
             stuck = sorted(n for n, ok in store.writability().items() if not ok)
             if stuck:
@@ -225,6 +243,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         store=store,
         credentials=credentials if store is not None else None,
         pending=pending,
+        toolkit_proposals=toolkit_proposals,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
@@ -627,6 +646,7 @@ def main() -> int:
     parser.add_argument("--identities")
     parser.add_argument("--credentials")
     parser.add_argument("--pending")
+    parser.add_argument("--toolkit-proposals", dest="toolkit_proposals")
     sub = parser.add_subparsers(dest="command", required=True)
 
     serve = sub.add_parser("serve", help="Start the server")

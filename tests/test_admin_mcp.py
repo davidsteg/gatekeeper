@@ -25,6 +25,7 @@ from gatekeeper.pending import PendingStore
 from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore
+from gatekeeper.toolkit_proposals import ToolkitProposalStore
 from gatekeeper.ui import UI_PREFIX
 
 BASE = "http://gatekeeper.test"
@@ -86,11 +87,19 @@ def admin_mcp_env(tmp_path, tier1, tool_specs):
             tools_path=str(tools_path), identities_path=str(identities_path),
         )
         pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=audit)
+        toolkit_proposals = ToolkitProposalStore(
+            path=str(tmp_path / "toolkit-proposals.yaml"),
+            audit=audit,
+            service=service,
+            toolkits_path=str(tmp_path / "toolkits.yaml"),
+            tools_path=str(tools_path),
+            identities_path=str(identities_path),
+        )
         app = build_app(
             service=service, identities=identities, audit=audit, ui=True,
-            store=store, pending=pending,
+            store=store, pending=pending, toolkit_proposals=toolkit_proposals,
         )
-        return app, store, pending
+        return app, store, pending, toolkit_proposals
 
     return {"build": _build, "tokens": tokens, "tools_path": tools_path}
 
@@ -120,7 +129,7 @@ async def test_both_mcp_endpoints_answer_over_one_app(admin_mcp_env):
     session managers -- actually works: both mounts answer real requests
     concurrently, within one lifespan, on one app instance.
     """
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
 
     async with app.router.lifespan_context(app):
@@ -142,7 +151,7 @@ async def test_both_mcp_endpoints_answer_over_one_app(admin_mcp_env):
 
 
 async def test_admin_tools_never_appear_on_mcp_and_vice_versa(admin_mcp_env):
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
 
     async with connected(app, tokens["root"], "/admin/mcp") as client:
@@ -155,7 +164,7 @@ async def test_admin_tools_never_appear_on_mcp_and_vice_versa(admin_mcp_env):
 
 
 async def test_admin_role_token_rejected_on_mcp(admin_mcp_env):
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     async with _http(app, tokens["hermes"]) as http:
         response = await http.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
@@ -163,7 +172,7 @@ async def test_admin_role_token_rejected_on_mcp(admin_mcp_env):
 
 
 async def test_agent_role_token_rejected_on_admin_mcp(admin_mcp_env):
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     async with _http(app, tokens["bot"]) as http:
         response = await http.post(
@@ -180,7 +189,7 @@ async def test_viewer_role_token_rejected_on_admin_mcp(admin_mcp_env):
     tool grants, per `identity.may_call`), so that side is not asserted
     here.
     """
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     async with _http(app, tokens["eye"]) as http:
         response = await http.post(
@@ -192,7 +201,7 @@ async def test_viewer_role_token_rejected_on_admin_mcp(admin_mcp_env):
 async def test_admin_token_still_cannot_call_agent_tools(admin_mcp_env):
     """The same identity's token, tried against the endpoint it doesn't
     belong to (FR-2.9's same-identity isolation check)."""
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     async with _http(app, tokens["root"]) as http:
         response = await http.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
@@ -203,7 +212,7 @@ async def test_admin_token_still_cannot_call_agent_tools(admin_mcp_env):
 
 
 async def test_tool_create_rejects_tier1_violation(admin_mcp_env):
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     bad_spec = {
         "id": "demo.hack", "toolkit": "demo", "binary": "/not/allowed/binary",
@@ -217,7 +226,7 @@ async def test_tool_create_rejects_tier1_violation(admin_mcp_env):
 
 
 async def test_tool_validate_matches_tool_create_rejection(admin_mcp_env):
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     bad_spec = {
         "id": "demo.hack2", "toolkit": "demo", "binary": "/not/allowed/binary",
@@ -235,7 +244,7 @@ async def test_tool_validate_matches_tool_create_rejection(admin_mcp_env):
 
 
 async def test_tool_create_always_disabled_even_if_spec_says_enabled(admin_mcp_env):
-    app, store, _pending = admin_mcp_env["build"]()
+    app, store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     spec = {
         "id": "demo.newread", "toolkit": "demo", "binary": _python(),
@@ -253,7 +262,7 @@ async def test_tool_create_always_disabled_even_if_spec_says_enabled(admin_mcp_e
 
 
 async def test_tool_enable_read_category_auto_applies_no_pending(admin_mcp_env):
-    app, store, pending = admin_mcp_env["build"]()
+    app, store, pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     # demo.show is category 'read' and starts enabled; disable then re-enable
     # via admin.* to observe the auto-apply path end to end.
@@ -268,7 +277,7 @@ async def test_tool_enable_read_category_auto_applies_no_pending(admin_mcp_env):
 
 
 async def test_tool_enable_write_category_creates_pending_item(admin_mcp_env):
-    app, store, pending = admin_mcp_env["build"]()
+    app, store, pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     write_spec = {
         "id": "demo.writeit", "toolkit": "demo", "binary": _python(),
@@ -290,7 +299,7 @@ async def test_tool_enable_write_category_creates_pending_item(admin_mcp_env):
 
 
 async def test_tool_delete_always_pending_even_for_read_tool(admin_mcp_env):
-    app, store, pending = admin_mcp_env["build"]()
+    app, store, pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     async with connected(app, tokens["hermes"], "/admin/mcp") as client:
         result = await client.call_tool("admin.tool_delete", {"id": "demo.show"})
@@ -301,7 +310,7 @@ async def test_tool_delete_always_pending_even_for_read_tool(admin_mcp_env):
 
 
 async def test_grant_set_always_pending(admin_mcp_env):
-    app, _store, pending = admin_mcp_env["build"]()
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     async with connected(app, tokens["hermes"], "/admin/mcp") as client:
         result = await client.call_tool(
@@ -316,7 +325,7 @@ async def test_grant_set_always_pending(admin_mcp_env):
 
 
 async def test_admin_mcp_tool_list_never_includes_approve_or_reject(admin_mcp_env):
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     async with connected(app, tokens["hermes"], "/admin/mcp") as client:
         names = {t.name for t in (await client.list_tools()).tools}
@@ -325,7 +334,7 @@ async def test_admin_mcp_tool_list_never_includes_approve_or_reject(admin_mcp_en
 
 
 async def test_calling_admin_approve_by_name_is_unknown_tool(admin_mcp_env):
-    app, _store, _pending = admin_mcp_env["build"]()
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
     async with connected(app, tokens["hermes"], "/admin/mcp") as client:
         result = await client.call_tool("admin.approve", {"id": "whatever"})
@@ -340,7 +349,7 @@ async def test_approved_pending_change_becomes_callable_on_mcp(admin_mcp_env):
     (inert) -> propose an enable on a write tool -> approve at /ui/pending
     -> the tool becomes callable on /mcp for a granted agent identity.
     """
-    app, store, pending = admin_mcp_env["build"]()
+    app, store, pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
 
     write_spec = {
@@ -383,11 +392,71 @@ async def test_approved_pending_change_becomes_callable_on_mcp(admin_mcp_env):
     # state as new Python objects -- and each `streamable_http_app()`'s
     # session manager can only `run()` once per instance, so `app` (already
     # connected-to above) cannot be reused for a second live connection.
-    app2, _store2, _pending2 = admin_mcp_env["build"]()
+    app2, _store2, _pending2, _toolkit_proposals = admin_mcp_env["build"]()
     async with connected(app2, tokens["bot"], "/mcp") as client:
         result = await client.call_tool("demo.approved_write", {})
     assert not result.is_error
     assert "done" in result.content[0].text
+
+
+# -- Toolkit proposals (plan "Follow-up 2") -----------------------------------
+
+
+async def test_toolkit_list_is_read_only_and_reflects_live_tier1(admin_mcp_env):
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.toolkit_list", {})
+    payload = json.loads(result.content[0].text)
+    names = {t["name"] for t in payload["toolkits"]}
+    assert names == {"demo"}
+
+
+async def test_toolkit_propose_always_lands_in_proposal_store(admin_mcp_env):
+    """Unlike every other action `AdminService` exposes, there is no
+    low-risk variant of this at all -- not even for a toolkit that looks
+    entirely read-only. It must always land in `ToolkitProposalStore`,
+    never `PendingStore`.
+    """
+    app, _store, pending, toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.toolkit_propose",
+            {"name": "zfs", "spec": {"executor": "local", "binaries": [_python()]}},
+        )
+    payload = json.loads(result.content[0].text)
+    assert payload["pending"] is True
+    assert payload["applied"] is False
+
+    proposed = toolkit_proposals.list(status="pending")
+    assert len(proposed) == 1
+    assert proposed[0].name == "zfs"
+    assert proposed[0].actor == "hermes"
+    # Never routed through the ordinary pending queue -- a toolkit proposal
+    # is a categorically different severity of change (Tier 1, not Tier 2).
+    assert pending.list() == []
+
+
+async def test_toolkit_deploy_and_reject_absent_from_admin_mcp_tool_list(admin_mcp_env):
+    """Same structural self-approval prevention as `pending.py`'s
+    approve/reject, extended to this surface: `ToolkitProposalStore.deploy`/
+    `.reject` are only reachable from `/ui/toolkits`, never `/admin/mcp`.
+    """
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        names = {t.name for t in (await client.list_tools()).tools}
+    assert "admin.toolkit_deploy" not in names
+    assert "admin.toolkit_reject" not in names
+
+
+async def test_calling_admin_toolkit_deploy_by_name_is_unknown_tool(admin_mcp_env):
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.toolkit_deploy", {"id": "whatever"})
+    assert result.is_error
 
 
 def _python() -> str:

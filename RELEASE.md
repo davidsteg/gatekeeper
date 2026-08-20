@@ -60,6 +60,41 @@ cannot. It is in every release.
 
 ---
 
+## 0.13.0
+
+**Hermes can now propose a brand-new Tier 1 toolkit through `/admin/mcp`; a human's one click validates, writes `toolkits.yaml`, and reloads it live — no redeploy, no restart.**
+
+Hermes kept hitting the Tier 1 wall correctly (`Unknown toolkit` on `zfs`/
+`file`) and had been drafting hand-checked toolkit YAML for a human to
+paste into `toolkits.yaml` and redeploy manually. That copy-paste is now a
+review-and-click, without weakening the guarantee that makes the admin
+token not equivalent to root (REQUIREMENTS.md §6): Tier 1 still never
+changes without a human decision.
+
+- **`admin.toolkit_list` / `admin.toolkit_propose`** — two new `admin.*`
+  actions. `toolkit_list` reads the live Tier 1 configuration (read-only);
+  `toolkit_propose` drafts a brand-new toolkit, but — unlike every other
+  action on this surface — has no low-risk variant at all: it always lands
+  in a proposal queue, never applies, not even for a toolkit that looks
+  entirely read-only.
+- **A categorically separate review surface.** Proposals live in their own
+  `toolkit_proposals.yaml`/`ToolkitProposalStore`
+  (`src/gatekeeper/toolkit_proposals.py`), never `pending.yaml` — a toolkit
+  changes what is *possible at all* (Tier 1), not just who can do what
+  (Tier 2), so it is deliberately unreachable through the same approval
+  path as an ordinary tool/grant change. Reviewed at the new `/ui/toolkits`
+  page, with a visibly heavier confirmation than `/ui/pending`'s.
+  `toolkit_deploy`/`toolkit_reject` are not part of the `admin.*` tool list
+  and have no code path from `/admin/mcp` — the same structural
+  self-approval prevention `pending.py` already established, extended here.
+- **No restart.** "Approve & Deploy" merges the proposed toolkit into the
+  live `toolkits.yaml` content, validates the result with the exact
+  `load_tier1()` startup uses (rejecting a name collision or any Tier-1
+  violation before touching anything real), atomically writes the file,
+  then calls `Service.reload_config` in-process — the same function the
+  existing SIGHUP handler already used, now with real test coverage for
+  both its success and failure paths (previously untested).
+
 ## 0.12.0
 
 **The interactive access map is now the default; the old fixed-size SVG map is gone. Real pan/zoom.**

@@ -194,6 +194,42 @@ _TOOLS: list[types.Tool] = [
             "additionalProperties": False,
         },
     ),
+    types.Tool(
+        name="admin.toolkit_list",
+        title="List live toolkits",
+        description=(
+            "Lists every toolkit and destination defined in the running "
+            "Tier 1 configuration (toolkits.yaml) -- executor, binaries, "
+            "path roots, protected resources, ceilings. Read-only; check "
+            "reality here before drafting a proposal instead of guessing."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.toolkit_propose",
+        title="Propose a new toolkit",
+        description=(
+            "Proposes adding a brand-new toolkit to Tier 1. Always written "
+            "to the toolkit-proposal queue -- never applies, not even for a "
+            "read-only-looking toolkit -- since this changes what is "
+            "possible at all (REQUIREMENTS.md §6), not just who can do "
+            "what. A human reviews it at /ui/toolkits and, if they approve, "
+            "gatekeeper validates, writes toolkits.yaml, and reloads it "
+            "into the running process itself -- no redeploy needed, but "
+            "also no way for this call to make it live on its own. Editing "
+            "an existing toolkit is not supported here; the name must be new."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "spec": _OPEN_OBJECT},
+            "required": ["name", "spec"],
+            "additionalProperties": False,
+        },
+    ),
 ]
 
 # Kept honest at import time, not merely by convention: if these two lists

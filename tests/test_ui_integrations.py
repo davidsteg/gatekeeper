@@ -21,6 +21,7 @@ from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore
 from gatekeeper.tier1 import load_tier1
+from gatekeeper.toolkit_proposals import ToolkitProposalStore
 from gatekeeper.ui import UI_PREFIX
 
 BASE = "http://gatekeeper.test"
@@ -72,9 +73,17 @@ def integrations_env(tmp_path):
         tools_path=str(tools_path), identities_path=str(identities_path),
     )
     pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "toolkit-proposals.yaml"),
+        audit=audit,
+        service=service,
+        toolkits_path=str(toolkits_path),
+        tools_path=str(tools_path),
+        identities_path=str(identities_path),
+    )
     app = build_app(
         service=service, identities=identities, audit=audit, ui=True,
-        store=store, pending=pending,
+        store=store, pending=pending, toolkit_proposals=toolkit_proposals,
     )
     return {"app": app, "store": store, "service": service}
 

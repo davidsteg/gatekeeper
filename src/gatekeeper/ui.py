@@ -60,6 +60,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+import yaml
+
 from starlette.datastructures import FormData
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
@@ -85,6 +87,11 @@ from .pending import PendingAction, PendingStore, PendingWriteRefused
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
 from .tier1 import Destination, Toolkit
+from .toolkit_proposals import (
+    ToolkitProposal,
+    ToolkitProposalStore,
+    ToolkitProposalWriteRefused,
+)
 
 #: Prefix of all UI paths. `AuthMiddleware` lets exactly this prefix through
 #: without a Bearer token -- the handlers check the session instead.
@@ -1128,6 +1135,7 @@ _NAV = (
     ("/identities", "Identities", "key"),
     ("/credentials", "Credentials", "lock"),
     ("/pending", "Pending", "share"),
+    ("/toolkits", "Toolkits", "layers"),
     ("/audit", "Audit", "clock"),
     ("/docs", "Docs", "book"),
 )
@@ -3474,6 +3482,199 @@ def _pending_reject_confirm(session: Session, item: PendingAction) -> str:
     )
 
 
+#: Rendering tone for each toolkit-proposal status -- mirrors _PENDING_TONE.
+_TOOLKIT_PROPOSAL_TONE = {
+    "pending": "warn",
+    "deployed": "ok",
+    "rejected": "",
+}
+
+
+def _toolkit_card(name: str, tk: Toolkit) -> str:
+    """One live, read-only toolkit card -- the same fields `_view_overview`
+    already renders for its collapsed Tier 1 section, factored out here so
+    `/ui/toolkits` can show them uncollapsed as the page's whole point.
+    """
+    return (
+        '<div class="card">'
+        f'<div class="card-head"><span class="name mono">{_e(name)}</span>'
+        f'<span class="pill accent">{_icon(_executor_icon(tk.executor), 12)}{_e(tk.executor)}</span></div>'
+        '<div class="rows">'
+        f'<div class="row"><div class="row-l">{_icon("chip", 14)}Binaries</div>'
+        f"<div>{_pills(tk.binaries, quiet=True)}</div></div>"
+        f'<div class="row"><div class="row-l">{_icon("ban", 14)}Denied arguments</div>'
+        f"<div>{_pills(tk.denied_args, tone='deny')}</div></div>"
+        f'<div class="row"><div class="row-l">{_icon("folder", 14)}Path roots</div>'
+        f"<div>{_pills(tk.path_roots, quiet=True)}</div></div>"
+        f'<div class="row"><div class="row-l">{_icon("lock", 14)}Protected resources</div>'
+        f"<div>{_pills(tk.protected_resources, tone='deny')}</div></div>"
+        f'<div class="row"><div class="row-l">{_icon("gauge", 14)}Ceilings</div>'
+        f'<div>{_pills([f"timeout {tk.max_timeout_seconds}s", f"output {tk.max_output_bytes} B"], quiet=True)}</div></div>'
+        + (
+            f'<div class="row"><div class="row-l">{_icon("share", 14)}Destinations</div>'
+            f"<div>{_pills(tk.destinations, quiet=True)}</div></div>"
+            if tk.destinations else ""
+        )
+        + "</div></div>"
+    )
+
+
+def _toolkit_proposal_card(
+    session: Session, item: ToolkitProposal, *, can_decide: bool
+) -> str:
+    tone = _TOOLKIT_PROPOSAL_TONE.get(item.status, "")
+    ops = ""
+    if item.status == "pending" and can_decide:
+        ops = (
+            f'<a class="btn solid-danger" href="{UI_PREFIX}/toolkits/deploy?id={_e(item.id)}">'
+            f'{_icon("alert", 14)}Approve &amp; Deploy</a> '
+            f'<a class="btn" href="{UI_PREFIX}/toolkits/reject?id={_e(item.id)}">'
+            f'{_icon("ban", 14)}Reject</a>'
+        )
+    detail = ""
+    if item.status != "pending":
+        detail = (
+            f'<div class="row-l">{_icon("users", 12)}'
+            f"{_e(item.decided_by or '')} &middot; {_e(item.decided_at or '')}"
+            + (f" &mdash; {_e(item.reason)}" if item.reason else "")
+            + "</div>"
+        )
+    spec_yaml = yaml.safe_dump({item.name: item.spec}, sort_keys=False, allow_unicode=True)
+    return (
+        '<div class="card"><div class="card-head">'
+        f'<span class="name mono">{_e(item.name)}</span>'
+        f'<span class="pill {tone}">{_e(item.status)}</span>'
+        f'<span class="spacer"></span>{ops}</div>'
+        '<div class="rows">'
+        f'<div class="row"><div class="row-l">{_icon("users", 14)}Proposed by</div>'
+        f'<div class="mono">{_e(item.actor)}</div></div>'
+        f'<div class="row"><div class="row-l">{_icon("clock", 14)}Proposed</div>'
+        f'<div class="mono">{_e(item.created_at)}</div></div>'
+        f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Proposed toolkit</div>'
+        f'<div><pre class="mono">{_e(spec_yaml)}</pre></div></div>'
+        + (f'<div class="row"><div class="row-l">Decision</div>{detail}</div>' if detail else "")
+        + "</div></div>"
+    )
+
+
+def _view_toolkits(
+    session: Session,
+    service: Service,
+    store: ConfigStore | None,
+    toolkit_proposals: ToolkitProposalStore | None,
+) -> str:
+    """Live Tier 1 toolkits (read-only, unchanged from today's overview
+    section) plus a "Proposed" section for what Hermes has drafted via
+    `admin.toolkit_propose` -- review/Approve & Deploy/Reject.
+
+    Unlike `/ui/pending`, a proposal here changes Tier 1 -- what is
+    possible at all, not just who can do what -- so the confirmation on
+    Approve & Deploy (`_toolkit_deploy_confirm`) is deliberately heavier
+    than `/ui/pending`'s single click.
+    """
+    parts = [
+        _note(
+            "These are deploy-time boundaries from <code>toolkits.yaml</code> "
+            "-- read-only here, exactly as on Overview. Adding a new one "
+            "normally needs a redeploy; a proposal below is the one way "
+            "around that, and only a human can make it take effect.",
+            icon="lock",
+        )
+    ]
+    parts.append(
+        "".join(_toolkit_card(name, tk) for name, tk in sorted(service.tier1.toolkits.items()))
+        or '<p class="muted">No toolkits defined yet.</p>'
+    )
+
+    parts.append(f'<h2>{_icon("share", 14)}Proposed</h2>')
+    if toolkit_proposals is None:
+        parts.append(
+            _note(
+                "<strong>No toolkit-proposal queue configured.</strong> This "
+                "deployment runs without a writable console (or /admin/mcp "
+                "is disabled), so there is nothing an agent could have "
+                "proposed.",
+                tone="bad",
+            )
+        )
+        return "".join(parts)
+
+    items = toolkit_proposals.list()
+    if not items:
+        parts.append(
+            _note(
+                "No proposals yet. This fills up when an admin-role agent "
+                "on /admin/mcp calls admin.toolkit_propose -- e.g. Hermes "
+                "hitting an 'Unknown toolkit' wall and drafting the fix "
+                "itself instead of a human hand-editing toolkits.yaml.",
+                icon="share",
+            )
+        )
+        return "".join(parts)
+
+    can_decide = session.can_write and store is not None
+    parts.append(
+        "".join(
+            _toolkit_proposal_card(session, item, can_decide=can_decide)
+            for item in reversed(items)
+        )
+    )
+    return "".join(parts)
+
+
+def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
+    """Deliberately heavier than `_pending_reject_confirm`/`/ui/pending`'s
+    Approve: this is a Tier 1 change, not a Tier 2 one -- it widens what is
+    *possible* at all on this deployment, not just who can do what, and it
+    takes effect immediately, with no further review after this click.
+    """
+    spec_yaml = yaml.safe_dump({item.name: item.spec}, sort_keys=False, allow_unicode=True)
+    return (
+        _note(
+            "<strong>This changes Tier 1.</strong> Tier 1 is the reason the "
+            "admin token is not equivalent to root: nothing in it normally "
+            "takes effect without a human editing toolkits.yaml and "
+            "redeploying. Approving this writes the toolkit below into "
+            "toolkits.yaml <em>and reloads it into this running process "
+            "immediately</em> -- every binary, path root, and destination "
+            "it lists becomes reachable the moment you click, with no "
+            "further review afterwards.",
+            tone="bad", icon="alert",
+        )
+        + '<div class="editor card"><div class="pad">'
+        f"<p><strong>Approve &amp; deploy toolkit {_e(item.name)}?</strong></p>"
+        f"<p class='muted'>Proposed by {_e(item.actor)} at {_e(item.created_at)}.</p>"
+        f'<pre class="mono">{_e(spec_yaml)}</pre>'
+        f'<form method="post" action="{UI_PREFIX}/toolkits/deploy">'
+        f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
+        f'<input type="hidden" name="id" value="{_e(item.id)}">'
+        '<div class="field"><label>'
+        '<input type="checkbox" name="confirm" value="yes" required> '
+        "I understand this immediately expands what this deployment can "
+        "reach, with no further review.</label></div>"
+        f'<button class="solid-danger" type="submit">{_icon("alert", 14)}Approve &amp; Deploy</button> '
+        f'<a class="btn" href="{UI_PREFIX}/toolkits">{_icon("back", 14)}Cancel</a>'
+        "</form></div></div>"
+    )
+
+
+def _toolkit_reject_confirm(session: Session, item: ToolkitProposal) -> str:
+    return (
+        '<div class="editor card"><div class="pad">'
+        f"<p><strong>Reject toolkit proposal {_e(item.name)}?</strong></p>"
+        f"<p class='muted'>Proposed by {_e(item.actor)}. This leaves "
+        "toolkits.yaml unchanged.</p>"
+        f'<form method="post" action="{UI_PREFIX}/toolkits/reject">'
+        f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
+        f'<input type="hidden" name="id" value="{_e(item.id)}">'
+        '<div class="field"><span>Reason (optional)</span>'
+        '<input name="reason" maxlength="240"></div>'
+        f'<button class="solid-danger" type="submit">{_icon("ban", 14)}Reject</button> '
+        f'<a class="btn" href="{UI_PREFIX}/toolkits">{_icon("back", 14)}Cancel</a>'
+        "</form></div></div>"
+    )
+
+
 _OUTCOMES = ("", "ok", "denied", "failed", "unknown")
 
 
@@ -4325,6 +4526,7 @@ def build_ui_routes(
     store: ConfigStore | None = None,
     credentials: CredentialStore | None = None,
     pending: PendingStore | None = None,
+    toolkit_proposals: ToolkitProposalStore | None = None,
     sessions: SessionStore | None = None,
     throttle: LoginThrottle | None = None,
 ) -> list[Route]:
@@ -5181,6 +5383,69 @@ def build_ui_routes(
             )
         return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
 
+    # -- Toolkits (plan "Follow-up 2") ------------------------------------
+    # A categorically different severity from Pending above: a toolkit
+    # proposal changes Tier 1, not Tier 2. Deploy/reject go through
+    # `writer` like every other admin write (session, `role: admin`,
+    # CSRF), but there is no code path from `/admin/mcp` that reaches
+    # either -- `ToolkitProposalStore.deploy`/`.reject` are not in
+    # `AdminService`'s dispatch table (see `admin_service.py`).
+
+    async def toolkit_deploy_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or not session.can_write or toolkit_proposals is None:
+            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+        item = toolkit_proposals.get(request.query_params.get("id", ""))
+        if item is None or item.status != "pending":
+            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+        return _shell(
+            request, "Approve & deploy toolkit", _toolkit_deploy_confirm(session, item),
+            session, icon="alert", active="/toolkits",
+        )
+
+    async def toolkit_deploy(request: Request, session: Session, form: FormData) -> Response:
+        if toolkit_proposals is None:
+            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+        proposal_id = str(form.get("id") or "")
+        try:
+            toolkit_proposals.deploy(proposal_id, decided_by=session.identity)
+        except (ToolkitProposalWriteRefused, ConfigError) as exc:
+            return _shell(
+                request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
+                session, icon="ban", active="/toolkits", status=400,
+            )
+        return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+
+    async def toolkit_reject_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or not session.can_write or toolkit_proposals is None:
+            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+        item = toolkit_proposals.get(request.query_params.get("id", ""))
+        if item is None or item.status != "pending":
+            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+        return _shell(
+            request, "Reject proposal", _toolkit_reject_confirm(session, item),
+            session, icon="ban", active="/toolkits",
+        )
+
+    async def toolkit_reject(request: Request, session: Session, form: FormData) -> Response:
+        if toolkit_proposals is None:
+            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+        proposal_id = str(form.get("id") or "")
+        reason = str(form.get("reason") or "")
+        try:
+            toolkit_proposals.reject(proposal_id, decided_by=session.identity, reason=reason)
+        except ToolkitProposalWriteRefused as exc:
+            return _shell(
+                request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
+                session, icon="ban", active="/toolkits", status=400,
+            )
+        return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+
     async def probe_executors_action(request: Request) -> Response:
         # Not gated by `writer`: this reads reachability, it does not
         # touch config, so it works the same in a read-only deployment
@@ -5350,6 +5615,24 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/pending/reject", pending_reject_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/pending/approve", writer(pending_approve), methods=["POST"]),
         Route(f"{UI_PREFIX}/pending/reject", writer(pending_reject), methods=["POST"]),
+        Route(
+            f"{UI_PREFIX}/toolkits",
+            guarded(
+                lambda r, s: _view_toolkits(s, service, store, toolkit_proposals),
+                "Toolkits", "/toolkits", icon="layers",
+                subtitle=(
+                    "Live Tier 1 toolkits, read-only, plus what an admin-role "
+                    "agent on /admin/mcp has proposed adding. Approving a "
+                    "proposal changes what is possible at all on this "
+                    "deployment -- only a human can do that."
+                ),
+            ),
+            methods=["GET"],
+        ),
+        Route(f"{UI_PREFIX}/toolkits/deploy", toolkit_deploy_form, methods=["GET"]),
+        Route(f"{UI_PREFIX}/toolkits/deploy", writer(toolkit_deploy), methods=["POST"]),
+        Route(f"{UI_PREFIX}/toolkits/reject", toolkit_reject_form, methods=["GET"]),
+        Route(f"{UI_PREFIX}/toolkits/reject", writer(toolkit_reject), methods=["POST"]),
         Route(f"{UI_PREFIX}/account", account_form, methods=["GET"]),
         Route(
             f"{UI_PREFIX}/account/password",

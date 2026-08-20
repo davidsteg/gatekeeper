@@ -28,6 +28,7 @@ from gatekeeper.pending import PendingStore
 from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore, WriteRefused, load_tool_yaml
+from gatekeeper.toolkit_proposals import ToolkitProposalStore
 from gatekeeper.ui import UI_PREFIX
 
 BASE = "http://gatekeeper.test"
@@ -91,14 +92,23 @@ def admin_env(tmp_path, tier1, tool_specs):
         identities_path=str(identities_path),
     )
     pending = PendingStore(path=str(tmp_path / "pending-rw.yaml"), audit=audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "toolkit-proposals-rw.yaml"),
+        audit=audit,
+        service=service,
+        toolkits_path=str(tmp_path / "toolkits.yaml"),
+        tools_path=str(tools_path),
+        identities_path=str(identities_path),
+    )
     app = build_app(
         service=service, identities=identities, audit=audit, ui=True, store=store,
-        pending=pending,
+        pending=pending, toolkit_proposals=toolkit_proposals,
     )
     return {
         "app": app,
         "store": store,
         "pending": pending,
+        "toolkit_proposals": toolkit_proposals,
         "service": service,
         "identities": identities,
         "tokens": tokens,
@@ -211,21 +221,34 @@ def test_admin_cannot_use_a_denied_argument(admin_env):
 
 
 def test_no_route_writes_tier1(admin_env):
-    """There is no path through which toolkits.yaml is written.
+    """`ConfigStore` (Tier 2) still has no path through which toolkits.yaml
+    is written, and among the UI's routes, only one -- `/ui/toolkits/deploy`
+    -- may ever touch it, and only for a human, through `writer` (session +
+    `role: admin` + CSRF), never automatically and never from `/admin/mcp`.
 
-    '/ui/toolkits/reference' is allowed: it is GET-only and renders
-    copy-pasteable YAML for a human to paste into toolkits.yaml by hand --
-    it holds no path to the file itself (FR-4.11 stays about writing, not
-    about the word 'toolkit' appearing in a URL).
+    '/ui/toolkits/reference' and '/ui/toolkits' itself are GET-only and
+    render read-only/copy-pasteable material. '/ui/toolkits/reject' POSTs
+    but only ever writes toolkit_proposals.yaml (Tier 2), never
+    toolkits.yaml. Since plan "Follow-up 2", exactly one route writes
+    Tier 1 at all -- '/ui/toolkits/deploy', via `ToolkitProposalStore.deploy`
+    (see `toolkit_proposals.py`) -- and even it only for a human, through
+    `writer` (session + `role: admin` + CSRF), never automatically and
+    never from `/admin/mcp`.
     """
+    tier1_writing_routes = {f"{UI_PREFIX}/toolkits/deploy"}
+    proposal_only_routes = {f"{UI_PREFIX}/toolkits/reject"}
     toolkit_routes = [
         r for r in admin_env["app"].routes if "toolkit" in getattr(r, "path", "").lower()
     ]
+    assert toolkit_routes, "expected at least the /ui/toolkits routes to be registered"
     for route in toolkit_routes:
         methods = getattr(route, "methods", None) or set()
+        if route.path in tier1_writing_routes or route.path in proposal_only_routes:
+            continue
         assert methods <= {"GET", "HEAD"}, (
             f"{route.path} accepts {methods} -- only GET/HEAD may touch a "
-            "'toolkit' path"
+            f"'toolkit' path (the only exceptions are {sorted(tier1_writing_routes)} "
+            f"and {sorted(proposal_only_routes)})"
         )
     assert not hasattr(admin_env["store"], "save_toolkit")
     assert "toolkits" not in "".join(dir(admin_env["store"]))
@@ -864,3 +887,89 @@ async def test_pending_page_distinguishes_real_from_missing_tools_in_a_grant(adm
     # The nonexistent tool is unmistakably flagged, not silently accepted.
     assert "missing" in page.text
     assert "no such tool in the catalog" in page.text
+
+
+# -- Toolkits (plan "Follow-up 2") -------------------------------------------
+
+
+async def test_toolkits_deploy_requires_csrf_token(admin_env):
+    """Same guarantee as every other write route -- proven directly for
+    the one route in this file that may ever write toolkits.yaml.
+    """
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    item = toolkit_proposals.propose(
+        name="zfs", spec={"executor": "local", "binaries": [PYTHON]}, actor="hermes",
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        response = await client.post(
+            f"{UI_PREFIX}/toolkits/deploy", data={"id": item.id},
+        )
+        assert response.status_code == 403
+        assert "form token" in response.text
+    assert toolkit_proposals.get(item.id).status == "pending"
+
+
+async def test_toolkits_deploy_requires_admin_role(admin_env):
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    item = toolkit_proposals.propose(
+        name="zfs", spec={"executor": "local", "binaries": [PYTHON]}, actor="hermes",
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client, "eye")
+        page = await client.get(f"{UI_PREFIX}/toolkits")
+        assert page.status_code == 200
+        # A viewer does not even see the deploy/reject buttons.
+        assert f"{UI_PREFIX}/toolkits/deploy" not in page.text
+
+        blocked = await client.post(
+            f"{UI_PREFIX}/toolkits/deploy", data={"id": item.id, "_csrf": "x"},
+        )
+        assert blocked.status_code == 403
+        assert "role: admin" in blocked.text
+    assert toolkit_proposals.get(item.id).status == "pending"
+
+
+async def test_toolkits_deploy_over_http_writes_toolkits_yaml_live(admin_env):
+    """The full path: propose (as Hermes would, store-level here) -> a
+    human approves at /ui/toolkits -> toolkits.yaml is written and the
+    running service reflects the new toolkit -- no restart.
+    """
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    service = admin_env["service"]
+    assert "zfs" not in service.tier1.toolkits
+
+    item = toolkit_proposals.propose(
+        name="zfs", spec={"executor": "local", "binaries": [PYTHON]}, actor="hermes",
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        csrf = await _signed_in(client)
+        response = await client.post(
+            f"{UI_PREFIX}/toolkits/deploy",
+            data={"id": item.id, "_csrf": csrf},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+    assert "zfs" in service.tier1.toolkits
+    assert toolkit_proposals.get(item.id).status == "deployed"
+
+
+async def test_toolkits_reject_leaves_toolkits_yaml_unchanged(admin_env):
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    item = toolkit_proposals.propose(
+        name="zfs", spec={"executor": "local", "binaries": [PYTHON]}, actor="hermes",
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        csrf = await _signed_in(client)
+        response = await client.post(
+            f"{UI_PREFIX}/toolkits/reject",
+            data={"id": item.id, "_csrf": csrf, "reason": "not now"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+    assert toolkit_proposals.get(item.id).status == "rejected"
+    assert "zfs" not in admin_env["service"].tier1.toolkits

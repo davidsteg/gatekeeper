@@ -278,6 +278,16 @@ every routine change.
   overwrites; old versions stay fetchable) and deletions are soft
   (`admin.tool_delete` marks a definition deleted with its history intact,
   rather than erasing it).
+- **Drafting a new toolkit is possible, deploying it never is — from here.**
+  `admin.toolkit_list` reads the live Tier 1 configuration; `admin.toolkit_propose`
+  drafts a brand-new toolkit, but always lands in its own review surface at
+  `/ui/toolkits`, never `/ui/pending` — a toolkit changes what is *possible*
+  at all (Tier 1), not just who can do what (Tier 2), so it gets a heavier,
+  explicit confirmation. A human clicking "Approve & Deploy" is the only
+  thing that ever writes `toolkits.yaml`: gatekeeper validates the merged
+  config with the same loader startup uses, writes it atomically, and
+  reloads it into the running process immediately — no redeploy, no
+  restart, and still no path from `/admin/mcp` to make it happen on its own.
 
 See [`admin_service.py`](src/gatekeeper/admin_service.py) for the exact
 per-action rules and [REQUIREMENTS.md §3](REQUIREMENTS.md) (FR-2.8–FR-3.7)
