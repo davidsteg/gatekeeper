@@ -1140,7 +1140,7 @@ async def test_approve_all_viewer_role_refused_and_link_absent(admin_env):
         await _login(client, "eye")
         # The Approve-all link should not appear for a viewer.
         page = await client.get(f"{UI_PREFIX}/requests?tab=change")
-        assert "Approve all" not in page.text
+        assert "pending/approve-all" not in page.text
         # POST should be refused.
         r = await client.post(
             f"{UI_PREFIX}/pending/approve-all",
