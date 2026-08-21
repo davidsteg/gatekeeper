@@ -973,3 +973,204 @@ async def test_toolkits_reject_leaves_toolkits_yaml_unchanged(admin_env):
         assert response.status_code == 303
     assert toolkit_proposals.get(item.id).status == "rejected"
     assert "zfs" not in admin_env["service"].tier1.toolkits
+
+# -- Approve-all (batch) ------------------------------------------------------
+
+
+async def test_approve_all_applies_every_pending_proposal(admin_env):
+    """Two independent proposals → one POST applies both."""
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    # Two independent proposals targeting different records.
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.show"},
+        base_rev=store.tool_revision("demo.show"),
+    )
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.echo"},
+        base_rev=store.tool_revision("demo.echo"),
+    )
+    live = [i for i in pending.list() if i.status == "pending"]
+    assert len(live) == 2
+
+    app = admin_env["app"]
+    async with _client(app) as client:
+        csrf = await _signed_in(client)
+        # GET confirm page.
+        page = await client.get(f"{UI_PREFIX}/pending/approve-all")
+        assert page.status_code == 200
+        assert "Approve all 2" in page.text
+        # POST.
+        r = await client.post(
+            f"{UI_PREFIX}/pending/approve-all",
+            data={"_csrf": csrf, "id": [live[0].id, live[1].id]},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+    # Both are now approved.
+    assert pending.get(live[0].id).status == "approved"
+    assert pending.get(live[1].id).status == "approved"
+
+
+async def test_approve_all_partial_failure_still_applies_rest(admin_env):
+    """Two proposals against the same record → first applies, second goes stale."""
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    # Disable the tool first so that tool_enable actually changes its state.
+    store.set_tool_enabled("demo.show", False, actor="root", rev=store.tools_revision())
+    # Two proposals targeting the same tool — the second will go stale
+    # because the first changes the tool's fingerprint.
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.show"},
+        base_rev=store.tool_revision("demo.show"),
+    )
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.show"},
+        base_rev=store.tool_revision("demo.show"),
+    )
+    live = [i for i in pending.list() if i.status == "pending"]
+    assert len(live) == 2
+
+    app = admin_env["app"]
+    async with _client(app) as client:
+        csrf = await _signed_in(client)
+        r = await client.post(
+            f"{UI_PREFIX}/pending/approve-all",
+            data={"_csrf": csrf, "id": [live[0].id, live[1].id]},
+            follow_redirects=False,
+        )
+        # Partial failure → 400 with summary.
+        assert r.status_code == 400
+        assert "Applied 1" in r.text
+        assert "Refused 1" in r.text
+    # First is approved, second is stale.
+    assert pending.get(live[0].id).status == "approved"
+    assert pending.get(live[1].id).status in ("stale", "pending")
+
+
+async def test_approve_all_only_applies_submitted_ids(admin_env):
+    """A third proposal not in the POST body stays pending."""
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    for tool_id in ("demo.show", "demo.echo", "demo.ping"):
+        pending.propose(
+            action="tool_enable",
+            actor="hermes",
+            payload={"id": tool_id},
+            base_rev=store.tool_revision(tool_id),
+        )
+    live = [i for i in pending.list() if i.status == "pending"]
+    assert len(live) == 3
+
+    app = admin_env["app"]
+    async with _client(app) as client:
+        csrf = await _signed_in(client)
+        # POST with only the first two ids.
+        r = await client.post(
+            f"{UI_PREFIX}/pending/approve-all",
+            data={"_csrf": csrf, "id": [live[0].id, live[1].id]},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+    # First two approved, third still pending.
+    assert pending.get(live[0].id).status == "approved"
+    assert pending.get(live[1].id).status == "approved"
+    assert pending.get(live[2].id).status == "pending"
+
+
+async def test_approve_all_without_csrf_is_refused(admin_env):
+    """CSRF absent → 403 and nothing applied."""
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.show"},
+        base_rev=store.tool_revision("demo.show"),
+    )
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.echo"},
+        base_rev=store.tool_revision("demo.echo"),
+    )
+    live = [i for i in pending.list() if i.status == "pending"]
+
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        r = await client.post(
+            f"{UI_PREFIX}/pending/approve-all",
+            data={"id": [live[0].id, live[1].id]},  # no _csrf
+            follow_redirects=False,
+        )
+        assert r.status_code == 403
+    # Nothing applied.
+    assert all(pending.get(i.id).status == "pending" for i in live)
+
+
+async def test_approve_all_viewer_role_refused_and_link_absent(admin_env):
+    """Viewer role → 403 on POST, and the Approve-all link is absent from the page."""
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.show"},
+        base_rev=store.tool_revision("demo.show"),
+    )
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.echo"},
+        base_rev=store.tool_revision("demo.echo"),
+    )
+    live = [i for i in pending.list() if i.status == "pending"]
+
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client, "eye")
+        # The Approve-all link should not appear for a viewer.
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+        assert "Approve all" not in page.text
+        # POST should be refused.
+        r = await client.post(
+            f"{UI_PREFIX}/pending/approve-all",
+            data={"id": [live[0].id, live[1].id]},
+            follow_redirects=False,
+        )
+        assert r.status_code == 403
+    assert all(pending.get(i.id).status == "pending" for i in live)
+
+
+async def test_approve_all_link_appears_with_two_pending(admin_env):
+    """The Approve-all link appears when can_decide and >=2 pending items."""
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.show"},
+        base_rev=store.tool_revision("demo.show"),
+    )
+    pending.propose(
+        action="tool_enable",
+        actor="hermes",
+        payload={"id": "demo.echo"},
+        base_rev=store.tool_revision("demo.echo"),
+    )
+
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+        assert "Approve all (2)" in page.text
+        assert f"{UI_PREFIX}/pending/approve-all" in page.text
