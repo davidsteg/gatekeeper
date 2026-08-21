@@ -152,6 +152,32 @@ def test_approve_grant_set_updates_identity_tools(tmp_path, tier1, tool_specs):
     assert store.identities.identities["bot"].tools == frozenset({"demo.show"})
 
 
+def test_approve_role_set_updates_identity_role(tmp_path, tier1, tool_specs):
+    """`hermes` starts as an admin with no console password (`/admin/mcp`
+    only). Give it one directly first, as a human would via the identity
+    editor -- otherwise demoting it to viewer would also hit
+    `save_identity`'s "role needs a console password" guard, which is not
+    what this test is about. `root` staying an admin with a password keeps
+    the last-admin guard from firing too.
+    """
+    store, pending, _tp, _ip = _env(tmp_path, tier1, tool_specs)
+    store.save_identity(
+        identity_id="hermes", role="admin", tools=[], scopes=[],
+        actor="root", rev=store.identities_revision(), replaces="hermes",
+        password="x" * 20,
+    )
+    item = pending.propose(
+        action="role_set", actor="root",
+        payload={
+            "identity_id": "hermes", "role": "viewer",
+            "tools": [], "scopes": [],
+        },
+        base_rev=store.identities_revision(),
+    )
+    apply_pending(store, pending, item.id, decided_by="root")
+    assert store.identities.identities["hermes"].role == "viewer"
+
+
 def test_approve_nonexistent_action_refused(tmp_path, tier1, tool_specs):
     store, pending, _tp, _ip = _env(tmp_path, tier1, tool_specs)
     try:
@@ -202,6 +228,36 @@ def test_stale_item_cannot_be_approved_again(tmp_path, tier1, tool_specs):
         assert False, "expected PendingWriteRefused"
     except PendingWriteRefused as exc:
         assert "already" in str(exc).lower() or "stale" in str(exc).lower()
+
+
+def test_approve_role_set_marks_stale_when_identities_moved_since_proposal(
+    tmp_path, tier1, tool_specs
+):
+    store, pending, _tp, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="role_set", actor="hermes",
+        payload={
+            "identity_id": "bot", "role": "viewer",
+            "tools": [], "scopes": [],
+        },
+        base_rev=store.identities_revision(),
+    )
+    # Something else changes identities.yaml before the human reviews it.
+    store.save_identity(
+        identity_id="bot", role="agent", tools=["demo.show"], scopes=[],
+        actor="root", rev=store.identities_revision(), replaces="bot",
+    )
+
+    try:
+        apply_pending(store, pending, item.id, decided_by="root")
+        assert False, "expected PendingWriteRefused (stale)"
+    except PendingWriteRefused as exc:
+        assert "stale" in str(exc).lower()
+
+    marked = pending.get(item.id)
+    assert marked.status == "stale"
+    # No silent re-basing: the role is still what the concurrent write set.
+    assert store.identities.identities["bot"].role == "agent"
 
 
 # -- Last-admin guard still fires through an approved pending identity change --

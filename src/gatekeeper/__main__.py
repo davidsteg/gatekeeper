@@ -197,7 +197,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             )
             # A third Tier 2 file, alongside tools.yaml/identities.yaml --
             # proposals from /admin/mcp that a human has not yet approved
-            # (or rejected) at /ui/pending.
+            # (or rejected) at /ui/requests (Change tab).
             pending = PendingStore(
                 path=_config_path("pending.yaml", args.pending),
                 audit=audit,

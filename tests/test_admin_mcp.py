@@ -321,6 +321,46 @@ async def test_grant_set_always_pending(admin_mcp_env):
     assert pending.list(status="pending")[0].action == "grant_set"
 
 
+async def test_role_set_always_pending(admin_mcp_env):
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    # "eye" already has a console password (role: viewer) -- promoting it to
+    # admin needs no new password, unlike a passwordless agent identity.
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.role_set", {"identity_id": "eye", "role": "admin"}
+        )
+    payload = json.loads(result.content[0].text)
+    assert payload["pending"] is True
+    assert pending.list(status="pending")[0].action == "role_set"
+
+
+async def test_role_set_unknown_identity_rejected(admin_mcp_env):
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.role_set", {"identity_id": "ghost", "role": "viewer"}
+        )
+    assert result.is_error
+    assert pending.list(status="pending") == []
+
+
+async def test_role_set_to_ui_role_without_password_rejected(admin_mcp_env):
+    """`bot` (role: agent) has no console password -- `admin.role_set` has
+    no password field of its own, so promoting it to `viewer` here would
+    leave an unsignable-in identity if it were allowed through.
+    """
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.role_set", {"identity_id": "bot", "role": "viewer"}
+        )
+    assert result.is_error
+    assert pending.list(status="pending") == []
+
+
 # -- approve/reject are structurally unreachable from /admin/mcp -------------
 
 
@@ -346,7 +386,7 @@ async def test_calling_admin_approve_by_name_is_unknown_tool(admin_mcp_env):
 
 async def test_approved_pending_change_becomes_callable_on_mcp(admin_mcp_env):
     """The manual-verification scenario from the plan, automated: create
-    (inert) -> propose an enable on a write tool -> approve at /ui/pending
+    (inert) -> propose an enable on a write tool -> approve at /ui/requests
     -> the tool becomes callable on /mcp for a granted agent identity.
     """
     app, store, pending, _toolkit_proposals = admin_mcp_env["build"]()
@@ -377,7 +417,7 @@ async def test_approved_pending_change_becomes_callable_on_mcp(admin_mcp_env):
         await http.post(
             f"{UI_PREFIX}/login", data={"identity": "root", "password": PASSWORDS["root"]}
         )
-        page = await http.get(f"{UI_PREFIX}/pending")
+        page = await http.get(f"{UI_PREFIX}/requests?tab=change")
         marker = 'name="_csrf" value="'
         start = page.text.index(marker) + len(marker)
         csrf = page.text[start : page.text.index('"', start)]

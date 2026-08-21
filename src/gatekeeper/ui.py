@@ -570,6 +570,11 @@ body {
   color: var(--bezel-accent); font-weight: 600; border-left-color: var(--bezel-accent);
 }
 .side nav a.active::before { content: "\\203a"; font-weight: 700; }
+.nav-badge {
+  margin-left: auto; background: var(--bezel-accent); color: var(--bezel-bg);
+  border-radius: 999px; font-size: .7rem; font-weight: 700; line-height: 1.4;
+  padding: .02rem .42rem;
+}
 .side-foot { margin-top: auto; border-top: 1px solid var(--bezel-line); padding-top: .7rem; }
 .who { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: .84rem; }
 .who b { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -717,6 +722,17 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
    equally loud neutral pills. */
 .pill.quiet { opacity: .62; }
 .pills { display: flex; flex-wrap: wrap; gap: .28rem; }
+
+/* -- /ui/requests tab switcher -- */
+.req-tabs { display: flex; gap: .5rem; margin-bottom: .8rem; }
+.req-tab {
+  display: flex; align-items: center; gap: .4rem; padding: .5rem .9rem;
+  border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--surface); color: var(--muted); text-decoration: none;
+  font-size: .88rem; font-weight: 600;
+}
+.req-tab:hover { border-color: var(--accent); color: var(--fg); }
+.req-tab.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 code {
   background: var(--sunken); border: 1px solid var(--line);
   padding: .06rem .3rem; border-radius: var(--radius-sm); font-size: .84em;
@@ -3361,7 +3377,7 @@ def _resolved_tool_badge(store: ConfigStore | None, tool_id: str) -> str:
     A pending proposal (especially `grant_set`) can name a tool that was
     never created, or that exists but is disabled -- approving that
     silently grants a right to nothing. This is the fix for exactly that:
-    every tool id rendered on `/ui/pending` is looked up here, and a
+    every tool id rendered on the Change tab of `/ui/requests` is looked up here, and a
     missing tool gets a distinct, unmissable warning state instead of
     looking identical to a real one.
     """
@@ -3416,7 +3432,95 @@ def _pending_payload_summary(item: PendingAction, store: ConfigStore | None = No
     return _e(json.dumps(item.payload, default=str))
 
 
-def _view_pending(session: Session, store: ConfigStore | None, pending: PendingStore | None) -> str:
+#: Statuses that need no further action -- tucked into a collapsed archive
+#: on /ui/requests instead of piling up forever in the live queue.
+_PENDING_ARCHIVE_STATUSES = {"approved", "rejected", "stale"}
+_TOOLKIT_ARCHIVE_STATUSES = {"deployed", "rejected"}
+
+
+def _decided_row(item: Any) -> str:
+    """The "who decided this, when, and why" row -- identical shape for a
+    `PendingAction` and a `ToolkitProposal` (both carry `decided_by`/
+    `decided_at`/`reason`), so one function covers both archives.
+    """
+    if item.status == "pending":
+        return ""
+    detail = (
+        f'{_e(item.decided_by or "")} &middot; {_e(item.decided_at or "")}'
+        + (f" &mdash; {_e(item.reason)}" if item.reason else "")
+    )
+    return (
+        f'<div class="row"><div class="row-l">Decision</div>'
+        f'<div class="row-l">{_icon("users", 12)}{detail}</div></div>'
+    )
+
+
+def _stale_row(item: PendingAction) -> str:
+    """Explains a `stale` item in place, instead of leaving a reviewer to
+    piece it together from a bare exception (the error this is meant to
+    fix: "Pending action ... is stale" used to be all a caller ever saw).
+    """
+    if item.status != "stale":
+        return ""
+    return (
+        '<div class="row"><div class="row-l">Why</div>'
+        "<div>The configuration this referred to changed after it was "
+        "proposed &mdash; ask Hermes to re-propose from the current "
+        "state.</div></div>"
+    )
+
+
+def _pending_card(
+    session: Session, item: PendingAction, store: ConfigStore | None, *, can_decide: bool
+) -> str:
+    tone = _PENDING_TONE.get(item.status, "")
+    ops = ""
+    if item.status == "pending" and can_decide:
+        ops = (
+            _post_button(
+                f"{UI_PREFIX}/pending/approve", "Approve", "check", session,
+                css="ghost", fields={"id": item.id},
+            )
+            + f'<a class="btn" href="{UI_PREFIX}/pending/reject?id={_e(item.id)}">'
+            f'{_icon("ban", 14)}Reject</a>'
+        )
+    meta = f'{_icon("users", 12)}{_e(item.actor)} &middot; {_e(item.created_at)}'
+    detail_rows = (
+        f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Change</div>'
+        f"<div>{_pending_payload_summary(item, store)}</div></div>"
+        + _stale_row(item)
+        + _decided_row(item)
+    )
+    return (
+        '<details class="card"><summary class="card-head">'
+        f'<span class="name mono">{_e(item.action)}</span>'
+        f'<span class="pill {tone}">{_e(item.status)}</span>'
+        f'<span class="row-l muted">{meta}</span>'
+        f'<span class="spacer"></span>{ops}'
+        f'<span class="chev">{_icon("chevron", 14)}</span>'
+        "</summary>"
+        f'<div class="rows">{detail_rows}</div>'
+        "</details>"
+    )
+
+
+def _archive_details(label: str, rows_html: str, count: int) -> str:
+    """One collapsed `<details>` trailing a live list -- resolved items
+    (approved/rejected/stale, or deployed/rejected for toolkits) stay
+    reachable but out of the way, instead of piling up in the queue
+    forever alongside what still needs a decision.
+    """
+    return (
+        '<details class="card"><summary class="card-head">'
+        f'<span class="name">{_e(label)} ({count})</span>'
+        f'<span class="spacer"></span><span class="chev">{_icon("chevron", 14)}</span>'
+        "</summary>"
+        f'<div class="pad">{rows_html}</div>'
+        "</details>"
+    )
+
+
+def _change_tab(session: Session, store: ConfigStore | None, pending: PendingStore | None) -> str:
     if pending is None:
         return _note(
             "<strong>No pending queue configured.</strong> This deployment "
@@ -3429,55 +3533,33 @@ def _view_pending(session: Session, store: ConfigStore | None, pending: PendingS
         return _note(
             "No proposals yet. This fills up when an admin-role agent on "
             "/admin/mcp calls a tool that expands what it can do -- "
-            "enabling/updating a write tool, deleting a tool, or setting a "
-            "grant.",
+            "enabling/updating a write tool, deleting a tool, setting a "
+            "grant, or changing a role.",
             icon="share",
         )
     can_decide = session.can_write and store is not None
-    rows = []
-    for item in reversed(items):
-        tone = _PENDING_TONE.get(item.status, "")
-        ops = ""
-        if item.status == "pending" and can_decide:
-            ops = (
-                _post_button(
-                    f"{UI_PREFIX}/pending/approve", "Approve", "check", session,
-                    css="ghost", fields={"id": item.id},
-                )
-                + f'<a class="btn" href="{UI_PREFIX}/pending/reject?id={_e(item.id)}">'
-                f'{_icon("ban", 14)}Reject</a>'
-            )
-        detail = ""
-        if item.status != "pending":
-            detail = (
-                f'<div class="row-l">{_icon("users", 12)}'
-                f"{_e(item.decided_by or '')} &middot; {_e(item.decided_at or '')}"
-                + (f" &mdash; {_e(item.reason)}" if item.reason else "")
-                + "</div>"
-            )
-        rows.append(
-            '<div class="card"><div class="card-head">'
-            f'<span class="name mono">{_e(item.action)}</span>'
-            f'<span class="pill {tone}">{_e(item.status)}</span>'
-            f'<span class="spacer"></span>{ops}</div>'
-            '<div class="rows">'
-            f'<div class="row"><div class="row-l">{_icon("users", 14)}Proposed by</div>'
-            f'<div class="mono">{_e(item.actor)}</div></div>'
-            f'<div class="row"><div class="row-l">{_icon("clock", 14)}Proposed</div>'
-            f'<div class="mono">{_e(item.created_at)}</div></div>'
-            f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Change</div>'
-            f"<div>{_pending_payload_summary(item, store)}</div></div>"
-            + (f'<div class="row"><div class="row-l">Decision</div>{detail}</div>' if detail else "")
-            + "</div></div>"
-        )
-    return (
+    live = [i for i in items if i.status not in _PENDING_ARCHIVE_STATUSES]
+    archived = [i for i in items if i.status in _PENDING_ARCHIVE_STATUSES]
+    parts = [
         _note(
             "Only a human can approve or reject a proposal here -- there is "
             "no path from /admin/mcp that reaches this decision (FR-2.8).",
             icon="share",
         )
-        + "".join(rows)
+    ]
+    parts.append(
+        "".join(_pending_card(session, i, store, can_decide=can_decide) for i in reversed(live))
+        or '<p class="muted">Nothing pending.</p>'
     )
+    if archived:
+        parts.append(
+            _archive_details(
+                "Archive",
+                "".join(_pending_card(session, i, store, can_decide=False) for i in reversed(archived)),
+                len(archived),
+            )
+        )
+    return "".join(parts)
 
 
 def _pending_reject_confirm(session: Session, item: PendingAction) -> str:
@@ -3492,7 +3574,7 @@ def _pending_reject_confirm(session: Session, item: PendingAction) -> str:
         '<div class="field"><span>Reason (optional)</span>'
         '<input name="reason" maxlength="240"></div>'
         f'<button class="solid-danger" type="submit">{_icon("ban", 14)}Reject</button> '
-        f'<a class="btn" href="{UI_PREFIX}/pending">{_icon("back", 14)}Cancel</a>'
+        f'<a class="btn" href="{UI_PREFIX}/requests?tab=change">{_icon("back", 14)}Cancel</a>'
         "</form></div></div>"
     )
 
@@ -3508,7 +3590,7 @@ _TOOLKIT_PROPOSAL_TONE = {
 def _toolkit_card(name: str, tk: Toolkit) -> str:
     """One live, read-only toolkit card -- the same fields `_view_overview`
     already renders for its collapsed Tier 1 section, factored out here so
-    `/ui/toolkits` can show them uncollapsed as the page's whole point.
+    the Toolkit tab of `/ui/requests` can show them uncollapsed as the page's whole point.
     """
     return (
         '<div class="card">'
@@ -3546,33 +3628,27 @@ def _toolkit_proposal_card(
             f'<a class="btn" href="{UI_PREFIX}/toolkits/reject?id={_e(item.id)}">'
             f'{_icon("ban", 14)}Reject</a>'
         )
-    detail = ""
-    if item.status != "pending":
-        detail = (
-            f'<div class="row-l">{_icon("users", 12)}'
-            f"{_e(item.decided_by or '')} &middot; {_e(item.decided_at or '')}"
-            + (f" &mdash; {_e(item.reason)}" if item.reason else "")
-            + "</div>"
-        )
+    meta = f'{_icon("users", 12)}{_e(item.actor)} &middot; {_e(item.created_at)}'
     spec_yaml = yaml.safe_dump({item.name: item.spec}, sort_keys=False, allow_unicode=True)
-    return (
-        '<div class="card"><div class="card-head">'
-        f'<span class="name mono">{_e(item.name)}</span>'
-        f'<span class="pill {tone}">{_e(item.status)}</span>'
-        f'<span class="spacer"></span>{ops}</div>'
-        '<div class="rows">'
-        f'<div class="row"><div class="row-l">{_icon("users", 14)}Proposed by</div>'
-        f'<div class="mono">{_e(item.actor)}</div></div>'
-        f'<div class="row"><div class="row-l">{_icon("clock", 14)}Proposed</div>'
-        f'<div class="mono">{_e(item.created_at)}</div></div>'
+    detail_rows = (
         f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Proposed toolkit</div>'
         f'<div><pre class="mono">{_e(spec_yaml)}</pre></div></div>'
-        + (f'<div class="row"><div class="row-l">Decision</div>{detail}</div>' if detail else "")
-        + "</div></div>"
+        + _decided_row(item)
+    )
+    return (
+        '<details class="card"><summary class="card-head">'
+        f'<span class="name mono">{_e(item.name)}</span>'
+        f'<span class="pill {tone}">{_e(item.status)}</span>'
+        f'<span class="row-l muted">{meta}</span>'
+        f'<span class="spacer"></span>{ops}'
+        f'<span class="chev">{_icon("chevron", 14)}</span>'
+        "</summary>"
+        f'<div class="rows">{detail_rows}</div>'
+        "</details>"
     )
 
 
-def _view_toolkits(
+def _toolkit_tab(
     session: Session,
     service: Service,
     store: ConfigStore | None,
@@ -3582,10 +3658,10 @@ def _view_toolkits(
     section) plus a "Proposed" section for what Hermes has drafted via
     `admin.toolkit_propose` -- review/Approve & Deploy/Reject.
 
-    Unlike `/ui/pending`, a proposal here changes Tier 1 -- what is
+    Unlike the Change tab, a proposal here changes Tier 1 -- what is
     possible at all, not just who can do what -- so the confirmation on
     Approve & Deploy (`_toolkit_deploy_confirm`) is deliberately heavier
-    than `/ui/pending`'s single click.
+    than the Change tab's single click.
     """
     parts = [
         _note(
@@ -3628,17 +3704,81 @@ def _view_toolkits(
         return "".join(parts)
 
     can_decide = session.can_write and store is not None
+    live = [i for i in items if i.status not in _TOOLKIT_ARCHIVE_STATUSES]
+    archived = [i for i in items if i.status in _TOOLKIT_ARCHIVE_STATUSES]
     parts.append(
-        "".join(
-            _toolkit_proposal_card(session, item, can_decide=can_decide)
-            for item in reversed(items)
-        )
+        "".join(_toolkit_proposal_card(session, i, can_decide=can_decide) for i in reversed(live))
+        or '<p class="muted">Nothing pending.</p>'
     )
+    if archived:
+        parts.append(
+            _archive_details(
+                "Archive",
+                "".join(_toolkit_proposal_card(session, i, can_decide=False) for i in reversed(archived)),
+                len(archived),
+            )
+        )
     return "".join(parts)
 
 
+def _request_pending_counts(
+    pending: PendingStore | None, toolkit_proposals: ToolkitProposalStore | None
+) -> tuple[int, int]:
+    change_n = sum(1 for i in pending.list() if i.status == "pending") if pending is not None else 0
+    toolkit_n = (
+        sum(1 for i in toolkit_proposals.list() if i.status == "pending")
+        if toolkit_proposals is not None else 0
+    )
+    return change_n, toolkit_n
+
+
+def _view_requests(
+    request: Request,
+    session: Session,
+    service: Service,
+    store: ConfigStore | None,
+    pending: PendingStore | None,
+    toolkit_proposals: ToolkitProposalStore | None,
+) -> str:
+    """Both proposal queues in one place, as two tabs sharing one layout --
+    "Change" (tool/grant/role proposals, formerly /ui/pending) and
+    "Toolkit" (Tier 1 proposals, formerly /ui/toolkits). Splitting them
+    across two unrelated-looking pages was the original complaint: same
+    review workflow, same card shape, no reason for two menu entries.
+    """
+    tab = request.query_params.get("tab", "change")
+    if tab not in ("change", "toolkit"):
+        tab = "change"
+    change_n, toolkit_n = _request_pending_counts(pending, toolkit_proposals)
+    tabs = (
+        '<div class="req-tabs">'
+        f'<a class="req-tab{" active" if tab == "change" else ""}" '
+        f'href="{UI_PREFIX}/requests?tab=change">{_icon("share", 14)}Change'
+        + (f'<span class="pill warn">{change_n}</span>' if change_n else "")
+        + "</a>"
+        f'<a class="req-tab{" active" if tab == "toolkit" else ""}" '
+        f'href="{UI_PREFIX}/requests?tab=toolkit">{_icon("layers", 14)}Toolkit'
+        + (f'<span class="pill warn">{toolkit_n}</span>' if toolkit_n else "")
+        + "</a></div>"
+    )
+    if change_n or toolkit_n:
+        banner_text = (
+            f"<strong>{change_n}</strong> change{'s' if change_n != 1 else ''} and "
+            f"<strong>{toolkit_n}</strong> toolkit{'s' if toolkit_n != 1 else ''} "
+            "awaiting review, across both tabs."
+        )
+    else:
+        banner_text = "Nothing awaiting review right now."
+    banner = _note(banner_text, icon="share")
+    body = (
+        _change_tab(session, store, pending) if tab == "change"
+        else _toolkit_tab(session, service, store, toolkit_proposals)
+    )
+    return tabs + banner + body
+
+
 def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
-    """Deliberately heavier than `_pending_reject_confirm`/`/ui/pending`'s
+    """Deliberately heavier than `_pending_reject_confirm`/the Change tab's
     Approve: this is a Tier 1 change, not a Tier 2 one -- it widens what is
     *possible* at all on this deployment, not just who can do what, and it
     takes effect immediately, with no further review after this click.
@@ -3668,7 +3808,7 @@ def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
         "I understand this immediately expands what this deployment can "
         "reach, with no further review.</label></div>"
         f'<button class="solid-danger" type="submit">{_icon("alert", 14)}Approve &amp; Deploy</button> '
-        f'<a class="btn" href="{UI_PREFIX}/toolkits">{_icon("back", 14)}Cancel</a>'
+        f'<a class="btn" href="{UI_PREFIX}/requests?tab=toolkit">{_icon("back", 14)}Cancel</a>'
         "</form></div></div>"
     )
 
@@ -3685,7 +3825,7 @@ def _toolkit_reject_confirm(session: Session, item: ToolkitProposal) -> str:
         '<div class="field"><span>Reason (optional)</span>'
         '<input name="reason" maxlength="240"></div>'
         f'<button class="solid-danger" type="submit">{_icon("ban", 14)}Reject</button> '
-        f'<a class="btn" href="{UI_PREFIX}/toolkits">{_icon("back", 14)}Cancel</a>'
+        f'<a class="btn" href="{UI_PREFIX}/requests?tab=toolkit">{_icon("back", 14)}Cancel</a>'
         "</form></div></div>"
     )
 
@@ -4577,13 +4717,15 @@ def build_ui_routes(
             f'<script nonce="{script_nonce}" src="{ACCESS_MAP_JS_PATH}"></script>'
             if script_nonce else ""
         )
+        change_n, toolkit_n = _request_pending_counts(pending, toolkit_proposals)
         return _respond(
             request,
             _page(title, body, session=session, subtitle=subtitle, icon=icon,
                   active=active, nonce=nonce, actions=actions,
                   # Without writable Tier 2 there is no account page: it
                   # could offer nothing but an error message.
-                  account=store is not None, script_tag=script_tag),
+                  account=store is not None, script_tag=script_tag,
+                  nav_badge=change_n + toolkit_n),
             nonce,
             status,
             script_nonce=script_nonce,
@@ -5361,32 +5503,32 @@ def build_ui_routes(
         if session is None:
             return _to_login()
         if store is None or not session.can_write or pending is None:
-            return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
         item = pending.get(request.query_params.get("id", ""))
         if item is None or item.status != "pending":
-            return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
         return _shell(
             request, "Reject proposal", _pending_reject_confirm(session, item),
-            session, icon="ban", active="/pending",
+            session, icon="ban", active="/requests",
         )
 
     async def pending_approve(request: Request, session: Session, form: FormData) -> Response:
         assert store is not None
         if pending is None:
-            return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
         action_id = str(form.get("id") or "")
         try:
             apply_pending(store, pending, action_id, decided_by=session.identity)
         except (PendingWriteRefused, WriteRefused, ConfigError) as exc:
             return _shell(
                 request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
-                session, icon="ban", active="/pending", status=400,
+                session, icon="ban", active="/requests", status=400,
             )
-        return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+        return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
 
     async def pending_reject(request: Request, session: Session, form: FormData) -> Response:
         if pending is None:
-            return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
         action_id = str(form.get("id") or "")
         reason = str(form.get("reason") or "")
         try:
@@ -5394,12 +5536,12 @@ def build_ui_routes(
         except PendingWriteRefused as exc:
             return _shell(
                 request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
-                session, icon="ban", active="/pending", status=400,
+                session, icon="ban", active="/requests", status=400,
             )
-        return RedirectResponse(f"{UI_PREFIX}/pending", status_code=303)
+        return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
 
     # -- Toolkits (plan "Follow-up 2") ------------------------------------
-    # A categorically different severity from Pending above: a toolkit
+    # A categorically different severity from Change above: a toolkit
     # proposal changes Tier 1, not Tier 2. Deploy/reject go through
     # `writer` like every other admin write (session, `role: admin`,
     # CSRF), but there is no code path from `/admin/mcp` that reaches
@@ -5411,45 +5553,45 @@ def build_ui_routes(
         if session is None:
             return _to_login()
         if store is None or not session.can_write or toolkit_proposals is None:
-            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
         item = toolkit_proposals.get(request.query_params.get("id", ""))
         if item is None or item.status != "pending":
-            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
         return _shell(
             request, "Approve & deploy toolkit", _toolkit_deploy_confirm(session, item),
-            session, icon="alert", active="/toolkits",
+            session, icon="alert", active="/requests",
         )
 
     async def toolkit_deploy(request: Request, session: Session, form: FormData) -> Response:
         if toolkit_proposals is None:
-            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
         proposal_id = str(form.get("id") or "")
         try:
             toolkit_proposals.deploy(proposal_id, decided_by=session.identity)
         except (ToolkitProposalWriteRefused, ConfigError) as exc:
             return _shell(
                 request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
-                session, icon="ban", active="/toolkits", status=400,
+                session, icon="ban", active="/requests", status=400,
             )
-        return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+        return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
 
     async def toolkit_reject_form(request: Request) -> Response:
         session = _current(request)
         if session is None:
             return _to_login()
         if store is None or not session.can_write or toolkit_proposals is None:
-            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
         item = toolkit_proposals.get(request.query_params.get("id", ""))
         if item is None or item.status != "pending":
-            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
         return _shell(
             request, "Reject proposal", _toolkit_reject_confirm(session, item),
-            session, icon="ban", active="/toolkits",
+            session, icon="ban", active="/requests",
         )
 
     async def toolkit_reject(request: Request, session: Session, form: FormData) -> Response:
         if toolkit_proposals is None:
-            return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
         proposal_id = str(form.get("id") or "")
         reason = str(form.get("reason") or "")
         try:
@@ -5457,9 +5599,9 @@ def build_ui_routes(
         except ToolkitProposalWriteRefused as exc:
             return _shell(
                 request, "Rejected", _note(f"<strong>Rejected.</strong> {_e(exc)}", tone="bad"),
-                session, icon="ban", active="/toolkits", status=400,
+                session, icon="ban", active="/requests", status=400,
             )
-        return RedirectResponse(f"{UI_PREFIX}/toolkits", status_code=303)
+        return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
 
     async def probe_executors_action(request: Request) -> Response:
         # Not gated by `writer`: this reads reachability, it does not
@@ -5615,14 +5757,15 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/credentials/delete", credential_delete_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/credentials/delete", writer(credential_delete), methods=["POST"]),
         Route(
-            f"{UI_PREFIX}/pending",
+            f"{UI_PREFIX}/requests",
             guarded(
-                lambda r, s: _view_pending(s, store, pending),
-                "Pending", "/pending", icon="share",
+                lambda r, s: _view_requests(r, s, service, store, pending, toolkit_proposals),
+                "Requests", "/requests", icon="share",
                 subtitle=(
-                    "Proposals from an admin-role agent on /admin/mcp that "
-                    "expand what it can do. Only a human can approve or "
-                    "reject one."
+                    "Proposals from an admin-role agent on /admin/mcp: tool, "
+                    "grant, and role changes on the Change tab, new Tier 1 "
+                    "toolkits on the Toolkit tab. Only a human can approve "
+                    "or reject one."
                 ),
             ),
             methods=["GET"],
@@ -5630,20 +5773,6 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/pending/reject", pending_reject_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/pending/approve", writer(pending_approve), methods=["POST"]),
         Route(f"{UI_PREFIX}/pending/reject", writer(pending_reject), methods=["POST"]),
-        Route(
-            f"{UI_PREFIX}/toolkits",
-            guarded(
-                lambda r, s: _view_toolkits(s, service, store, toolkit_proposals),
-                "Toolkits", "/toolkits", icon="layers",
-                subtitle=(
-                    "Live Tier 1 toolkits, read-only, plus what an admin-role "
-                    "agent on /admin/mcp has proposed adding. Approving a "
-                    "proposal changes what is possible at all on this "
-                    "deployment -- only a human can do that."
-                ),
-            ),
-            methods=["GET"],
-        ),
         Route(f"{UI_PREFIX}/toolkits/deploy", toolkit_deploy_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/toolkits/deploy", writer(toolkit_deploy), methods=["POST"]),
         Route(f"{UI_PREFIX}/toolkits/reject", toolkit_reject_form, methods=["GET"]),

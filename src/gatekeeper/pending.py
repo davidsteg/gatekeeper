@@ -2,7 +2,8 @@
 
 Low-risk admin actions apply immediately (see `admin_service.py`); anything
 that expands what an agent can actually do or touch is written here instead
-and waits for a human to approve or reject it through `/ui/pending`. This is
+and waits for a human to approve or reject it through `/ui/requests` (Change
+tab). This is
 a third Tier 2 file, `pending.yaml`, written with the exact same
 atomic-write / revision-fingerprint primitives `store.py` uses for
 `tools.yaml`/`identities.yaml` (`_atomic.py`) -- so the same "no silent
