@@ -266,10 +266,11 @@ every routine change.
   tool (always created disabled), disabling a tool, and enabling/updating a
   `read`-category tool.
 - **Everything that expands what an agent can do goes to a pending queue**
-  at `/ui/pending` instead: enabling/updating a `write`/`write_external`
-  tool, deleting a tool, and granting access. A human approves or rejects
-  from the console — the applied change and its audit entry are identical
-  to a human doing the same edit directly.
+  at `/ui/requests` (Change tab) instead: enabling/updating a
+  `write`/`write_external` tool, deleting a tool, granting access
+  (`admin.grant_set`), and changing an identity's role (`admin.role_set`).
+  A human approves or rejects from the console — the applied change and
+  its audit entry are identical to a human doing the same edit directly.
 - **Self-approval is impossible, structurally.** `approve`/`reject` are not
   part of the `admin.*` tool list and have no code path from `/admin/mcp` —
   there is no permission check to bypass, because the capability doesn't
@@ -280,9 +281,10 @@ every routine change.
   rather than erasing it).
 - **Drafting a new toolkit is possible, deploying it never is — from here.**
   `admin.toolkit_list` reads the live Tier 1 configuration; `admin.toolkit_propose`
-  drafts a brand-new toolkit, but always lands in its own review surface at
-  `/ui/toolkits`, never `/ui/pending` — a toolkit changes what is *possible*
-  at all (Tier 1), not just who can do what (Tier 2), so it gets a heavier,
+  drafts a brand-new toolkit, but always lands in its own review surface,
+  the Toolkit tab of `/ui/requests` — never the Change tab — a toolkit
+  changes what is *possible* at all (Tier 1), not just who can do what
+  (Tier 2), so it gets a heavier,
   explicit confirmation. A human clicking "Approve & Deploy" is the only
   thing that ever writes `toolkits.yaml`: gatekeeper validates the merged
   config with the same loader startup uses, writes it atomically, and

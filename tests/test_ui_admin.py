@@ -226,8 +226,8 @@ def test_no_route_writes_tier1(admin_env):
     -- may ever touch it, and only for a human, through `writer` (session +
     `role: admin` + CSRF), never automatically and never from `/admin/mcp`.
 
-    '/ui/toolkits/reference' and '/ui/toolkits' itself are GET-only and
-    render read-only/copy-pasteable material. '/ui/toolkits/reject' POSTs
+    '/ui/toolkits/reference' and '/ui/requests' (Toolkit tab) are GET-only
+    and render read-only/copy-pasteable material. '/ui/toolkits/reject' POSTs
     but only ever writes toolkit_proposals.yaml (Tier 2), never
     toolkits.yaml. Since plan "Follow-up 2", exactly one route writes
     Tier 1 at all -- '/ui/toolkits/deploy', via `ToolkitProposalStore.deploy`
@@ -857,7 +857,7 @@ def test_a_password_on_an_agent_role_never_reaches_the_file(admin_env):
 
 async def test_pending_page_distinguishes_real_from_missing_tools_in_a_grant(admin_env):
     """A `grant_set` proposal naming a tool that doesn't exist must not look
-    the same on /ui/pending as one naming a real, enabled tool -- otherwise
+    the same on /ui/requests as one naming a real, enabled tool -- otherwise
     a human can approve a grant to nothing without ever noticing (the gap
     found and fixed after the first real-world use of /admin/mcp).
     """
@@ -877,7 +877,7 @@ async def test_pending_page_distinguishes_real_from_missing_tools_in_a_grant(adm
     app = admin_env["app"]
     async with _client(app) as client:
         await _login(client)
-        page = await client.get(f"{UI_PREFIX}/pending")
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
 
     assert "demo.show" in page.text
     assert "demo.ghost" in page.text
@@ -919,7 +919,7 @@ async def test_toolkits_deploy_requires_admin_role(admin_env):
     app = admin_env["app"]
     async with _client(app) as client:
         await _login(client, "eye")
-        page = await client.get(f"{UI_PREFIX}/toolkits")
+        page = await client.get(f"{UI_PREFIX}/requests?tab=toolkit")
         assert page.status_code == 200
         # A viewer does not even see the deploy/reject buttons.
         assert f"{UI_PREFIX}/toolkits/deploy" not in page.text
@@ -934,7 +934,7 @@ async def test_toolkits_deploy_requires_admin_role(admin_env):
 
 async def test_toolkits_deploy_over_http_writes_toolkits_yaml_live(admin_env):
     """The full path: propose (as Hermes would, store-level here) -> a
-    human approves at /ui/toolkits -> toolkits.yaml is written and the
+    human approves at /ui/requests (Toolkit tab) -> toolkits.yaml is written and the
     running service reflects the new toolkit -- no restart.
     """
     toolkit_proposals = admin_env["toolkit_proposals"]

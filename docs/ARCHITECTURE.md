@@ -16,7 +16,7 @@ A toolkit **proposal** (`toolkit_proposals.yaml`) is the one deliberate,
 narrow exception: an `admin.toolkit_propose` call from `/admin/mcp` can
 draft a brand-new Tier 1 toolkit, but it only ever lands in this separate
 Tier 2 file -- never `pending.yaml` -- and only a human clicking "Approve &
-Deploy" at `/ui/toolkits` writes it into `toolkits.yaml` and reloads it into
+Deploy" at `/ui/requests` (Toolkit tab) writes it into `toolkits.yaml` and reloads it into
 the running process (`Service.reload_config`, no restart). See
 [`toolkit_proposals.py`](../src/gatekeeper/toolkit_proposals.py).
 
@@ -52,11 +52,12 @@ each mount -- an `admin`-role token is rejected outright on `/mcp`, and every
 other role is rejected outright on `/admin/mcp`, so a token never opens the
 "wrong" endpoint even in principle. See [`admin_service.py`](../src/gatekeeper/admin_service.py)
 for which `admin.*` actions apply immediately versus land in the
-`pending.yaml` queue for a human to approve at `/ui/pending` -- `approve`/
-`reject` are not reachable from `/admin/mcp` at all, so an agent cannot
-approve its own proposal. `admin.toolkit_propose` is separate again: it
-never applies and never touches `pending.yaml`, only the dedicated
-`toolkit_proposals.yaml`/`/ui/toolkits` surface described above -- a toolkit
+`pending.yaml` queue for a human to approve at `/ui/requests` (Change tab)
+-- `approve`/`reject` are not reachable from `/admin/mcp` at all, so an
+agent cannot approve its own proposal. `admin.toolkit_propose` is separate
+again: it never applies and never touches `pending.yaml`, only the
+dedicated `toolkit_proposals.yaml`/`/ui/requests` (Toolkit tab) surface
+described above -- a toolkit
 changes Tier 1, not Tier 2, so it is deliberately not reachable through the
 same review path as an ordinary tool/grant change.
 
@@ -206,13 +207,13 @@ src/gatekeeper/
                        /admin/mcp -- see pending.py
   pending.py            The pending-actions queue (pending.yaml) an
                        admin-role agent's higher-risk admin.* calls land in;
-                       approved only via /ui/pending (human + CSRF)
+                       approved only via /ui/requests, Change tab (human + CSRF)
   toolkit_proposals.py  ToolkitProposalStore (toolkit_proposals.yaml) --
                        admin.toolkit_propose always lands here, never
                        pending.yaml. deploy() merges + validates via
                        load_tier1() before writing toolkits.yaml, then calls
                        Service.reload_config() in-process (no restart).
-                       Only reachable from /ui/toolkits (human + CSRF)
+                       Only reachable from /ui/requests, Toolkit tab (human + CSRF)
   service.py          Call pipeline: auth -> authorize -> registry ->
                        validate -> build request -> execute -> audit;
                        dispatches to execute.py / execute_http.py /

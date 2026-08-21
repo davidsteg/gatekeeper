@@ -24,6 +24,7 @@ from mcp.server.lowlevel import Server
 from ._authctx import identity_from as _identity_from
 from .admin_service import AdminActionError, AdminService, EXPOSED_ACTIONS
 from .errors import ConfigError
+from .identity import ROLES
 from .store import WriteRefused
 
 _OPEN_OBJECT: dict[str, Any] = {"type": "object", "additionalProperties": True}
@@ -82,7 +83,7 @@ _TOOLS: list[types.Tool] = [
             "overwrites -- old versions remain fetchable via admin.tool_get). "
             "Applies immediately if the resulting category is 'read'; "
             "otherwise it is written to the pending queue for a human to "
-            "approve at /ui/pending."
+            "approve at /ui/requests (Change tab)."
         ),
         inputSchema={
             "type": "object",
@@ -97,7 +98,7 @@ _TOOLS: list[types.Tool] = [
         description=(
             "Enables a tool. Applies immediately if its category is 'read'; "
             "otherwise it is written to the pending queue for a human to "
-            "approve at /ui/pending."
+            "approve at /ui/requests (Change tab)."
         ),
         inputSchema=_ID_ONLY,
     ),
@@ -165,6 +166,25 @@ _TOOLS: list[types.Tool] = [
         },
     ),
     types.Tool(
+        name="admin.role_set",
+        title="Change an identity's role",
+        description=(
+            "Changes an existing identity's role (agent/viewer/admin). "
+            "Cannot create a new identity. Always written to the pending "
+            "queue for a human to approve -- role changes go through the "
+            "same review surface as grant changes."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "identity_id": {"type": "string"},
+                "role": {"type": "string", "enum": list(ROLES)},
+            },
+            "required": ["identity_id", "role"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
         name="admin.audit_query",
         title="Query the audit log",
         description="Reads recent audit log entries, optionally filtered. Read-only.",
@@ -185,7 +205,7 @@ _TOOLS: list[types.Tool] = [
         description=(
             "Lists proposals in the pending queue, optionally filtered by "
             "status (pending/approved/rejected/stale). Read-only -- approving "
-            "or rejecting a proposal is only possible through /ui/pending, "
+            "or rejecting a proposal is only possible through /ui/requests (Change tab), "
             "never from here."
         ),
         inputSchema={
@@ -280,7 +300,7 @@ def build_admin_mcp_server(admin_service: AdminService) -> Server[None]:
             "tool) apply immediately. Anything that expands what an agent "
             "can do -- enabling/updating a write tool, deleting a tool, "
             "granting access -- is written to a pending queue and takes "
-            "effect only once a human approves it at /ui/pending. There is "
+            "effect only once a human approves it at /ui/requests (Change tab). There is "
             "no way to approve your own proposal from this endpoint."
         ),
         on_list_tools=on_list_tools,

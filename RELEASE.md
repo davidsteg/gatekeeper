@@ -60,6 +60,36 @@ cannot. It is in every release.
 
 ---
 
+## 0.14.0
+
+**A new `admin.role_set` proposal, and Pending + Toolkits merged into one "Requests" menu with Change/Toolkit tabs, an archive, and pending-count badges.**
+
+- **`admin.role_set`** lets an admin-role agent (Hermes) propose changing an
+  identity's role, mirroring `admin.grant_set`'s shape exactly: always goes
+  to the pending queue, `identities.yaml`'s revision is checked at approval
+  (stale on a concurrent write, same as every other identity mutation).
+  Promoting a passwordless identity straight to `viewer`/`admin` is refused
+  at propose time -- `save_identity` would refuse it anyway (no password to
+  sign in with), and this call has no password field of its own on purpose
+  (a token must never double as a console password). A human sets the
+  password directly in the identity editor first, then this proposal can
+  go through.
+- **`/ui/pending` and `/ui/toolkits` are now one page, `/ui/requests`**, with
+  a Change tab (tool/grant/role proposals) and a Toolkit tab (Tier 1
+  proposals) sharing the same layout: a compact, expandable row per
+  proposal instead of an always-open card, so scanning the queue no longer
+  means scrolling past every payload detail.
+- **Resolved proposals no longer sit in the live list forever.** Approved,
+  rejected, and stale items (deployed/rejected for toolkits) move into a
+  collapsed "Archive" section per tab, reachable but out of the way.
+- **A `stale` proposal now explains itself in place** -- "the configuration
+  this referred to changed after it was proposed, ask Hermes to re-propose
+  from the current state" -- instead of only ever surfacing as a raw
+  exception to whoever clicked Approve.
+- **Pending-count badges**: the tab switcher shows each tab's own pending
+  count, and the sidebar's "Requests" nav entry shows the combined total,
+  so it's visible without opening the page at all.
+
 ## 0.13.2
 
 **Fix: clicking a map node, or the +/-/Fit buttons, did nothing. Protected resources removed from the map.**

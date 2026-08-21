@@ -27,8 +27,9 @@ whether a change applies immediately or is written to the pending queue:
 `approve`/`reject` are deliberately **not** methods on this class and are
 not in `_EXPOSED`. The only place a pending item is ever turned into a live
 change is `apply_pending` below, called exclusively from `ui.py`'s
-`/ui/pending` routes (human session + CSRF, exactly like every other admin
-write). There is no code path from `/admin/mcp` that reaches it -- FR-2.8's
+`/ui/requests` (Change tab) routes (human session + CSRF, exactly like
+every other admin write). There is no code path from `/admin/mcp` that
+reaches it -- FR-2.8's
 self-approval prevention is structural, not a permission check.
 """
 
@@ -40,12 +41,13 @@ from typing import Any, Callable
 
 from .catalog import normalize_tool_entry, parse_tool_spec
 from .errors import ConfigError
+from .identity import ROLES, UI_ROLES
 from .pending import PendingAction, PendingStore
 from .store import ConfigStore, WriteRefused
 from .toolkit_proposals import ToolkitProposalStore
 
 # Imported lazily inside `audit_query` (not at module level): `ui.py`
-# imports `apply_pending` from this module for its `/ui/pending` routes,
+# imports `apply_pending` from this module for its `/ui/requests` routes,
 # so a top-level `from .ui import read_audit` here would be circular.
 
 
@@ -288,6 +290,40 @@ class AdminService:
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
 
+    def role_set(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        identity_id = _require_str(args, "identity_id")
+        existing = self.store.identities.identities.get(identity_id)
+        if existing is None:
+            raise AdminActionError(f"No identity {identity_id!r}.")
+        role = _require_str(args, "role")
+        if role not in ROLES:
+            raise AdminActionError(f"Unknown role {role!r}.")
+        if role in UI_ROLES and not existing.password_hash:
+            # `save_identity` refuses a UI role without a console password,
+            # and this call has no password field of its own -- a token
+            # never carries one, on purpose (identity.py's module docstring:
+            # a stolen token must not double as a stolen password). Turning
+            # a passwordless agent into a console user needs a human at the
+            # identity editor, not a proposal an agent can complete alone.
+            raise AdminActionError(
+                f"{identity_id!r} has no console password -- role {role!r} "
+                "needs one to sign in, and this proposal cannot set one. "
+                "A human must set a password directly in the identity editor."
+            )
+        payload = {
+            "identity_id": identity_id,
+            "role": role,
+            "tools": sorted(existing.tools),
+            "scopes": list(existing.scopes),
+        }
+        item = self.pending.propose(
+            action="role_set",
+            actor=actor,
+            payload=payload,
+            base_rev=self.store.identities_revision(),
+        )
+        return {"applied": False, "pending": True, "pending_id": item.id}
+
     def toolkit_propose(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
         """Always writes to `ToolkitProposalStore`, never auto-applies --
         unlike every other action in this class, a toolkit changes Tier 1
@@ -317,6 +353,7 @@ _EXPOSED: tuple[str, ...] = (
     "tool_validate",
     "grant_list",
     "grant_set",
+    "role_set",
     "audit_query",
     "pending_list",
     "toolkit_list",
@@ -357,6 +394,19 @@ def _apply_grant_set(store: ConfigStore, item: PendingAction) -> Any:
     )
 
 
+def _apply_role_set(store: ConfigStore, item: PendingAction) -> Any:
+    payload = item.payload
+    return store.save_identity(
+        identity_id=payload["identity_id"],
+        role=payload["role"],
+        tools=payload["tools"],
+        scopes=payload["scopes"],
+        actor=item.actor,
+        rev=item.base_rev,
+        replaces=payload["identity_id"],
+    )
+
+
 #: proposed_action -> (applier, "tools"|"identities" -- which file's live
 #: revision `PendingStore.approve` re-checks the proposal's `base_rev`
 #: against before applying).
@@ -365,6 +415,7 @@ _APPLIERS: dict[str, tuple[Callable[[ConfigStore, PendingAction], Any], str]] = 
     "tool_enable": (_apply_tool_enable, "tools"),
     "tool_delete": (_apply_tool_delete, "tools"),
     "grant_set": (_apply_grant_set, "identities"),
+    "role_set": (_apply_role_set, "identities"),
 }
 
 
