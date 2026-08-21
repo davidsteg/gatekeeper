@@ -60,6 +60,33 @@ cannot. It is in every release.
 
 ---
 
+## 0.15.1
+
+**Fixed: approving one pending proposal no longer marks unrelated pending proposals "stale." Toolkit tab decluttered.**
+
+- **Per-record staleness, not whole-file.** `PendingStore.approve` used to
+  compare a proposal's `base_rev` against a hash of the *entire*
+  `tools.yaml`/`identities.yaml` file. Since every write rewrites the whole
+  document, approving one proposal (e.g. granting tools to one agent
+  identity) changed that hash and falsely marked every *other* still-pending
+  proposal against the same file "stale" -- even one targeting a completely
+  different identity or tool. This is a normal pattern, not an edge case:
+  Hermes batch-proposing several `grant_set`/`role_set`/`tool_update`/
+  `tool_delete` calls in one session (e.g. onboarding a batch of identities)
+  is exactly the trigger. `ConfigStore` gained `tool_revision(id)`/
+  `identity_revision(id)`, a fingerprint of just the one record a proposal
+  targets; `admin_service.py` now proposes and re-checks against that
+  instead of the whole-file hash. The mutators' own whole-file `_check()`
+  at the moment of writing is unchanged -- it's still the real atomic-write
+  safety net for a genuine same-instant race.
+  *Compatibility:* any proposal already queued from before this upgrade
+  will show `stale` the first time it's approved (its stored fingerprint
+  predates this change) -- just re-propose it; nothing is at risk.
+- **The Toolkit tab of `/ui/requests` no longer repeats the live toolkit
+  list.** That information already lives on the Tools page, grouped by
+  toolkit. The tab now shows only proposals + archive, the same shape as
+  the Change tab.
+
 ## 0.15.0
 
 **Findings from a full security review: an unauthenticated DoS on the auth path, three HTTP-executor edge cases, reverse-proxy correctness, and tooling/supply-chain hygiene.**
