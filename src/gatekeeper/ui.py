@@ -363,6 +363,7 @@ _ICONS = {
     "pencil": '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/>',
     "chevron": '<path d="m9 5 7 7-7 7"/>',
     "book": '<path d="M4 19.5v-15A1.5 1.5 0 0 1 5.5 3H11v18H5.5A1.5 1.5 0 0 1 4 19.5z"/><path d="M20 19.5v-15A1.5 1.5 0 0 0 18.5 3H13v18h5.5a1.5 1.5 0 0 0 1.5-1.5z"/>',
+    "bar-chart": '<path d="M4 20V10M12 20V4M20 20v-6"/><path d="M3 20h18"/>',
     # Generic executor/tooling glyphs -- deliberately schematic rather than
     # brand marks: a toolkit's own logo would be trademarked and would also
     # need refreshing whenever the toolkit doesn't map to a real product.
@@ -691,6 +692,9 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
   font-size: 1.5rem; font-weight: 650; line-height: 1.1; letter-spacing: -.01em;
 }
 .stat .l { color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; }
+.stat-link { text-decoration: none; color: var(--fg); display: flex; align-items: center; gap: .75rem; width: 100%; }
+.stat-link:hover { background: var(--sunken); border-radius: 11px; }
+.stat-link .n { color: var(--accent); }
 
 /* Same reasoning as .grid's margin-bottom: this is a bare grid container,
    not a .card, so it carries none of .card's own trailing margin -- without
@@ -1152,6 +1156,7 @@ _NAV = (
     ("/credentials", "Credentials", "lock"),
     ("/requests", "Requests", "share"),
     ("/audit", "Audit", "clock"),
+    ("/stats", "Stats", "bar-chart"),
     ("/docs", "Docs", "book"),
 )
 
@@ -2195,6 +2200,118 @@ def _pair_call_stats(
     return stats
 
 
+def _bucket_calls_by_day(
+    records: list[dict[str, Any]], days: int = 7, *, now: datetime | None = None,
+) -> list[tuple[int, int]]:
+    """Calls per day slot as ``(succeeded, not succeeded)``.
+
+    Same shape and rounding-down-before-diffing approach as ``_bucket_calls``,
+    but day-granularity for the 7d/30d chart on the Stats page.
+    """
+    current = (now or datetime.now(UTC)).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    buckets = [(0, 0) for _ in range(days)]
+    for record in records:
+        if record.get("kind") != "call":
+            continue
+        stamp = _parse_ts(record.get("ts"))
+        if stamp is None:
+            continue
+        day = stamp.astimezone(UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+        age = int((current - day).total_seconds() // 86400)
+        if 0 <= age < days:
+            slot = days - 1 - age
+            ok, bad = buckets[slot]
+            if record.get("outcome") == "ok":
+                buckets[slot] = (ok + 1, bad)
+            else:
+                buckets[slot] = (ok, bad + 1)
+    return buckets
+
+
+def _admin_action_stats(records: list[dict[str, Any]]) -> dict[str, int]:
+    """Counts ``admin_change`` records by action, using ``_ADMIN_VERBS`` labels."""
+    stats: dict[str, int] = {}
+    for record in records:
+        if record.get("kind") != "admin_change":
+            continue
+        action = record.get("action", "")
+        label = _ADMIN_VERBS.get(action, action or "admin_change")
+        stats[label] = stats.get(label, 0) + 1
+    return dict(sorted(stats.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _duration_stats(
+    records: list[dict[str, Any]], tools_by_kit: dict[str, set[str]] | None = None,
+) -> dict[str, dict[str, float]]:
+    """Average and p95 duration per toolkit, plus overall."""
+    tool_to_kit: dict[str, str] = {}
+    if tools_by_kit:
+        for kit, tool_ids in tools_by_kit.items():
+            for tid in tool_ids:
+                tool_to_kit[tid] = kit
+    per_kit: dict[str, list[int]] = {}
+    all_durations: list[int] = []
+    for record in records:
+        if record.get("kind") != "call":
+            continue
+        dur = record.get("duration_ms")
+        if dur is None:
+            continue
+        try:
+            dur = int(dur)
+        except (TypeError, ValueError):
+            continue
+        all_durations.append(dur)
+        kit = tool_to_kit.get(record.get("tool") or "", "_unknown")
+        per_kit.setdefault(kit, []).append(dur)
+
+    def _pct(values: list[int], pct: float) -> float:
+        if not values:
+            return 0.0
+        s = sorted(values)
+        idx = max(0, min(len(s) - 1, int(len(s) * pct) - 1))
+        return float(s[idx])
+
+    result: dict[str, dict[str, float]] = {}
+    for kit, durations in per_kit.items():
+        result[kit] = {
+            "avg": sum(durations) / len(durations) if durations else 0.0,
+            "p95": _pct(durations, 0.95),
+            "count": float(len(durations)),
+        }
+    result["_overall"] = {
+        "avg": sum(all_durations) / len(all_durations) if all_durations else 0.0,
+        "p95": _pct(all_durations, 0.95),
+        "count": float(len(all_durations)),
+    }
+    return result
+
+
+def _outcome_totals(records: list[dict[str, Any]]) -> dict[str, int]:
+    """Flat outcome totals and error rate across all call records."""
+    ok = denied = failed = 0
+    for record in records:
+        if record.get("kind") != "call":
+            continue
+        outcome = record.get("outcome") or "unknown"
+        if outcome == "ok":
+            ok += 1
+        elif outcome == "denied":
+            denied += 1
+        elif outcome == "failed":
+            failed += 1
+    total = ok + denied + failed
+    error_rate = int((denied + failed) / total * 100) if total else 0
+    return {
+        "ok": ok, "denied": denied, "failed": failed,
+        "total": total, "error_rate": error_rate,
+    }
+
+
 def _access_graph_data(
     service: Service, identities: IdentityStore,
     records: list[dict[str, Any]] | None = None,
@@ -2831,6 +2948,28 @@ def _view_overview(
         + "</div>"
     )
 
+    # Highlight tiles from the same audit records loaded above — no extra
+    # read.  These give the most important signal (calls and success rate)
+    # without a click to the Stats page.
+    _ov_totals = _outcome_totals(records)
+    _ov_success = int(_ov_totals["ok"] / _ov_totals["total"] * 100) if _ov_totals["total"] else 0
+    parts.append(
+        '<div class="grid">'
+        + _stat(
+            _ov_totals["total"], "Calls (last 12h)", "activity",
+            "t-ok" if _ov_totals["total"] else "",
+        )
+        + _stat(
+            f"{_ov_success}%", "Success rate (last 12h)", "check",
+            "t-ok" if _ov_success >= 80 else ("t-warn" if _ov_success >= 50 else "t-deny"),
+        )
+        + f'<div class="stat"><a href="{UI_PREFIX}/stats" class="stat-link">'
+        f'<div class="chip">{_icon("bar-chart", 18)}</div>'
+        f'<div><div class="n">View &rarr;</div>'
+        f'<div class="l">Full stats</div></div></a></div>'
+        + "</div>"
+    )
+
     # Call pipeline: the 8 layers that every call passes through. This is
     # documentation, not a status readout -- it looks the same on every
     # visit, so it stays collapsed by default rather than pushing the
@@ -2911,6 +3050,7 @@ def _view_overview(
         # for what is not.
         '<div class="subhead">Recent events</div>'
         f'<div class="feed">{_feed(records)}</div>'
+        f'<div class="subhead"><a href="{UI_PREFIX}/stats">View full stats &rarr;</a></div>'
         "</div>"
         "</div></div>"
     )
@@ -4615,6 +4755,205 @@ _DOC_FILES = (
 )
 
 
+_STATS_WINDOWS = (("24h", "Last 24 hours", 24, 200), ("7d", "Last 7 days", 7, 1000), ("30d", "Last 30 days", 30, 2000))
+
+
+def _activity_chart_by_day(
+    records: list[dict[str, Any]], days: int = 7, *, now: datetime | None = None,
+) -> str:
+    """Day-bucketed stacked bar chart, same SVG style as ``_activity_chart``."""
+    current = (now or datetime.now(UTC)).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    buckets = _bucket_calls_by_day(records, days, now=current)
+    peak = max((o + d for o, d in buckets), default=0)
+
+    width, height, pad = 300.0, 78.0, 14.0
+    slot_w = width / days
+    bw = slot_w * 0.62
+    bars = []
+    for index, (ok, bad) in enumerate(buckets):
+        x = index * slot_w + (slot_w - bw) / 2
+        usable = height - pad - 6
+        h_ok = usable * ok / peak if peak else 0
+        h_bad = usable * bad / peak if peak else 0
+        if h_bad > 0:
+            bars.append(
+                f'<rect class="c-deny" x="{x:.1f}" y="{height - pad - h_bad:.1f}" '
+                f'width="{bw:.1f}" height="{h_bad:.1f}" rx="1.5"/>'
+            )
+        if h_ok > 0:
+            bars.append(
+                f'<rect class="c-ok" x="{x:.1f}" y="{height - pad - h_bad - h_ok:.1f}" '
+                f'width="{bw:.1f}" height="{h_ok:.1f}" rx="1.5"/>'
+            )
+        if h_ok == 0 and h_bad == 0:
+            bars.append(
+                f'<rect class="c-base" x="{x:.1f}" y="{height - pad - 2:.1f}" '
+                f'width="{bw:.1f}" height="2" rx="1"/>'
+            )
+
+    first = (current - timedelta(days=days - 1)).strftime("%b %d")
+    if not peak:
+        return (
+            f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
+            f'aria-label="Calls per day (none in last {days}d)">'
+            f'<text class="c-ax" x="{width / 2:.0f}" y="{height / 2:.0f}" '
+            f'text-anchor="middle">No tool calls in the last {days} days</text>'
+            f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
+            f'<text class="c-ax" x="{width:.0f}" y="{height - 3:.0f}" '
+            f'text-anchor="end">{_e(current.strftime("%b %d"))}</text>'
+            "</svg>"
+        )
+    return (
+        f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
+        f'aria-label="Calls per day">{"".join(bars)}'
+        f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
+        f'<text class="c-ax" x="{width:.0f}" y="{height - 3:.0f}" '
+        f'text-anchor="end">{_e(current.strftime("%b %d"))}</text>'
+        "</svg>"
+    )
+
+
+def _view_stats(service: Service, identities: IdentityStore, request: Request | None = None) -> str:
+    """Aggregate statistics over the audit log."""
+    window = request.query_params.get("window", "24h") if request else "24h"
+    win_spec = next((w for w in _STATS_WINDOWS if w[0] == window), _STATS_WINDOWS[0])
+    win_label, win_value, limit = win_spec[1], win_spec[2], win_spec[3]
+
+    path = os.path.join(service.tier1.audit_dir, "audit.jsonl")
+    records, truncated = read_audit(path, limit=limit)
+
+    tools_by_kit: dict[str, set[str]] = {}
+    for name in service.tier1.toolkits:
+        tools_by_kit.setdefault(name, set())
+    for tool in service.catalog.tools.values():
+        tools_by_kit.setdefault(tool.toolkit, set()).add(tool.id)
+
+    totals = _outcome_totals(records)
+    call_stats = _call_stats(records)
+    kit_stats = _tool_call_stats(records, tools_by_kit)
+    admin_stats = _admin_action_stats(records)
+    durations = _duration_stats(records, tools_by_kit)
+
+    success_rate = int(totals["ok"] / totals["total"] * 100) if totals["total"] else 0
+    active_idents = len(call_stats)
+    active_kits = sum(1 for k, v in kit_stats.items() if v["total"] > 0 and k != "_unknown")
+    admin_total = sum(admin_stats.values())
+
+    tabs = "".join(
+        f'<a href="{UI_PREFIX}/stats?window={_e(w[0])}"'
+        f'{" class=\"active\"" if w[0] == window else ""}>'
+        f"{_e(w[1])}</a>"
+        for w in _STATS_WINDOWS
+    )
+
+    note = (
+        _note(
+            "<strong>Only the most recent entries of the current log file.</strong> "
+            "Older material sits in the rotated files and is not visible here "
+            "&ndash; the window is best-effort, not a complete view."
+        )
+        if truncated
+        else ""
+    )
+
+    tiles = (
+        '<div class="grid">'
+        + _stat(totals["total"], "Total calls", "activity")
+        + _stat(f"{success_rate}%", "Success rate", "check", "t-ok" if success_rate >= 80 else ("t-warn" if success_rate >= 50 else "t-deny"))
+        + _stat(active_idents, "Active identities", "users")
+        + _stat(active_kits, "Active toolkits", "layers")
+        + _stat(admin_total, "Admin actions", "share")
+        + "</div>"
+    )
+
+    if window == "24h":
+        chart = _activity_chart(records, hours=24)
+    else:
+        chart = _activity_chart_by_day(records, days=win_value)
+
+    kit_rows = "".join(
+        f'<tr><td class="mono">{_e(kit)}</td>'
+        f'<td class="mono">{v["total"]}</td>'
+        f'<td class="mono">{v["ok"]}</td>'
+        f'<td class="mono">{v["denied"]}</td>'
+        f'<td class="mono">{v["failed"]}</td></tr>'
+        for kit, v in sorted(kit_stats.items(), key=lambda kv: (-kv[1]["total"], kv[0]))
+        if v["total"] > 0
+    ) or '<tr><td colspan="5" class="muted">No calls.</td></tr>'
+
+    ident_rows = "".join(
+        f'<tr><td class="mono">{_e(ident)}</td>'
+        f'<td class="mono">{v["total"]}</td>'
+        f'<td class="mono">{v["ok"]}</td>'
+        f'<td class="mono">{v["denied"]}</td>'
+        f'<td class="mono">{v["failed"]}</td></tr>'
+        for ident, v in sorted(call_stats.items(), key=lambda kv: (-kv[1]["total"], kv[0]))
+    ) or '<tr><td colspan="5" class="muted">No calls.</td></tr>'
+
+    admin_rows = "".join(
+        f'<tr><td>{_e(label)}</td><td class="mono">{count}</td></tr>'
+        for label, count in admin_stats.items()
+    ) or '<tr><td colspan="2" class="muted">No admin changes.</td></tr>'
+
+    dur_rows = "".join(
+        f'<tr><td class="mono">{_e(kit)}</td>'
+        f'<td class="mono">{int(v["avg"])} ms</td>'
+        f'<td class="mono">{int(v["p95"])} ms</td>'
+        f'<td class="mono">{int(v["count"])}</td></tr>'
+        for kit, v in sorted(durations.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+        if v["count"] > 0
+    ) or '<tr><td colspan="4" class="muted">No duration data.</td></tr>'
+
+    error_rate = totals["error_rate"]
+    err_tone = "deny" if error_rate >= 20 else ("warn" if error_rate >= 5 else "ok")
+
+    return (
+        f'<div class="docs-tabs">{tabs}</div>'
+        + note
+        + tiles
+        + (
+            '<div class="card">'
+            f'<div class="card-head"><h3>{_icon("activity", 14)}Activity &ndash; {win_label}</h3></div>'
+            f'<div class="pad pad-tight">{chart}</div>'
+            "</div>"
+        )
+        + (
+            '<div class="split"><div>'
+            '<div class="card">'
+            f'<div class="card-head"><h3>{_icon("layers", 14)}Toolkit usage</h3></div>'
+            '<div class="wrap"><table><thead><tr>'
+            '<th>Toolkit</th><th>Calls</th><th>OK</th><th>Denied</th><th>Failed</th>'
+            f'</tr></thead><tbody>{kit_rows}</tbody></table></div></div>'
+            '<div class="card">'
+            f'<div class="card-head"><h3>{_icon("gauge", 14)}Latency</h3></div>'
+            '<div class="wrap"><table><thead><tr>'
+            '<th>Toolkit</th><th>Avg</th><th>P95</th><th>Calls</th>'
+            f'</tr></thead><tbody>{dur_rows}</tbody></table></div></div>'
+            "</div><div>"
+            '<div class="card">'
+            f'<div class="card-head"><h3>{_icon("users", 14)}Identity activity</h3></div>'
+            '<div class="wrap"><table><thead><tr>'
+            '<th>Identity</th><th>Calls</th><th>OK</th><th>Denied</th><th>Failed</th>'
+            f'</tr></thead><tbody>{ident_rows}</tbody></table></div></div>'
+            '<div class="card">'
+            f'<div class="card-head"><h3>{_icon("share", 14)}Admin actions</h3></div>'
+            '<div class="wrap"><table><thead><tr>'
+            f'<th>Action</th><th>Count</th>'
+            f'</tr></thead><tbody>{admin_rows}</tbody></table></div></div>'
+            "</div></div>"
+        )
+        + (
+            '<div class="card">'
+            f'<div class="card-head"><h3>{_icon("ban", 14)}Error rate</h3></div>'
+            f'<div class="pad"><span class="pill {err_tone}">{error_rate}%</span> '
+            f'<span class="muted">({totals["denied"]} denied + {totals["failed"]} failed of {totals["total"]} total)</span></div>'
+            "</div>"
+        )
+    )
+
+
 def _view_docs(request: Request) -> str:
     """Full project documentation, rendered as HTML in the console."""
     slug = request.query_params.get("doc", "readme")
@@ -5748,6 +6087,19 @@ def build_ui_routes(
             f"{UI_PREFIX}/account/password",
             session_post(account_password),
             methods=["POST"],
+        ),
+        Route(
+            f"{UI_PREFIX}/stats",
+            guarded(
+                lambda r, s: _view_stats(service, identities, r),
+                "Stats", "/stats", icon="bar-chart",
+                subtitle=(
+                    "Aggregate call statistics &mdash; outcomes, latency, "
+                    "toolkit and identity activity, admin changes. Window is "
+                    "best-effort over the tail of the current audit log."
+                ),
+            ),
+            methods=["GET"],
         ),
         Route(
             f"{UI_PREFIX}/audit",

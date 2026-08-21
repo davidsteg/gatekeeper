@@ -60,6 +60,24 @@ cannot. It is in every release.
 
 ---
 
+## 0.15.2
+
+**Stats page — aggregate call statistics in the console.**
+
+A new "Stats" tab in the sidebar (`/ui/stats`) shows aggregate numbers
+over the audit log: total calls, success rate, active identities and
+toolkits, admin actions, latency (avg/p95 per toolkit), and error rate.
+Three window selectors (24h / 7d / 30d) switch between hourly and
+day-bucketed activity charts. Best-effort over the audit log tail.
+
+- New aggregation helpers: `_bucket_calls_by_day`, `_admin_action_stats`,
+  `_duration_stats`, `_outcome_totals`.
+- Overview page shows two highlight tiles (calls + success rate, last 12h)
+  and a "View full stats →" link.
+- 17 new tests in `tests/test_ui_stats.py`.
+
+---
+
 ## 0.15.1
 
 **Fixed: approving one pending proposal no longer marks unrelated pending proposals "stale." Toolkit tab decluttered.**

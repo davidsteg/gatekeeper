@@ -53,6 +53,7 @@ Once started with `--ui`, gatekeeper hosts an admin dashboard at `/ui` where you
 - **Manage tools** — add, edit, enable/disable without restarting
 - **Grant permissions** — link identities to tools with scopes
 - **Monitor audit log** — search activity, track denials, find mistakes
+- **See statistics** — aggregate call stats, success rates, latency, admin activity at `/ui/stats`
 - **Change passwords** — rotate console access for people
 
 ### Overview: At a glance
