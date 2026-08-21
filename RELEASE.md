@@ -60,6 +60,57 @@ cannot. It is in every release.
 
 ---
 
+## 0.15.0
+
+**Findings from a full security review: an unauthenticated DoS on the auth path, three HTTP-executor edge cases, reverse-proxy correctness, and tooling/supply-chain hygiene.**
+
+- **`/mcp` no longer costs O(identity count) scrypt calls per request.**
+  `IdentityStore.authenticate` ran scrypt against *every* identity's token
+  hash on every call, deliberately without short-circuiting, to avoid
+  revealing which one matched -- so a handful of concurrent requests with
+  garbage bearer tokens could stall the whole event loop for seconds. Each
+  identity now also carries a `token_lookup` (plain SHA-256 of its token --
+  safe without a pepper, since a `generate_token()` output has 256 bits of
+  entropy and brute-forcing it back is exactly as infeasible from a fast
+  hash as a slow one): one O(1) dict lookup narrows a request to its
+  candidate identity, then a single scrypt verification confirms it. An
+  identities.yaml written before this field existed keeps working exactly
+  as before, just without the speedup, until its token is next rotated.
+- **Three HTTP-executor edge cases closed.** A resolved path containing
+  `?`/`#` no longer escapes as an unaudited 500 (`httpx.InvalidURL` is now
+  a `Denied`, routed through the same audit/outcome bookkeeping as every
+  other rejection); a percent-encoded `%2e%2e%2f` traversal is rejected
+  alongside a literal `..`; `allowed_path_prefixes` now matches at a
+  segment boundary (`/api/v3/series` no longer also matches
+  `/api/v3/seriesXYZ`), mirroring the `commonpath` fix `validate.py`
+  already applies on the filesystem side.
+- **A `{credential}` placeholder in a toolkit's `base_url` now requires a
+  `url_path`-kind credential.** A toolkit misconfigured to reference a
+  `bearer`/`api_key_header`/etc. credential there would have silently
+  placed that value in the URL path -- landing in the target's own access
+  logs, exactly what FR-8.14's header-first policy exists to prevent.
+- **`--trusted-proxies` / `GATEKEEPER_TRUSTED_PROXIES`** configures
+  uvicorn's own proxy-header handling for a reverse proxy in front of
+  gatekeeper. Left unset (the previous, only behavior), a proxy in its own
+  container is not `127.0.0.1` to gatekeeper, so `X-Forwarded-For` is
+  silently ignored: the console's login throttle locks out every visitor
+  at once instead of the one actually failing to sign in, the audit log
+  records the proxy's address for every UI action instead of the real
+  actor, and the session cookie's `Secure` flag never activates behind TLS
+  termination. See docs/DEPLOYMENT.md's new "Behind a reverse proxy"
+  section.
+- **Credential rotation overlap windows no longer drift across a DST
+  transition.** The expiry check compared local-time ISO strings
+  lexicographically; both sides now use a fixed UTC offset, matching the
+  idiom `catalog.py` already used elsewhere.
+- **CI now runs `ruff` (blocking, scoped to `src/`), `mypy` (informational
+  -- the first run surfaced ~30 pre-existing findings, mostly the MCP
+  SDK's pydantic camelCase aliases, tracked as a follow-up rather than
+  fixed blind), and `pip-audit` (blocking).** `constraints.txt` pins
+  gatekeeper's direct runtime dependencies to the exact versions this
+  release is tested against, in both CI and the Docker build, so two
+  builds of the same commit resolve the same dependency tree.
+
 ## 0.14.0
 
 **A new `admin.role_set` proposal, and Pending + Toolkits merged into one "Requests" menu with Change/Toolkit tabs, an archive, and pending-count badges.**

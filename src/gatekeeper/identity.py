@@ -28,6 +28,7 @@ import functools
 import hashlib
 import hmac
 import os
+import re
 import secrets
 from typing import Any
 
@@ -111,6 +112,25 @@ def verify_token(token: str, encoded: str) -> bool:
     return hmac.compare_digest(derived, base64.b64decode(hash_b64))
 
 
+def hash_token_lookup(token: str) -> str:
+    """A fast, deterministic index for `IdentityStore.authenticate` (NFR-3
+    addendum -- an unauthenticated caller must not be able to stall the
+    event loop).
+
+    Plain SHA-256, unsalted and unkeyed -- deliberately, and safely: scrypt's
+    cost defends against *guessable* secrets, and what it indexes here is a
+    `generate_token()` output, 256 bits of entropy from `secrets.token_urlsafe`,
+    never a human-chosen one. Brute-forcing that back from a fast hash is
+    exactly as infeasible as from a slow one, so nothing is lost by making
+    the lookup cheap. What is gained: `authenticate()` goes from one scrypt
+    verification *per identity in the file* (deliberately run against all of
+    them, to hide which one matched) to one dict lookup plus a single scrypt
+    verification against the matching candidate -- so a request carrying
+    garbage can no longer cost the server O(identity count) scrypt calls.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def generate_token() -> str:
     """Generates a new agent token."""
     return "gk_" + secrets.token_urlsafe(32)
@@ -147,6 +167,12 @@ class Identity:
     #: Empty means: this identity cannot sign in to the console.
     #: For `agent` this is the normal case.
     password_hash: str = ""
+    #: `hash_token_lookup(token)`, or "" for an identity written before this
+    #: field existed. Empty is handled, not rejected: `authenticate()` falls
+    #: back to a direct scrypt check for exactly the un-indexed identities,
+    #: so an older identities.yaml keeps working -- just without the O(1)
+    #: lookup until its token is rotated or the file is regenerated.
+    token_lookup: str = ""
 
     @property
     def can_sign_in(self) -> bool:
@@ -192,14 +218,49 @@ class IdentityStore:
     def authenticate(self, token: str) -> Identity | None:
         """Resolves an API token to an identity.
 
-        Checks against all hashes, without short-circuiting on the first match, so
-        that the runtime does not reveal which identity was matched.
+        Two paths, chosen by whether the identity that issued this token
+        (if any) was written with a `token_lookup` index:
+
+        * **Indexed** (the normal case): one O(1) dict lookup narrows the
+          field to the -- normally single -- identity(ies) sharing that
+          index, then scrypt verifies only that candidate. An unauthenticated
+          caller sending garbage costs one dict build (plain string hashing,
+          no scrypt) plus one dict miss, not one scrypt call per identity in
+          the file (NFR-3): `hash_token_lookup`'s docstring is the reasoning
+          for why this is safe even though SHA-256 is fast. The index is
+          rebuilt on every call rather than cached: `store.py._write_identities`
+          replaces `self.identities` in place on the same `IdentityStore` (so
+          that `AuthMiddleware`'s reference stays valid across a write), and a
+          cache keyed on that mutation would need its own invalidation logic
+          for what is, without scrypt in the loop, an unmeasurable cost.
+        * **Un-indexed** (an identity written before this field existed):
+          falls back to the original exhaustive scrypt scan, but only over
+          the identities that actually lack an index -- so an unmigrated
+          file keeps working exactly as before, without dragging already-
+          migrated identities back into the slow path.
 
         Applies exclusively to `/mcp`. The console uses
         `authenticate_console` -- a token opens nothing there.
         """
-        found: Identity | None = None
+        lookup = hash_token_lookup(token)
+        by_lookup: dict[str, list[Identity]] = {}
+        unindexed: list[Identity] = []
         for identity in self.identities.values():
+            if identity.token_lookup:
+                by_lookup.setdefault(identity.token_lookup, []).append(identity)
+            else:
+                unindexed.append(identity)
+
+        candidates = by_lookup.get(lookup)
+        if candidates is not None:
+            found: Identity | None = None
+            for identity in candidates:
+                if verify_token(token, identity.token_hash):
+                    found = identity
+            return found
+
+        found = None
+        for identity in unindexed:
             if verify_token(token, identity.token_hash):
                 found = identity
         return found
@@ -291,6 +352,22 @@ def load_identities(path: str) -> IdentityStore:
                 f"{' and '.join(UI_ROLES)} can sign in to the console."
             )
 
+        # Optional, same reasoning as `password_hash` above: a file written
+        # before this field existed must still load -- `authenticate()`
+        # falls back to a direct scrypt check for exactly the identities
+        # missing it (identity.py's `IdentityStore.authenticate`).
+        token_lookup = spec.get("token_lookup") or ""
+        if not isinstance(token_lookup, str):
+            raise ConfigError(f"{where}: 'token_lookup' must be a string")
+        if token_lookup and (
+            len(token_lookup) != 64 or not re.fullmatch(r"[0-9a-f]+", token_lookup)
+        ):
+            raise ConfigError(
+                f"{where}: 'token_lookup' is not a SHA-256 hex digest. It is "
+                "computed alongside token_hash, never typed by hand -- "
+                "regenerate the token with: gatekeeper token"
+            )
+
         tools = spec.get("tools") or []
         if not isinstance(tools, list):
             raise ConfigError(f"{where}: 'tools' must be a list")
@@ -317,6 +394,7 @@ def load_identities(path: str) -> IdentityStore:
             tools=frozenset(tools),
             scopes=tuple(str(s) for s in scopes),
             password_hash=password_hash,
+            token_lookup=token_lookup,
         )
 
     return IdentityStore(identities=identities)
@@ -353,6 +431,8 @@ def to_spec(identity: Identity) -> dict[str, Any]:
     # not carry empty password fields after a write operation either.
     if identity.password_hash:
         spec["password_hash"] = identity.password_hash
+    if identity.token_lookup:
+        spec["token_lookup"] = identity.token_lookup
     return spec
 
 

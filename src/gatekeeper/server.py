@@ -20,11 +20,12 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from ._authctx import SCOPE_IDENTITY, identity_from as _identity_from
+from ._authctx import SCOPE_IDENTITY
+from ._authctx import identity_from as _identity_from
 from .admin_server import build_admin_mcp_server
 from .admin_service import AdminService
 from .audit import AuditLog
-from .errors import Denied, DenialReason
+from .errors import DenialReason, Denied
 from .execute import OUTCOME_OK, OUTCOME_UNKNOWN
 from .identity import ADMIN_ROLE, IdentityStore
 from .service import Service

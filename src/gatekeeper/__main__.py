@@ -19,6 +19,7 @@ from .identity import (
     generate_password,
     generate_token,
     hash_token,
+    hash_token_lookup,
     load_identities,
 )
 from .pending import PendingStore
@@ -245,7 +246,26 @@ def cmd_serve(args: argparse.Namespace) -> int:
         pending=pending,
         toolkit_proposals=toolkit_proposals,
     )
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    # `forwarded_allow_ips` gates uvicorn's own ProxyHeadersMiddleware,
+    # which -- for a request whose immediate peer is in this list -- rewrites
+    # scope["client"]/scope["scheme"] from X-Forwarded-For/X-Forwarded-Proto
+    # *before* the ASGI app (AuthMiddleware, ui.py's session/CSRF/throttle
+    # logic) ever sees the request. Left at uvicorn's own default
+    # ("127.0.0.1" when unset), a container's reverse-proxy sidecar --
+    # which is not 127.0.0.1 to gatekeeper -- is not trusted, and every
+    # request keeps reporting the proxy's own address as the client. No
+    # code elsewhere needs to change for this: `request.client.host` and
+    # `request.url.scheme` become correct for every caller the moment this
+    # is set, because they read straight from the rewritten scope.
+    trusted_proxies = (
+        [p.strip() for p in args.trusted_proxies.split(",") if p.strip()]
+        if args.trusted_proxies
+        else None
+    )
+    uvicorn.run(
+        app, host=args.host, port=args.port, log_level="info",
+        forwarded_allow_ips=trusted_proxies,
+    )
     return 0
 
 
@@ -374,6 +394,7 @@ def bootstrap(
             "  - id: admin\n"
             "    role: admin\n"
             f'    token_hash: "{hash_token(token)}"\n'
+            f'    token_lookup: "{hash_token_lookup(token)}"\n'
             f'    password_hash: "{hash_token(password)}"\n'
             "    # An administrator needs no tool rights: the console\n"
             "    # calls nothing.\n"
@@ -602,6 +623,11 @@ def cmd_token(args: argparse.Namespace) -> int:
     token = args.token or generate_token()
     print(f"Token (shown once, goes into the agent config.yaml):\n  {token}\n")
     print(f"token_hash (goes into identities.yaml):\n  {hash_token(token)}")
+    print(
+        f"token_lookup (goes into identities.yaml too -- lets authenticate() "
+        f"avoid a per-identity scrypt scan on every /mcp request):\n"
+        f"  {hash_token_lookup(token)}"
+    )
     return 0
 
 
@@ -673,6 +699,22 @@ def main() -> int:
         "--no-bootstrap",
         action="store_true",
         help="Never create configuration on start; fail if it is missing",
+    )
+    serve.add_argument(
+        "--trusted-proxies",
+        default=os.environ.get("GATEKEEPER_TRUSTED_PROXIES"),
+        help=(
+            "Comma-separated IPs/CIDRs of reverse proxies allowed to set "
+            "X-Forwarded-For/X-Forwarded-Proto (or '*' to trust any peer -- "
+            "only inside a network gatekeeper does not share with anything "
+            "untrusted). Unset means uvicorn's own default: only a proxy "
+            "on 127.0.0.1 is trusted, which a container's own reverse-proxy "
+            "sidecar is not -- see docs/DEPLOYMENT.md. Without this, the "
+            "console's per-client login throttle keys on the proxy's "
+            "address for every visitor, the audit log records the proxy "
+            "as the actor of every UI action, and the session cookie's "
+            "Secure flag never activates behind TLS termination."
+        ),
     )
     serve.set_defaults(func=cmd_serve)
 

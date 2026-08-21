@@ -57,17 +57,17 @@ import os
 import re
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import yaml
-
 from starlette.datastructures import FormData
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .__init__ import __version__
+from . import __version__
 from .admin_service import apply_pending
 from .audit import AuditLog
 from .catalog import ToolDef
@@ -298,7 +298,7 @@ def _bucket_calls(
     negative age, and fall out of every slot -- the chart would
     stay empty even though calls just took place.
     """
-    current = (now or datetime.now(timezone.utc)).replace(
+    current = (now or datetime.now(UTC)).replace(
         minute=0, second=0, microsecond=0
     )
     buckets = [(0, 0) for _ in range(hours)]
@@ -308,7 +308,7 @@ def _bucket_calls(
         stamp = _parse_ts(record.get("ts"))
         if stamp is None:
             continue
-        hour = stamp.astimezone(timezone.utc).replace(
+        hour = stamp.astimezone(UTC).replace(
             minute=0, second=0, microsecond=0
         )
         age = int((current - hour).total_seconds() // 3600)
@@ -2399,7 +2399,7 @@ def _toolkit_access_matrix(
 
 def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
     """Calls per hour, succeeded vs. rejected -- as stacked bars."""
-    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     buckets = _bucket_calls(records, hours, now=now)
     peak = max((o + d for o, d in buckets), default=0)
 
@@ -3303,12 +3303,10 @@ def _view_credentials(
     for dest in service.tier1.destinations.values():
         if dest.credential:
             _add_user(dest.credential, f"{dest.name} (destination)")
-    rev = credentials.revision()
     parts = []
     for meta in credentials.names(used_by=used_by):
         ops = ""
         if session.can_write and store is not None:
-            fields = {"name": meta.name, "rev": rev}
             ops = (
                 f'<a class="btn" href="{UI_PREFIX}/credentials/rotate?name={_e(meta.name)}">'
                 f'{_icon("refresh", 14)}Rotate</a>'
@@ -4090,7 +4088,7 @@ def _view_integration_picker(integration: Integration, service: Service, session
     for spec in integration.tool_specs:
         exists = service.catalog.raw_of(spec["id"]) is not None
         action = (
-            f'<span class="pill">already defined</span>'
+            '<span class="pill">already defined</span>'
             if exists
             else (
                 f'<a class="btn primary" href="{UI_PREFIX}/tools/integrations/new'
@@ -4630,7 +4628,7 @@ def _md_to_html(text: str) -> str:
         ) and not lines[i + 1].strip().startswith("```"):
             i += 1
             para_lines.append(lines[i])
-        out.append(f"<p>{inline(' '.join(l.strip() for l in para_lines))}</p>")
+        out.append(f"<p>{inline(' '.join(line.strip() for line in para_lines))}</p>")
         i += 1
 
     if in_code:

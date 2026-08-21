@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import yaml
@@ -452,7 +452,7 @@ _VERSION_SPEC_STRIP = frozenset({"id", "enabled", "version"})
 
 def now_iso() -> str:
     """Timestamp for a new tool version / pending action record."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
 def _is_versioned(entry: dict[str, Any]) -> bool:

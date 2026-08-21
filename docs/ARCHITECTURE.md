@@ -312,6 +312,35 @@ Kinds: `call`, `auth_failure`, `startup`, `admin_change`, `admin_denied`,
 (timeout on a non-idempotent tool — the operation may have completed on the
 other side, so it is not reported as a failure that would provoke a retry).
 
+## Scale: single instance, blocking I/O by design
+
+gatekeeper runs as one process (`ratelimit.py`'s `RateLimiter` says so
+directly: "with multiple instances the counter would need to be shared").
+Within that scope, several hot paths do plain synchronous file I/O on the
+asyncio event loop rather than using a thread pool or an async file API:
+
+- `AuditLog.write` (`audit.py`) opens and appends the log file per call.
+- `CredentialStore._raw()` (`credentials.py`) re-reads and re-parses
+  `credentials.yaml`, and re-runs Fernet decryption, on every credential
+  resolution -- there is no in-memory cache of the decrypted value.
+- `ui.py`'s `read_audit` parses up to `AUDIT_READ_BYTES` (2 MB) of the
+  audit log on every render of a page that shows it.
+
+This is a deliberate choice, not an oversight: at the scale gatekeeper
+targets (per NFR-5/§14, a handful of agents against a single homelab
+instance), the cost of each is a few milliseconds against local disk, and
+the code stays straightforward to read and audit -- which matters more
+here than shaving milliseconds off a request rate this project was never
+sized for. It stops being free past roughly the point where either
+concurrent call volume or `credentials.yaml`'s size make a single-digit-
+millisecond block on the event loop start queuing noticeably, or where the
+audit log's read cost per UI page load becomes the visible bottleneck
+(watch `read_audit`'s truncation behavior on a directory nearing
+`audit_max_bytes` per file as the practical early signal). If gatekeeper
+ever needs to scale past a single instance or a much higher call rate,
+these three are the first places to revisit -- alongside `RateLimiter`
+itself, which already documents its own single-instance assumption.
+
 ## Roadmap / known gaps
 
 See [ROADMAP.md](ROADMAP.md).

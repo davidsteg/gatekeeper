@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .credentials import CredentialStore, ResolvedCredential
-from .errors import Denied, DenialReason
+from .errors import DenialReason, Denied
 from .execute import OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN, Result
 from .tier1 import Toolkit
 
@@ -59,7 +59,7 @@ async def probe(toolkit: Toolkit) -> bool:
         except OSError:
             pass
         return True
-    except (Denied, OSError, asyncio.TimeoutError, TimeoutError):
+    except (Denied, OSError, TimeoutError):
         return False
 
 
@@ -77,6 +77,20 @@ def _substitute_base_url(base_url: str, credential: ResolvedCredential | None) -
         raise Denied(
             DenialReason.CREDENTIAL_UNAVAILABLE,
             "This toolkit's base_url needs a credential that is not configured.",
+        )
+    if credential.kind != "url_path":
+        # FR-8.14's preference for a header over a URL exists precisely
+        # because a URL ends up in the target's own access logs -- a
+        # toolkit misconfigured to reference a `bearer`/`api_key_header`/etc.
+        # credential here would otherwise place that value in the URL path
+        # silently, defeating the header-first policy `_credential_headers`
+        # implements for every other credential kind.
+        raise Denied(
+            DenialReason.CREDENTIAL_UNAVAILABLE,
+            f"This toolkit's base_url substitutes a credential into the URL "
+            f"path, but {credential.name!r} is kind {credential.kind!r}, not "
+            "'url_path'. Only a 'url_path' credential may fill this "
+            "placeholder.",
         )
     return base_url.replace("{credential}", credential.value)
 
@@ -253,7 +267,26 @@ async def run(
     # own DNS lookup a second time -- that second lookup is exactly the
     # rebinding window FR-8.9 closes. `sni_hostname` keeps TLS verification
     # bound to the real hostname/certificate despite the IP-literal URL.
-    request_url = httpx.URL(scheme=scheme, host=resolved_ip, port=port, path=parsed.path + path)
+    try:
+        request_url = httpx.URL(
+            scheme=scheme, host=resolved_ip, port=port, path=parsed.path + path
+        )
+    except httpx.InvalidURL as exc:
+        # httpx rejects a handful of characters (`?`, `#`, ...) in a `path=`
+        # component outright rather than percent-encoding them -- reachable
+        # whenever a tool's parameter pattern is permissive enough to let
+        # one through into the resolved path. `httpx.InvalidURL` is a bare
+        # `Exception`, not an `httpx.HTTPError`, so it would otherwise
+        # escape both this function's own except clauses below and
+        # `service.call`'s `except Denied` -- an unaudited 500 instead of
+        # the `Denied`/`Result` this module exists to guarantee (see
+        # `_denied`'s docstring).
+        return _denied(
+            Denied(
+                DenialReason.PARAM_INVALID,
+                f"Resolved request path is not a valid URL component: {exc}",
+            )
+        )
     extensions = {"sni_hostname": host} if scheme == "https" else {}
 
     outcome = OUTCOME_FAILED
@@ -312,7 +345,7 @@ async def run(
             outcome = OUTCOME_OK
         else:
             outcome = OUTCOME_FAILED
-    except (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException):
+    except (TimeoutError, httpx.TimeoutException):
         duration = int((time.monotonic() - started) * 1000)
         return Result(
             outcome=OUTCOME_FAILED if idempotent else OUTCOME_UNKNOWN,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .errors import Denied, DenialReason
+from .errors import DenialReason, Denied
 from .identity import Identity
 
 #: Key under which `AuthMiddleware` (`server.py`) stores the authenticated

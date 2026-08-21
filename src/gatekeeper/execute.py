@@ -14,7 +14,7 @@ import signal
 import sys
 import time
 
-from .errors import Denied, DenialReason
+from .errors import DenialReason, Denied
 
 #: Outcome states. `unknown` is the important one: on timeout it is
 #: undecided whether the operation completed on the other side (FR-6.9).
@@ -149,11 +149,11 @@ async def run(
         stdout_bytes, out_truncated, stderr_bytes, err_truncated = await asyncio.wait_for(
             _gather(process, max_output_bytes), timeout=timeout_seconds
         )
-    except (asyncio.TimeoutError, TimeoutError):
+    except TimeoutError:
         _terminate(process)
         try:
             await asyncio.wait_for(process.wait(), timeout=5)
-        except (asyncio.TimeoutError, TimeoutError):
+        except TimeoutError:
             pass
         duration = int((time.monotonic() - started) * 1000)
         return Result(

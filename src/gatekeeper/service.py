@@ -21,7 +21,7 @@ from . import execute, execute_http, execute_ssh, execute_truenas, validate
 from .audit import AuditLog
 from .catalog import Catalog, ToolDef, load_catalog
 from .credentials import CredentialStore
-from .errors import ConfigError, Denied, DenialReason
+from .errors import ConfigError, DenialReason, Denied
 from .identity import Identity, load_identities
 from .ratelimit import RateLimiter
 from .tier1 import Tier1, Toolkit, load_tier1
@@ -390,7 +390,7 @@ class Service:
                             for d in pending
                         )
                     )
-                    for dest_name, ready in zip(pending, results):
+                    for dest_name, ready in zip(pending, results, strict=True):
                         seen[f"{toolkit.executor}@{dest_name}"] = ready
                 continue
             if toolkit.executor in seen:

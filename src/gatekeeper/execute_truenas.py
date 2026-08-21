@@ -27,7 +27,7 @@ from typing import Any
 import websockets
 
 from .credentials import CredentialStore, ResolvedCredential
-from .errors import Denied, DenialReason
+from .errors import DenialReason, Denied
 from .execute import OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN, Result
 from .tier1 import Toolkit
 
@@ -119,7 +119,7 @@ async def run(
         ws = await asyncio.wait_for(
             websockets.connect(toolkit.ws_url), timeout=timeout_seconds
         )
-    except (OSError, TimeoutError, asyncio.TimeoutError) as exc:
+    except (OSError, TimeoutError) as exc:
         return Result(
             outcome=OUTCOME_FAILED,
             exit_code=None,
@@ -153,7 +153,7 @@ async def run(
         )
         try:
             raw = await asyncio.wait_for(ws.recv(), timeout=timeout_seconds)
-        except (asyncio.TimeoutError, TimeoutError):
+        except TimeoutError:
             duration = int((time.monotonic() - started) * 1000)
             return Result(
                 outcome=OUTCOME_FAILED if idempotent else OUTCOME_UNKNOWN,

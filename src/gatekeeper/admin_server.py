@@ -22,7 +22,7 @@ import mcp.types as types
 from mcp.server.lowlevel import Server
 
 from ._authctx import identity_from as _identity_from
-from .admin_service import AdminActionError, AdminService, EXPOSED_ACTIONS
+from .admin_service import EXPOSED_ACTIONS, AdminActionError, AdminService
 from .errors import ConfigError
 from .identity import ROLES
 from .store import WriteRefused

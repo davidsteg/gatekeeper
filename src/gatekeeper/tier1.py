@@ -176,16 +176,31 @@ class Toolkit:
         return method in self.allowed_methods
 
     def allows_path(self, path: str) -> bool:
-        """FR-8.6/FR-8.7: the path must start with an allowed prefix.
+        """FR-8.6/FR-8.7: the path must start with an allowed prefix, at a
+        segment boundary.
 
         Checked twice by callers -- once against the template's literal
         prefix at parse time, once against the fully resolved path at
         call time -- mirroring `check_binary`/`check_args` for argv tools.
+
+        A bare `str.startswith` would let prefix `/api/v3/series` also match
+        `/api/v3/seriesXYZ` -- the same ambiguity `validate.py`'s
+        `_resolve_path` already rejects on the filesystem side via
+        `commonpath` rather than a string prefix, for exactly the analogous
+        `/mnt/raid` vs. `/mnt/raid-evil` reason. A prefix ending in `/`
+        already has an unambiguous boundary built in; one that does not
+        (an exact-endpoint prefix like `/api/v3/series`) additionally needs
+        an exact match or the next character to be `/`.
         """
-        return any(path.startswith(prefix) for prefix in self.allowed_path_prefixes)
+        for prefix in self.allowed_path_prefixes:
+            if not path.startswith(prefix):
+                continue
+            if prefix.endswith("/") or path == prefix or path[len(prefix)] == "/":
+                return True
+        return False
 
     def in_allowed_cidrs(
-        self, address: "ipaddress.IPv4Address | ipaddress.IPv6Address"
+        self, address: ipaddress.IPv4Address | ipaddress.IPv6Address
     ) -> bool:
         """FR-8.9: the *resolved* IP, checked immediately before connecting.
 

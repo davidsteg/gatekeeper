@@ -7,12 +7,18 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
 WORKDIR /build
-COPY pyproject.toml ./
+COPY pyproject.toml constraints.txt ./
 COPY src ./src
 
+# constraints.txt pins the direct dependencies to the exact versions this
+# project is tested against, so two builds of the same commit resolve the
+# same dependency tree instead of drifting with whatever pyproject.toml's
+# ">=" floors happen to satisfy that day -- see constraints.txt's own
+# comment for why it stops at direct dependencies rather than a full
+# transitive lock (this image is built for both amd64 and arm64).
 RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip install --upgrade pip \
- && /opt/venv/bin/pip install .
+ && /opt/venv/bin/pip install . -c constraints.txt
 
 # --- Docker CLI + Compose plugin ------------------------------------------
 # Only the client, no daemon. gatekeeper talks to the host's Docker daemon
