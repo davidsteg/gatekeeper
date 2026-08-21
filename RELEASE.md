@@ -60,6 +60,29 @@ cannot. It is in every release.
 
 ---
 
+## 0.13.2
+
+**Fix: clicking a map node, or the +/-/Fit buttons, did nothing. Protected resources removed from the map.**
+
+- **Root cause of the dead clicks**: `wireZoomPan` called
+  `root.setPointerCapture()` on every `pointerdown`, including ones that
+  landed on a node or a control button. Capturing the pointer retargets
+  the browser's subsequent `click` synthesis to the capturing element
+  (`root`) instead of whatever was actually under the cursor, so no
+  listener on a node or button ever saw the click. Fixed by dropping
+  pointer capture entirely -- drag/pinch now track via `window`-level
+  `pointermove`/`pointerup` while a gesture is active instead, which gets
+  the same panning behavior without hijacking click delivery. A
+  `pointerdown` that starts on the `.map-controls` bar no longer begins a
+  pan gesture at all, so a button's own click is never at risk from it.
+- **Protected resources dropped from the map.** They added nothing an
+  identity can reach or a call can hit -- the Overview page's own
+  "Protected resources" stat and each toolkit's card already cover them.
+  `_access_graph_data` no longer emits `kind: "protected"` nodes or
+  `meta.protected_count`; the map's third column is destinations only when
+  present, two columns otherwise (labels simplified from "TOOLKITS AND
+  BLOCKED"/"DESTINATIONS AND BLOCKED" to just "TOOLKITS"/"DESTINATIONS").
+
 ## 0.13.1
 
 **Access map: a toolkit's connection target, and per-tool scopes on the identity panel.**
