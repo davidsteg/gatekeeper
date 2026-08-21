@@ -3685,6 +3685,11 @@ def _change_tab(session: Session, store: ConfigStore | None, pending: PendingSto
             icon="share",
         )
     ]
+    if can_decide and len(live) >= 2:
+        parts.append(
+            f'<p><a class="btn" href="{UI_PREFIX}/pending/approve-all">'
+            f'{_icon("check", 14)}Approve all ({len(live)})</a></p>'
+        )
     parts.append(
         "".join(_pending_card(session, i, store, can_decide=can_decide) for i in reversed(live))
         or '<p class="muted">Nothing pending.</p>'
@@ -3712,6 +3717,41 @@ def _pending_reject_confirm(session: Session, item: PendingAction) -> str:
         '<div class="field"><span>Reason (optional)</span>'
         '<input name="reason" maxlength="240"></div>'
         f'<button class="solid-danger" type="submit">{_icon("ban", 14)}Reject</button> '
+        f'<a class="btn" href="{UI_PREFIX}/requests?tab=change">{_icon("back", 14)}Cancel</a>'
+        "</form></div></div>"
+    )
+
+
+def _pending_approve_all_confirm(
+    session: Session, items: list[PendingAction], store: ConfigStore | None,
+) -> str:
+    """Confirm page for batch-approving every pending Tier 2 proposal.
+
+    Lists one row per proposal reusing ``_pending_payload_summary`` so the
+    reviewer sees the same resolved detail as expanding each card. The
+    proposal ids are carried as hidden fields -- the POST applies *only
+    those ids*, not "everything currently pending", so a proposal filed
+    in the window between render and click stays pending for the next pass.
+    """
+    rows = "".join(
+        f'<div class="row"><div class="row-l">{_icon("sliders", 14)}{_e(item.action)}</div>'
+        f'<div>{_pending_payload_summary(item, store)}</div></div>'
+        for item in items
+    )
+    hidden_ids = "".join(
+        f'<input type="hidden" name="id" value="{_e(item.id)}">' for item in items
+    )
+    return (
+        '<div class="editor card"><div class="pad">'
+        f"<p><strong>Approve all {len(items)} pending proposals?</strong></p>"
+        f'<p class="muted">Each one will be applied individually in the order '
+        "it was proposed. A refusal (e.g. a stale proposal) does not stop "
+        "the rest.</p>"
+        f'<div class="rows">{rows}</div>'
+        f'<form method="post" action="{UI_PREFIX}/pending/approve-all">'
+        f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
+        f"{hidden_ids}"
+        f'<button class="solid" type="submit">{_icon("check", 14)}Approve all {len(items)}</button> '
         f'<a class="btn" href="{UI_PREFIX}/requests?tab=change">{_icon("back", 14)}Cancel</a>'
         "</form></div></div>"
     )
@@ -5845,6 +5885,57 @@ def build_ui_routes(
             )
         return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
 
+    async def pending_approve_all_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or not session.can_write or pending is None:
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
+        live = [i for i in pending.list() if i.status not in _PENDING_ARCHIVE_STATUSES]
+        if len(live) < 2:
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
+        return _shell(
+            request, "Approve all proposals",
+            _pending_approve_all_confirm(session, live, store),
+            session, icon="check", active="/requests",
+        )
+
+    async def pending_approve_all(request: Request, session: Session, form: FormData) -> Response:
+        assert store is not None
+        if pending is None:
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
+        submitted_ids = [str(v) for v in form.getlist("id")]
+        # Apply oldest first (pending.list() order), not reversed display order.
+        all_items = {i.id: i for i in pending.list()}
+        to_apply = [
+            all_items[i] for i in submitted_ids
+            if i in all_items and all_items[i].status == "pending"
+        ]
+        refused: list[tuple[PendingAction, str]] = []
+        applied = 0
+        for item in to_apply:
+            try:
+                apply_pending(store, pending, item.id, decided_by=session.identity)
+                applied += 1
+            except (PendingWriteRefused, WriteRefused, ConfigError) as exc:
+                refused.append((item, str(exc)))
+        if refused:
+            rows = "".join(
+                f'<div class="row"><div class="row-l">{_icon("sliders", 14)}{_e(item.action)}</div>'
+                f'<div><code>{_e(item.id)}</code> &mdash; {_e(reason)}</div></div>'
+                for item, reason in refused
+            )
+            return _shell(
+                request, "Approve all",
+                _note(
+                    f"<strong>Applied {applied}. Refused {len(refused)}.</strong>",
+                    tone="bad" if applied == 0 else "",
+                )
+                + f'<div class="card"><div class="rows">{rows}</div></div>',
+                session, icon="check", active="/requests", status=400,
+            )
+        return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
+
     # -- Toolkits (plan "Follow-up 2") ------------------------------------
     # A categorically different severity from Change above: a toolkit
     # proposal changes Tier 1, not Tier 2. Deploy/reject go through
@@ -6078,6 +6169,8 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/pending/reject", pending_reject_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/pending/approve", writer(pending_approve), methods=["POST"]),
         Route(f"{UI_PREFIX}/pending/reject", writer(pending_reject), methods=["POST"]),
+        Route(f"{UI_PREFIX}/pending/approve-all", pending_approve_all_form, methods=["GET"]),
+        Route(f"{UI_PREFIX}/pending/approve-all", writer(pending_approve_all), methods=["POST"]),
         Route(f"{UI_PREFIX}/toolkits/deploy", toolkit_deploy_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/toolkits/deploy", writer(toolkit_deploy), methods=["POST"]),
         Route(f"{UI_PREFIX}/toolkits/reject", toolkit_reject_form, methods=["GET"]),

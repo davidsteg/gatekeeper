@@ -60,6 +60,26 @@ cannot. It is in every release.
 
 ---
 
+## 0.16.0
+
+**Approve-all for the Requests page's Change tab.**
+
+One click clears the entire pending Tier 2 queue — tool enables/updates,
+deletes, grant sets, role sets. An "Approve all (N)" link appears above
+the list when ≥2 proposals are pending and the session has write access.
+
+- The confirm page lists every proposal with resolved detail (same
+  `_pending_payload_summary` as the individual cards) and carries the
+  ids as hidden fields. The POST applies *only those ids* — a proposal
+  filed in the window between render and click stays pending.
+- Each item is applied individually via `apply_pending` in oldest-first
+  order (queue drains as it filled). A refusal (e.g. a stale proposal)
+  does not stop the rest — the response names what was applied and what
+  was refused.
+- 6 new tests in `tests/test_ui_admin.py`.
+
+---
+
 ## 0.15.2
 
 **Stats page — aggregate call statistics in the console.**
