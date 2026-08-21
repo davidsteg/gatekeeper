@@ -27,6 +27,8 @@ guarantees underpin this layer:
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import os
 import threading
 from typing import Any
@@ -67,6 +69,18 @@ class WriteRefused(ConfigError):
     """A write attempt was refused -- with a human-readable reason."""
 
 
+def _fingerprint(record: Any) -> str:
+    """Deterministic sha256 fingerprint of one record, truncated to 16 hex
+    chars for consistency with `_atomic.revision()`'s whole-file hash.
+    `None` (the record does not exist) fingerprints as "" -- same
+    convention `revision()` uses for a missing file.
+    """
+    if record is None:
+        return ""
+    encoded = json.dumps(record, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
 @dataclasses.dataclass(slots=True)
 class ConfigStore:
     """Owns the Tier 2 files and the runtime state derived from them."""
@@ -85,6 +99,24 @@ class ConfigStore:
 
     def identities_revision(self) -> str:
         return revision(self.identities_path)
+
+    def tool_revision(self, tool_id: str) -> str:
+        """Fingerprint of a single tool's raw entry -- unlike
+        `tools_revision()`, unaffected by any OTHER entry in tools.yaml
+        changing. Used only to gate pending-proposal staleness (see
+        `admin_service.apply_pending`); `_check()`'s own whole-file check
+        at the moment of writing is the real concurrency guarantee and is
+        untouched by this.
+        """
+        return _fingerprint(self.service.catalog.raw_of(tool_id))
+
+    def identity_revision(self, identity_id: str) -> str:
+        """Fingerprint of a single identity's spec -- unlike
+        `identities_revision()`, unaffected by any OTHER identity in
+        identities.yaml changing. Same rationale as `tool_revision()`.
+        """
+        identity = self.identities.identities.get(identity_id)
+        return _fingerprint(None if identity is None else to_spec(identity))
 
     def writability(self) -> dict[str, bool]:
         return {

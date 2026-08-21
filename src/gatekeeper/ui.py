@@ -3585,35 +3585,6 @@ _TOOLKIT_PROPOSAL_TONE = {
 }
 
 
-def _toolkit_card(name: str, tk: Toolkit) -> str:
-    """One live, read-only toolkit card -- the same fields `_view_overview`
-    already renders for its collapsed Tier 1 section, factored out here so
-    the Toolkit tab of `/ui/requests` can show them uncollapsed as the page's whole point.
-    """
-    return (
-        '<div class="card">'
-        f'<div class="card-head"><span class="name mono">{_e(name)}</span>'
-        f'<span class="pill accent">{_icon(_executor_icon(tk.executor), 12)}{_e(tk.executor)}</span></div>'
-        '<div class="rows">'
-        f'<div class="row"><div class="row-l">{_icon("chip", 14)}Binaries</div>'
-        f"<div>{_pills(tk.binaries, quiet=True)}</div></div>"
-        f'<div class="row"><div class="row-l">{_icon("ban", 14)}Denied arguments</div>'
-        f"<div>{_pills(tk.denied_args, tone='deny')}</div></div>"
-        f'<div class="row"><div class="row-l">{_icon("folder", 14)}Path roots</div>'
-        f"<div>{_pills(tk.path_roots, quiet=True)}</div></div>"
-        f'<div class="row"><div class="row-l">{_icon("lock", 14)}Protected resources</div>'
-        f"<div>{_pills(tk.protected_resources, tone='deny')}</div></div>"
-        f'<div class="row"><div class="row-l">{_icon("gauge", 14)}Ceilings</div>'
-        f'<div>{_pills([f"timeout {tk.max_timeout_seconds}s", f"output {tk.max_output_bytes} B"], quiet=True)}</div></div>'
-        + (
-            f'<div class="row"><div class="row-l">{_icon("share", 14)}Destinations</div>'
-            f"<div>{_pills(tk.destinations, quiet=True)}</div></div>"
-            if tk.destinations else ""
-        )
-        + "</div></div>"
-    )
-
-
 def _toolkit_proposal_card(
     session: Session, item: ToolkitProposal, *, can_decide: bool
 ) -> str:
@@ -3652,9 +3623,10 @@ def _toolkit_tab(
     store: ConfigStore | None,
     toolkit_proposals: ToolkitProposalStore | None,
 ) -> str:
-    """Live Tier 1 toolkits (read-only, unchanged from today's overview
-    section) plus a "Proposed" section for what Hermes has drafted via
-    `admin.toolkit_propose` -- review/Approve & Deploy/Reject.
+    """Proposals for a brand-new Tier 1 toolkit that Hermes has drafted via
+    `admin.toolkit_propose` -- review/Approve & Deploy/Reject. Live
+    toolkits themselves aren't shown here -- they're already visible,
+    grouped by toolkit, on the Tools page.
 
     Unlike the Change tab, a proposal here changes Tier 1 -- what is
     possible at all, not just who can do what -- so the confirmation on
@@ -3663,19 +3635,15 @@ def _toolkit_tab(
     """
     parts = [
         _note(
-            "These are deploy-time boundaries from <code>toolkits.yaml</code> "
-            "-- read-only here, exactly as on Overview. Adding a new one "
-            "normally needs a redeploy; a proposal below is the one way "
-            "around that, and only a human can make it take effect.",
+            "Adding a toolkit normally needs a redeploy (Tier 1 is "
+            "immutable at runtime) -- a proposal below is the one way "
+            "around that, and only a human can make it take effect. Live "
+            "toolkits are on the <a href=\""
+            + UI_PREFIX + "/tools\">Tools page</a>.",
             icon="lock",
         )
     ]
-    parts.append(
-        "".join(_toolkit_card(name, tk) for name, tk in sorted(service.tier1.toolkits.items()))
-        or '<p class="muted">No toolkits defined yet.</p>'
-    )
 
-    parts.append(f'<h2>{_icon("share", 14)}Proposed</h2>')
     if toolkit_proposals is None:
         parts.append(
             _note(

@@ -211,7 +211,7 @@ class AdminService:
             action="tool_enable",
             actor=actor,
             payload={"id": tool_id},
-            base_rev=self.store.tools_revision(),
+            base_rev=self.store.tool_revision(tool_id),
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
 
@@ -235,7 +235,7 @@ class AdminService:
             action="tool_update",
             actor=actor,
             payload={"spec": spec, "replaces": tool_id},
-            base_rev=self.store.tools_revision(),
+            base_rev=self.store.tool_revision(tool_id),
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
 
@@ -249,7 +249,7 @@ class AdminService:
             action="tool_delete",
             actor=actor,
             payload={"id": tool_id},
-            base_rev=self.store.tools_revision(),
+            base_rev=self.store.tool_revision(tool_id),
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
 
@@ -287,7 +287,7 @@ class AdminService:
             action="grant_set",
             actor=actor,
             payload=payload,
-            base_rev=self.store.identities_revision(),
+            base_rev=self.store.identity_revision(identity_id),
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
 
@@ -321,7 +321,7 @@ class AdminService:
             action="role_set",
             actor=actor,
             payload=payload,
-            base_rev=self.store.identities_revision(),
+            base_rev=self.store.identity_revision(identity_id),
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
 
@@ -370,16 +370,19 @@ EXPOSED_ACTIONS: frozenset[str] = frozenset(_EXPOSED)
 def _apply_tool_update(store: ConfigStore, item: PendingAction) -> Any:
     payload = item.payload
     return store.save_tool(
-        payload["spec"], actor=item.actor, rev=item.base_rev, replaces=payload.get("replaces")
+        payload["spec"], actor=item.actor, rev=store.tools_revision(),
+        replaces=payload.get("replaces"),
     )
 
 
 def _apply_tool_enable(store: ConfigStore, item: PendingAction) -> Any:
-    return store.set_tool_enabled(item.payload["id"], True, actor=item.actor, rev=item.base_rev)
+    return store.set_tool_enabled(
+        item.payload["id"], True, actor=item.actor, rev=store.tools_revision()
+    )
 
 
 def _apply_tool_delete(store: ConfigStore, item: PendingAction) -> Any:
-    return store.delete_tool(item.payload["id"], actor=item.actor, rev=item.base_rev)
+    return store.delete_tool(item.payload["id"], actor=item.actor, rev=store.tools_revision())
 
 
 def _apply_grant_set(store: ConfigStore, item: PendingAction) -> Any:
@@ -390,7 +393,7 @@ def _apply_grant_set(store: ConfigStore, item: PendingAction) -> Any:
         tools=payload["tools"],
         scopes=payload["scopes"],
         actor=item.actor,
-        rev=item.base_rev,
+        rev=store.identities_revision(),
         replaces=payload["identity_id"],
     )
 
@@ -403,20 +406,41 @@ def _apply_role_set(store: ConfigStore, item: PendingAction) -> Any:
         tools=payload["tools"],
         scopes=payload["scopes"],
         actor=item.actor,
-        rev=item.base_rev,
+        rev=store.identities_revision(),
         replaces=payload["identity_id"],
     )
 
 
-#: proposed_action -> (applier, "tools"|"identities" -- which file's live
-#: revision `PendingStore.approve` re-checks the proposal's `base_rev`
-#: against before applying).
-_APPLIERS: dict[str, tuple[Callable[[ConfigStore, PendingAction], Any], str]] = {
-    "tool_update": (_apply_tool_update, "tools"),
-    "tool_enable": (_apply_tool_enable, "tools"),
-    "tool_delete": (_apply_tool_delete, "tools"),
-    "grant_set": (_apply_grant_set, "identities"),
-    "role_set": (_apply_role_set, "identities"),
+def _target_id_tool_update(payload: dict[str, Any]) -> str:
+    return payload["replaces"]
+
+
+def _target_id_tool_id_field(payload: dict[str, Any]) -> str:
+    return payload["id"]
+
+
+def _target_id_identity(payload: dict[str, Any]) -> str:
+    return payload["identity_id"]
+
+
+#: proposed_action -> (applier, "tools"|"identities" -- which store's
+#: per-record fingerprint `PendingStore.approve` re-checks the proposal's
+#: `base_rev` against, and a function that pulls the specific tool/identity
+#: id a proposal targets out of its own payload). Staleness is checked at
+#: the granularity of the ONE record a proposal targets, not the whole
+#: file -- two simultaneous proposals against different identities (or
+#: different tools) in the same YAML file no longer invalidate each other.
+#: `store.save_tool`/`save_identity`/etc. still perform their own
+#: whole-file `_check()` at the moment of writing (see store.py) as the
+#: real atomic-write safety net; that is unrelated to this gate.
+_APPLIERS: dict[
+    str, tuple[Callable[[ConfigStore, PendingAction], Any], str, Callable[[dict[str, Any]], str]]
+] = {
+    "tool_update": (_apply_tool_update, "tools", _target_id_tool_update),
+    "tool_enable": (_apply_tool_enable, "tools", _target_id_tool_id_field),
+    "tool_delete": (_apply_tool_delete, "tools", _target_id_tool_id_field),
+    "grant_set": (_apply_grant_set, "identities", _target_id_identity),
+    "role_set": (_apply_role_set, "identities", _target_id_identity),
 }
 
 
@@ -425,10 +449,10 @@ def apply_pending(
 ) -> Any:
     """Approves and applies one pending action -- the only function in this
     codebase that turns a proposal into a live change. Called exclusively
-    from `ui.py`'s `/ui/pending/approve` route (human session, `role:
-    admin`, CSRF token -- the same `writer` wrapper every other admin write
-    goes through). Not part of `AdminService`, not reachable from
-    `/admin/mcp` (FR-2.8/2.9).
+    from `ui.py`'s `/ui/requests` (Change tab) approve route (human
+    session, `role: admin`, CSRF token -- the same `writer` wrapper every
+    other admin write goes through). Not part of `AdminService`, not
+    reachable from `/admin/mcp` (FR-2.8/2.9).
     """
     item = pending.get(action_id)
     if item is None:
@@ -436,12 +460,18 @@ def apply_pending(
     entry = _APPLIERS.get(item.action)
     if entry is None:
         raise WriteRefused(f"Unknown pending action type {item.action!r}.")
-    applier, kind = entry
-    current_rev = store.tools_revision if kind == "tools" else store.identities_revision
+    applier, kind, target_id_of = entry
+
+    def _current_rev(pending_item: PendingAction) -> str:
+        target_id = target_id_of(pending_item.payload)
+        if kind == "tools":
+            return store.tool_revision(target_id)
+        return store.identity_revision(target_id)
+
     return pending.approve(
         action_id,
         decided_by=decided_by,
-        current_rev=lambda _item: current_rev(),
+        current_rev=_current_rev,
         apply=lambda _item: applier(store, _item),
     )
 
