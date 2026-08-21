@@ -1134,8 +1134,7 @@ _NAV = (
     ("/tools/integrations", "Integrations", "package"),
     ("/identities", "Identities", "key"),
     ("/credentials", "Credentials", "lock"),
-    ("/pending", "Pending", "share"),
-    ("/toolkits", "Toolkits", "layers"),
+    ("/requests", "Requests", "share"),
     ("/audit", "Audit", "clock"),
     ("/docs", "Docs", "book"),
 )
@@ -1435,8 +1434,7 @@ _ACCESS_MAP_JS = """
     var identities = groupNodes(this.data.nodes, "identity", IDENTITY_GROUP_THRESHOLD, this.expanded);
     var toolkits = groupNodes(this.data.nodes, "toolkit", TOOLKIT_GROUP_THRESHOLD, this.expanded);
     var destinations = this.data.nodes.filter(function (n) { return n.kind === "destination"; });
-    var protected_ = this.data.nodes.filter(function (n) { return n.kind === "protected"; });
-    return { identities: identities, toolkits: toolkits, destinations: destinations, protected: protected_ };
+    return { identities: identities, toolkits: toolkits, destinations: destinations };
   };
 
   App.prototype.render = function () {
@@ -1445,9 +1443,8 @@ _ACCESS_MAP_JS = """
     var visible = this.visibleNodes();
     var hasDestinations = this.data.meta.has_destinations;
 
-    var midItems = hasDestinations ? visible.toolkits.length
-      : visible.toolkits.length + visible.protected.length;
-    var rightItems = hasDestinations ? visible.destinations.length + visible.protected.length : midItems;
+    var midItems = visible.toolkits.length;
+    var rightItems = hasDestinations ? visible.destinations.length : midItems;
     var lanes = Math.max(visible.identities.length, midItems, rightItems, 1);
     // "World" size -- the content's own layout extent, unrelated to how
     // much of it is currently visible on screen (that's viewW/viewH below).
@@ -1531,21 +1528,9 @@ _ACCESS_MAP_JS = """
     visible.toolkits.forEach(function (node, i) {
       drawNode(node, mx, laneY(i, midItems, worldH), node.kind === "cluster" ? " cluster" : "");
     });
-    var rightIndex = 0;
     if (hasDestinations) {
-      visible.destinations.forEach(function (node) {
-        drawNode(node, dx, laneY(rightIndex, rightItems, worldH));
-        rightIndex += 1;
-      });
-      visible.protected.forEach(function (node) {
-        drawNode(node, dx, laneY(rightIndex, rightItems, worldH));
-        rightIndex += 1;
-      });
-    } else {
-      visible.toolkits.forEach(function () { rightIndex += 1; });
-      visible.protected.forEach(function (node) {
-        drawNode(node, mx, laneY(rightIndex, rightItems, worldH));
-        rightIndex += 1;
+      visible.destinations.forEach(function (node, i) {
+        drawNode(node, dx, laneY(i, rightItems, worldH));
       });
     }
 
@@ -1604,11 +1589,9 @@ _ACCESS_MAP_JS = """
     });
 
     nodeLayer.appendChild(text("text", { "class": "g-n", x: lx, y: 14 }, "IDENTITIES"));
+    nodeLayer.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS"));
     if (hasDestinations) {
-      nodeLayer.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS"));
-      nodeLayer.appendChild(text("text", { "class": "g-n", x: dx, y: 14 }, "DESTINATIONS AND BLOCKED"));
-    } else {
-      nodeLayer.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS AND BLOCKED"));
+      nodeLayer.appendChild(text("text", { "class": "g-n", x: dx, y: 14 }, "DESTINATIONS"));
     }
 
     // Narrow teardown: only the previous <svg>, never the whole root --
@@ -1750,19 +1733,13 @@ _ACCESS_MAP_JS = """
       self.zoomAt(e.clientX, e.clientY, factor);
     }, { passive: false });
 
-    root.addEventListener("pointerdown", function (e) {
-      self.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
-      try { root.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-      if (Object.keys(self.pointers).length >= 2) {
-        self.dragStart = null;
-        self.pinchDist = null;
-      } else {
-        self.dragStart = { x: e.clientX, y: e.clientY, tx: self.tx, ty: self.ty };
-        self.dragMoved = 0;
-      }
-    });
-
-    root.addEventListener("pointermove", function (e) {
+    // No setPointerCapture: capturing the pointer on `root` retargets the
+    // browser's own click synthesis away from whatever element was
+    // actually under the cursor (a node, a control button) to the
+    // capturing element instead -- silently breaking every click. Plain
+    // root-level pointerdown plus window-level move/up while a gesture is
+    // active gets the same drag/pinch behavior without that side effect.
+    function onPointerMove(e) {
       if (!(e.pointerId in self.pointers)) return;
       self.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
       var ids = Object.keys(self.pointers);
@@ -1787,11 +1764,10 @@ _ACCESS_MAP_JS = """
       self.ty = self.dragStart.ty + dyClient / ctm.d;
       self.userAdjusted = true;
       self.applyTransform();
-    });
+    }
 
-    function endPointer(e) {
+    function onPointerUp(e) {
       delete self.pointers[e.pointerId];
-      try { root.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
       self.pinchDist = null;
       var ids = Object.keys(self.pointers);
       if (ids.length === 1) {
@@ -1801,9 +1777,29 @@ _ACCESS_MAP_JS = """
       } else {
         self.dragStart = null;
       }
+      if (ids.length === 0) {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        window.removeEventListener("pointercancel", onPointerUp);
+      }
     }
-    root.addEventListener("pointerup", endPointer);
-    root.addEventListener("pointercancel", endPointer);
+
+    root.addEventListener("pointerdown", function (e) {
+      // A control button (+/-/Fit) handles its own click; starting a pan
+      // gesture from it would swallow that click for no benefit.
+      if (e.target.closest && e.target.closest(".map-controls")) return;
+      self.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      if (Object.keys(self.pointers).length >= 2) {
+        self.dragStart = null;
+        self.pinchDist = null;
+      } else {
+        self.dragStart = { x: e.clientX, y: e.clientY, tx: self.tx, ty: self.ty };
+        self.dragMoved = 0;
+      }
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+      window.addEventListener("pointercancel", onPointerUp);
+    });
 
     window.addEventListener("resize", function () {
       window.clearTimeout(self.resizeTimer);
@@ -1967,11 +1963,14 @@ def _page(
     actions: str = "",
     account: bool = False,
     script_tag: str = "",
+    nav_badge: int = 0,
 ) -> str:
     nav = "".join(
         f'<a href="{UI_PREFIX}{path or "/"}"'
         f'{" class=\"active\"" if path == active else ""}>'
-        f"{_icon(name_icon, 16)}{_e(label)}</a>"
+        f"{_icon(name_icon, 16)}{_e(label)}"
+        + (f'<span class="nav-badge">{nav_badge}</span>' if path == "/requests" and nav_badge else "")
+        + "</a>"
         for path, label, name_icon in _NAV
     )
     return (
@@ -2186,20 +2185,20 @@ def _access_graph_data(
 ) -> dict[str, Any]:
     """The access map's node/edge model as JSON, for the interactive view.
 
-    Gathers identities, toolkits, destinations, protected resources, and
-    live call stats, and returns plain structures rather than laid-out
-    coordinates -- `access-map.js` does the layout, grouping, filtering,
-    and pan/zoom client-side, which is what lets it scale past the point a
-    fixed server-rendered canvas could.
+    Gathers identities, toolkits, destinations, and live call stats, and
+    returns plain structures rather than laid-out coordinates --
+    `access-map.js` does the layout, grouping, filtering, and pan/zoom
+    client-side, which is what lets it scale past the point a fixed
+    server-rendered canvas could. Protected resources are deliberately not
+    included -- they add nothing an identity can reach or a call can hit,
+    and the Overview page's own "Protected resources" stat and each
+    toolkit's own card already cover them.
     """
     idents = sorted(
         (i for i in identities.identities.values() if i.role not in UI_ROLES or i.tools),
         key=lambda i: i.id,
     ) or sorted(identities.identities.values(), key=lambda i: i.id)
     toolkits = sorted(service.tier1.toolkits.items())
-    protected = sorted(
-        {r for tk in service.tier1.toolkits.values() for r in tk.protected_resources}
-    )
 
     tools_by_kit: dict[str, set[str]] = {name: set() for name, _ in toolkits}
     tools_by_kit_and_dest: dict[str, dict[str, set[str]]] = {name: {} for name, _ in toolkits}
@@ -2309,15 +2308,6 @@ def _access_graph_data(
                 "kind": "grant", "calls": _zero(), "hot": False,
             })
 
-    for resource in protected:
-        nodes.append({
-            "id": f"protected:{resource}", "kind": "protected", "label": resource,
-            "sub": "own container" if resource == "gatekeeper" else "blocked",
-            "group": "",
-            "icon": "lock", "logo_key": None, "color_class": "deny",
-            "calls": _zero(), "granted_tools": [],
-        })
-
     return {
         "nodes": nodes,
         "edges": edges,
@@ -2327,7 +2317,6 @@ def _access_graph_data(
             "identity_count": len(idents),
             "toolkit_count": len(toolkits),
             "destination_count": len(dest_names),
-            "protected_count": len(protected),
         },
     }
 
@@ -2669,10 +2658,10 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
     )
 
 
-#: Above this many combined identities/toolkits/destinations/protected
-#: resources, the access map defaults to the dense table view instead of
-#: the graph -- a single SVG canvas stops being legible well before this,
-#: while the table stays scannable (FR: access map redesign).
+#: Above this many combined identities/toolkits/destinations, the access
+#: map defaults to the dense table view instead of the graph -- a single
+#: SVG canvas stops being legible well before this, while the table stays
+#: scannable (FR: access map redesign).
 ACCESS_MAP_TABLE_THRESHOLD = 80
 
 
@@ -2680,7 +2669,6 @@ def _access_map_legend() -> str:
     return (
         '<div class="legend">'
         "<span>each color is one identity</span>"
-        '<span class="l-deny"><i></i>blocked for everyone (FR-4.12)</span>'
         '<span class="l-hot"><i></i>high traffic</span>'
         "<span>scroll/pinch to zoom, drag to pan, click a node for detail</span>"
         "</div>"
@@ -2722,10 +2710,8 @@ def _view_access_map(
     view = request.query_params.get("view", "").strip()
 
     dest_names = {d for _, tk in service.tier1.toolkits.items() for d in tk.destinations}
-    protected = {r for tk in service.tier1.toolkits.values() for r in tk.protected_resources}
     total_nodes = (
-        len(identities.identities) + len(service.tier1.toolkits)
-        + len(dest_names) + len(protected)
+        len(identities.identities) + len(service.tier1.toolkits) + len(dest_names)
     )
     table_default = total_nodes > ACCESS_MAP_TABLE_THRESHOLD
     show_table = view == "table" or (view != "graph" and table_default)
@@ -3416,6 +3402,17 @@ def _pending_payload_summary(item: PendingAction, store: ConfigStore | None = No
         if not tools:
             return header
         return header + "".join(_resolved_tool_badge(store, t) for t in sorted(tools))
+    if item.action == "role_set":
+        identity_id = item.payload.get("identity_id", "")
+        new_role = item.payload.get("role", "")
+        current = store.identities.identities.get(identity_id) if store is not None else None
+        current_role = current.role if current is not None else None
+        arrow = (
+            f'<code>{_e(current_role)}</code> &rarr; <code>{_e(new_role)}</code>'
+            if current_role is not None and current_role != new_role
+            else f'<code>{_e(new_role)}</code>'
+        )
+        return f'identity <code>{_e(identity_id)}</code> &rarr; role {arrow}'
     return _e(json.dumps(item.payload, default=str))
 
 
