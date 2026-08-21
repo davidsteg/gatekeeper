@@ -106,6 +106,29 @@ def test_rotation_without_overlap_drops_old_value(store):
     assert resolved.previous_value is None
 
 
+def test_overlap_timestamps_use_a_fixed_utc_offset(store):
+    """`_resolve` compares `previous_expires_at` against `_now()` as plain
+
+    strings -- correct only if both always carry the same UTC offset. Local
+    time would use whatever offset is in effect at the moment each string
+    is generated, which changes across a DST transition and could make an
+    overlap window expire up to an hour early or late. Asserting both
+    strings end in the fixed '+0000' offset is what makes that lexicographic
+    comparison actually safe, regardless of the host's timezone or DST state
+    when the test runs.
+    """
+    from gatekeeper.credentials import _now
+
+    assert _now().endswith("+0000")
+
+    store.create("sonarr", kind="api_key_header", header="X-Api-Key", value="old", actor="x", rev="")
+    rev = store.revision()
+    store.rotate("sonarr", value="new", overlap_seconds=3600, actor="x", rev=rev)
+
+    raw = store._raw()
+    assert raw["sonarr"]["previous_expires_at"].endswith("+0000")
+
+
 def test_rotate_unknown_name_refused(store):
     with pytest.raises(WriteRefused):
         store.rotate("nope", value="x", actor="x", rev="")

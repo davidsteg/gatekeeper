@@ -294,6 +294,80 @@ async def test_response_capped_at_max_output_bytes(toolkit, credentials):
     assert result.truncated is True
 
 
+async def test_invalid_url_component_denied_not_raised(toolkit, credentials):
+    """A resolved path containing '?' or '#' must come back as a `Result`
+
+    with `outcome=failed`, not an unhandled exception. `httpx.URL(...)`
+    rejects such characters in a `path=` component with `httpx.InvalidURL`,
+    which is a bare `Exception` (not `httpx.HTTPError`) -- reachable
+    whenever a tool's own parameter pattern is permissive enough to let one
+    through, and previously able to escape both this module's `except`
+    clauses and `service.call`'s `except Denied`, producing an unaudited
+    500 instead of the normal call/outcome bookkeeping.
+    """
+    tk, tier1 = toolkit
+    tool = _tool(
+        tier1, id="demo_http.weird", path="/api/thing/{name}",
+        parameters={"name": {"type": "string", "pattern": "^.*$", "required": True}},
+    )
+    method, path, query, body = validate.build_http_request(tool, {"name": "a?b"}, tk)
+    result = await execute_http.run(
+        method=method, path=path, query=query, body=body, toolkit=tk,
+        credentials=credentials, timeout_seconds=5, max_output_bytes=65536,
+        idempotent=True,
+    )
+    assert result.outcome == OUTCOME_FAILED
+    assert "not a valid URL component" in result.stderr
+
+
+async def test_credential_kind_mismatch_in_base_url_denied(tmp_path, http_server, monkeypatch):
+    """FR-8.14: `{credential}` in `base_url` is a narrow exception reserved
+
+    for `url_path`-kind credentials (Telegram's bot-token-in-path case) --
+    a toolkit misconfigured to reference a `bearer`/`api_key_header`/etc.
+    credential there must be refused, not silently place that value in the
+    URL path where it lands in the target's own access logs.
+    """
+    port = http_server.server_address[1]
+    path = tmp_path / "toolkits5.yaml"
+    path.write_text(
+        f"""
+toolkits:
+  demo_http:
+    executor: http
+    base_url: "http://127.0.0.1:{port}/bot{{credential}}"
+    allowed_methods: ["GET"]
+    allowed_path_prefixes: ["/api/"]
+    allowed_cidrs: ["127.0.0.1/32"]
+    credential: demo_cred
+audit:
+  dir: {tmp_path / "logs"}
+""",
+        encoding="utf-8",
+    )
+    tier1 = load_tier1(str(path))
+    tk = tier1.toolkit("demo_http")
+    tool = _tool(tier1)
+
+    monkeypatch.setenv(KEY_ENV, generate_master_key())
+    from gatekeeper.audit import AuditLog
+
+    audit = AuditLog(str(tmp_path / "logs5"))
+    store = CredentialStore(path=str(tmp_path / "credentials5.yaml"), audit=audit)
+    store.create(
+        "demo_cred", kind="bearer", value="should-not-land-in-a-url",
+        actor="test", rev="",
+    )
+
+    method, req_path, query, body = validate.build_http_request(tool, {"name": "widgets"}, tk)
+    result = await execute_http.run(
+        method=method, path=req_path, query=query, body=body, toolkit=tk,
+        credentials=store, timeout_seconds=5, max_output_bytes=65536, idempotent=True,
+    )
+    assert result.outcome == OUTCOME_FAILED
+    assert "url_path" in result.stderr
+
+
 async def test_missing_credential_denied(toolkit):
     tk, tier1 = toolkit
     tool = _tool(tier1)

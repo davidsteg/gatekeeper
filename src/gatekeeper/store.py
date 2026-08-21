@@ -35,8 +35,7 @@ import yaml
 
 from ._atomic import atomic_write as _atomic_write
 from ._atomic import dump as _dump
-from ._atomic import revision
-from ._atomic import writable
+from ._atomic import revision, writable
 from .audit import AuditLog
 from .catalog import (
     append_tool_version,
@@ -49,18 +48,20 @@ from .catalog import (
 from .errors import ConfigError
 from .identity import (
     ADMIN_ROLE,
-    Identity,
     MIN_PASSWORD_LENGTH,
     ROLES,
     UI_ROLES,
+    Identity,
     dump_identities,
     generate_token,
     hash_token,
+    hash_token_lookup,
     load_identities,
     to_spec,
     verify_token,
 )
 from .service import Service
+
 
 class WriteRefused(ConfigError):
     """A write attempt was refused -- with a human-readable reason."""
@@ -343,6 +344,10 @@ class ConfigStore:
             }
             if password_hash:
                 updated["password_hash"] = password_hash
+            # The token itself is not changing here -- carry its lookup
+            # index over unchanged, same as token_hash above.
+            if previous.token_lookup:
+                updated["token_lookup"] = previous.token_lookup
             entries = [updated if e["id"] == replaces else e for e in entries]
 
             self._guard_last_admin(entries, action=f"changing {replaces!r}")
@@ -411,6 +416,7 @@ class ConfigStore:
                 "id": identity_id,
                 "role": role,
                 "token_hash": hash_token(token),
+                "token_lookup": hash_token_lookup(token),
                 "tools": sorted(set(tools)),
                 "scopes": [s for s in scopes if s],
             }
@@ -444,6 +450,7 @@ class ConfigStore:
             for entry in payload["identities"]:
                 if entry["id"] == identity_id:
                     entry["token_hash"] = hash_token(token)
+                    entry["token_lookup"] = hash_token_lookup(token)
             self._write_identities(payload)
             self.audit.write(
                 {

@@ -33,7 +33,7 @@ from typing import Any
 import asyncssh
 
 from .credentials import CredentialStore, ResolvedCredential
-from .errors import Denied, DenialReason
+from .errors import DenialReason, Denied
 from .execute import OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN, Result
 from .tier1 import Toolkit
 
@@ -129,7 +129,7 @@ async def run(
             proc = await asyncio.wait_for(
                 conn.run(command, check=False), timeout=timeout_seconds
             )
-    except (asyncio.TimeoutError, TimeoutError):
+    except TimeoutError:
         duration = int((time.monotonic() - started) * 1000)
         return Result(
             outcome=OUTCOME_FAILED if idempotent else OUTCOME_UNKNOWN,
@@ -216,5 +216,5 @@ async def probe(toolkit: Toolkit) -> bool:
         except OSError:
             pass
         return True
-    except (OSError, asyncio.TimeoutError, TimeoutError):
+    except (OSError, TimeoutError):
         return False

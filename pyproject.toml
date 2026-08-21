@@ -1,6 +1,6 @@
 [project]
 name = "gatekeeper"
-version = "0.14.0"
+version = "0.15.0"
 description = "Controlled MCP server for host operations"
 requires-python = ">=3.12"
 dependencies = [
@@ -14,7 +14,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.16",
+    "mypy>=1.13",
+    "types-PyYAML>=6.0",
+    "pip-audit>=2.7",
+]
 
 [project.scripts]
 gatekeeper = "gatekeeper.__main__:main"
@@ -29,3 +36,35 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F: pycodestyle errors + pyflakes -- real bugs and dead code, not style
+# opinions. I: import sorting, cheap to keep consistent. UP: pyupgrade,
+# flags the stdlib idiom this project's own 3.12 floor already allows.
+# B: flake8-bugbear, catches a handful of correctness footguns (mutable
+# default args, bare except-pass) that are worth a second look each time.
+# Deliberately not "ALL": several available categories (blind-except,
+# try-except-pass, ...) restyle existing, deliberate error-handling choices
+# and belong in a considered follow-up, not a blanket lint gate.
+select = ["E", "F", "I", "UP", "B"]
+# Long lines are this codebase's own style in ui.py's HTML-building
+# f-strings, not an oversight -- reformatting ~5800 lines to fit a column
+# limit is a separate, considered pass, not something a lint gate should
+# force as a side effect of adding one.
+ignore = [
+    "E501",
+    # UP042 (str,Enum -> StrEnum) has no *safe* autofix, and DenialReason's
+    # exact `str`-subclass behaviour is relied on for its `.value` in the
+    # audit log and denial responses -- worth a considered, verified change,
+    # not a lint-driven one.
+    "UP042",
+]
+
+[tool.mypy]
+mypy_path = "src"
+explicit_package_bases = true
+ignore_missing_imports = true

@@ -11,6 +11,7 @@ import ipaddress
 import os
 
 import pytest
+import yaml
 
 from conftest import PYTHON, make_catalog
 from gatekeeper.errors import ConfigError, Denied, DenialReason, OPAQUE_DENIAL
@@ -448,6 +449,207 @@ def test_token_hash_is_salted(identities):
     assert verify_token("same-token", second)
 
 
+def test_unauthenticated_token_scan_is_not_a_dos(tmp_path):
+    """A garbage bearer token must not cost O(identity count) scrypt calls.
+
+    This is what made an unauthenticated request able to stall the whole
+    event loop before `token_lookup` existed (identity.py's `authenticate`):
+    scrypt runs once per identity in the file, every time, on purpose --
+    to avoid revealing which one matched. With every identity carrying its
+    fast `token_lookup` index, a bad token should cost roughly one dict
+    miss, not N scrypt verifications.
+    """
+    import time
+
+    from gatekeeper.identity import (
+        Identity,
+        IdentityStore,
+        generate_token,
+        hash_token,
+        hash_token_lookup,
+    )
+
+    tokens = [generate_token() for _ in range(100)]
+    store = IdentityStore(
+        {
+            f"agent-{i}": Identity(
+                id=f"agent-{i}",
+                role="agent",
+                token_hash=hash_token(tok),
+                token_lookup=hash_token_lookup(tok),
+                tools=frozenset(),
+                scopes=(),
+            )
+            for i, tok in enumerate(tokens)
+        }
+    )
+
+    started = time.perf_counter()
+    assert store.authenticate("gk_" + "x" * 43) is None
+    elapsed = time.perf_counter() - started
+    # A single scrypt verification alone costs ~50ms (identity.py's
+    # SCRYPT_N comment); 100 of them would be ~5s. Well under one
+    # verification's worth of time proves no scrypt call happened at all.
+    assert elapsed < 0.05
+
+    # Every identity still authenticates correctly, and lookup cost does
+    # not depend on position in the file -- both would fail if the index
+    # were somehow scoped to only the first/last entries.
+    first = time.perf_counter()
+    assert store.authenticate(tokens[0]).id == "agent-0"
+    first_elapsed = time.perf_counter() - first
+
+    last = time.perf_counter()
+    assert store.authenticate(tokens[-1]).id == "agent-99"
+    last_elapsed = time.perf_counter() - last
+
+    # Both cost about one scrypt verification, not N of them.
+    assert first_elapsed < 0.5
+    assert last_elapsed < 0.5
+
+
+def test_token_lookup_index_survives_in_place_identity_swap(tmp_path):
+    """`store.py._write_identities` replaces `IdentityStore.identities` in
+    place on the same `IdentityStore` object (so `AuthMiddleware`'s
+    reference stays valid across a write) -- the index must therefore be
+    rebuilt from whatever `.identities` currently holds, never cached from
+    construction time, or a freshly created/rotated identity would
+    authenticate as nobody.
+    """
+    from gatekeeper.identity import (
+        Identity,
+        IdentityStore,
+        generate_token,
+        hash_token,
+        hash_token_lookup,
+    )
+
+    store = IdentityStore({})
+    assert store.authenticate("gk_anything") is None
+
+    token = generate_token()
+    store.identities = {
+        "fresh": Identity(
+            id="fresh",
+            role="agent",
+            token_hash=hash_token(token),
+            token_lookup=hash_token_lookup(token),
+            tools=frozenset(),
+            scopes=(),
+        )
+    }
+    assert store.authenticate(token).id == "fresh"
+
+
+def test_mixed_indexed_and_unindexed_identities_both_authenticate(tmp_path):
+    """An identities.yaml partway through migration -- some entries carry
+    `token_lookup`, some (written by an older gatekeeper) don't -- must
+    authenticate correctly for both kinds, and a bad token must not match
+    either.
+    """
+    from gatekeeper.identity import (
+        Identity,
+        IdentityStore,
+        generate_token,
+        hash_token,
+        hash_token_lookup,
+    )
+
+    indexed_token = generate_token()
+    legacy_token = generate_token()
+    store = IdentityStore(
+        {
+            "indexed": Identity(
+                id="indexed",
+                role="agent",
+                token_hash=hash_token(indexed_token),
+                token_lookup=hash_token_lookup(indexed_token),
+                tools=frozenset(),
+                scopes=(),
+            ),
+            "legacy": Identity(
+                id="legacy",
+                role="agent",
+                token_hash=hash_token(legacy_token),
+                tools=frozenset(),
+                scopes=(),
+            ),
+        }
+    )
+
+    assert store.authenticate(indexed_token).id == "indexed"
+    assert store.authenticate(legacy_token).id == "legacy"
+    assert store.authenticate("gk_wrong") is None
+
+
+def test_token_lookup_field_round_trips_through_yaml(tmp_path):
+    """`load_identities`/`to_spec` must not drop `token_lookup` on a
+    write-then-reload cycle -- otherwise every reload of identities.yaml
+    would silently fall an identity back to the slow, un-indexed path.
+    """
+    from gatekeeper.identity import (
+        dump_identities,
+        generate_token,
+        hash_token,
+        hash_token_lookup,
+        load_identities,
+    )
+
+    token = generate_token()
+    path = tmp_path / "identities.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "identities": [
+                    {
+                        "id": "a",
+                        "role": "agent",
+                        "token_hash": hash_token(token),
+                        "token_lookup": hash_token_lookup(token),
+                        "tools": [],
+                        "scopes": [],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = load_identities(str(path))
+    assert store.identities["a"].token_lookup == hash_token_lookup(token)
+
+    dumped = dump_identities(store)
+    assert dumped["identities"][0]["token_lookup"] == hash_token_lookup(token)
+
+
+def test_malformed_token_lookup_rejected(tmp_path):
+    """`token_lookup` is computed, never hand-typed -- a value that is not
+    a 64-character hex SHA-256 digest is refused at load time rather than
+    silently never matching anything.
+    """
+    from gatekeeper.identity import hash_token, load_identities
+
+    path = tmp_path / "identities.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "identities": [
+                    {
+                        "id": "a",
+                        "role": "agent",
+                        "token_hash": hash_token("whatever"),
+                        "token_lookup": "not-a-hex-digest",
+                        "tools": [],
+                        "scopes": [],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="token_lookup"):
+        load_identities(str(path))
+
+
 def test_wildcard_in_tool_grant_rejected(tmp_path):
     """FR-7.5: no grants at toolkit level, not even as a wildcard."""
     import yaml as _yaml
@@ -589,6 +791,59 @@ def test_path_escape_is_rejected_not_normalized(tmp_path):
     tool = _http_tool(tier1)
     with pytest.raises(Denied):
         build_http_request(tool, {"name": ".."}, toolkit)
+
+
+@pytest.mark.parametrize(
+    "encoded", ["%2e%2e", "%2E%2E", "%2e%2e%2f", "..%2f..%2fetc"]
+)
+def test_percent_encoded_path_traversal_rejected(tmp_path, encoded):
+    """FR-8.7's ban on '..' must survive a percent-encoded segment too.
+
+    `allows_path`'s prefix check only inspects the path the way gatekeeper
+    sends it -- the target server decodes percent-escapes before
+    interpreting the path, so an unencoded check alone would let
+    `%2e%2e%2f` reach the network looking like an ordinary segment and
+    resolve to `../` on the other end.
+    """
+    tier1 = _http_tier1(tmp_path, allowed_cidrs=["127.0.0.1/32"])
+    toolkit = tier1.toolkit("demo_http")
+    tool = _http_tool(tier1)
+    with pytest.raises(Denied) as exc:
+        build_http_request(tool, {"name": encoded}, toolkit)
+    assert exc.value.reason is DenialReason.PATH_ESCAPE
+
+
+def test_allows_path_prefix_boundary_not_a_bare_startswith(tmp_path):
+    """A prefix without a trailing slash must match at a segment boundary.
+
+    `allowed_path_prefixes: ["/api/v3/series"]` must allow
+    `/api/v3/series/123` and the bare `/api/v3/series` itself, but not
+    `/api/v3/seriesXYZ` -- the same ambiguity `validate.py`'s
+    `_resolve_path` already closes on the filesystem side via
+    `commonpath` instead of a string prefix (`/mnt/raid` vs.
+    `/mnt/raid-evil`).
+    """
+    tier1 = _http_tier1(
+        tmp_path,
+        allowed_cidrs=["127.0.0.1/32"],
+        allowed_path_prefixes=("/api/v3/series",),
+    )
+    toolkit = tier1.toolkit("demo_http")
+    assert toolkit.allows_path("/api/v3/series")
+    assert toolkit.allows_path("/api/v3/series/123")
+    assert not toolkit.allows_path("/api/v3/seriesXYZ")
+    assert not toolkit.allows_path("/api/v3/serie")
+
+
+def test_allows_path_prefix_with_trailing_slash_unaffected(tmp_path):
+    """The common case (`allowed_path_prefixes: ["/api/"]`) is unchanged --
+
+    a prefix already ending in '/' has its boundary built in.
+    """
+    tier1 = _http_tier1(tmp_path, allowed_cidrs=["127.0.0.1/32"])
+    toolkit = tier1.toolkit("demo_http")
+    assert toolkit.allows_path("/api/thing/widgets")
+    assert not toolkit.allows_path("/apix/thing")
 
 
 def test_toolkit_credential_never_reachable_via_query_or_body_template():

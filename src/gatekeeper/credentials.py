@@ -19,8 +19,9 @@ from __future__ import annotations
 import dataclasses
 import os
 import threading
-import time
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import yaml
 from cryptography.fernet import Fernet, InvalidToken
@@ -135,7 +136,15 @@ class ResolvedCredential:
 
 
 def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    """UTC, not local time (catalog.py's `now_iso` uses the same idiom):
+
+    `_resolve`'s `expires_at > _now()` compares these strings
+    lexicographically, which is only monotonic across a fixed UTC offset --
+    `time.strftime("%Y-%m-%dT%H:%M:%S%z")` would use the local offset at
+    call time, which changes across a DST transition and could make an
+    overlap window expire up to an hour early or late.
+    """
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
 @dataclasses.dataclass(slots=True)
@@ -291,8 +300,11 @@ class CredentialStore:
                 raise WriteRefused(f"No credential named {name!r}.")
             previous_ciphertext = existing["ciphertext"] if overlap_seconds > 0 else None
             previous_expires_at = (
-                time.strftime(
-                    "%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() + overlap_seconds)
+                # UTC, same reasoning as `_now`: this value is later
+                # compared against `_now()` in `_resolve`, and both sides
+                # of that comparison must share a fixed offset.
+                (datetime.now(UTC) + timedelta(seconds=overlap_seconds)).strftime(
+                    "%Y-%m-%dT%H:%M:%S%z"
                 )
                 if overlap_seconds > 0
                 else None

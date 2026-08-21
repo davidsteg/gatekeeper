@@ -1,0 +1,29 @@
+# Pins gatekeeper's direct runtime dependencies to the exact versions this
+# codebase is tested and released against -- so that two builds of the same
+# commit resolve the same dependency tree, and `pip-audit` in CI is
+# checking the versions that actually ship, not whatever floor-satisfying
+# resolution pip happened to pick that day. gatekeeper holds
+# root-equivalent access to the host it manages; an unpinned transitive
+# resolution drifting between builds is exactly the kind of supply-chain
+# gap this project's own CI gate on the negative test corpus exists to
+# close for the code itself.
+#
+# Deliberately NOT a full `pip freeze` of the transitive closure: this
+# project's Docker image is built for both linux/amd64 and linux/arm64,
+# and a transitive lock resolved on one platform is not guaranteed to
+# match what the other platform's wheels require. Pinning only the direct
+# dependencies -- the ones this project actually chose -- lets pip resolve
+# a correct transitive set per platform while still eliminating drift in
+# what matters most: which major/minor line of each direct dependency is
+# actually running.
+#
+# Bump alongside a deliberate dependency upgrade, not incidentally: install
+# into a clean venv (`pip install .`), then `pip show <name>` each direct
+# dependency and copy its resolved version here.
+mcp==2.0.0
+pyyaml==6.0.3
+uvicorn==0.52.4
+httpx==0.28.1
+websockets==17.0.1
+cryptography==50.0.0
+asyncssh==2.24.0

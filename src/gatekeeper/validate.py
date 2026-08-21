@@ -21,9 +21,10 @@ from __future__ import annotations
 import os
 import re
 from typing import Any
+from urllib.parse import unquote
 
 from .catalog import PLACEHOLDER_RE, Parameter, ToolDef
-from .errors import Denied, DenialReason
+from .errors import DenialReason, Denied
 from .tier1 import Toolkit
 
 
@@ -231,11 +232,27 @@ def _reject_path_traversal(name: str, path: str) -> None:
     Normalizing would mean gatekeeper decides what the segment "really"
     meant -- exactly the ambiguity a target server could exploit. An
     outright reject has no such interpretation to get wrong.
+
+    Checked both literally and percent-decoded: `toolkit.allows_path`'s
+    prefix check only inspects the path as gatekeeper sends it, but the
+    *target* server decodes percent-escapes before interpreting the path --
+    `%2e%2e%2f` reads as an ordinary path segment here and as `../` there.
+    A single `unquote` pass catches that gap the same way the literal
+    check catches an unencoded `..`, without trying to guess or normalize
+    what a doubly-encoded sequence would mean -- rejecting once is enough
+    to close the ambiguity, guessing further would just reopen it.
     """
     if ".." in path.split("/"):
         raise Denied(
             DenialReason.PATH_ESCAPE,
             f"{name}: resolved path {path!r} contains a '..' segment.",
+        )
+    decoded = unquote(path)
+    if decoded != path and ".." in decoded.split("/"):
+        raise Denied(
+            DenialReason.PATH_ESCAPE,
+            f"{name}: resolved path {path!r} percent-decodes to a "
+            "'..' segment.",
         )
 
 

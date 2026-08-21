@@ -80,7 +80,29 @@ jobs:
           echo "Will release v$version ($(echo "$notes" | wc -l) lines of notes)."
 
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" -c constraints.txt
+
+      - name: Audit dependencies (pip-audit)
+        run: pip-audit
+
+      - name: Lint (ruff)
+        # Scoped to src/ only: tests/ carries a handful of pre-existing,
+        # deliberate idioms (assert False, broad pytest.raises(Exception))
+        # that are a style call, not a bug -- gating on them here would
+        # force a rewrite of test files as a side effect of adding a
+        # linter, which is its own considered change. E501/UP042 are
+        # excluded per pyproject.toml's own comments.
+        run: ruff check src/
+
+      - name: Type check (mypy)
+        # Informational, not gating: the first run against this codebase
+        # surfaces ~30 pre-existing findings (mostly the MCP SDK's
+        # pydantic camelCase aliases, e.g. inputSchema vs input_schema,
+        # that mypy doesn't resolve without its pydantic plugin) that are
+        # a considered backlog, not something to fix blind under a lint
+        # gate. Kept running so the signal is visible without blocking
+        # the build on it.
+        run: mypy src/gatekeeper || true
 
       - name: Test suite
         # Unter Linux laufen auch die Faelle, die unter Windows uebersprungen

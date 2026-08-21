@@ -290,6 +290,98 @@ async def test_similar_prefix_is_not_public(ui_app):
         assert (await client.get("/uixyz")).status_code == 401
 
 
+def _proxied_client(app, *, peer: str, trusted: list[str]) -> httpx2.AsyncClient:
+    """Wraps `app` the way `gatekeeper serve --trusted-proxies` wraps it at
+
+    runtime: `uvicorn.run(..., forwarded_allow_ips=...)` puts uvicorn's own
+    `ProxyHeadersMiddleware` *outside* the ASGI app, where it rewrites
+    scope["client"]/scope["scheme"] from X-Forwarded-For/X-Forwarded-Proto
+    before `AuthMiddleware`/`ui.py` ever see the request -- so exercising
+    that rewrite means wrapping the same way here, not sending the headers
+    straight to `ui_app` (which would never look at them itself; nothing in
+    `ui.py`/`server.py` reads X-Forwarded-* directly, on purpose). `peer` is
+    the immediate connection's address, exactly as `httpx.ASGITransport`'s
+    own `client=` sets scope["client"] before any middleware runs.
+    """
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    wrapped = ProxyHeadersMiddleware(app, trusted_hosts=trusted)
+    return httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=wrapped, client=(peer, 12345)),
+        base_url=BASE, timeout=30.0,
+    )
+
+
+async def test_trusted_proxy_headers_reveal_real_client(ui_app, tier1):
+    """A login failure behind a *trusted* reverse proxy must audit the
+
+    real visitor's address, not the proxy's -- otherwise every UI action
+    in the log would show the proxy as the actor (finding 5 of the full
+    review: docs/DEPLOYMENT.md's reverse-proxy section explains why
+    --trusted-proxies must name the proxy's actual address).
+    """
+    async with _proxied_client(
+        ui_app, peer="172.18.0.5", trusted=["172.18.0.5"]
+    ) as client:
+        response = await client.post(
+            f"{UI_PREFIX}/login",
+            data={"identity": "root", "password": "wrong"},
+            headers={"X-Forwarded-For": "203.0.113.7"},
+        )
+        assert response.status_code == 200
+
+    failures = _auth_failures(tier1)
+    assert failures, "expected a ui_login_failed record"
+    detail = failures[-1]["detail"]
+    assert "203.0.113.7" in detail
+    assert "172.18.0.5" not in detail
+
+
+async def test_untrusted_peer_forwarded_headers_are_ignored(ui_app, tier1):
+    """The same X-Forwarded-For must be ignored from a peer that is not in
+
+    --trusted-proxies -- otherwise any caller could forge the audited
+    client address merely by sending the header, defeating the point of
+    naming a specific proxy at all.
+    """
+    async with _proxied_client(
+        ui_app, peer="203.0.113.99", trusted=["172.18.0.5"]
+    ) as client:
+        response = await client.post(
+            f"{UI_PREFIX}/login",
+            data={"identity": "root", "password": "wrong"},
+            headers={"X-Forwarded-For": "10.0.0.1"},
+        )
+        assert response.status_code == 200
+
+    failures = _auth_failures(tier1)
+    assert failures, "expected a ui_login_failed record"
+    detail = failures[-1]["detail"]
+    assert "203.0.113.99" in detail
+    assert "10.0.0.1" not in detail
+
+
+async def test_trusted_proxy_https_forward_makes_session_cookie_secure(ui_app):
+    """Behind a TLS-terminating trusted proxy, X-Forwarded-Proto: https must
+
+    flip the session cookie's Secure flag -- `ui.py`'s
+    `secure=request.url.scheme == "https"` only sees "https" once uvicorn's
+    ProxyHeadersMiddleware has rewritten scope["scheme"] from that header,
+    which only happens for a trusted peer.
+    """
+    async with _proxied_client(
+        ui_app, peer="172.18.0.5", trusted=["172.18.0.5"]
+    ) as client:
+        response = await client.post(
+            f"{UI_PREFIX}/login",
+            data={"identity": "root", "password": ROOT_PASSWORD},
+            headers={"X-Forwarded-For": "203.0.113.7", "X-Forwarded-Proto": "https"},
+        )
+        assert response.status_code == 303
+        set_cookie = response.headers.get("set-cookie", "")
+        assert "secure" in set_cookie.lower()
+
+
 def _auth_failures(tier1) -> list[dict]:
     path = os.path.join(tier1.audit_dir, "audit.jsonl")
     if not os.path.exists(path):

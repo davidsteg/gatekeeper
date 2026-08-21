@@ -37,7 +37,8 @@ from __future__ import annotations
 
 import dataclasses
 import os
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .catalog import normalize_tool_entry, parse_tool_spec
 from .errors import ConfigError
