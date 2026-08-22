@@ -150,10 +150,10 @@ created or rotated.
 ## Integrations
 
 `integrations.py` — a small library of starter definitions (toolkit YAML block +
-2-4 starter tools + an inline-SVG logo) for 20 services: Sonarr, Radarr,
+2-4 starter tools + an inline-SVG logo) for 21 services: Sonarr, Radarr,
 Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n, Uptime Kuma, Immich,
 Telegram, Google API (static-key subset), TrueNAS, pfSense, Jellystat,
-Netdata, SABnzbd, Paperless-ngx, Docker, and Linux-over-SSH. Most are
+Jellyseerr, Netdata, SABnzbd, Paperless-ngx, Docker, and Linux-over-SSH. Most are
 `http`-shaped; Docker reuses the `docker` executor's own toolkit/tool shape
 (binaries/denied_args/path_roots, mirroring `config/examples/toolkits.yaml`)
 and Linux reuses the `ssh` executor's, via `_tool_argv()` rather than the
@@ -233,7 +233,7 @@ src/gatekeeper/
   execute_ssh.py        The `ssh` executor: binary+argv over an SSH exec
                        channel, mandatory host-key pinning
   credentials.py       The write-only, encrypted credential store
-  integrations.py      Starter toolkit/tool definitions + logos for 20
+  integrations.py      Starter toolkit/tool definitions + logos for 21
                        services, used by /ui/tools/integrations
   identity.py          scrypt token hashing, constant-time verify,
                        IdentityStore, roles

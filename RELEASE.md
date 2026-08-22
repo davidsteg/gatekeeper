@@ -60,6 +60,49 @@ cannot. It is in every release.
 
 ---
 
+## 0.16.2
+
+**The audit log now records which credential a call used, and masks
+secret-shaped field names in every spelling.**
+
+The credential store itself is unchanged -- it already encrypted at rest,
+injected per kind, and never returned a value. What was missing sat on
+either side of it: the log could not say *which* key a call had used, and
+its field-name masking matched too narrowly to be relied on.
+
+- **`"credentials"` in a call record is no longer always empty.**
+  `audit.call()` has accepted a `credential_names` argument since the store
+  landed, but `service.py` never passed one -- so the field every call
+  record carried was `[]`, whatever the call actually did. It is now filled
+  from the resolved toolkit, which means a destination's credential
+  override is already applied and the audited name is the one the executor
+  really resolves. Denials record it too: a rejected call against a service
+  was previously invisible when answering "what touched this key?" after a
+  leak. Names only, never values (FR-10.7).
+- **Field-name masking matched exact names, and now matches normalized
+  substrings.** `_NEVER_LOG` held `api_key` -- so a tool parameter named
+  `apikey`, `x-api-key`, `access_token` or `client_secret` went to disk in
+  cleartext. Keys are now lowercased with `-`, `_`, `.` and spaces stripped
+  before being tested against the token set, which collapses every spelling
+  onto one. The `Redactor` was never a backstop for this: it only knows
+  values gatekeeper stores itself, not a foreign token an agent passed in
+  as an argument. Deliberately generous, with one explicit exemption list
+  for keys that *describe* a secret rather than carry one -- masking
+  `credentials` or `credential_kind` would have deleted exactly the
+  metadata the previous point adds.
+- **Jellyseerr starter integration** (21 services now): port 5055,
+  `X-Api-Key`, three read-only tools. Its monogram is deliberately not
+  Jellystat's -- the two sit next to each other in the gallery, differ by
+  three letters, and shared the same "Js" badge.
+- **Docs.** A "Credentials: from zero to a working call" runbook in
+  `docs/DEPLOYMENT.md` (master key, the Tier 1 `credential:` line, the
+  console entry, enabling tools) -- the three-part setup was documented
+  only in pieces, which is the usual reason a freshly deployed toolkit
+  keeps answering 401. The README's Credentials section gains the
+  kind-to-request table, `compose.yaml` documents
+  `GATEKEEPER_CREDENTIAL_KEY`, and "What's not here (yet)" no longer
+  claims the `ssh` executor is missing -- it shipped in 0.8.0.
+
 ## 0.16.1
 
 **The access map's pan/zoom/click/drag now run on Cytoscape.js instead of ~700 lines of hand-rolled code.**

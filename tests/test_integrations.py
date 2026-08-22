@@ -122,10 +122,27 @@ def test_all_named_services_present():
     expected = {
         "sonarr", "radarr", "jellyfin", "bazarr", "tdarr", "prowlarr",
         "hass", "n8n", "uptimekuma", "immich", "telegram", "google_api",
-        "truenas", "pfsense", "jellystat", "netdata", "sabnzbd", "paperless",
-        "docker", "linux",
+        "truenas", "pfsense", "jellystat", "jellyseerr", "netdata", "sabnzbd",
+        "paperless", "docker", "linux",
     }
     assert expected <= set(INTEGRATIONS)
+
+
+def test_jellyseerr_auth_shape():
+    """Jellyseerr and Jellystat are different services with different auth.
+
+    They sit next to each other in the gallery and their names differ by
+    three letters -- pinning the header and port here is what keeps a
+    future edit from "fixing" one into the other.
+    """
+    integration = INTEGRATIONS["jellyseerr"]
+    parsed = yaml.safe_load(integration.toolkit_yaml)["jellyseerr"]
+    assert parsed["base_url"].endswith(":5055")
+    assert integration.credential_kind == "api_key_header"
+    assert "X-Api-Key" in integration.toolkit_yaml
+    # Read-only starter set: no tool here may write.
+    assert {spec["method"] for spec in integration.tool_specs} == {"GET"}
+    assert parsed["allowed_methods"] == ["GET"]
 
 
 def test_docker_and_linux_use_argv_shaped_tools_not_http():

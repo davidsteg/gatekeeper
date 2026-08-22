@@ -27,7 +27,7 @@ item.
   into destination-qualified, independently-grantable IDs
   (`docker.compose_up@nas1`) — REQUIREMENTS.md FR-8.3g-j (`tier1.py`,
   `catalog.py`)
-- Integrations — starter toolkit YAML + tools + logo for 20 services
+- Integrations — starter toolkit YAML + tools + logo for 21 services
   (Sonarr, Radarr, Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n,
   Uptime Kuma, Immich, Telegram, Google API, TrueNAS, pfSense, Jellystat,
   Netdata, SABnzbd, Paperless-ngx, Docker, Linux-over-SSH), reachable

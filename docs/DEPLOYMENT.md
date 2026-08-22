@@ -25,6 +25,60 @@ A `credentials.yaml` with any entries in it, but no master key configured,
 aborts startup (fail closed) rather than running with masking silently
 disabled.
 
+## Credentials: from zero to a working call
+
+A freshly deployed toolkit that needs auth answers `401`/`403` until all
+three of these are true. They are separate on purpose — the master key is a
+deploy secret, the binding is Tier 1, and the value itself is Tier 2.
+
+**1. Generate and mount the master key.** Once per deployment, not per
+service. Without it the store cannot encrypt anything, and a
+`credentials.yaml` that already has entries aborts startup rather than
+running unmasked.
+
+```bash
+docker exec gatekeeper gatekeeper credential-key
+```
+
+Put the output in the container's environment as `GATEKEEPER_CREDENTIAL_KEY`,
+or write it to a mounted file and point `GATEKEEPER_CREDENTIAL_KEY_FILE` at
+that path — the file variant keeps the key out of `docker inspect`. Losing
+this key means every stored credential must be entered again; it is not
+recoverable from the ciphertext.
+
+**2. Bind each toolkit to a credential name.** In `toolkits.yaml`, one line
+per toolkit:
+
+```yaml
+toolkits:
+  jellyfin:
+    executor: http
+    base_url: "http://10.10.200.20:8096"
+    credential: jellyfin        # <- the name, never the key itself
+```
+
+This is Tier 1: edited by hand at deploy time and never by the console, which
+is what stops a compromised admin session from pointing one service's key at
+another host. The name is free-form; matching it to the toolkit name is only
+a convention. Nothing else in the toolkit block changes — `base_url`,
+`allowed_cidrs`, `allowed_methods` and `allowed_path_prefixes` stay as they
+are. Redeploy (or send `SIGHUP`, see below) so Tier 1 is re-read.
+
+**3. Enter the values in the console.** `/ui/credentials` → *Add credential*,
+once per service. Name must equal the `credential:` value from step 2; kind
+and header follow the service (see the table in the README's Credentials
+section — most homelab services are `api_key_header`, SABnzbd is the one
+`url_query` case). The value is write-only from the moment you save it: no
+role, no route, and no export ever shows it again.
+
+**4. Enable the tools.** A tool with no grantees exists but is invisible to
+every agent — `/ui/tools` to enable, `/ui/identities` to grant.
+
+To verify, call one read-only tool and check `/ui/audit`: a successful record
+names the credential it used (`"credentials": ["jellyfin"]`) and contains the
+value nowhere. A `credential_unavailable` denial means step 2 and step 3
+disagree about the name.
+
 ## Config reload without a restart
 
 ```bash

@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from conftest import make_catalog
 from gatekeeper import execute_http, validate
 from gatekeeper.catalog import parse_tool_spec
 from gatekeeper.credentials import CredentialStore, KEY_ENV, generate_master_key
@@ -403,3 +404,119 @@ audit:
     tier1 = load_tier1(str(path))
     tk = tier1.toolkit("demo_http")
     assert await execute_http.probe(tk) is False
+
+
+# -- The audit record of an HTTP call (FR-10.7) ----------------------------
+#
+# Run through `Service.call` rather than `execute_http.run` directly: the
+# credential *name* is attached by the service, the credential *value* by
+# the executor, and the property under test is that exactly one of the two
+# reaches the log. Only the full path exercises both.
+
+
+def _service_for(tmp_path, tier1, credentials, *, name):
+    from gatekeeper.audit import AuditLog
+    from gatekeeper.identity import Identity, hash_token
+    from gatekeeper.service import Service
+
+    catalog = make_catalog(tmp_path, tier1, [_tool_spec()])
+    audit = AuditLog(str(tmp_path / name))
+    identity = Identity(
+        id="agent",
+        role="agent",
+        token_hash=hash_token("unused"),
+        tools=frozenset({"demo_http.get_thing"}),
+        scopes=(),
+    )
+    service = Service(tier1=tier1, catalog=catalog, audit=audit, credentials=credentials)
+    return service, identity, tmp_path / name / "audit.jsonl"
+
+
+def _tool_spec():
+    return {
+        "id": "demo_http.get_thing",
+        "toolkit": "demo_http",
+        "version": 1,
+        "title": "Get thing",
+        "description": "test",
+        "category": "read",
+        "idempotent": True,
+        "enabled": True,
+        "method": "GET",
+        "path": "/api/thing/{name}",
+        "parameters": {
+            "name": {"type": "string", "pattern": "^[a-z]+$", "required": True,
+                      "description": "thing name"},
+        },
+        "required_scopes": [],
+        "timeout_seconds": 5,
+        "max_output_bytes": 65536,
+    }
+
+
+async def test_audit_records_credential_name_but_never_its_value(toolkit, credentials, tmp_path):
+    _, tier1 = toolkit
+    service, identity, log_path = _service_for(
+        tmp_path, tier1, credentials, name="logs-named"
+    )
+
+    result = await service.call(identity, "demo_http.get_thing", {"name": "widgets"})
+    assert result.outcome == OUTCOME_OK
+    # The key really did reach the target -- otherwise the assertion below
+    # would pass for the trivial reason that no request was ever made.
+    assert json.loads(result.stdout)["headers"]["X-Api-Key"] == "super-secret-abc"
+
+    written = log_path.read_text(encoding="utf-8")
+    record = json.loads(written.splitlines()[-1])
+    assert record["credentials"] == ["demo_cred"]
+    # Not "the value is absent from the fields we thought to check" -- absent
+    # from the serialized record, full stop.
+    assert "super-secret-abc" not in written
+
+
+async def test_audit_records_no_credential_when_toolkit_has_none(tmp_path, http_server):
+    port = http_server.server_address[1]
+    path = tmp_path / "toolkits-nocred.yaml"
+    path.write_text(
+        f"""
+toolkits:
+  demo_http:
+    executor: http
+    base_url: "http://127.0.0.1:{port}"
+    allowed_methods: ["GET"]
+    allowed_path_prefixes: ["/api/"]
+    allowed_cidrs: ["127.0.0.1/32"]
+audit:
+  dir: {tmp_path / "logs-nocred"}
+""",
+        encoding="utf-8",
+    )
+    tier1 = load_tier1(str(path))
+    service, identity, log_path = _service_for(tmp_path, tier1, None, name="logs-nocred")
+
+    result = await service.call(identity, "demo_http.get_thing", {"name": "widgets"})
+    assert result.outcome == OUTCOME_OK
+    record = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    # [] and not [None]: an unauthenticated toolkit names no credential.
+    assert record["credentials"] == []
+
+
+async def test_audit_records_credential_name_on_denial(toolkit, credentials, tmp_path):
+    """A denial names the credential the call *would* have used.
+
+    Without this, a rejected call against a service is invisible when
+    answering "what touched this key?" after it leaked.
+    """
+    _, tier1 = toolkit
+    service, identity, log_path = _service_for(
+        tmp_path, tier1, credentials, name="logs-denied"
+    )
+
+    with pytest.raises(Denied):
+        # Fails `^[a-z]+$` -- denied after the toolkit resolves, so the
+        # credential name is already known.
+        await service.call(identity, "demo_http.get_thing", {"name": "NOT-LOWERCASE"})
+
+    record = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["outcome"] == "denied"
+    assert record["credentials"] == ["demo_cred"]
