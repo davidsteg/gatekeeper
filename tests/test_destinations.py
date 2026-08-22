@@ -586,6 +586,98 @@ def destination_store(tmp_path):
     return store, service
 
 
+def test_admin_tool_get_reports_grantable_ids(destination_store, tmp_path):
+    """`admin.tool_get`/`tool_list` must surface the destination-expanded
+
+    ids `grant_set` actually accepts -- the bare id shown as `enabled: true`
+    is never itself grantable once a toolkit declares `destinations`
+    (FR-8.3h), and that gap is exactly what led an agent to keep
+    resubmitting a grant on the bare id and getting "Unknown tool IDs"
+    back on approval.
+    """
+    from gatekeeper.admin_service import AdminService
+    from gatekeeper.pending import PendingStore
+    from gatekeeper.toolkit_proposals import ToolkitProposalStore
+
+    store, service = destination_store
+    pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=store.audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "toolkit-proposals.yaml"), audit=store.audit, service=service,
+        toolkits_path=str(tmp_path / "toolkits.yaml"), tools_path=store.tools_path,
+        identities_path=store.identities_path,
+    )
+    admin = AdminService(store=store, pending=pending, toolkit_proposals=toolkit_proposals)
+
+    got = admin.tool_get("hermes", {"id": "docker.compose_up"})
+    assert got["grantable_ids"] == ["docker.compose_up@nas1", "docker.compose_up@nas2"]
+
+    listed = admin.tool_list("hermes", {})
+    entry = next(t for t in listed["tools"] if t["id"] == "docker.compose_up")
+    assert entry["grantable_ids"] == ["docker.compose_up@nas1", "docker.compose_up@nas2"]
+
+
+def test_admin_tool_get_grantable_ids_bare_when_no_destinations(tmp_path):
+    """A toolkit without `destinations:` keeps today's behaviour: the bare
+
+    id is itself the one grantable id.
+    """
+    from gatekeeper.admin_service import AdminService
+    from gatekeeper.identity import IdentityStore, hash_token
+    from gatekeeper.pending import PendingStore
+    from gatekeeper.store import ConfigStore
+    from gatekeeper.toolkit_proposals import ToolkitProposalStore
+
+    tier1 = _docker_tier1(tmp_path, destinations=())
+    toolkits_path = tmp_path / "toolkits.yaml"
+    toolkits_path.write_text(
+        "toolkits:\n"
+        "  docker:\n"
+        "    executor: docker\n"
+        f"    binaries: [{json.dumps(PYTHON)}]\n"
+        "    denied_args: []\n"
+        "    path_roots: []\n"
+        f"audit:\n  dir: {tmp_path / 'logs6'}\n",
+        encoding="utf-8",
+    )
+    tier1 = load_tier1(str(toolkits_path))
+    tools_path = tmp_path / "tools.yaml"
+    tools_path.write_text(yaml.safe_dump({"tools": [_compose_up_spec()]}), encoding="utf-8")
+    catalog = load_catalog(str(tools_path), tier1)
+    audit = AuditLog(str(tmp_path / "logs6"))
+    service = Service(tier1=tier1, catalog=catalog, audit=audit)
+
+    identities_path = tmp_path / "identities.yaml"
+    identities_path.write_text(
+        yaml.safe_dump(
+            {
+                "identities": [
+                    {
+                        "id": "hermes", "role": "admin",
+                        "token_hash": hash_token("x" * 20),
+                        "tools": [], "scopes": [],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    identities = IdentityStore(identities={})
+    store = ConfigStore(
+        service=service, identities=identities, audit=audit,
+        tools_path=str(tools_path), identities_path=str(identities_path),
+    )
+    pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "toolkit-proposals.yaml"), audit=audit, service=service,
+        toolkits_path=str(toolkits_path), tools_path=str(tools_path),
+        identities_path=str(identities_path),
+    )
+    admin = AdminService(store=store, pending=pending, toolkit_proposals=toolkit_proposals)
+
+    got = admin.tool_get("hermes", {"id": "docker.compose_up"})
+    assert got["grantable_ids"] == ["docker.compose_up"]
+
+
 def test_disable_by_base_id_succeeds(destination_store):
     """Regression: the UI used to send the @destination-qualified id here,
 

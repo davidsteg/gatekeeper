@@ -60,6 +60,20 @@ cannot. It is in every release.
 
 ---
 
+## 0.20.4
+
+**`admin.tool_get`/`admin.tool_list` now report `grantable_ids` — the actual, possibly destination-qualified id(s) `admin.grant_set` accepts.**
+
+- A multi-destination toolkit's tools live in the catalog only as
+  `<id>@<destination>` (FR-8.3h); the bare id an agent sees via
+  `admin.tool_get` was never itself grantable, only its raw source
+  definition. A grant submitted for the bare id was silently rejected as
+  "Unknown tool IDs" on approval, with nothing in the read path pointing at
+  why. Both responses now include `grantable_ids`, the exact id(s) to pass
+  to `admin.grant_set`.
+
+---
+
 ## 0.20.3
 
 **Overview layout: Activity above, Access map full-width below.**
