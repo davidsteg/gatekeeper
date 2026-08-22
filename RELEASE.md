@@ -60,6 +60,16 @@ cannot. It is in every release.
 
 ---
 
+## 0.20.4
+
+**Activity card: chart and feed side-by-side (80/20 split).**
+
+Recent events now sit to the right of the call chart instead of below
+it, cutting the Activity card's height significantly. Feed max 200px
+with its own scrollbar.
+
+---
+
 ## 0.20.3
 
 **Overview layout: Activity above, Access map full-width below.**
