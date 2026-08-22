@@ -23,6 +23,7 @@ import httpx2
 import pytest
 import yaml
 
+from gatekeeper._vendor_cytoscape import CYTOSCAPE_JS, CYTOSCAPE_VERSION
 from gatekeeper.audit import AuditLog
 from gatekeeper.identity import generate_token, hash_token, load_identities
 from gatekeeper.server import build_app
@@ -474,9 +475,12 @@ async def test_access_map_scopes_script_src_to_itself(ui_app, ui_identities):
 
     Both routes that render it -- Overview (which now embeds the live map
     directly) and the dedicated /ui/access-map page -- get a matching
-    nonce'd `script-src`. Every other route must stay exactly as
-    script-free as before -- a future change that widens this by accident
-    should fail here, not get noticed later in a security review.
+    nonce'd `script-src`, load both the vendored Cytoscape bundle and the
+    glue script under that one nonce, and allow the single `<style>`
+    element Cytoscape injects for itself by exact hash. Every other route
+    must stay exactly as script-free as before -- a future change that
+    widens this by accident should fail here, not get noticed later in a
+    security review.
     """
     _, tokens = ui_identities
     async with _client(ui_app) as client:
@@ -489,14 +493,24 @@ async def test_access_map_scopes_script_src_to_itself(ui_app, ui_identities):
         csp = page.headers["content-security-policy"]
         assert "default-src 'none'" in csp
         assert "script-src 'nonce-" in csp
+        # Cytoscape's one self-injected <style> is allowed by hash, not by
+        # 'unsafe-inline' -- exactly that rule, nowhere else.
+        assert "'sha256-pgvDUBa4IjFA2yuSJ2cqcyxmNYJMborsd0ORcRv9vw8='" in csp
         assert page.headers["cache-control"] == "no-store"
-        # The script tag on the page must carry that exact nonce.
+        # Both script tags on the page must carry that exact nonce, and
+        # the library must load before the glue that calls into it.
         nonce = csp.split("script-src 'nonce-")[1].split("'")[0]
-        assert f'nonce="{nonce}"' in page.text
+        cyto_at = page.text.find(f'nonce="{nonce}"')
+        assert cyto_at != -1
+        glue_at = page.text.find(f'nonce="{nonce}"', cyto_at + 1)
+        assert glue_at != -1
+        assert "cytoscape-" in page.text[cyto_at:glue_at]
+        assert "access-map.js" in page.text[glue_at : glue_at + 200]
 
     tools_csp = tools.headers["content-security-policy"]
     assert "default-src 'none'" in tools_csp
     assert "script-src" not in tools_csp
+    assert "sha256-" not in tools_csp
 
 
 async def test_access_map_data_endpoint(ui_app, ui_identities):
@@ -551,6 +565,33 @@ async def test_access_map_js_served_with_session(ui_app, ui_identities):
     assert response.status_code == 200
     assert "javascript" in response.headers["content-type"]
     assert "access-map-root" in response.text
+
+
+async def test_cytoscape_js_requires_session(ui_app):
+    async with _client(ui_app) as client:
+        response = await client.get(
+            f"{UI_PREFIX}/cytoscape-{CYTOSCAPE_VERSION}.js", follow_redirects=False
+        )
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/login")
+
+
+async def test_cytoscape_js_served_with_session(ui_app, ui_identities):
+    """Served from this origin, versioned, and cacheable.
+
+    Unlike every other UI response (permission/audit data, `no-store`),
+    the vendored bundle carries none of that and is immutable once
+    fetched -- re-sending ~425 KB on every dashboard load to preserve a
+    caching rule that exists for a different reason would be a poor trade.
+    """
+    _, tokens = ui_identities
+    async with _client(ui_app) as client:
+        await _login(client)
+        response = await client.get(f"{UI_PREFIX}/cytoscape-{CYTOSCAPE_VERSION}.js")
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+    assert response.headers["cache-control"] == "private, max-age=31536000, immutable"
+    assert response.text == CYTOSCAPE_JS
 
 
 async def test_token_hashes_are_never_rendered(ui_app, ui_identities):
