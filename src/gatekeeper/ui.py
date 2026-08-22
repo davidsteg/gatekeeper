@@ -1010,7 +1010,7 @@ td.ops form { display: inline; }
 .c-deny { fill: var(--deny); }
 .c-base { fill: var(--line); }
 .c-ax { fill: var(--muted); font-size: 9px; font-family: inherit; }
-.activity-split { display: grid; grid-template-columns: 80% 20%; gap: .8rem; }
+.activity-split { display: grid; grid-template-columns: 70% 30%; gap: .8rem; }
 .activity-chart-col { min-width: 0; }
 .activity-feed-col { min-width: 0; display: flex; flex-direction: column; }
 .activity-feed-col .feed { max-height: 200px; overflow-y: auto; }
