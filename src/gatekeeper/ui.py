@@ -1010,7 +1010,7 @@ td.ops form { display: inline; }
 .c-deny { fill: var(--deny); }
 .c-base { fill: var(--line); }
 .c-ax { fill: var(--muted); font-size: 9px; font-family: inherit; }
-.feed { display: flex; flex-direction: column; }
+.feed { display: flex; flex-direction: column; max-height: 280px; overflow-y: auto; }
 .feed-item { display: flex; gap: .55rem; padding: .7rem 1rem; align-items: baseline; border-top: 1px solid var(--line); font-size: .82rem; }
 .feed-item .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
 .feed-item.t-ok .dot { background: var(--ok); }
@@ -2273,30 +2273,36 @@ def _view_overview(
         + "</div>"
     )
 
-    # Highlight tiles from the same audit records loaded above — no extra
-    # read.  These give the most important signal (calls and success rate)
-    # without a click to the Stats page.
+    # Call stats are shown inside the Activity card below — no separate
+    # tile row needed.
     _ov_totals = _outcome_totals(records)
     _ov_success = int(_ov_totals["ok"] / _ov_totals["total"] * 100) if _ov_totals["total"] else 0
+
     parts.append(
+        '<div class="card">'
+        f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3>'
+        '<span class="spacer"></span>'
+        f'<a class="btn" href="{UI_PREFIX}/stats">{_icon("bar-chart", 13)}Full stats</a>'
+        "</div>"
         '<div class="grid">'
         + _stat(
             _ov_totals["total"], "Calls (last 12h)", "activity",
             "t-ok" if _ov_totals["total"] else "",
         )
         + _stat(
-            f"{_ov_success}%", "Success rate (last 12h)", "check",
+            f"{_ov_success}%", "Success rate", "check",
             "t-ok" if _ov_success >= 80 else ("t-warn" if _ov_success >= 50 else "t-deny"),
         )
-        + f'<div class="stat"><a href="{UI_PREFIX}/stats" class="stat-link">'
-        f'<div class="chip">{_icon("bar-chart", 18)}</div>'
-        f'<div><div class="n">View &rarr;</div>'
-        f'<div class="l">Full stats</div></div></a></div>'
+        + _stat(len(records), "Events", "list")
         + "</div>"
+        '<div class="subhead">Calls, last 12 h</div>'
+        f'<div class="pad pad-tight">{_activity_chart(records)}</div>'
+        '<div class="subhead">Recent events</div>'
+        f'<div class="feed">{_feed(records)}</div>'
+        "</div>"
     )
 
     parts.append(
-        '<div class="split"><div>'
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("share", 14)}Access map</h3>'
         '<span class="spacer"></span>'
@@ -2310,21 +2316,8 @@ def _view_overview(
         f'<button class="ghost" type="submit" title="Filter">{_icon("search", 14)}</button>'
         + (f'<a class="reset" href="{UI_PREFIX}/">reset</a>' if query else "")
         + "</form>"
-        f'<div class="pad-tight">{_access_matrix(service, identities, records, highlight=query)}</div></div></div>'
-        "</div><div>"
-        '<div class="card">'
-        f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3></div>'
-        '<div class="subhead">Calls, last 12 h</div>'
-        f'<div class="pad pad-tight">{_activity_chart(records)}</div>'
-        # The feed below also carries sign-ins and admin changes, not just
-        # calls -- labelling the whole card "Calls" said less than it
-        # showed. Two headings, one for what is actually a call and one
-        # for what is not.
-        '<div class="subhead">Recent events</div>'
-        f'<div class="feed">{_feed(records)}</div>'
-        f'<div class="subhead"><a href="{UI_PREFIX}/stats">View full stats &rarr;</a></div>'
+        f'<div class="pad-tight">{_access_matrix(service, identities, records, highlight=query)}</div></div>'
         "</div>"
-        "</div></div>"
     )
 
     return "".join(parts)

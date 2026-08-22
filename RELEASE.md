@@ -60,6 +60,17 @@ cannot. It is in every release.
 
 ---
 
+## 0.20.3
+
+**Overview layout: Activity above, Access map full-width below.**
+
+The split-column layout (access map left, activity sidebar right) is
+gone. Activity is now a full-width card on top with call tiles, chart,
+and a scrollable event feed (max 280px). Access map sits below it at
+full width — the matrix fits without horizontal scroll on most screens.
+
+---
+
 ## 0.20.2
 
 **Access matrix: hover popup replaces inline `<details>` expand.**
