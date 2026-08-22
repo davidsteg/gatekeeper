@@ -60,6 +60,26 @@ cannot. It is in every release.
 
 ---
 
+## 0.17.0
+
+**Overview drops its static reference cards; the Tools page gains a Cards/Matrix toggle.**
+
+Call flow, Executors, and Tier 1 sat on Overview looking the same on every
+visit, competing with the map and activity feed for attention -- the things
+that actually change. Tier 1 already had a dedicated page
+(`/ui/toolkits/reference`), so it was pure duplication there.
+
+- **Call flow, Executors, and Tier 1 cards removed from Overview.** The
+  8-layer pipeline diagram, the executor reachability panel (and its
+  `/ui/probe-executors` endpoint), and the collapsed Tier 1 boundaries
+  block are gone. `service.probe_executors()`/`executor_ready` are
+  unaffected -- `/health/ready` and the Prometheus gauge still use them.
+- **Tool matrix moves to `/ui/tools`.** Rather than delete it outright, the
+  dense per-tool table is now a view on the Tools page: a Cards/Matrix
+  toggle (`?view=cards|matrix`) switches between the existing per-toolkit
+  cards and the table, the same pattern the access map already uses for
+  its graph/table switch.
+
 ## 0.16.2
 
 **The audit log now records which credential a call used, and masks

@@ -285,9 +285,9 @@ code:
   Embedded directly on Overview and as a larger dedicated page at
   `/ui/access-map` (which also offers a dense identity×toolkit table,
   `_toolkit_access_matrix()`, once past `ACCESS_MAP_TABLE_THRESHOLD` nodes).
-- **Call flow pipeline** — `_call_flow_pipeline()`: the layers a request
-  passes, as a horizontal SVG
-- **Tool matrix** — `_tool_matrix()`: HTML table, one tool per row
+- **Tool matrix** — `_tool_matrix()`: HTML table, one tool per row; the
+  `/ui/tools` Cards/Matrix toggle (`?view=matrix`) switches to it in place
+  of the per-toolkit tool cards
 - **Activity chart** — `_activity_chart()`: calls/hour as stacked bars
 - **Activity feed** — `_feed()`: recent calls as a timeline
 

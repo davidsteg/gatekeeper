@@ -60,11 +60,13 @@ Once started with `--ui`, gatekeeper hosts an admin dashboard at `/ui` where you
 
 ![](.readme-assets/overview.png)
 
-**Left column:** navigation. **Top row:** counts. **Access map:** which identities reach which toolkits (green=granted, red-dashed=protected). **Call flow:** the 8 layers every request passes. **Call history:** recent activity. **Tool matrix:** what's defined, what's active.
+**Left column:** navigation. **Top row:** counts. **Access map:** which identities reach which toolkits (green=granted, red-dashed=protected). **Call history:** recent activity.
 
 ### Tools: Manage the catalog
 
 ![](.readme-assets/tools.png)
+
+Toggle between **Cards** (grouped by toolkit, one card per tool with parameters, scopes, and limits) and **Matrix** (a dense table: status, category, idempotency, and who may call each tool).
 
 Each tool is a template — a fixed action, not a free-form command. For a local binary that's a program path, arguments, and parameter rules; for an HTTP service (see Integrations below) it's a method and path instead, shown as `REQUEST` on the card. Either way the editor shows the Tier 1 limits it has to stay inside, so you know what's allowed before you save. Defining and granting are two steps — a tool with no grantees exists but is invisible to every agent.
 
