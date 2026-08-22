@@ -463,6 +463,95 @@ async def test_toolkit_list_is_read_only_and_reflects_live_tier1(admin_mcp_env):
     payload = json.loads(result.content[0].text)
     names = {t["name"] for t in payload["toolkits"]}
     assert names == {"demo"}
+    # `demo` is a `local` toolkit with no base_url/docker_host/ws_url and no
+    # credential -- both new fields must report that plainly (empty
+    # string, None) rather than being absent or raising.
+    demo = next(t for t in payload["toolkits"] if t["name"] == "demo")
+    assert demo["target"] == ""
+    assert demo["credential"] is None
+
+
+async def test_toolkit_list_reports_target_and_credential_name(tmp_path):
+    """The gap that caused a real misdiagnosis: this action used to omit
+
+    a toolkit's own connection target and credential reference entirely,
+    which read as "not configured" when it was actually just unreported.
+    `target` must match `_target()` -- the same resolution the console's
+    Tools page and access map already use -- and `credential` must be the
+    *name* only, never a value (the credential store stays write-only,
+    FR-10.2, regardless of what this read-only action exposes).
+    """
+    from gatekeeper.audit import AuditLog
+    from gatekeeper.pending import PendingStore
+    from gatekeeper.service import Service
+    from gatekeeper.store import ConfigStore
+    from gatekeeper.tier1 import load_tier1
+    from gatekeeper.toolkit_proposals import ToolkitProposalStore
+
+    toolkits_path = tmp_path / "toolkits.yaml"
+    toolkits_path.write_text(
+        yaml.safe_dump(
+            {
+                "toolkits": {
+                    "bazarr": {
+                        "executor": "http",
+                        "base_url": "http://10.10.200.90:30046",
+                        "allowed_methods": ["GET"],
+                        "allowed_path_prefixes": ["/api/"],
+                        "allowed_cidrs": ["10.10.200.0/24"],
+                        "credential": "bazarr-api-key",
+                        "max_timeout_seconds": 20,
+                        "max_output_bytes": 65536,
+                    }
+                },
+                "audit": {"dir": str(tmp_path / "logs")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    tier1 = load_tier1(str(toolkits_path))
+    tools_path = tmp_path / "tools.yaml"
+    tools_path.write_text(yaml.safe_dump({"tools": []}), encoding="utf-8")
+    identities_path = tmp_path / "identities.yaml"
+    identities_path.write_text(
+        yaml.safe_dump(
+            {
+                "identities": [
+                    {
+                        "id": "hermes", "role": "admin",
+                        "token_hash": hash_token(generate_token()),
+                        "tools": [], "scopes": [],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit = AuditLog(str(tmp_path / "logs"))
+    from gatekeeper.catalog import load_catalog
+    from gatekeeper.identity import load_identities
+
+    service = Service(tier1=tier1, catalog=load_catalog(str(tools_path), tier1), audit=audit)
+    identities = load_identities(str(identities_path))
+    store = ConfigStore(
+        service=service, identities=identities, audit=audit,
+        tools_path=str(tools_path), identities_path=str(identities_path),
+    )
+    pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "toolkit-proposals.yaml"), audit=audit, service=service,
+        toolkits_path=str(toolkits_path), tools_path=str(tools_path),
+        identities_path=str(identities_path),
+    )
+    from gatekeeper.admin_service import AdminService
+
+    admin = AdminService(store=store, pending=pending, toolkit_proposals=toolkit_proposals)
+    payload = admin.toolkit_list("hermes", {})
+    bazarr = next(t for t in payload["toolkits"] if t["name"] == "bazarr")
+    assert bazarr["target"] == "http://10.10.200.90:30046"
+    # The name a call would look the credential up by -- never a value,
+    # since nothing on this path ever touches the credential store itself.
+    assert bazarr["credential"] == "bazarr-api-key"
 
 
 async def test_toolkit_propose_always_lands_in_proposal_store(admin_mcp_env):

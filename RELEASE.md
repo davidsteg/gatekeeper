@@ -60,6 +60,41 @@ cannot. It is in every release.
 
 ---
 
+## 0.18.1
+
+**`admin.toolkit_list` reports a toolkit's target and credential name. The embedded access map's filter box and lane layout are fixed.**
+
+- **`admin.toolkit_list` was missing the two fields that actually matter
+  for diagnosing a toolkit.** It reported `executor`, limits, and
+  `destinations` (the optional multi-host fan-out field) but never a
+  toolkit's own `base_url`/`docker_host`/`ws_url` or which `credential` it
+  references. That gap caused a real misdiagnosis: an agent debugging a
+  401 read the missing field as "not configured" and proposed adding
+  `destinations:` -- the base URL had been correctly wired the entire
+  time, just never reported. Fixed by adding `target` (via the same
+  `_target()` resolution the console's Tools page and access map already
+  use, so this agrees with what a human sees) and `credential` (the name
+  only -- the credential store stays write-only, FR-10.2, this doesn't
+  change that).
+- **The embedded Overview map card's filter box was cramming a text
+  input, submit button, title, and "Open full page" link into one row
+  narrower than the dedicated full page ever needs to be -- the
+  placeholder text was visibly cut off.** The filter form now gets its
+  own row, same structure the dedicated `/ui/access-map` page already
+  used.
+- **The map's lanes now rotate to match whatever container they're
+  actually in**, instead of always laying out as columns. A short, wide
+  container (the embedded card sits in half the dashboard's width) is a
+  poor fit for tall stacked columns -- a short lane got stretched to
+  match the busiest one's height, leaving huge gaps. Lanes are now
+  columns when the container is taller than wide, rows (identities on
+  top, toolkits below, spread left-to-right) when it's wider than tall --
+  decided from the container's own measured shape at render time, not a
+  per-route flag, so it also re-evaluates correctly on a browser resize.
+  Each lane is now sized to its own item count rather than a shared
+  per-lane maximum, which was the actual cause of the sparse look in
+  either orientation.
+
 ## 0.18.0
 
 **`admin.cred_propose`: an agent can name a new credential slot, but never touch its value.**

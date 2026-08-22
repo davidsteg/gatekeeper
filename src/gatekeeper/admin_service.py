@@ -176,6 +176,11 @@ class AdminService:
         toolkit's executor/limits are) instead of guessing before drafting
         a proposal. Read-only -- Tier 1 itself is never written from here.
         """
+        # Deferred: ui.py imports admin_service.py at module load, so a
+        # top-level import here would be circular -- same reason
+        # `read_audit` above is imported this way instead of at the top.
+        from .ui import _target
+
         tier1 = self.store.service.tier1
         toolkits = [
             {
@@ -188,6 +193,14 @@ class AdminService:
                 "max_timeout_seconds": tk.max_timeout_seconds,
                 "max_output_bytes": tk.max_output_bytes,
                 "destinations": list(tk.destinations),
+                # Where this toolkit connects to, and which credential it
+                # references -- not previously reported here, which read
+                # as "not configured" when it was actually just missing
+                # from this report. `credential` is the name only (e.g.
+                # "bazarr-api-key"), never its value -- the credential
+                # store stays write-only (FR-10.2) regardless.
+                "target": _target(tk),
+                "credential": tk.credential,
             }
             for name, tk in sorted(tier1.toolkits.items())
         ]

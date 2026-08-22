@@ -1298,21 +1298,15 @@ _ACCESS_MAP_JS = """
 (function () {
   "use strict";
 
-  // Lane geometry. Unchanged from the hand-drawn SVG renderer this
+  // Node geometry. Unchanged from the hand-drawn SVG renderer this
   // replaced -- these numbers now feed Cytoscape's `preset` layout instead
-  // of being turned into SVG coordinates by hand, so the map keeps the
-  // same three-column shape (identities | toolkits | destinations) rather
-  // than becoming an unrecognisable force-directed blob.
-  var NW = 132, NH = 52, GAP = 14;
-  var LX = 8, MX = 360, DX = MX + NW + 220;
+  // of being turned into SVG coordinates by hand. `LX` is the one fixed
+  // origin both orientations share (`buildElements` computes each lane's
+  // and each item's own position from it, not a shared per-lane extent).
+  var NW = 132, NH = 52, GAP = 14, LX = 8;
   var TOOLKIT_GROUP_THRESHOLD = 8;
   var IDENTITY_GROUP_THRESHOLD = 20;
   var MIN_ZOOM = 0.15, MAX_ZOOM = 6, FIT_PAD = 28;
-
-  function laneY(index, count, height) {
-    var span = count * NH + Math.max(count - 1, 0) * GAP;
-    return (height - span) / 2 + index * (NH + GAP);
-  }
 
   function callTotal(calls) {
     return calls && calls.total ? calls.total : 0;
@@ -1434,15 +1428,16 @@ _ACCESS_MAP_JS = """
       { selector: "node.cluster", style: {
         "border-style": "dashed", "border-width": 2,
       }},
-      // Column headers. Plain non-interactive text nodes so they pan and
-      // zoom with the graph instead of floating over it.
+      // Lane headers (above a column, or left of a row -- see
+      // `buildElements`). Plain non-interactive text nodes, anchored at
+      // exactly the point they should appear, so they pan and zoom with
+      // the graph instead of floating over it.
       { selector: "node.lane-label", style: {
         shape: "rectangle", width: 1, height: 1,
         "background-opacity": 0, "border-width": 0,
         label: "data(display)", color: theme.muted,
         "font-size": 9, "font-weight": 600,
-        "text-valign": "center", "text-halign": "right",
-        "text-margin-x": NW, events: "no",
+        "text-valign": "center", "text-halign": "center", events: "no",
       }},
       { selector: "edge", style: {
         width: 1.5,
@@ -1512,18 +1507,30 @@ _ACCESS_MAP_JS = """
   App.prototype.buildElements = function () {
     var visible = this.visibleNodes();
     var hasDestinations = this.data.meta.has_destinations;
+    var rect = this.root.getBoundingClientRect();
+    // Lanes as columns (identities | toolkits | destinations, each
+    // stacked top-to-bottom) when the container is taller than wide; as
+    // rows (identities on top, toolkits below, destinations below that,
+    // each spread left-to-right) when it's wider than tall. An embedded
+    // card sitting in a narrow page column is short and wide -- stacking
+    // nodes vertically wastes exactly the space it doesn't have, and
+    // rotating the lanes 90 degrees uses the width it does have instead.
+    var rows = rect.width >= rect.height;
 
-    var midItems = visible.toolkits.length;
-    var rightItems = hasDestinations ? visible.destinations.length : midItems;
-    var lanes = Math.max(visible.identities.length, midItems, rightItems, 1);
-    var worldH = Math.max(lanes * (NH + GAP) + 30, 210);
+    var lanes = [
+      { items: visible.identities, id: "identities", label: "IDENTITIES" },
+      { items: visible.toolkits, id: "toolkits", label: "TOOLKITS" },
+    ];
+    if (hasDestinations) {
+      lanes.push({ items: visible.destinations, id: "destinations", label: "DESTINATIONS" });
+    }
 
     var els = [];
     var placed = {};
     var byId = {};
     this.data.nodes.forEach(function (n) { byId[n.id] = n; });
 
-    function add(node, laneX, index, count) {
+    function add(node, x, y) {
       var total = callTotal(node.calls);
       var display = node.label
         + (node.sub ? "\\n" + node.sub : "")
@@ -1531,9 +1538,9 @@ _ACCESS_MAP_JS = """
       placed[node.id] = true;
       els.push({
         group: "nodes",
-        // Cytoscape positions a node by its centre; the lane maths above
-        // is in top-left corners, like the old renderer's rects.
-        position: { x: laneX + NW / 2, y: laneY(index, count, worldH) + NH / 2 },
+        // Cytoscape positions a node by its centre; x/y here are
+        // top-left corners, like the old renderer's rects.
+        position: { x: x + NW / 2, y: y + NH / 2 },
         classes: node.kind === "cluster" ? "cluster" : "",
         data: {
           id: node.id, kind: node.kind, label: node.label,
@@ -1543,25 +1550,38 @@ _ACCESS_MAP_JS = """
       });
     }
 
-    visible.identities.forEach(function (n, i) {
-      add(n, LX, i, visible.identities.length);
-    });
-    visible.toolkits.forEach(function (n, i) { add(n, MX, i, midItems); });
-    if (hasDestinations) {
-      visible.destinations.forEach(function (n, i) { add(n, DX, i, rightItems); });
-    }
+    // Fixed spacing between lanes themselves (columns' x, or rows' y) --
+    // deliberately NOT based on any lane's item count, so a 3-item
+    // identities lane no longer stretches to match a 15-item toolkits
+    // lane. That stretching (every lane sized to the busiest one) was
+    // exactly what made short lanes look sparse before: a handful of
+    // nodes spread across the same span a much busier lane needed.
+    var itemStep = rows ? (NW + GAP) : (NH + GAP);
+    var laneStep = rows ? (NH + 46) : (NW + 220);
+    var laneOrigin = 8;
+    // Rows-mode reserves room on the left for the lane label (drawn at
+    // x = LX + 20); columns-mode's label sits above the column instead,
+    // so nodes there can start right at the column's own x.
+    var itemOrigin = rows ? (LX + 60) : LX;
 
-    function laneLabel(id, x, textValue) {
+    lanes.forEach(function (lane, li) {
+      var laneAt = laneOrigin + li * laneStep;
+      lane.items.forEach(function (node, i) {
+        var along = itemOrigin + i * itemStep;
+        if (rows) add(node, along, laneAt);
+        else add(node, laneAt, along);
+      });
       els.push({
         group: "nodes", classes: "lane-label",
-        position: { x: x, y: 14 },
-        data: { id: id, display: textValue, color_class: "" },
+        // Left of the row's nodes in rows-mode, above the column's nodes
+        // in columns-mode -- same anchor logic, transposed.
+        position: rows
+          ? { x: LX + 20, y: laneAt + NH / 2 }
+          : { x: laneAt + NW / 2, y: 14 },
+        data: { id: "lane:" + lane.id, display: lane.label, color_class: "" },
         selectable: false,
       });
-    }
-    laneLabel("lane:identities", LX, "IDENTITIES");
-    laneLabel("lane:toolkits", MX, "TOOLKITS");
-    if (hasDestinations) laneLabel("lane:destinations", DX, "DESTINATIONS");
+    });
 
     // Edges only exist between two currently-visible endpoints: a
     // collapsed cluster's member edges fold into one edge on the cluster
@@ -1837,7 +1857,19 @@ _ACCESS_MAP_JS = """
     window.addEventListener("resize", function () {
       window.clearTimeout(self.resizeTimer);
       self.resizeTimer = window.setTimeout(function () {
-        if (self.cy) self.cy.resize();
+        if (!self.cy || !self.data) return;
+        self.cy.resize();
+        // Unlike render()'s other callers (search, cluster expand/
+        // collapse), a resize doesn't just add or dim elements -- the
+        // container's own aspect ratio may have flipped rows/columns
+        // mode entirely, so the old pan/zoom belongs to a layout that
+        // may no longer exist. Rebuild and always re-fit, rather than
+        // going through render()'s pan/zoom-preserving branch.
+        var els = self.buildElements();
+        self.cy.elements().remove();
+        self.cy.add(els);
+        self.applyFilter();
+        self.cy.fit(undefined, FIT_PAD);
       }, 120);
     });
   };
@@ -2836,6 +2868,15 @@ def _view_overview(
         '<span class="spacer"></span>'
         f'<a class="btn" href="{UI_PREFIX}/access-map" title="Open the '
         f'full-page access map">{_icon("share", 13)}Open full page</a>'
+        "</div>"
+        # The filter form gets its own row above the map instead of
+        # crowding into .card-head alongside the title and "Open full
+        # page" button -- this card only gets half the page width (the
+        # .split column next to Activity), and a 12rem input plus three
+        # siblings in one flex row left the placeholder text truncated.
+        # One .pad wrapper, matching `_view_access_map`'s own structure,
+        # so the form and the map don't each add a `.card > .pad` gap.
+        "<div class=\"pad\">"
         # GET form: still a working no-script fallback (a plain reload of
         # this page with ?q= seeded); `App.prototype.wireSearch` intercepts
         # it and filters live once access-map.js runs.
@@ -2844,8 +2885,8 @@ def _view_overview(
         'placeholder="Filter identity or toolkit&hellip;">'
         f'<button class="ghost" type="submit" title="Filter">{_icon("search", 14)}</button>'
         + (f'<a class="reset" href="{UI_PREFIX}/">reset</a>' if query else "")
-        + "</form></div>"
-        f'<div class="pad">{_access_map_mount(query)}'
+        + "</form>"
+        f"{_access_map_mount(query)}"
         f"{_access_map_legend()}{no_traffic_caption}</div></div>"
         "</div><div>"
         '<div class="card">'
