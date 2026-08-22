@@ -60,6 +60,23 @@ cannot. It is in every release.
 
 ---
 
+## 0.20.1
+
+**Access matrix: integration logos from dashboardicons.com.**
+
+Toolkit column headers now show the actual service logo (Jellyfin,
+Sonarr, Radarr, etc.) loaded from the homarr-labs/dashboard-icons CDN
+on jsDelivr — the same source the inline `_BRAND_LOGOS` were drawn
+from, but now covering all 9000+ icons without hardcoding each one.
+
+- CSP `img-src` widened to allow `https://cdn.jsdelivr.net`.
+- `_dashboard_icon_url()` maps toolkit names to CDN SVG slugs, with
+  a manual override table for names that don't match directly
+  (hass→home-assistant, paperless→paperless-ngx, zfs→truenas, etc.).
+- Logos render as `<img loading="lazy">` above the toolkit name.
+
+---
+
 ## 0.20.0
 
 **Access map redesigned: matrix grid replaces the Cytoscape.js graph.**

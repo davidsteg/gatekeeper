@@ -424,6 +424,50 @@ def _guess_integration(toolkit_name: str) -> str | None:
     return None
 
 
+#: CDN base for dashboardicons.com (homarr-labs/dashboard-icons on jsDelivr).
+#: ~9000 SVG icons, same source the inline `_BRAND_LOGOS` were drawn from.
+_DASHBOARD_ICON_CDN = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg"
+
+#: Toolkit names that need a slug different from the name itself.
+#: Most toolkits match directly (jellyfin → jellyfin.svg); these don't.
+_DASHBOARD_ICON_SLUGS: dict[str, str] = {
+    "hass": "home-assistant",
+    "homeassistant": "home-assistant",
+    "uptimekuma": "uptime-kuma",
+    "google_api": "google",
+    "sabnzbd": "sabnzbd",
+    "paperless": "paperless-ngx",
+    "jellyseerr": "jellyseerr",
+    "tdarr": "tdarr",
+    "diag": "stethoscope",
+    "docker": "docker",
+    "file": "folder",
+    "zfs": "truenas",
+    "http": "web",
+    "webui": "web",
+}
+
+
+def _dashboard_icon_url(toolkit_name: str) -> str | None:
+    """URL to the dashboardicons.com SVG for a toolkit, or None if no match.
+
+    Tries the slug map first, then the toolkit name directly (most
+    dashboardicons slugs match the service name: jellyfin, sonarr, radarr,
+    prowlarr, bazarr, immich, n8n, etc.).
+    """
+    name = toolkit_name.strip().lower()
+    slug = _DASHBOARD_ICON_SLUGS.get(name)
+    if slug:
+        return f"{_DASHBOARD_ICON_CDN}/{slug}.svg"
+    # Try integration key match (e.g. "jellyfin" in "jellyfin-prod")
+    integration = _guess_integration(name)
+    if integration:
+        slug = _DASHBOARD_ICON_SLUGS.get(integration, integration)
+        return f"{_DASHBOARD_ICON_CDN}/{slug}.svg"
+    # Last resort: try the name itself — many services match directly
+    return f"{_DASHBOARD_ICON_CDN}/{name}.svg"
+
+
 def _target(obj: Toolkit | Destination) -> str:
     """The one target field that's actually set on a Toolkit or a
 
@@ -885,15 +929,17 @@ td.ops form { display: inline; }
   transition: background .15s;
 }
 .am-col:hover { background: var(--accent-soft); }
+.am-col-logo {
+  display: block; margin: 0 auto .2rem; width: 18px; height: 18px;
+  filter: drop-shadow(0 0 2px rgba(0,0,0,.2));
+}
 .am-col-name {
   display: block; font-weight: 700; font-size: .76rem; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; color: var(--fg);
 }
 .am-col-exec {
-  display: flex; align-items: center; justify-content: center; gap: .15rem;
-  font-size: .62rem; color: var(--muted); margin-top: .2rem;
+  display: block; font-size: .62rem; color: var(--muted); margin-top: .15rem;
 }
-.am-col-exec svg { opacity: .6; }
 .am-row-id {
   text-align: left; padding: .4rem .6rem; white-space: nowrap;
   background: var(--surface); border-radius: var(--radius-sm);
@@ -1435,7 +1481,7 @@ def _respond(
     directives = [
         "default-src 'none'",
         f"style-src 'nonce-{nonce}'",
-        "img-src 'self' data:",
+        "img-src 'self' data: https://cdn.jsdelivr.net",
         "form-action 'self'",
         "frame-ancestors 'none'",
         "base-uri 'none'",
@@ -1838,13 +1884,20 @@ def _access_matrix(
             f"No identity or toolkit matches &ldquo;{_e(highlight)}&rdquo;.", icon="search",
         )
 
-    col_headers = "".join(
-        f'<th class="am-col" title="{_e(name)}">'
-        f'<span class="am-col-name">{_e(name)}</span>'
-        f'<span class="am-col-exec">{_icon(_executor_icon(tk.executor), 10)}{_e(tk.executor)}</span>'
-        f"</th>"
-        for name, tk in toolkits
-    )
+    col_headers = ""
+    for name, tk in toolkits:
+        icon_url = _dashboard_icon_url(name)
+        if icon_url:
+            icon_html = f'<img src="{_e(icon_url)}" class="am-col-logo" alt="" loading="lazy" width="18" height="18">'
+        else:
+            icon_html = _icon(_executor_icon(tk.executor), 14)
+        col_headers += (
+            f'<th class="am-col" title="{_e(name)}">'
+            f'{icon_html}'
+            f'<span class="am-col-name">{_e(name)}</span>'
+            f'<span class="am-col-exec">{_e(tk.executor)}</span>'
+            f"</th>"
+        )
 
     rows_html = []
     for ident in idents:
