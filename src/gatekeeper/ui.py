@@ -1010,7 +1010,12 @@ td.ops form { display: inline; }
 .c-deny { fill: var(--deny); }
 .c-base { fill: var(--line); }
 .c-ax { fill: var(--muted); font-size: 9px; font-family: inherit; }
-.feed { display: flex; flex-direction: column; max-height: 280px; overflow-y: auto; }
+.activity-split { display: grid; grid-template-columns: 70% 30%; gap: .8rem; }
+.activity-chart-col { min-width: 0; }
+.activity-feed-col { min-width: 0; display: flex; flex-direction: column; }
+.activity-feed-col .feed { max-height: 200px; overflow-y: auto; }
+@media (max-width: 768px) { .activity-split { grid-template-columns: 1fr; } }
+.feed { display: flex; flex-direction: column; }
 .feed-item { display: flex; gap: .55rem; padding: .7rem 1rem; align-items: baseline; border-top: 1px solid var(--line); font-size: .82rem; }
 .feed-item .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
 .feed-item.t-ok .dot { background: var(--ok); }
@@ -2295,10 +2300,16 @@ def _view_overview(
         )
         + _stat(len(records), "Events", "list")
         + "</div>"
+        '<div class="activity-split">'
+        '<div class="activity-chart-col">'
         '<div class="subhead">Calls, last 12 h</div>'
         f'<div class="pad pad-tight">{_activity_chart(records)}</div>'
+        '</div>'
+        '<div class="activity-feed-col">'
         '<div class="subhead">Recent events</div>'
         f'<div class="feed">{_feed(records)}</div>'
+        '</div>'
+        '</div>'
         "</div>"
     )
 

@@ -60,7 +60,7 @@ cannot. It is in every release.
 
 ---
 
-## 0.20.4
+## 0.20.5
 
 **`admin.tool_get`/`admin.tool_list` now report `grantable_ids` — the actual, possibly destination-qualified id(s) `admin.grant_set` accepts.**
 
@@ -71,6 +71,16 @@ cannot. It is in every release.
   "Unknown tool IDs" on approval, with nothing in the read path pointing at
   why. Both responses now include `grantable_ids`, the exact id(s) to pass
   to `admin.grant_set`.
+
+---
+
+## 0.20.4
+
+**Activity card: chart and feed side-by-side (80/20 split).**
+
+Recent events now sit to the right of the call chart instead of below
+it, cutting the Activity card's height significantly. Feed max 200px
+with its own scrollbar.
 
 ---
 
