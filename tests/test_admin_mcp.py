@@ -20,6 +20,7 @@ from mcp.client.client import Client, streamable_http_client
 
 from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
+from gatekeeper.credentials import KEY_ENV, CredentialStore, generate_master_key
 from gatekeeper.identity import generate_token, hash_token, load_identities
 from gatekeeper.pending import PendingStore
 from gatekeeper.server import build_app
@@ -76,7 +77,7 @@ def admin_mcp_env(tmp_path, tier1, tool_specs):
         encoding="utf-8",
     )
 
-    def _build():
+    def _build(*, credentials=None):
         identities = load_identities(str(identities_path))
         audit = AuditLog(str(tmp_path / "logs"))
         service = Service(
@@ -98,10 +99,22 @@ def admin_mcp_env(tmp_path, tier1, tool_specs):
         app = build_app(
             service=service, identities=identities, audit=audit, ui=True,
             store=store, pending=pending, toolkit_proposals=toolkit_proposals,
+            credentials=credentials,
         )
         return app, store, pending, toolkit_proposals
 
     return {"build": _build, "tokens": tokens, "tools_path": tools_path}
+
+
+@pytest.fixture
+def credential_store(tmp_path, monkeypatch):
+    """A fresh, empty `CredentialStore` -- for `admin.cred_propose`, which
+
+    needs one on `AdminService` to check name collisions/revision against.
+    """
+    monkeypatch.setenv(KEY_ENV, generate_master_key())
+    audit = AuditLog(str(tmp_path / "cred-logs"))
+    return CredentialStore(path=str(tmp_path / "credentials.yaml"), audit=audit)
 
 
 def _http(app, token: str | None) -> httpx2.AsyncClient:
@@ -497,6 +510,135 @@ async def test_calling_admin_toolkit_deploy_by_name_is_unknown_tool(admin_mcp_en
     async with connected(app, tokens["hermes"], "/admin/mcp") as client:
         result = await client.call_tool("admin.toolkit_deploy", {"id": "whatever"})
     assert result.is_error
+
+
+# -- admin.cred_propose (metadata-only credential proposals) ---------------
+
+
+async def test_cred_propose_always_pending(admin_mcp_env, credential_store):
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.cred_propose",
+            {"name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key"},
+        )
+    assert not result.is_error
+    payload = json.loads(result.content[0].text)
+    assert payload["applied"] is False
+    assert payload["pending"] is True
+    items = pending.list(status="pending")
+    assert len(items) == 1
+    assert items[0].action == "cred_propose"
+    assert items[0].payload == {
+        "name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key",
+    }
+    # Never written to disk: no credential exists until a human fills a value.
+    assert credential_store.names() == []
+
+
+async def test_cred_propose_rejects_unknown_kind(admin_mcp_env, credential_store):
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.cred_propose", {"name": "sonarr", "kind": "made_up_kind"}
+        )
+    assert result.is_error
+    assert pending.list() == []
+
+
+async def test_cred_propose_rejects_missing_header_for_api_key_header(
+    admin_mcp_env, credential_store
+):
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.cred_propose", {"name": "sonarr", "kind": "api_key_header"}
+        )
+    assert result.is_error
+    assert pending.list() == []
+
+
+async def test_cred_propose_rejects_duplicate_name(admin_mcp_env, credential_store):
+    credential_store.create(
+        "sonarr", kind="api_key_header", header="X-Api-Key",
+        value="already-here", actor="admin", rev="",
+    )
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.cred_propose",
+            {"name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key"},
+        )
+    assert result.is_error
+    assert pending.list() == []
+
+
+async def test_cred_propose_without_a_credential_store_is_a_clean_error(admin_mcp_env):
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"]()  # no credentials=
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.cred_propose", {"name": "sonarr", "kind": "api_key_header", "header": "X"}
+        )
+    assert result.is_error
+    assert pending.list() == []
+
+
+async def test_cred_propose_schema_has_no_value_property(admin_mcp_env, credential_store):
+    """The schema documents the intent (no `value` property); the actual
+
+    enforcement -- since the MCP SDK does not itself reject an unlisted
+    argument, `additionalProperties: False` is advisory to a well-behaved
+    client, not a transport gate -- is `cred_propose`'s own explicit check,
+    covered by the test right below.
+    """
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    schema = tools["admin.cred_propose"].input_schema
+    assert "value" not in schema["properties"]
+    assert schema["additionalProperties"] is False
+
+
+async def test_cred_propose_rejects_an_unexpected_value_argument(
+    admin_mcp_env, credential_store
+):
+    """The real enforcement point (see the test above): `cred_propose`
+
+    explicitly refuses a `value` argument rather than silently dropping
+    it -- a caller who sent one should learn immediately that it went
+    nowhere, not assume gatekeeper stored it.
+    """
+    app, _store, pending, _toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.cred_propose",
+            {
+                "name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key",
+                "value": "sneaked-in-secret",
+            },
+        )
+    assert result.is_error
+    assert "sneaked-in-secret" not in result.content[0].text
+    assert pending.list() == []
 
 
 def _python() -> str:

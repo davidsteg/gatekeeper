@@ -87,10 +87,7 @@ The new heart. The admin agent manages the tool catalog via MCP tools in the `ad
   | `admin.tool_delete` | Retire a definition (soft delete, history preserved) |
   | `admin.tool_validate` | Validate a definition **without** saving it |
   | `admin.grant_list` / `admin.grant_set` | Permission profiles per identity |
-  | `admin.cred_list` | Only **names**, type, creation date, last rotation — **never values** |
-  | `admin.cred_set` | Create or rotate a value (write-only, §11) |
-  | `admin.cred_delete` | Remove a credential |
-  | `admin.cred_pubkey` | Output the public part of an SSH key (FR-10.9) |
+  | `admin.cred_propose` | Implemented as of §17's bootstrap question below — proposes a credential's name/kind/header, deliberately with no `value` argument at all. A human types the actual value in `/ui/requests` at approval time; this is the only step of the original `admin.cred_set` idea that is reachable from `/admin/mcp`. `admin.cred_list`/`cred_delete`/`cred_pubkey` remain unimplemented. |
   | `admin.audit_query` | Search the audit log |
 
 - **FR-3.2** **New definitions are inactive after `create`.** Activation is a separate, separately audited call. Prevents a typo or a half-finished agent run from immediately going live.
@@ -467,7 +464,14 @@ In v2, an **agent** writes the tool catalog. The approval from FR-3.2 is thus th
 - [ ] **Which TrueNAS version is running?** Directly determines the implementation: from 25.04 REST is deprecated, from 26 removed (FR-8.3a). From 26, SCRAM-SHA-512 mutual auth for API keys is additionally available.
 - [ ] **Master Key Storage — Conflict with Homelab Rule.** FR-10.3 requires that the master key **not** reside in the same dataset as the encrypted credential store. The homelab convention places `compose.yaml` exactly there. If the key sits as an env variable in that file, encryption is ineffective. Options: Docker secret, separately mounted file outside `/mnt/raid/gatekeeper/`, or delivery via Dockhand. **This question blocks the credential store.**
 - [ ] **Enable `ssh` executor in v1?** Per FR-8.3f, only host diagnostics without API equivalent (`ps aux`, `top`) remain for it. Is that worth the additional key, or does `pid: host` on the container suffice?
-- [ ] **Credential Bootstrap:** Do the first API keys come in via `admin.cred_set` after startup, or via a one-time mounted file that is then removed?
+- [x] **Credential Bootstrap:** Neither. `admin.cred_set` (a single call
+  carrying a value) was never built; a one-time mounted file was never built
+  either. Instead: `admin.cred_propose` lets an agent name a credential slot
+  (name/kind/header, structurally no value), and a human always types the
+  actual secret in `/ui/requests` at approval time (`admin_service.py`'s
+  `cred_propose`, `ui.py`'s `/ui/pending/credential-fill`). The very first
+  key on a fresh deployment still has to go in by hand at `/ui/credentials`
+  — nothing bootstraps it automatically, on purpose (FR-10.3).
 - [ ] **Hermes Transport:** Does the deployed version support Streamable HTTP, or is the deprecated SSE transport additionally needed?
 - [ ] **Admin Interface:** MCP tools on `/admin/mcp` (recommendation, because the admin agent speaks MCP natively) or a separate REST API?
 - [ ] **Audit of Outputs:** Full, filtered, or metadata only? Affects FR-9.6 (secrets in container logs).

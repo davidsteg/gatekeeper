@@ -23,6 +23,9 @@ whether a change applies immediately or is written to the pending queue:
 * `tool_delete` and `grant_set` (the only identity mutation exposed here)
   always go to the pending queue -- they either remove a capability or
   change who has one.
+* `cred_propose` always goes to the pending queue too, but is never applied
+  through `apply_pending`/`_APPLIERS` below -- see its own docstring. It
+  proposes a credential's name/kind/header only, never a value.
 
 `approve`/`reject` are deliberately **not** methods on this class and are
 not in `_EXPOSED`. The only place a pending item is ever turned into a live
@@ -37,15 +40,23 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 from collections.abc import Callable
 from typing import Any
 
 from .catalog import normalize_tool_entry, parse_tool_spec
+from .credentials import KINDS as CREDENTIAL_KINDS
+from .credentials import CredentialStore
 from .errors import ConfigError
 from .identity import ROLES, UI_ROLES
 from .pending import PendingAction, PendingStore
 from .store import ConfigStore, WriteRefused
 from .toolkit_proposals import ToolkitProposalStore
+
+#: Server-side mirror of `_credential_editor`'s HTML `pattern` attribute
+#: (ui.py) -- that one is client-side only, so a raw MCP call bypasses it
+#: entirely unless enforced here too.
+_CREDENTIAL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 # Imported lazily inside `audit_query` (not at module level): `ui.py`
 # imports `apply_pending` from this module for its `/ui/requests` routes,
@@ -75,6 +86,10 @@ class AdminService:
     store: ConfigStore
     pending: PendingStore
     toolkit_proposals: ToolkitProposalStore
+    #: `None` on a deployment with no credential store configured (no
+    #: master key, or `--ui` disabled) -- `cred_propose` reports that
+    #: plainly rather than the store simply not existing on `self`.
+    credentials: CredentialStore | None = None
 
     #: Exact set of action names reachable via `call` -- deliberately an
     #: explicit allowlist rather than a raw `getattr`, so a private helper
@@ -339,6 +354,70 @@ class AdminService:
         item = self.toolkit_proposals.propose(name=name, spec=spec, actor=actor)
         return {"applied": False, "pending": True, "proposal_id": item.id}
 
+    def cred_propose(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Proposes a *named, typed, headerless-or-not credential slot* --
+
+        never a value (FR-10.2/10.8). `admin_server.py`'s inputSchema for
+        this tool has no `value` property, but the MCP SDK does not itself
+        enforce `additionalProperties: False` against an extra argument
+        (that's advisory to a well-behaved client, not a transport gate) --
+        so a stray `value` is rejected explicitly below, loudly rather than
+        silently ignored. The value is always typed by a human, at approval
+        time, in `/ui/requests` -- never written to `pending.yaml` (see
+        `pending.py`'s module docstring: everything proposed through it
+        sits in a plaintext Tier 2 file).
+
+        Deliberately not wired through `PendingStore.approve()`'s generic
+        `apply` callback the way `grant_set`/`tool_delete` are: that
+        callback fires synchronously at approval with no way to collect
+        additional input, but filling in the value *is* the approval here.
+        `ui.py`'s dedicated `/ui/pending/credential-fill` route calls
+        `pending.approve()` directly instead of going through
+        `admin_service.apply_pending`/`_APPLIERS`.
+        """
+        if self.credentials is None:
+            raise AdminActionError(
+                "No credential store is configured on this deployment -- "
+                "nothing to propose against."
+            )
+        if "value" in args:
+            # The MCP SDK does not enforce `additionalProperties: False`
+            # itself (it's advisory to a well-behaved client, not a
+            # transport-level gate) -- so this is the actual enforcement
+            # point. Rejected loudly rather than silently ignored: a
+            # caller sending a value here should learn immediately that it
+            # went nowhere, not assume it was stored.
+            raise AdminActionError(
+                "'value' is not a valid argument here -- this proposes a "
+                "credential's name/kind/header only. The secret value is "
+                "always typed by a human in /ui at approval time, never "
+                "sent over /admin/mcp (FR-10.2/10.8)."
+            )
+        name = _require_str(args, "name")
+        if not _CREDENTIAL_NAME_RE.match(name):
+            raise AdminActionError(
+                f"{name!r} is not a valid credential name -- must match "
+                f"{_CREDENTIAL_NAME_RE.pattern!r}."
+            )
+        kind = _require_str(args, "kind")
+        if kind not in CREDENTIAL_KINDS:
+            raise AdminActionError(f"Unknown credential kind {kind!r} (allowed: {sorted(CREDENTIAL_KINDS)}).")
+        header = args.get("header")
+        if header is not None and not isinstance(header, str):
+            raise AdminActionError("'header' must be a string if given.")
+        if kind in ("api_key_header", "url_query") and not header:
+            raise AdminActionError(f"kind {kind!r} requires a 'header' (header/param name).")
+        existing_names = {meta.name for meta in self.credentials.names()}
+        if name in existing_names:
+            raise AdminActionError(f"A credential named {name!r} already exists.")
+        item = self.pending.propose(
+            action="cred_propose",
+            actor=actor,
+            payload={"name": name, "kind": kind, "header": header},
+            base_rev=self.credentials.revision(),
+        )
+        return {"applied": False, "pending": True, "pending_id": item.id}
+
 
 #: The complete, fixed set of `admin.*` actions reachable from `/admin/mcp`
 #: (FR-2.8/2.9). `admin_server.py`'s tool list is asserted to match this
@@ -359,6 +438,7 @@ _EXPOSED: tuple[str, ...] = (
     "pending_list",
     "toolkit_list",
     "toolkit_propose",
+    "cred_propose",
 )
 
 EXPOSED_ACTIONS: frozenset[str] = frozenset(_EXPOSED)

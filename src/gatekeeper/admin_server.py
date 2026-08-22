@@ -23,6 +23,7 @@ from mcp.server.lowlevel import Server
 
 from ._authctx import identity_from as _identity_from
 from .admin_service import EXPOSED_ACTIONS, AdminActionError, AdminService
+from .credentials import KINDS as CREDENTIAL_KINDS
 from .errors import ConfigError
 from .identity import ROLES
 from .store import WriteRefused
@@ -226,6 +227,32 @@ _TOOLS: list[types.Tool] = [
         inputSchema={
             "type": "object",
             "properties": {},
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.cred_propose",
+        title="Propose a new credential slot",
+        description=(
+            "Proposes a new named credential -- name, kind, and (for "
+            "api_key_header/url_query) the header/param name. There is no "
+            "'value' property, and one sent anyway is explicitly refused, "
+            "never stored or ignored quietly: no operation on /admin/mcp "
+            "ever carries a secret (FR-10.2/10.8), not even to create one. "
+            "Always written to the pending queue and never auto-applies -- "
+            "a human reviews the proposed name/kind/header at /ui/requests "
+            "and, if they approve, types the actual secret value there "
+            "themselves; the value never exists anywhere an agent could "
+            "have written it."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "kind": {"type": "string", "enum": sorted(CREDENTIAL_KINDS)},
+                "header": {"type": "string"},
+            },
+            "required": ["name", "kind"],
             "additionalProperties": False,
         },
     ),

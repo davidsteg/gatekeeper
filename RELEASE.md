@@ -60,6 +60,46 @@ cannot. It is in every release.
 
 ---
 
+## 0.18.0
+
+**`admin.cred_propose`: an agent can name a new credential slot, but never touch its value.**
+
+REQUIREMENTS.md §17 had an open question since the credential store's first
+draft: "Do the first API keys come in via `admin.cred_set` after startup, or
+via a one-time mounted file that is then removed?" Neither. There is still
+no `admin.cred_set` (a single call that would carry a value over
+`/admin/mcp`), and there never will be one that takes a value.
+
+- **What an agent can do:** propose a credential's `name`, `kind`, and (for
+  `api_key_header`/`url_query`) its `header`/param name. That's it — the
+  tool has no `value` property, and `admin_service.py`'s `cred_propose`
+  explicitly refuses one if sent anyway (the MCP SDK does not itself
+  enforce `additionalProperties: false` against an unlisted argument, so
+  this refusal is the actual enforcement point, not the schema alone).
+  Every proposal lands in the same `pending.yaml` queue as a `grant_set` or
+  `tool_delete` — visible at `/ui/requests` (Change tab) — but is excluded
+  from "Approve all", since approving it needs a value typed in
+  individually.
+- **What a human does:** review the proposed name/kind/header at
+  `/ui/requests` and, if it's right, click through to
+  `/ui/pending/credential-fill` — a form that shows those three fields
+  read-only (not editable, so a reviewer sees exactly what was proposed
+  instead of silently retyping it) plus one password field. Submitting it
+  calls `CredentialStore.create()` directly with the locked kind/header and
+  the typed value, in the same request that marks the proposal approved.
+  The value never exists in `pending.yaml`, at any point in the flow.
+- **Deliberately not routed through `apply_pending`/`_APPLIERS`** — those
+  assume a proposal's payload alone is enough to fully apply a change, with
+  no way to collect additional input at approval time. Filling in the
+  secret value *is* the approval here, so it gets its own route, the same
+  way `admin.toolkit_propose` already stays off the generic path because
+  Tier 1 has different rules than Tier 2.
+- **Why the split, not one atomic `cred_set`-style call:** a name/kind/header
+  an agent chooses on its own is metadata a human should consciously
+  confirm before typing a secret against it — the wrong `kind` (e.g.
+  `url_query` instead of `api_key_header`) changes whether the value ends
+  up in a header or in a target service's own URL/access logs (FR-8.14).
+
 ## 0.17.0
 
 **Overview drops its static reference cards; the Tools page gains a Cards/Matrix toggle.**

@@ -3324,6 +3324,15 @@ def _pending_payload_summary(item: PendingAction, store: ConfigStore | None = No
         if not tools:
             return header
         return header + "".join(_resolved_tool_badge(store, t) for t in sorted(tools))
+    if item.action == "cred_propose":
+        payload = item.payload
+        header = payload.get("header")
+        return (
+            f'name <code>{_e(payload.get("name", ""))}</code> &rarr; '
+            f'kind <code>{_e(payload.get("kind", ""))}</code>'
+            + (f', header <code>{_e(header)}</code>' if header else "")
+            + ' <span class="muted">(no value -- typed by a human on approval)</span>'
+        )
     if item.action == "role_set":
         identity_id = item.payload.get("identity_id", "")
         new_role = item.payload.get("role", "")
@@ -3382,11 +3391,22 @@ def _pending_card(
     tone = _PENDING_TONE.get(item.status, "")
     ops = ""
     if item.status == "pending" and can_decide:
-        ops = (
-            _post_button(
+        if item.action == "cred_propose":
+            # Not a one-click _post_button like every other action: approving
+            # this one means typing a secret value, which a bare POST button
+            # cannot collect. The link goes to a confirm page instead, same
+            # shape as "Reject" below.
+            approve_op = (
+                f'<a class="btn" href="{UI_PREFIX}/pending/credential-fill?id={_e(item.id)}">'
+                f'{_icon("check", 14)}Approve</a>'
+            )
+        else:
+            approve_op = _post_button(
                 f"{UI_PREFIX}/pending/approve", "Approve", "check", session,
                 css="ghost", fields={"id": item.id},
             )
+        ops = (
+            approve_op
             + f'<a class="btn" href="{UI_PREFIX}/pending/reject?id={_e(item.id)}">'
             f'{_icon("ban", 14)}Reject</a>'
         )
@@ -3446,6 +3466,10 @@ def _change_tab(session: Session, store: ConfigStore | None, pending: PendingSto
     can_decide = session.can_write and store is not None
     live = [i for i in items if i.status not in _PENDING_ARCHIVE_STATUSES]
     archived = [i for i in items if i.status in _PENDING_ARCHIVE_STATUSES]
+    # Credential proposals need a value typed in individually -- a batch
+    # approve has nowhere to collect one, so they never count toward or
+    # appear in "Approve all" (see pending_credential_fill's own route).
+    batchable = [i for i in live if i.action != "cred_propose"]
     parts = [
         _note(
             "Only a human can approve or reject a proposal here -- there is "
@@ -3453,10 +3477,10 @@ def _change_tab(session: Session, store: ConfigStore | None, pending: PendingSto
             icon="share",
         )
     ]
-    if can_decide and len(live) >= 2:
+    if can_decide and len(batchable) >= 2:
         parts.append(
             f'<p><a class="btn" href="{UI_PREFIX}/pending/approve-all">'
-            f'{_icon("check", 14)}Approve all ({len(live)})</a></p>'
+            f'{_icon("check", 14)}Approve all ({len(batchable)})</a></p>'
         )
     parts.append(
         "".join(_pending_card(session, i, store, can_decide=can_decide) for i in reversed(live))
@@ -4259,6 +4283,54 @@ def _credential_rotate_editor(
         '<input type="number" name="overlap_seconds" value="0" min="0"></div>'
         f'<button type="submit">{_icon("refresh", 14)}Rotate</button> '
         f'<a class="btn" href="{UI_PREFIX}/credentials">{_icon("back", 14)}Cancel</a>'
+        "</form></div></div>"
+    )
+
+
+def _credential_fill_confirm(
+    session: Session, item: PendingAction, *, error: str = "",
+) -> str:
+    """The other half of `admin.cred_propose` (admin_service.py): name/kind/
+
+    header came from an agent's proposal and are shown read-only here, not
+    as editable fields -- the reviewer's job is to see exactly what was
+    proposed and consciously accept it, not to retype it. Only the value is
+    an input, and it is never written to `pending.yaml`; submitting this
+    form calls `CredentialStore.create()` directly with the proposal's
+    locked kind/header plus the value typed here, in the same request that
+    marks the proposal approved (see the `pending_credential_fill` route).
+    """
+    payload = item.payload
+    name = str(payload.get("name", ""))
+    kind = str(payload.get("kind", ""))
+    header = payload.get("header")
+    return (
+        (_note(f"<strong>Rejected.</strong> {_e(error)}", tone="bad") if error else "")
+        + '<div class="editor card"><div class="pad">'
+        f"<p><strong>Approve credential proposal for {_e(name)}?</strong></p>"
+        f"<p class='muted'>Proposed by {_e(item.actor)} at {_e(item.created_at)}. "
+        "Type the secret value below to create it -- it is never stored in "
+        "the pending queue and never shown again after this.</p>"
+        '<div class="rows">'
+        f'<div class="row"><div class="row-l">Name</div><div><code>{_e(name)}</code></div></div>'
+        f'<div class="row"><div class="row-l">Kind</div><div><code>{_e(kind)}</code></div></div>'
+        + (
+            f'<div class="row"><div class="row-l">Header/param</div>'
+            f'<div><code>{_e(header)}</code></div></div>'
+            if header else ""
+        )
+        + "</div>"
+        f'<form method="post" action="{UI_PREFIX}/pending/credential-fill">'
+        f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
+        f'<input type="hidden" name="id" value="{_e(item.id)}">'
+        '<div class="field"><span>Value'
+        '<div class="hint">Encrypted at rest, never shown again after this '
+        "form (FR-10.2). For kind=docker_tls, a JSON object: "
+        "<code>{&quot;cert&quot;: ..., &quot;key&quot;: ..., "
+        "&quot;ca&quot;: ...}</code> (PEM text, ca optional).</div></span>"
+        '<input type="password" name="value" autocomplete="new-password" required></div>'
+        f'<button type="submit">{_icon("check", 14)}Approve &amp; create</button> '
+        f'<a class="btn" href="{UI_PREFIX}/requests?tab=change">{_icon("back", 14)}Cancel</a>'
         "</form></div></div>"
     )
 
@@ -5617,6 +5689,47 @@ def build_ui_routes(
     # are the only functions that decide a proposal -- neither is reachable
     # from `/admin/mcp` (see `admin_service.py`).
 
+    async def pending_credential_fill_form(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or not session.can_write or pending is None or credentials is None:
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
+        item = pending.get(request.query_params.get("id", ""))
+        if item is None or item.status != "pending" or item.action != "cred_propose":
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
+        return _shell(
+            request, "Approve credential proposal", _credential_fill_confirm(session, item),
+            session, icon="check", active="/requests",
+        )
+
+    async def pending_credential_fill(request: Request, session: Session, form: FormData) -> Response:
+        assert store is not None
+        if pending is None or credentials is None:
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
+        action_id = str(form.get("id") or "")
+        value = str(form.get("value") or "")
+        item = pending.get(action_id)
+        if item is None or item.action != "cred_propose":
+            return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
+        try:
+            pending.approve(
+                action_id, decided_by=session.identity,
+                current_rev=lambda _item: credentials.revision(),
+                apply=lambda i: credentials.create(
+                    i.payload["name"], kind=i.payload["kind"],
+                    header=i.payload.get("header"), value=value,
+                    actor=session.identity, rev=credentials.revision(),
+                ),
+            )
+        except (PendingWriteRefused, CredentialWriteRefused, ConfigError) as exc:
+            return _shell(
+                request, "Approve credential proposal",
+                _credential_fill_confirm(session, item, error=str(exc)),
+                session, icon="ban", active="/requests", status=400,
+            )
+        return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
+
     async def pending_reject_form(request: Request) -> Response:
         session = _current(request)
         if session is None:
@@ -5666,11 +5779,12 @@ def build_ui_routes(
         if store is None or not session.can_write or pending is None:
             return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
         live = [i for i in pending.list() if i.status not in _PENDING_ARCHIVE_STATUSES]
-        if len(live) < 2:
+        batchable = [i for i in live if i.action != "cred_propose"]
+        if len(batchable) < 2:
             return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
         return _shell(
             request, "Approve all proposals",
-            _pending_approve_all_confirm(session, live, store),
+            _pending_approve_all_confirm(session, batchable, store),
             session, icon="check", active="/requests",
         )
 
@@ -5684,6 +5798,11 @@ def build_ui_routes(
         to_apply = [
             all_items[i] for i in submitted_ids
             if i in all_items and all_items[i].status == "pending"
+            # Defense in depth: the confirm page never lists a cred_propose
+            # id, but a hand-crafted POST could still try -- apply_pending
+            # has no applier for it (it isn't in _APPLIERS), and skipping it
+            # here is clearer than surfacing that as a "refused" row.
+            and all_items[i].action != "cred_propose"
         ]
         refused: list[tuple[PendingAction, str]] = []
         applied = 0
@@ -5933,8 +6052,16 @@ def build_ui_routes(
             methods=["GET"],
         ),
         Route(f"{UI_PREFIX}/pending/reject", pending_reject_form, methods=["GET"]),
+        Route(
+            f"{UI_PREFIX}/pending/credential-fill",
+            pending_credential_fill_form, methods=["GET"],
+        ),
         Route(f"{UI_PREFIX}/pending/approve", writer(pending_approve), methods=["POST"]),
         Route(f"{UI_PREFIX}/pending/reject", writer(pending_reject), methods=["POST"]),
+        Route(
+            f"{UI_PREFIX}/pending/credential-fill",
+            writer(pending_credential_fill), methods=["POST"],
+        ),
         Route(f"{UI_PREFIX}/pending/approve-all", pending_approve_all_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/pending/approve-all", writer(pending_approve_all), methods=["POST"]),
         Route(f"{UI_PREFIX}/toolkits/deploy", toolkit_deploy_form, methods=["GET"]),
