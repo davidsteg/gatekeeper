@@ -5,6 +5,9 @@ an *agent* should behave while working in this repo (release steps, testing,
 pitfalls), see [AGENTS.md](../AGENTS.md). For the full requirements and
 rationale behind every design decision, see [REQUIREMENTS.md](../REQUIREMENTS.md).
 
+See [DIAGRAMS.md](DIAGRAMS.md) for the system architecture, call pipeline,
+and Tier 2 change-approval flow diagrams.
+
 ## Two-tier security model
 
 | Tier | File | Mutable at runtime | Changed via |
@@ -54,7 +57,13 @@ other role is rejected outright on `/admin/mcp`, so a token never opens the
 for which `admin.*` actions apply immediately versus land in the
 `pending.yaml` queue for a human to approve at `/ui/requests` (Change tab)
 -- `approve`/`reject` are not reachable from `/admin/mcp` at all, so an
-agent cannot approve its own proposal. `admin.toolkit_propose` is separate
+agent cannot approve its own proposal. `admin.cred_propose` also lands in
+`pending.yaml`, but its own approval never goes through `apply_pending`/its
+`_APPLIERS` table (those are `store.py`-shaped): the dedicated
+`/ui/pending/credential-fill` route calls `PendingStore.approve()` directly,
+with the human-typed secret value as its `apply` callback's only extra
+input -- the value itself is never written to `pending.yaml`, only the
+proposed name/kind/header are. `admin.toolkit_propose` is separate
 again: it never applies and never touches `pending.yaml`, only the
 dedicated `toolkit_proposals.yaml`/`/ui/requests` (Toolkit tab) surface
 described above -- a toolkit

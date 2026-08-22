@@ -318,7 +318,8 @@ def build_app(
                 "alongside the ConfigStore/PendingStore for exactly this."
             )
         admin_service = AdminService(
-            store=store, pending=pending, toolkit_proposals=toolkit_proposals
+            store=store, pending=pending, toolkit_proposals=toolkit_proposals,
+            credentials=credentials,
         )
         admin_mcp_server = build_admin_mcp_server(admin_service)
         admin_app = admin_mcp_server.streamable_http_app(

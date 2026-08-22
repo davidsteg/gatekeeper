@@ -173,10 +173,10 @@ One running instance, for agents that operate against it directly:
 
 | | |
 |---|---|
-| **Local clone** | `/opt/data/gatekeeper` |
+| **Local clone** | `/opt/example/gatekeeper` |
 | **Container** | `gatekeeper`, port `30221→8080`, image `davidsteg/gatekeeper:latest` |
 | **Deploy mounts** | `<data-root>/gatekeeper/config → /etc/gatekeeper`, `<data-root>/gatekeeper/logs`, `/var/run/docker.sock` |
-| **Host** | `10.10.200.90`, console at `http://10.10.200.90:30221/ui/` |
+| **Host** | `10.0.0.10` (example), console at `http://10.0.0.10:30221/ui/` |
 | **Container user** | `568:568` (unprivileged), `group_add: 999` (docker.sock GID) |
 
 Before starting work against this clone: `git fetch origin && git log

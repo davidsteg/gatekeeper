@@ -114,6 +114,8 @@ The binding lives in `toolkits.yaml` (Tier 1, deploy-time) as a single line — 
 
 Two things follow for the audit log. Every call record names the credential it used (`"credentials": ["sonarr"]`) so you know what to rotate after a leak — and the value itself is masked everywhere it could surface: in the record, in the tool's own response before that response reaches the agent, and in any field whose name looks like a secret. Setting up the master key that encrypts all of this is step 1 of [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#credentials-from-zero-to-a-working-call).
 
+An admin agent on `/admin/mcp` can propose a new credential's *name*, *kind*, and *header* (`admin.cred_propose`) — but never a value; the tool has no such parameter, and one sent anyway is refused, not stored. The proposal waits in `/ui/requests` until a human reviews exactly what was proposed and types the secret themselves, the same write-only guarantee as creating one by hand.
+
 ### Identities: Manage access
 
 ![](.readme-assets/identities.png)

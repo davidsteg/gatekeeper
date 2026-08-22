@@ -81,7 +81,10 @@ def credentials_env(tmp_path, tier1, tool_specs, monkeypatch):
         service=service, identities=identities, audit=audit, ui=True, store=store,
         credentials=credentials, pending=pending, toolkit_proposals=toolkit_proposals,
     )
-    return {"app": app, "credentials": credentials, "tier1": tier1}
+    return {
+        "app": app, "credentials": credentials, "tier1": tier1,
+        "pending": pending, "pending_path": tmp_path / "pending.yaml",
+    }
 
 
 def _client(app) -> httpx2.AsyncClient:
@@ -184,6 +187,156 @@ async def test_rotate_and_delete_round_trip(credentials_env):
         )
         assert delete.status_code in (302, 303)
         assert credentials_env["credentials"].names() == []
+
+
+# -- The other half of admin.cred_propose: filling in the value -----------
+
+
+async def test_credential_fill_approves_proposal_and_creates_credential(credentials_env):
+    pending = credentials_env["pending"]
+    credentials = credentials_env["credentials"]
+    item = pending.propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key"},
+        base_rev=credentials.revision(),
+    )
+    async with _client(credentials_env["app"]) as client:
+        csrf = await _signed_in(client)
+
+        form_page = await client.get(f"{UI_PREFIX}/pending/credential-fill?id={item.id}")
+        assert form_page.status_code == 200
+        assert "sonarr" in form_page.text
+        assert "api_key_header" in form_page.text
+        assert "X-Api-Key" in form_page.text
+
+        response = await client.post(
+            f"{UI_PREFIX}/pending/credential-fill",
+            data={"_csrf": csrf, "id": item.id, "value": SECRET_VALUE},
+        )
+        assert response.status_code in (302, 303)
+
+    metas = {m.name: m for m in credentials.names()}
+    assert metas["sonarr"].kind == "api_key_header"
+    assert metas["sonarr"].header == "X-Api-Key"
+    approved = pending.get(item.id)
+    assert approved.status == "approved"
+    # The value never touched the pending queue's own file, at any point.
+    pending_raw = credentials_env["pending_path"].read_text(encoding="utf-8")
+    assert SECRET_VALUE not in pending_raw
+
+
+async def test_credential_fill_never_echoes_the_value(credentials_env):
+    pending = credentials_env["pending"]
+    credentials = credentials_env["credentials"]
+    item = pending.propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key"},
+        base_rev=credentials.revision(),
+    )
+    async with _client(credentials_env["app"]) as client:
+        csrf = await _signed_in(client)
+        response = await client.post(
+            f"{UI_PREFIX}/pending/credential-fill",
+            data={"_csrf": csrf, "id": item.id, "value": SECRET_VALUE},
+            follow_redirects=True,
+        )
+        assert SECRET_VALUE not in response.text
+
+
+async def test_credential_fill_route_is_writer_gated(credentials_env):
+    pending = credentials_env["pending"]
+    credentials = credentials_env["credentials"]
+    item = pending.propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key"},
+        base_rev=credentials.revision(),
+    )
+    async with _client(credentials_env["app"]) as client:
+        csrf = await _signed_in(client, "eye")
+        response = await client.post(
+            f"{UI_PREFIX}/pending/credential-fill",
+            data={"_csrf": csrf, "id": item.id, "value": SECRET_VALUE},
+        )
+        assert response.status_code == 403
+        assert credentials.names() == []
+
+
+async def test_credential_fill_requires_csrf(credentials_env):
+    pending = credentials_env["pending"]
+    credentials = credentials_env["credentials"]
+    item = pending.propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key"},
+        base_rev=credentials.revision(),
+    )
+    async with _client(credentials_env["app"]) as client:
+        await _signed_in(client)
+        response = await client.post(
+            f"{UI_PREFIX}/pending/credential-fill",
+            data={"id": item.id, "value": SECRET_VALUE},
+        )
+        assert response.status_code == 403
+        assert credentials.names() == []
+
+
+async def test_credential_fill_stale_when_name_taken_meanwhile(credentials_env):
+    """Between propose and fill, someone else creates a credential of the
+
+    same name directly (e.g. a second admin, in the normal /ui form) --
+    the fill must not silently create a second, orphaned entry or clobber
+    the one that already exists.
+    """
+    pending = credentials_env["pending"]
+    credentials = credentials_env["credentials"]
+    item = pending.propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key"},
+        base_rev=credentials.revision(),
+    )
+    credentials.create(
+        "sonarr", kind="bearer", value="typed-directly-in-the-meantime",
+        actor="root", rev="",
+    )
+    async with _client(credentials_env["app"]) as client:
+        csrf = await _signed_in(client)
+        response = await client.post(
+            f"{UI_PREFIX}/pending/credential-fill",
+            data={"_csrf": csrf, "id": item.id, "value": SECRET_VALUE},
+        )
+        assert response.status_code == 400
+        assert SECRET_VALUE not in response.text
+    # The directly-created credential is untouched -- still 'bearer', not
+    # silently overwritten by the stale proposal's 'api_key_header'.
+    metas = {m.name: m for m in credentials.names()}
+    assert metas["sonarr"].kind == "bearer"
+
+
+async def test_approve_all_excludes_credential_proposals(credentials_env):
+    pending = credentials_env["pending"]
+    credentials = credentials_env["credentials"]
+    pending.propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key"},
+        base_rev=credentials.revision(),
+    )
+    pending.propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "radarr", "kind": "api_key_header", "header": "X-Api-Key"},
+        base_rev=credentials.revision(),
+    )
+    async with _client(credentials_env["app"]) as client:
+        await _signed_in(client)
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+        # Two items are live, but neither is batchable -- the "Approve all"
+        # link itself must not appear (checked by href, not by the phrase
+        # "Approve all" alone -- that also shows up in this page's own
+        # static help text describing the feature in general).
+        assert f'href="{UI_PREFIX}/pending/approve-all"' not in page.text
+
+        redirect = await client.get(
+            f"{UI_PREFIX}/pending/approve-all", follow_redirects=False
+        )
+        assert redirect.status_code in (302, 303)
 
 
 async def test_used_by_toolkit_shown(tmp_path, tool_specs, tier1, monkeypatch):
