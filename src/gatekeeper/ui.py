@@ -544,6 +544,7 @@ _STYLE = """
   }
 }
 * { box-sizing: border-box; }
+html, body { height: 100%; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; color: var(--fg); background: var(--bg);
@@ -560,7 +561,7 @@ body {
 .muted { color: var(--muted); }
 
 /* -- Layout -- */
-.app { display: grid; grid-template-columns: 236px 1fr; min-height: 100vh; }
+.app { display: grid; grid-template-columns: 236px 1fr; height: 100vh; }
 /* The sidebar is a bezel, not a page: it uses --bezel-* rather than the
    theme tokens, so it stays the same dark panel whether the content column
    is in light or dark mode -- the one constant a user re-orients from. */
@@ -607,7 +608,7 @@ body {
 }
 .side-foot a.btn:hover, .side-foot button.ghost:hover { color: var(--bezel-fg); border-color: var(--bezel-muted); }
 
-.col { min-width: 0; display: flex; flex-direction: column; }
+.col { min-width: 0; display: flex; flex-direction: column; height: 100vh; overflow-y: auto; }
 .topbar {
   position: sticky; top: 0; z-index: 15;
   background: var(--surface); border-bottom: 1px solid var(--line);
@@ -616,11 +617,18 @@ body {
 .topbar .grow { flex: 1; min-width: 260px; }
 .topbar h1 { display: flex; align-items: center; gap: .5rem; font-size: 1.3rem; letter-spacing: -.02em; margin: 0; }
 .topbar h1 .icon { color: var(--accent); }
-.topbar p { margin: .3rem 0 0; color: var(--muted); font-size: .87rem; max-width: 78ch; }
+.topbar p {
+  margin: .3rem 0 0; color: var(--muted); font-size: .87rem; max-width: 78ch;
+  opacity: 1; max-height: 2.5rem; overflow: hidden;
+  transition: opacity .15s, margin .15s, max-height .15s;
+}
+.topbar.is-scrolled p { opacity: 0; margin: 0; max-height: 0; }
 .actions { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
 main { padding: 1.2rem 1.4rem 3.5rem; }
 
 @media (max-width: 900px) {
+  .app { height: auto; }
+  .col { height: auto; overflow-y: visible; }
   /* minmax(0,...) and not a bare 1fr: a grid track defaults to the
      min-content width of its item, and the sidebar's is the full width of
      the nav row. That pushed the page 17px past the viewport and made the
@@ -720,7 +728,10 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
 /* Same reasoning as .grid's margin-bottom: this is a bare grid container,
    not a .card, so it carries none of .card's own trailing margin -- without
    one of its own it sits flush against whatever section follows it. */
-.split { display: grid; grid-template-columns: minmax(0,1fr) 330px; gap: .8rem; align-items: start; margin-bottom: .8rem; }
+.split { display: grid; grid-template-columns: minmax(0,1fr) 330px; gap: .8rem; align-items: stretch; margin-bottom: .8rem; }
+.split > div { display: flex; flex-direction: column; }
+.split .card { flex: 1; display: flex; flex-direction: column; }
+.split .card > .pad { flex: 1; display: flex; flex-direction: column; }
 @media (max-width: 1080px) { .split { grid-template-columns: 1fr; } }
 
 .pill {
@@ -882,6 +893,7 @@ td.ops form { display: inline; }
   background: var(--sunken);
 }
 .map-root.map-root-full { height: 78vh; min-height: 520px; }
+.map-root.map-root-split { flex: 1; height: auto; }
 .map-canvas { position: absolute; inset: 0; }
 .map-root .map-loading { position: absolute; top: .8rem; left: .9rem; margin: 0; }
 .map-controls {
@@ -1962,6 +1974,16 @@ def _page(
         + (f'<div class="actions">{actions}</div>' if actions else "")
         + f"</div><main>{body}</main></div></div>"
         + _release_notes_modal()
+        + f'<script nonce="{nonce}">'
+        '(function () {'
+        'var col = document.querySelector(".col");'
+        'var topbar = document.querySelector(".topbar");'
+        "if (!col || !topbar) return;"
+        'col.addEventListener("scroll", function () {'
+        'topbar.classList.toggle("is-scrolled", col.scrollTop > 4);'
+        "}, { passive: true });"
+        "})();"
+        "</script>"
         + script_tag
         + "</body></html>"
     )
@@ -2886,7 +2908,7 @@ def _view_overview(
         f'<button class="ghost" type="submit" title="Filter">{_icon("search", 14)}</button>'
         + (f'<a class="reset" href="{UI_PREFIX}/">reset</a>' if query else "")
         + "</form>"
-        f"{_access_map_mount(query)}"
+        f"{_access_map_mount(query, height_class=' map-root-split')}"
         f"{_access_map_legend()}{no_traffic_caption}</div></div>"
         "</div><div>"
         '<div class="card">'
