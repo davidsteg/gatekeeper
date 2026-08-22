@@ -909,12 +909,12 @@ td.ops form { display: inline; }
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
 
 /* -- Access matrix grid -- */
-.am-wrap { overflow-x: auto; border-radius: var(--radius); }
+.am-wrap { overflow: visible; border-radius: var(--radius); }
 .am-wrap::-webkit-scrollbar { height: 6px; }
 .am-wrap::-webkit-scrollbar-track { background: var(--sunken); border-radius: 3px; }
 .am-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 .am-wrap::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-.am-grid { width: 100%; border-collapse: separate; border-spacing: 3px; font-size: .82rem; }
+.am-grid { width: 100%; border-collapse: separate; border-spacing: 3px; font-size: .82rem; table-layout: auto; }
 .am-grid th, .am-grid td { border: none; padding: 0; text-align: center; }
 .am-corner {
   background: var(--surface); font-size: .68rem; text-transform: uppercase;
@@ -929,6 +929,13 @@ td.ops form { display: inline; }
   transition: background .15s;
 }
 .am-col:hover { background: var(--accent-soft); }
+.am-col-link {
+  text-decoration: none; color: var(--fg); display: block;
+  padding: .2rem .1rem; border-radius: var(--radius-sm);
+  transition: all .15s;
+}
+.am-col-link:hover .am-col-name { color: var(--accent); }
+.am-col-link:hover .am-col-logo { transform: scale(1.15); transition: transform .15s; }
 .am-col-logo {
   display: block; margin: 0 auto .2rem; width: 18px; height: 18px;
   filter: drop-shadow(0 0 2px rgba(0,0,0,.2));
@@ -944,10 +951,19 @@ td.ops form { display: inline; }
   text-align: left; padding: .4rem .6rem; white-space: nowrap;
   background: var(--surface); border-radius: var(--radius-sm);
 }
-.am-row-id svg { opacity: .5; vertical-align: middle; margin-right: .35rem; }
-.am-row-id .mono { font-size: .8rem; font-weight: 600; color: var(--fg); }
+.am-row-link {
+  text-decoration: none; color: var(--fg); display: inline;
+  transition: color .15s;
+}
+.am-row-link:hover .mono { color: var(--accent); }
+.am-row-link:hover svg { opacity: .8; }
+.am-row-id svg { opacity: .5; vertical-align: middle; margin-right: .35rem; transition: opacity .15s; }
+.am-row-id .mono { font-size: .8rem; font-weight: 600; color: var(--fg); transition: color .15s; }
 .am-row-role { padding: .35rem .3rem; background: var(--surface); border-radius: var(--radius-sm); }
 .am-row-role .pill { font-size: .65rem; padding: .1rem .4rem; }
+.am-grid tbody tr:hover .am-row-id { background: var(--accent-soft); }
+.am-grid tbody tr:hover .am-row-role { background: var(--accent-soft); }
+.am-grid tbody tr:hover .am-row-tools { background: var(--accent-soft); color: var(--fg); }
 .am-row-tools {
   color: var(--muted); font-size: .72rem; background: var(--surface);
   border-radius: var(--radius-sm); padding: .35rem;
@@ -982,18 +998,18 @@ td.ops form { display: inline; }
 }
 .am-cell.am-grant.heat-hot .am-count { color: var(--fg); }
 .am-popup {
-  position: absolute; bottom: calc(100% + 6px); left: 50%;
+  position: absolute; top: calc(100% + 6px); left: 50%;
   transform: translateX(-50%) scale(.92);
   opacity: 0; pointer-events: none; transition: opacity .12s, transform .12s;
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,.5);
   padding: .6rem .7rem; min-width: 10rem; max-width: 16rem;
-  text-align: left; z-index: 50;
+  text-align: left; z-index: 100;
 }
 .am-popup::after {
-  content: ""; position: absolute; top: 100%; left: 50%;
+  content: ""; position: absolute; bottom: 100%; left: 50%;
   transform: translateX(-50%); border: 5px solid transparent;
-  border-top-color: var(--surface);
+  border-bottom-color: var(--surface);
 }
 .am-cell:hover .am-popup {
   opacity: 1; transform: translateX(-50%) scale(1);
@@ -1003,6 +1019,8 @@ td.ops form { display: inline; }
 .am-tools { margin: .2rem 0 0; padding-left: .8rem; }
 .am-tools li { margin-bottom: .15rem; }
 .am-tools .tool-id { font-size: .68rem; color: var(--accent); }
+.tool-id-link { text-decoration: none; }
+.tool-id-link:hover .tool-id { color: var(--fg); text-decoration: underline; }
 
 /* -- Activity -- */
 .chart { width: 100%; height: auto; display: block; }
@@ -1907,8 +1925,10 @@ def _access_matrix(
             icon_html = _icon(_executor_icon(tk.executor), 14)
         col_headers += (
             f'<th class="am-col" title="{_e(name)}">'
+            f'<a class="am-col-link" href="{UI_PREFIX}/tools?view=cards">'
             f'{icon_html}'
             f'<span class="am-col-name">{_e(name)}</span>'
+            f'</a>'
             f'<span class="am-col-exec">{_e(tk.executor)}</span>'
             f"</th>"
         )
@@ -1927,7 +1947,7 @@ def _access_matrix(
             pair = pair_stats.get((ident.id, name), {"ok": 0, "denied": 0, "failed": 0, "total": 0})
             heat = _heat_class(pair["total"])
             detail_tools = "".join(
-                f'<li><code class="tool-id">{_e(tid)}</code></li>'
+                f'<li><a class="tool-id-link" href="{UI_PREFIX}/tools/edit?id={_e(tid)}" title="Edit {_e(tid)}"><code class="tool-id">{_e(tid)}</code></a></li>'
                 for tid in sorted(granted)[:20]
             )
             if len(granted) > 20:
@@ -1947,7 +1967,9 @@ def _access_matrix(
                 f"</td>"
             )
         rows_html.append(
-            f'<tr><td class="am-row-id">{_icon(role_icon, 13)}<span class="mono">{_e(ident.id)}</span></td>'
+            f'<tr><td class="am-row-id">'
+            f'<a class="am-row-link" href="{UI_PREFIX}/identities" title="{_e(ident.id)}">'
+            f'{_icon(role_icon, 13)}<span class="mono">{_e(ident.id)}</span></a></td>'
             f'<td class="am-row-role">{role_badge}</td>'
             f'<td class="am-row-tools">{len(ident.tools)}</td>'
             f'{"".join(cells)}</tr>'
@@ -2263,6 +2285,10 @@ def _view_overview(
             )
         )
 
+    # Call stats sit in the top tile row alongside the catalog stats.
+    _ov_totals = _outcome_totals(records)
+    _ov_success = int(_ov_totals["ok"] / _ov_totals["total"] * 100) if _ov_totals["total"] else 0
+
     parts.append(
         '<div class="grid">'
         + _stat(active, "Tools active", "sliders", "t-ok")
@@ -2275,23 +2301,8 @@ def _view_overview(
             blocked, "Tools disabled", "ban", "t-deny" if blocked else "",
             title="Tool definitions rejected at load time for violating a Tier 1 rule",
         )
-        + "</div>"
-    )
-
-    # Call stats are shown inside the Activity card below — no separate
-    # tile row needed.
-    _ov_totals = _outcome_totals(records)
-    _ov_success = int(_ov_totals["ok"] / _ov_totals["total"] * 100) if _ov_totals["total"] else 0
-
-    parts.append(
-        '<div class="card">'
-        f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3>'
-        '<span class="spacer"></span>'
-        f'<a class="btn" href="{UI_PREFIX}/stats">{_icon("bar-chart", 13)}Full stats</a>'
-        "</div>"
-        '<div class="grid">'
         + _stat(
-            _ov_totals["total"], "Calls (last 12h)", "activity",
+            _ov_totals["total"], "Calls (12h)", "activity",
             "t-ok" if _ov_totals["total"] else "",
         )
         + _stat(
@@ -2300,6 +2311,14 @@ def _view_overview(
         )
         + _stat(len(records), "Events", "list")
         + "</div>"
+    )
+
+    parts.append(
+        '<div class="card">'
+        f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3>'
+        '<span class="spacer"></span>'
+        f'<a class="btn" href="{UI_PREFIX}/stats">{_icon("bar-chart", 13)}Full stats</a>'
+        "</div>"
         '<div class="activity-split">'
         '<div class="activity-chart-col">'
         '<div class="subhead">Calls, last 12 h</div>'

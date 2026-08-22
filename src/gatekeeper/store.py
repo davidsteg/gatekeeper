@@ -323,7 +323,32 @@ class ConfigStore:
             if replaces is not None and identity_id != replaces and identity_id in current:
                 raise WriteRefused(f"An identity {identity_id!r} already exists.")
 
-            unknown = sorted(set(tools) - set(self.service.catalog.tools))
+            # Expand bare tool IDs to their destination-qualified catalog IDs.
+            # A multi-destination toolkit's tools live in the catalog only as
+            # `<id>@<dest>` (FR-8.3h); accepting the bare id for validation but
+            # storing it unexpanded would make may_call() fail at call time.
+            resolved_tools = set()
+            for tid in tools:
+                if tid in self.service.catalog.tools:
+                    resolved_tools.add(tid)
+                else:
+                    prefix = f"{tid}@"
+                    expanded = sorted(
+                        t for t in self.service.catalog.tools if t.startswith(prefix)
+                    )
+                    if expanded:
+                        resolved_tools.update(expanded)
+                    else:
+                        resolved_tools.add(tid)  # will be caught by unknown check
+            unknown = sorted(
+                set(tools)
+                - set(self.service.catalog.tools)
+                - {
+                    tid.rsplit("@", 1)[0]
+                    for tid in self.service.catalog.tools
+                    if "@" in tid
+                }
+            )
             if unknown:
                 raise WriteRefused(f"Unknown tool IDs: {', '.join(unknown)}")
 
@@ -371,7 +396,7 @@ class ConfigStore:
                 "id": identity_id,
                 "role": role,
                 "token_hash": previous.token_hash,
-                "tools": sorted(set(tools)),
+                "tools": sorted(resolved_tools),
                 "scopes": [s for s in scopes if s],
             }
             if password_hash:
@@ -392,7 +417,7 @@ class ConfigStore:
                     "target": identity_id,
                     "previous_id": replaces if replaces != identity_id else None,
                     "role": role,
-                    "tools": sorted(set(tools)),
+                    "tools": sorted(resolved_tools),
                     "scopes": [s for s in scopes if s],
                     # The plaintext is never logged, but the fact is:
                     # a password change belongs in the trail.
@@ -426,7 +451,29 @@ class ConfigStore:
                 )
             if identity_id in self.identities.identities:
                 raise WriteRefused(f"An identity {identity_id!r} already exists.")
-            unknown = sorted(set(tools) - set(self.service.catalog.tools))
+            # Expand bare tool IDs to destination-qualified catalog IDs.
+            resolved_tools = set()
+            for tid in tools:
+                if tid in self.service.catalog.tools:
+                    resolved_tools.add(tid)
+                else:
+                    prefix = f"{tid}@"
+                    expanded = sorted(
+                        t for t in self.service.catalog.tools if t.startswith(prefix)
+                    )
+                    if expanded:
+                        resolved_tools.update(expanded)
+                    else:
+                        resolved_tools.add(tid)
+            unknown = sorted(
+                set(tools)
+                - set(self.service.catalog.tools)
+                - {
+                    tid.rsplit("@", 1)[0]
+                    for tid in self.service.catalog.tools
+                    if "@" in tid
+                }
+            )
             if unknown:
                 raise WriteRefused(f"Unknown tool IDs: {', '.join(unknown)}")
             if role in UI_ROLES and not password:
@@ -449,7 +496,7 @@ class ConfigStore:
                 "role": role,
                 "token_hash": hash_token(token),
                 "token_lookup": hash_token_lookup(token),
-                "tools": sorted(set(tools)),
+                "tools": sorted(resolved_tools),
                 "scopes": [s for s in scopes if s],
             }
             if password:
@@ -466,7 +513,7 @@ class ConfigStore:
                     "action": "identity_create",
                     "target": identity_id,
                     "role": role,
-                    "tools": sorted(set(tools)),
+                    "tools": sorted(resolved_tools),
                     "scopes": [s for s in scopes if s],
                 }
             )

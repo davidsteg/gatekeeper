@@ -285,7 +285,7 @@ async def test_overview_shows_call_tiles(stats_app, tier1):
         await _login(client)
         r = await client.get(f"{UI_PREFIX}/")
         assert r.status_code == 200
-        assert "Calls (last 12h)" in r.text
+        assert "Calls (12h)" in r.text
         assert "Success rate" in r.text
         assert "Full stats" in r.text
         assert f"{UI_PREFIX}/stats" in r.text
@@ -296,4 +296,4 @@ async def test_overview_call_tiles_zero_when_empty(stats_app):
         await _login(client)
         r = await client.get(f"{UI_PREFIX}/")
         assert r.status_code == 200
-        assert "Calls (last 12h)" in r.text
+        assert "Calls (12h)" in r.text

@@ -60,6 +60,23 @@ cannot. It is in every release.
 
 ---
 
+## 0.20.7
+
+**Fix: `grant_set` accepts bare tool IDs for multi-destination toolkits.**
+
+`save_identity`/`create_identity` rejected `sabnzbd.request` as
+"Unknown tool IDs" because the catalog only contains the
+destination-expanded IDs (`sabnzbd.request@sabnzbd-movie`,
+`sabnzbd.request@sabnzbd-serie`). Now bare IDs are validated against
+the un-expanded form AND expanded to the actual catalog IDs before
+saving — so `may_call()` succeeds at call time.
+
+Also: call stats moved to top tile row (7 tiles), Activity card is
+chart+feed only (70/30 split). Hover highlights and links on matrix
+columns, identity rows, and tool IDs in popups.
+
+---
+
 ## 0.20.5
 
 **`admin.tool_get`/`admin.tool_list` now report `grantable_ids` — the actual, possibly destination-qualified id(s) `admin.grant_set` accepts.**
