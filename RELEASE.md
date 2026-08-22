@@ -60,6 +60,16 @@ cannot. It is in every release.
 
 ---
 
+## 0.20.2
+
+**Access matrix: hover popup replaces inline `<details>` expand.**
+
+Cells no longer resize the row when expanded — hovering a grant cell
+shows a floating popup above it with the identity→toolkit title, call
+stats, and tool list. Pure CSS `:hover`, no JavaScript.
+
+---
+
 ## 0.20.1
 
 **Access matrix: integration logos from dashboardicons.com.**
