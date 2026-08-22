@@ -60,6 +60,29 @@ cannot. It is in every release.
 
 ---
 
+## 0.20.0
+
+**Access map redesigned: matrix grid replaces the Cytoscape.js graph.**
+
+The Cytoscape.js graph (and before it the vanilla JS SVG graph) had a
+spaghetti problem — with real-world identity and toolkit counts, edges
+crossed so heavily the map was unreadable. The replacement is a
+server-rendered HTML grid:
+
+- **Identities as rows, toolkits as columns.** Each cell shows the
+  number of granted tools (green, heat-mapped by call volume) or a
+  dash (not granted). No edges, no crossing lines, no pan/zoom.
+- **Expandable detail:** click a cell (native `<details>`) to see the
+  concrete tool IDs and call stats for that identity×toolkit pair.
+- **No JavaScript.** The entire map is server-rendered HTML + CSS.
+  Removed: `_ACCESS_MAP_JS` (631 lines), `_vendor_cytoscape.py`,
+  `CYTOSCAPE_JS_PATH`, `ACCESS_MAP_JS_PATH`, the JSON data endpoint,
+  the JS routes, and the `script-src`/`connect-src` CSP exceptions.
+- **Search** via `?q=` filters both identities and toolkits.
+- 547 tests pass.
+
+---
+
 ## 0.19.0
 
 **Console shell: the sidebar and topbar title now stay fixed to the viewport instead of scrolling with the page; Overview's Access map and Activity cards match height.**

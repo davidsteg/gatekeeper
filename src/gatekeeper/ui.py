@@ -31,14 +31,10 @@ Five design decisions underpin this layer:
    page. This follows from the data situation: the audit log shows
    parameter values from agents, for denied calls, unvalidated ones.
    Without script execution, an injected `<script>` is harmless, even if
-   the escaping fails. Chart, forms, and most of the console therefore
-   manage without code in the browser. The one narrow exception is the
-   interactive access map (Overview and `/ui/access-map`), whose
-   `script-src`/`connect-src 'self'` is nonce-scoped to those two routes
-   only and never widened -- its client-side JS (`_ACCESS_MAP_JS`) builds
-   every DOM node from server-JSON via `textContent`/`createElement`,
-   never `innerHTML`, so the same untrusted-audit-data guarantee holds
-   there too.
+   the escaping fails. Chart, forms, and the entire console therefore
+   manage without code in the browser. The access map is a
+   server-rendered HTML matrix grid — no JavaScript, no SVG, no
+   `script-src` exception anywhere.
 
 5. **Reading and writing are separate roles.** `viewer` sees everything,
    `admin` may change. Without this separation, anyone who can view the audit
@@ -68,7 +64,6 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from . import __version__
-from ._vendor_cytoscape import CYTOSCAPE_JS, CYTOSCAPE_VERSION
 from .admin_service import apply_pending
 from .audit import AuditLog
 from .catalog import ToolDef
@@ -98,19 +93,7 @@ from .toolkit_proposals import (
 #: without a Bearer token -- the handlers check the session instead.
 UI_PREFIX = "/ui"
 
-#: Served from under `UI_PREFIX` (session-gated like every other UI route,
-#: see `build_ui_routes`) rather than as a public static asset -- the page
-#: that references it already requires a session, so nothing is gained by
-#: making the script fetchable without one, and it avoids adding another
-#: entry to `UI_COMPANION_PATHS`/`AuthMiddleware` for a single small file.
-ACCESS_MAP_JS_PATH = f"{UI_PREFIX}/access-map.js"
 
-#: The vendored Cytoscape.js bundle (`_vendor_cytoscape.py`), served the
-#: same session-gated way and from this origin only -- the CSP names no
-#: external host anywhere, and a CDN `script-src` would change that. The
-#: version is in the path so the immutable cache entry it is served with
-#: (see `cytoscape_js`) is replaced by an upgrade rather than outliving it.
-CYTOSCAPE_JS_PATH = f"{UI_PREFIX}/cytoscape-{CYTOSCAPE_VERSION}.js"
 
 #: Cytoscape injects exactly one `<style>` element when it initialises --
 #: `.__________cytoscape_container { position: relative; }`, and nothing
@@ -881,64 +864,33 @@ td.ops form { display: inline; }
 
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
 
-/* -- Interactive access map (access-map.js + Cytoscape) -- */
-.btn.active { color: var(--fg); border-color: var(--accent); background: var(--accent-soft); }
-/* A fixed box: the map's content must not dictate its own height, or
-   there is nothing to zoom into. Cytoscape draws into `.map-canvas`
-   inside it; the controls sit on top as a sibling so a re-render never
-   disturbs them. */
-.map-root {
-  position: relative; height: 52vh; min-height: 380px; max-height: 780px;
-  overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--sunken);
-}
-.map-root.map-root-full { height: 78vh; min-height: 520px; }
-.map-root.map-root-split { flex: 1; height: auto; }
-.map-canvas { position: absolute; inset: 0; }
-.map-root .map-loading { position: absolute; top: .8rem; left: .9rem; margin: 0; }
-.map-controls {
-  position: absolute; right: .6rem; bottom: .6rem; display: flex; gap: .3rem; z-index: 2;
-}
-.map-control-btn {
-  width: 2rem; height: 2rem; padding: 0; font-size: 1rem; line-height: 1;
-  border-radius: 6px; background: var(--surface);
-}
-.map-panel {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(26rem, 92vw);
-  background: var(--surface); border-left: 1px solid var(--line);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, .18);
-  transform: translateX(100%); transition: transform .18s ease-out;
-  z-index: 40; overflow-y: auto;
-}
-.map-panel.open { transform: translateX(0); }
-.map-panel-head {
-  display: flex; align-items: center; gap: .5rem; padding: .9rem 1rem;
-  border-bottom: 1px solid var(--line); position: sticky; top: 0;
-  background: var(--surface);
-}
-.map-panel-head h4 { margin: 0; font-size: .95rem; flex: 1; }
-.map-panel-close { cursor: pointer; background: none; border: none; color: var(--muted); }
-.map-panel-close:hover { color: var(--fg); }
-.map-panel-body { padding: 1rem; font-size: .85rem; }
-.map-panel-body .row-l { color: var(--muted); }
-.map-backdrop {
-  position: fixed; inset: 0; background: rgba(0, 0, 0, .25); z-index: 39;
-  opacity: 0; pointer-events: none; transition: opacity .18s ease-out;
-}
-.map-backdrop.open { opacity: 1; pointer-events: auto; }
-/* CSP is `style-src 'nonce-...'`, which does not cover inline `style=""`
-   attributes -- only a `<style>` block with the nonce runs. An inline
-   style is silently dropped, not an error the eye catches, so one-off
-   layout tweaks live here as named classes instead. */
-.caption { margin: .5rem 0 0; font-size: .78rem; }
-.inline-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-.filter-row { display: flex; gap: .35rem; align-items: center; }
-.filter-row input[type="text"] { width: 12rem; }
-.pad.pad-tight { padding-top: .5rem; }
-.scopes-area { min-height: 6rem; }
-.legend i { display: inline-block; width: 14px; height: 0; margin-right: .3rem; vertical-align: middle; }
-.legend .l-deny i { border-top: 2px dashed var(--deny); }
-.legend .l-hot i { border-top: 3px solid var(--accent); }
+/* -- Access matrix grid -- */
+.am-wrap { overflow-x: auto; }
+.am-grid { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.am-grid th, .am-grid td { border: 1px solid var(--line); padding: 0; text-align: center; }
+.am-corner { background: var(--sunken); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: .4rem .5rem; white-space: nowrap; }
+.am-corner:first-child { text-align: left; }
+.am-corner:nth-child(2), .am-corner:nth-child(3) { text-align: center; }
+.am-col { min-width: 5rem; max-width: 8rem; padding: .35rem .3rem; vertical-align: bottom; }
+.am-col-name { display: block; font-weight: 600; font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-col-exec { display: block; font-size: .68rem; color: var(--muted); margin-top: .15rem; }
+.am-row-id { text-align: left; padding: .35rem .5rem; white-space: nowrap; }
+.am-row-role { padding: .3rem; }
+.am-row-tools { color: var(--muted); font-size: .75rem; }
+.am-cell { text-align: center; min-width: 3rem; }
+.am-cell.am-none { color: var(--muted); opacity: .35; font-size: .75rem; }
+.am-cell.am-grant { background: var(--ok-soft); }
+.am-cell.am-grant.heat-low { background: color-mix(in srgb, var(--ok-soft) 80%, var(--ok) 20%); }
+.am-cell.am-grant.heat-warm { background: color-mix(in srgb, var(--ok-soft) 60%, var(--ok) 40%); }
+.am-cell.am-grant.heat-hot { background: color-mix(in srgb, var(--ok-soft) 40%, var(--ok) 60%); }
+.am-cell details { padding: .25rem; }
+.am-cell summary { cursor: pointer; font-weight: 700; font-size: .85rem; color: var(--ok); list-style: none; }
+.am-cell summary::-webkit-details-marker { display: none; }
+.am-cell details[open] summary { color: var(--fg); }
+.am-detail { text-align: left; padding-top: .4rem; border-top: 1px solid var(--line); margin-top: .3rem; font-size: .72rem; }
+.am-tools { margin: .3rem 0 0; padding-left: 1rem; }
+.am-tools li { margin-bottom: .15rem; }
+.am-tools .tool-id { font-size: .7rem; }
 
 /* -- Activity -- */
 .chart { width: 100%; height: auto; display: block; }
@@ -1300,623 +1252,6 @@ def _release_notes_modal() -> str:
     )
 
 
-#: The interactive access map's client-side renderer. Vanilla ES2019, no
-#: dependencies, no build step -- loaded only by `/ui/access-map` via a
-#: script-src nonce scoped to that one route (see `_shell`/`_respond`).
-#: Never touches `innerHTML` with server-derived data: every label, tool
-#: ID, and identity name that could contain hostile audit-log-sourced text
-#: is set through `textContent`, so nothing rendered here can execute.
-_ACCESS_MAP_JS = """
-(function () {
-  "use strict";
-
-  // Node geometry. Unchanged from the hand-drawn SVG renderer this
-  // replaced -- these numbers now feed Cytoscape's `preset` layout instead
-  // of being turned into SVG coordinates by hand. `LX` is the one fixed
-  // origin both orientations share (`buildElements` computes each lane's
-  // and each item's own position from it, not a shared per-lane extent).
-  var NW = 132, NH = 52, GAP = 14, LX = 8;
-  var TOOLKIT_GROUP_THRESHOLD = 8;
-  var IDENTITY_GROUP_THRESHOLD = 20;
-  var MIN_ZOOM = 0.15, MAX_ZOOM = 6, FIT_PAD = 28;
-
-  function callTotal(calls) {
-    return calls && calls.total ? calls.total : 0;
-  }
-
-  // -- Grouping: collapse toolkits by executor and identities by role once
-  // past a threshold, so hundreds of nodes render as a handful of clusters
-  // by default. Expanding one cluster (click) only ever affects that lane.
-  function groupNodes(nodes, kind, threshold, expanded) {
-    var of_kind = nodes.filter(function (n) { return n.kind === kind; });
-    if (of_kind.length <= threshold) return of_kind;
-    var byGroup = {};
-    var order = [];
-    of_kind.forEach(function (n) {
-      var g = n.group || "(none)";
-      if (!byGroup[g]) { byGroup[g] = []; order.push(g); }
-      byGroup[g].push(n);
-    });
-    var out = [];
-    order.sort().forEach(function (g) {
-      var members = byGroup[g];
-      if (expanded[kind + ":" + g] || members.length === 1) {
-        out = out.concat(members);
-        return;
-      }
-      var calls = { ok: 0, denied: 0, failed: 0, total: 0 };
-      members.forEach(function (m) {
-        calls.ok += m.calls.ok; calls.denied += m.calls.denied;
-        calls.failed += m.calls.failed; calls.total += m.calls.total;
-      });
-      var noun = kind === "identity" ? "identit" + (members.length === 1 ? "y" : "ies")
-        : kind + (members.length === 1 ? "" : "s");
-      out.push({
-        id: "cluster:" + kind + ":" + g, kind: "cluster", label: g,
-        sub: members.length + " " + noun,
-        group: g, icon: members[0].icon, logo_key: null, color_class: "",
-        calls: calls, granted_tools: [], cluster_kind: kind, members: members,
-      });
-    });
-    return out;
-  }
-
-  // -- Theme -----------------------------------------------------------
-  // Cytoscape's stylesheet wants literal colours; the console defines its
-  // palette as CSS custom properties and swaps them under
-  // `prefers-color-scheme`. Resolve them once here, and again whenever the
-  // OS scheme flips (see `wireTheme`) -- the old SVG renderer got dark mode
-  // for free by inheriting the properties, this is what replaces that.
-  function readTheme() {
-    var cs = getComputedStyle(document.documentElement);
-    function v(name, fallback) {
-      var got = (cs.getPropertyValue(name) || "").trim();
-      return got || fallback;
-    }
-    // The palette's `-soft` entries are the same colour at a low alpha
-    // (`rgba(r,g,b,.12)` light, `.16` dark). Cytoscape drops the alpha
-    // from `background-color` and takes it from `background-opacity`
-    // instead, so pull the two apart here rather than hardcoding a number
-    // that would then quietly disagree with the stylesheet.
-    function softAlpha(value, fallback) {
-      var m = /rgba\\(\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*([\\d.]+)\\s*\\)/.exec(value || "");
-      return m ? parseFloat(m[1]) : fallback;
-    }
-    var cat = [], catAlpha = [];
-    for (var i = 1; i <= 6; i++) {
-      cat.push(v("--cat-" + i, "#7c8a8f"));
-      catAlpha.push(softAlpha(v("--cat-" + i + "-soft", ""), 0.14));
-    }
-    return {
-      fg: v("--fg", "#12191c"),
-      muted: v("--muted", "#6b7b80"),
-      line: v("--line", "#d9e2e4"),
-      sunken: v("--sunken", "#f3f7f8"),
-      accent: v("--accent", "#0e7490"),
-      cat: cat,
-      catAlpha: catAlpha,
-    };
-  }
-
-  function catIndex(ele) {
-    var c = ele.data("color_class") || "";
-    if (c.charAt(0) !== "c") return -1;
-    var i = parseInt(c.slice(1), 10) - 1;
-    return (i >= 0 && i <= 5) ? i : -1;
-  }
-
-  function styleFor(theme) {
-    return [
-      { selector: "node", style: {
-        shape: "round-rectangle",
-        width: NW, height: NH,
-        "background-color": function (e) {
-          var i = catIndex(e);
-          return i < 0 ? theme.sunken : theme.cat[i];
-        },
-        // A tint of the identity's colour, not the colour itself -- a
-        // saturated fill would leave the label unreadable.
-        "background-opacity": function (e) {
-          var i = catIndex(e);
-          return i < 0 ? 1 : theme.catAlpha[i];
-        },
-        "border-color": function (e) {
-          var i = catIndex(e);
-          return i < 0 ? theme.line : theme.cat[i];
-        },
-        "border-width": 1,
-        label: "data(display)",
-        color: theme.fg,
-        "font-size": 11,
-        "font-weight": 600,
-        "text-valign": "center",
-        "text-halign": "center",
-        "text-wrap": "wrap",
-        "text-max-width": NW - 14,
-        "line-height": 1.35,
-      }},
-      // A cluster reads as "several things behind one box" -- dashed, the
-      // same cue the SVG renderer used.
-      { selector: "node.cluster", style: {
-        "border-style": "dashed", "border-width": 2,
-      }},
-      // Lane headers (above a column, or left of a row -- see
-      // `buildElements`). Plain non-interactive text nodes, anchored at
-      // exactly the point they should appear, so they pan and zoom with
-      // the graph instead of floating over it.
-      { selector: "node.lane-label", style: {
-        shape: "rectangle", width: 1, height: 1,
-        "background-opacity": 0, "border-width": 0,
-        label: "data(display)", color: theme.muted,
-        "font-size": 9, "font-weight": 600,
-        "text-valign": "center", "text-halign": "center", events: "no",
-      }},
-      { selector: "edge", style: {
-        width: 1.5,
-        "curve-style": "bezier",
-        "line-color": function (e) {
-          var i = catIndex(e);
-          return i < 0 ? theme.line : theme.cat[i];
-        },
-        opacity: 0.55,
-        "target-arrow-shape": "none",
-      }},
-      // Structural (toolkit -> destination) edges are a deploy-time fact,
-      // not traffic: dashed and quiet, never coloured by identity.
-      { selector: "edge.structural", style: {
-        "line-color": theme.line, "line-style": "dashed", opacity: 0.5,
-      }},
-      { selector: "edge.hot", style: { width: 2.8, opacity: 0.9 } },
-      // Search: a match is not decorated, everything else recedes -- the
-      // point is that the shape of the map survives with one hit selected.
-      { selector: "[?dimmed]", style: { opacity: 0.12 } },
-      { selector: "node[?matched]", style: {
-        "border-color": theme.accent, "border-width": 2,
-      }},
-    ];
-  }
-
-  function App(root) {
-    this.root = root;
-    this.endpoint = root.getAttribute("data-endpoint");
-    this.query = (root.getAttribute("data-query") || "").toLowerCase();
-    this.expanded = {};
-    this.data = null;
-    this.cy = null;
-    this.theme = readTheme();
-    this.panel = null;
-    this.backdrop = null;
-    this.resizeTimer = null;
-  }
-
-  App.prototype.fail = function (message) {
-    var p = document.createElement("p");
-    p.className = "muted";
-    p.textContent = message;
-    this.root.insertBefore(p, this.root.firstChild);
-  };
-
-  App.prototype.load = function () {
-    var self = this;
-    fetch(this.endpoint, { credentials: "same-origin", headers: { Accept: "application/json" } })
-      .then(function (r) { if (!r.ok) throw new Error("fetch failed"); return r.json(); })
-      .then(function (data) { self.data = data; self.render(); })
-      .catch(function () {
-        self.fail("Could not load the access map.");
-      });
-  };
-
-  App.prototype.visibleNodes = function () {
-    var identities = groupNodes(this.data.nodes, "identity", IDENTITY_GROUP_THRESHOLD, this.expanded);
-    var toolkits = groupNodes(this.data.nodes, "toolkit", TOOLKIT_GROUP_THRESHOLD, this.expanded);
-    var destinations = this.data.nodes.filter(function (n) { return n.kind === "destination"; });
-    return { identities: identities, toolkits: toolkits, destinations: destinations };
-  };
-
-  // Turns the server's node/edge JSON into Cytoscape elements, positioned
-  // on the same three lanes the SVG renderer used. The server contract is
-  // untouched; this is the only place that knows about both shapes.
-  App.prototype.buildElements = function () {
-    var visible = this.visibleNodes();
-    var hasDestinations = this.data.meta.has_destinations;
-    var rect = this.root.getBoundingClientRect();
-    // Lanes as columns (identities | toolkits | destinations, each
-    // stacked top-to-bottom) when the container is taller than wide; as
-    // rows (identities on top, toolkits below, destinations below that,
-    // each spread left-to-right) when it's wider than tall. An embedded
-    // card sitting in a narrow page column is short and wide -- stacking
-    // nodes vertically wastes exactly the space it doesn't have, and
-    // rotating the lanes 90 degrees uses the width it does have instead.
-    var rows = rect.width >= rect.height;
-
-    var lanes = [
-      { items: visible.identities, id: "identities", label: "IDENTITIES" },
-      { items: visible.toolkits, id: "toolkits", label: "TOOLKITS" },
-    ];
-    if (hasDestinations) {
-      lanes.push({ items: visible.destinations, id: "destinations", label: "DESTINATIONS" });
-    }
-
-    var els = [];
-    var placed = {};
-    var byId = {};
-    this.data.nodes.forEach(function (n) { byId[n.id] = n; });
-
-    function add(node, x, y) {
-      var total = callTotal(node.calls);
-      var display = node.label
-        + (node.sub ? "\\n" + node.sub : "")
-        + (total ? "\\n" + total + " calls" : "");
-      placed[node.id] = true;
-      els.push({
-        group: "nodes",
-        // Cytoscape positions a node by its centre; x/y here are
-        // top-left corners, like the old renderer's rects.
-        position: { x: x + NW / 2, y: y + NH / 2 },
-        classes: node.kind === "cluster" ? "cluster" : "",
-        data: {
-          id: node.id, kind: node.kind, label: node.label,
-          color_class: node.color_class || "", display: display,
-          node: node,
-        },
-      });
-    }
-
-    // Fixed spacing between lanes themselves (columns' x, or rows' y) --
-    // deliberately NOT based on any lane's item count, so a 3-item
-    // identities lane no longer stretches to match a 15-item toolkits
-    // lane. That stretching (every lane sized to the busiest one) was
-    // exactly what made short lanes look sparse before: a handful of
-    // nodes spread across the same span a much busier lane needed.
-    var itemStep = rows ? (NW + GAP) : (NH + GAP);
-    var laneStep = rows ? (NH + 46) : (NW + 220);
-    var laneOrigin = 8;
-    // Rows-mode reserves room on the left for the lane label (drawn at
-    // x = LX + 20); columns-mode's label sits above the column instead,
-    // so nodes there can start right at the column's own x.
-    var itemOrigin = rows ? (LX + 60) : LX;
-
-    lanes.forEach(function (lane, li) {
-      var laneAt = laneOrigin + li * laneStep;
-      lane.items.forEach(function (node, i) {
-        var along = itemOrigin + i * itemStep;
-        if (rows) add(node, along, laneAt);
-        else add(node, laneAt, along);
-      });
-      els.push({
-        group: "nodes", classes: "lane-label",
-        // Left of the row's nodes in rows-mode, above the column's nodes
-        // in columns-mode -- same anchor logic, transposed.
-        position: rows
-          ? { x: LX + 20, y: laneAt + NH / 2 }
-          : { x: laneAt + NW / 2, y: 14 },
-        data: { id: "lane:" + lane.id, display: lane.label, color_class: "" },
-        selectable: false,
-      });
-    });
-
-    // Edges only exist between two currently-visible endpoints: a
-    // collapsed cluster's member edges fold into one edge on the cluster
-    // rather than vanishing.
-    function resolve(rawId) {
-      if (placed[rawId]) return rawId;
-      var node = byId[rawId];
-      if (!node) return null;
-      var clusterId = "cluster:" + node.kind + ":" + (node.group || "(none)");
-      return placed[clusterId] ? clusterId : null;
-    }
-
-    var pairs = {};
-    this.data.edges.forEach(function (edge) {
-      var from = resolve(edge.from), to = resolve(edge.to);
-      if (!from || !to || from === to) return;
-      var key = from + ">" + to;
-      if (pairs[key]) {
-        pairs[key].total += callTotal(edge.calls);
-        pairs[key].hot = pairs[key].hot || edge.hot;
-        return;
-      }
-      pairs[key] = {
-        from: from, to: to, kind: edge.kind,
-        total: callTotal(edge.calls), hot: !!edge.hot,
-      };
-    });
-
-    Object.keys(pairs).forEach(function (key) {
-      var e = pairs[key];
-      var source = byId[e.from] || {};
-      var classes = [];
-      if (e.kind === "structural") classes.push("structural");
-      if (e.hot) classes.push("hot");
-      els.push({
-        group: "edges", classes: classes.join(" "),
-        data: {
-          id: "e:" + key, source: e.from, target: e.to,
-          color_class: e.kind === "structural" ? "" : (source.color_class || ""),
-          total: e.total,
-        },
-      });
-    });
-
-    return els;
-  };
-
-  App.prototype.render = function () {
-    var self = this;
-    var els = this.buildElements();
-
-    if (!this.cy) {
-      this.cy = cytoscape({
-        container: this.canvas,
-        elements: els,
-        layout: { name: "preset" },
-        style: styleFor(this.theme),
-        minZoom: MIN_ZOOM, maxZoom: MAX_ZOOM,
-        // Lanes carry meaning -- a node dragged out of its column would
-        // say something false about the topology.
-        autoungrabify: true,
-        boxSelectionEnabled: false,
-      });
-      this.cy.on("tap", "node", function (evt) {
-        var node = evt.target.data("node");
-        if (node) self.onNodeClick(node);
-      });
-      // The graph is a canvas, so nothing about it is reachable from the
-      // DOM -- no element to query, no text to assert on. This handle is
-      // how it stays inspectable at all, from devtools or a smoke test.
-      // It exposes only what this page already fetched and is already
-      // showing to the same signed-in reader.
-      this.root.accessMap = this;
-      this.cy.fit(undefined, FIT_PAD);
-    } else {
-      // Keep whatever the reader was looking at: expanding a cluster or
-      // typing in the filter must not yank the viewport back to a fit.
-      var pan = this.cy.pan(), zoom = this.cy.zoom();
-      this.cy.elements().remove();
-      this.cy.add(els);
-      this.cy.zoom(zoom);
-      this.cy.pan(pan);
-    }
-    this.applyFilter();
-  };
-
-  // Search runs as a data flag the stylesheet reacts to, so narrowing
-  // never rebuilds the graph or disturbs pan/zoom.
-  App.prototype.applyFilter = function () {
-    var cy = this.cy, q = this.query;
-    if (!cy) return;
-    cy.batch(function () {
-      cy.nodes().forEach(function (n) {
-        if (n.hasClass("lane-label")) return;
-        if (!q) { n.data("dimmed", 0); n.data("matched", 0); return; }
-        var hit = (n.data("label") || "").toLowerCase().indexOf(q) !== -1;
-        n.data("matched", hit ? 1 : 0);
-        n.data("dimmed", hit ? 0 : 1);
-      });
-      cy.edges().forEach(function (e) {
-        if (!q) { e.data("dimmed", 0); return; }
-        var lit = e.source().data("matched") || e.target().data("matched");
-        e.data("dimmed", lit ? 0 : 1);
-      });
-    });
-  };
-
-  App.prototype.onNodeClick = function (node) {
-    if (node.kind === "cluster") {
-      this.expanded[node.cluster_kind + ":" + node.group] = true;
-      this.render();
-      return;
-    }
-    this.openPanel(node);
-  };
-
-  App.prototype.ensurePanel = function () {
-    if (this.panel) return;
-    var self = this;
-    var backdrop = document.createElement("div");
-    backdrop.className = "map-backdrop";
-    backdrop.addEventListener("click", function () { self.closePanel(); });
-    document.body.appendChild(backdrop);
-
-    var panel = document.createElement("div");
-    panel.className = "map-panel";
-    var head = document.createElement("div");
-    head.className = "map-panel-head";
-    var h4 = document.createElement("h4");
-    var closeBtn = document.createElement("button");
-    closeBtn.className = "map-panel-close";
-    closeBtn.type = "button";
-    closeBtn.setAttribute("aria-label", "Close");
-    closeBtn.textContent = "\\u00d7";
-    closeBtn.addEventListener("click", function () { self.closePanel(); });
-    head.appendChild(h4);
-    head.appendChild(closeBtn);
-    var body = document.createElement("div");
-    body.className = "map-panel-body";
-    panel.appendChild(head);
-    panel.appendChild(body);
-    document.body.appendChild(panel);
-
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") self.closePanel();
-    });
-
-    this.panel = panel;
-    this.backdrop = backdrop;
-    this.panelTitle = h4;
-    this.panelBody = body;
-  };
-
-  function row(label, value) {
-    var r = document.createElement("div");
-    r.className = "row";
-    var l = document.createElement("div");
-    l.className = "row-l";
-    l.textContent = label;
-    var v = document.createElement("div");
-    v.textContent = value;
-    r.appendChild(l);
-    r.appendChild(v);
-    return r;
-  }
-
-  App.prototype.openPanel = function (node) {
-    this.ensurePanel();
-    this.panelTitle.textContent = node.label;
-    while (this.panelBody.firstChild) this.panelBody.removeChild(this.panelBody.firstChild);
-    this.panelBody.appendChild(row("Kind", node.kind));
-    this.panelBody.appendChild(row("Detail", node.sub));
-    if (node.group) this.panelBody.appendChild(row(node.kind === "identity" ? "Role" : "Executor", node.group));
-    if (node.target) this.panelBody.appendChild(row("Target", node.target));
-    var calls = node.calls || { ok: 0, denied: 0, failed: 0, total: 0 };
-    this.panelBody.appendChild(row("Calls", calls.total + " total (" + calls.ok + " ok, "
-      + calls.denied + " denied, " + calls.failed + " failed)"));
-    if (node.destinations && node.destinations.length) {
-      this.panelBody.appendChild(row("Destinations", node.destinations.join(", ")));
-    }
-    if (node.granted_tools && node.granted_tools.length) {
-      var label = document.createElement("div");
-      label.className = "row-l";
-      label.textContent = "Tools";
-      this.panelBody.appendChild(label);
-      var pills = document.createElement("div");
-      pills.className = "pills";
-      // Identity nodes carry {id, scopes} per tool (which scope THIS
-      // grant needs); toolkit/destination nodes carry plain id strings
-      // (just "what exists here") -- one loop handles both shapes.
-      node.granted_tools.forEach(function (t) {
-        var pill = document.createElement("span");
-        pill.className = "pill mono quiet";
-        var id = (t && typeof t === "object") ? t.id : t;
-        var scopes = (t && typeof t === "object") ? t.scopes : null;
-        pill.textContent = scopes && scopes.length ? id + " \\u00b7 " + scopes.join(", ") : id;
-        pills.appendChild(pill);
-      });
-      this.panelBody.appendChild(pills);
-    }
-    this.panel.classList.add("open");
-    this.backdrop.classList.add("open");
-  };
-
-  App.prototype.closePanel = function () {
-    if (!this.panel) return;
-    this.panel.classList.remove("open");
-    this.backdrop.classList.remove("open");
-  };
-
-  App.prototype.zoomBy = function (factor) {
-    if (!this.cy) return;
-    var w = this.canvas.clientWidth / 2, h = this.canvas.clientHeight / 2;
-    this.cy.zoom({ level: this.cy.zoom() * factor, renderedPosition: { x: w, y: h } });
-  };
-
-  App.prototype.ensureControls = function () {
-    var self = this;
-    var bar = document.createElement("div");
-    bar.className = "map-controls";
-    [
-      ["+", "Zoom in", function () { self.zoomBy(1.3); }],
-      ["\\u2212", "Zoom out", function () { self.zoomBy(1 / 1.3); }],
-      ["Fit", "Fit to content", function () {
-        if (self.cy) self.cy.fit(undefined, FIT_PAD);
-      }],
-    ].forEach(function (spec) {
-      var b = document.createElement("button");
-      b.type = "button";
-      b.className = "ghost map-control-btn";
-      b.title = spec[1];
-      b.textContent = spec[0];
-      b.addEventListener("click", spec[2]);
-      bar.appendChild(b);
-    });
-    this.root.appendChild(bar);
-  };
-
-  App.prototype.wireSearch = function () {
-    var self = this;
-    var input = document.getElementById("map-search");
-    var form = document.getElementById("map-filter");
-    if (!input || !form) return;
-    form.addEventListener("submit", function (e) {
-      // With the renderer live, filtering happens without a reload -- the
-      // GET form is only the no-script fallback.
-      e.preventDefault();
-    });
-    var timer = null;
-    input.addEventListener("input", function () {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(function () {
-        self.query = input.value.toLowerCase();
-        self.applyFilter();
-      }, 150);
-    });
-  };
-
-  App.prototype.wireTheme = function () {
-    var self = this;
-    if (!window.matchMedia) return;
-    var mq = window.matchMedia("(prefers-color-scheme: dark)");
-    function refresh() {
-      self.theme = readTheme();
-      if (self.cy) self.cy.style(styleFor(self.theme));
-    }
-    if (mq.addEventListener) mq.addEventListener("change", refresh);
-    else if (mq.addListener) mq.addListener(refresh);
-  };
-
-  App.prototype.wireResize = function () {
-    var self = this;
-    window.addEventListener("resize", function () {
-      window.clearTimeout(self.resizeTimer);
-      self.resizeTimer = window.setTimeout(function () {
-        if (!self.cy || !self.data) return;
-        self.cy.resize();
-        // Unlike render()'s other callers (search, cluster expand/
-        // collapse), a resize doesn't just add or dim elements -- the
-        // container's own aspect ratio may have flipped rows/columns
-        // mode entirely, so the old pan/zoom belongs to a layout that
-        // may no longer exist. Rebuild and always re-fit, rather than
-        // going through render()'s pan/zoom-preserving branch.
-        var els = self.buildElements();
-        self.cy.elements().remove();
-        self.cy.add(els);
-        self.applyFilter();
-        self.cy.fit(undefined, FIT_PAD);
-      }, 120);
-    });
-  };
-
-  function boot() {
-    var root = document.getElementById("access-map-root");
-    if (!root) return;
-    var app = new App(root);
-    if (typeof cytoscape !== "function") {
-      app.fail("Could not load the access map renderer.");
-      return;
-    }
-    var loading = root.querySelector(".map-loading");
-    if (loading) root.removeChild(loading);
-    // Cytoscape owns this element outright; the control bar stays a
-    // sibling so a re-render never disturbs it.
-    var canvas = document.createElement("div");
-    canvas.className = "map-canvas";
-    root.appendChild(canvas);
-    app.canvas = canvas;
-
-    app.ensureControls();
-    app.wireSearch();
-    app.wireTheme();
-    app.wireResize();
-    app.load();
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
-  } else {
-    boot();
-  }
-})();
-"""
 
 
 def _page(
@@ -1930,7 +1265,6 @@ def _page(
     nonce: str,
     actions: str = "",
     account: bool = False,
-    script_tag: str = "",
     nav_badge: int = 0,
 ) -> str:
     nav = "".join(
@@ -1984,7 +1318,6 @@ def _page(
         "}, { passive: true });"
         "})();"
         "</script>"
-        + script_tag
         + "</body></html>"
     )
 
@@ -2037,38 +1370,19 @@ def _post_button(
 
 def _respond(
     request: Request, html_text: str, nonce: str, status: int = 200,
-    *, script_nonce: str | None = None,
 ) -> Response:
     response = HTMLResponse(html_text, status_code=status)
-    # No scripts and no external sources by default. The nonce applies only
-    # to the single <style> block. Most pages are inline HTML/SVG and
-    # therefore need neither an image source nor code in the browser. The
-    # one exception is `script_nonce`, opted into only by the routes that
-    # render the interactive access map (Overview and /ui/access-map) --
-    # nonce-scoped to that single response, never widened to 'self' or a
-    # blanket default-src relaxation.
-    # A script-bearing route also has to allow the one `<style>` element
-    # Cytoscape injects for itself (see `CYTOSCAPE_STYLE_HASH`) -- by hash,
-    # so that exact rule and nothing else. Every other route's header is
-    # byte-for-byte what it was before any of this existed.
-    style_src = f"style-src 'nonce-{nonce}'"
-    if script_nonce:
-        style_src += f" {CYTOSCAPE_STYLE_HASH}"
+    # No scripts and no external sources. The nonce applies only
+    # to the single <style> block. Most pages are inline HTML and
+    # therefore need neither an image source nor code in the browser.
     directives = [
         "default-src 'none'",
-        style_src,
+        f"style-src 'nonce-{nonce}'",
         "img-src 'self' data:",
         "form-action 'self'",
         "frame-ancestors 'none'",
         "base-uri 'none'",
     ]
-    if script_nonce:
-        directives.append(f"script-src 'nonce-{script_nonce}'")
-        # The map's own fetch() to its same-origin JSON endpoint would
-        # otherwise fall back to `default-src 'none'` and be blocked like
-        # any other network access -- still same-origin only, not 'self'
-        # on every route.
-        directives.append("connect-src 'self'")
     response.headers["Content-Security-Policy"] = "; ".join(directives)
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -2418,14 +1732,16 @@ def _access_graph_data(
     }
 
 
-def _toolkit_access_matrix(
-    service: Service, identities: IdentityStore, *, highlight: str = "",
+def _access_matrix(
+    service: Service, identities: IdentityStore, records: list[dict[str, Any]] | None = None,
+    *, highlight: str = "",
 ) -> str:
-    """Identity x toolkit grant matrix -- the access map's alternate, denser
+    """Identity \u00d7 toolkit grant matrix \u2014 the access map.
 
-    view for real scale (many toolkits/identities). Generalizes
-    `_tool_matrix`'s per-tool table one level up to per-toolkit, so it stays
-    legible with hundreds of tools where a tool-per-row table would not.
+    Identities as rows, toolkits as columns. Each cell shows the number of
+    granted tools (green heat-mapped by call volume) or a dash (not granted).
+    No JavaScript, no SVG edges, no pan/zoom \u2014 a plain HTML table that
+    scales to any number of nodes without becoming spaghetti.
     """
     q = highlight.strip().lower()
     toolkits = sorted(service.tier1.toolkits.items())
@@ -2440,38 +1756,87 @@ def _toolkit_access_matrix(
     for tool in service.catalog.tools.values():
         tools_by_kit.setdefault(tool.toolkit, set()).add(tool.id)
 
-    rows = []
-    for name, tk in toolkits:
-        if q and q not in name.lower():
-            continue
-        kit_tools = tools_by_kit.get(name, set())
-        cells = "".join(
-            f'<td class="cell-grant"><span class="pill ok">{len(i.tools & kit_tools)}'
-            "</span></td>"
-            if (i.tools & kit_tools)
-            else '<td class="cell-grant"><span class="pill">&mdash;</span></td>'
-            for i in idents
-        )
-        rows.append(
-            f'<tr><td><code class="tool-id">{_e(name)}</code></td>'
-            f'<td><span class="pill accent">{_icon(_executor_icon(tk.executor), 12)}'
-            f'{_e(tk.executor)}</span></td>'
-            f"<td>{len(kit_tools)}</td>{cells}</tr>"
-        )
-
-    if not rows:
-        return _note(
-            f"No toolkit matches &ldquo;{_e(highlight)}&rdquo;.", icon="search",
-        )
-
-    id_cols = "".join(
-        f'<th class="col-ident" title="{_e(i.id)}">{_e(i.id[:8])}</th>' for i in idents
+    audit_records = records or []
+    pair_stats = _pair_call_stats(audit_records, tools_by_kit)
+    all_totals = [s["total"] for s in pair_stats.values()]
+    hot_threshold = max(
+        sorted(all_totals)[int(len(all_totals) * 0.75)] if all_totals else 0, 3,
     )
+
+    def _heat_class(total: int) -> str:
+        if total == 0:
+            return ""
+        if total >= hot_threshold:
+            return " heat-hot"
+        if total >= hot_threshold // 2:
+            return " heat-warm"
+        return " heat-low"
+
+    if q:
+        idents = [i for i in idents if q in i.id.lower() or q in i.role.lower()]
+        toolkits = [(n, tk) for n, tk in toolkits if q in n.lower() or q in tk.executor.lower()]
+
+    if not idents or not toolkits:
+        return _note(
+            f"No identity or toolkit matches &ldquo;{_e(highlight)}&rdquo;.", icon="search",
+        )
+
+    col_headers = "".join(
+        f'<th class="am-col" title="{_e(name)}">'
+        f'<span class="am-col-name">{_e(name)}</span>'
+        f'<span class="am-col-exec">{_icon(_executor_icon(tk.executor), 10)}{_e(tk.executor)}</span>'
+        f"</th>"
+        for name, tk in toolkits
+    )
+
+    rows_html = []
+    for ident in idents:
+        role_badge = f'<span class="pill{" ok" if ident.role == "admin" else " accent" if ident.role == "viewer" else ""}">{_e(ident.role)}</span>'
+        cells = []
+        for name, _tk in toolkits:
+            kit_tools = tools_by_kit.get(name, set())
+            granted = ident.tools & kit_tools
+            if not granted:
+                cells.append('<td class="am-cell am-none">&ndash;</td>')
+                continue
+            pair = pair_stats.get((ident.id, name), {"ok": 0, "denied": 0, "failed": 0, "total": 0})
+            heat = _heat_class(pair["total"])
+            detail_tools = "".join(
+                f'<li><code class="tool-id">{_e(tid)}</code></li>'
+                for tid in sorted(granted)[:20]
+            )
+            if len(granted) > 20:
+                detail_tools += f'<li class="muted">&hellip; +{len(granted) - 20} more</li>'
+            call_text = (
+                f'{pair["total"]} calls ({pair["ok"]} ok, {pair["denied"]} denied, {pair["failed"]} failed)'
+                if pair["total"] else "no calls yet"
+            )
+            cells.append(
+                f'<td class="am-cell am-grant{heat}">'
+                f'<details><summary>{len(granted)}</summary>'
+                f'<div class="am-detail">'
+                f'<div class="muted">{call_text}</div>'
+                f'<ul class="am-tools">{detail_tools}</ul>'
+                f'</div></details>'
+                f"</td>"
+            )
+        rows_html.append(
+            f'<tr><td class="am-row-id"><span class="mono">{_e(ident.id)}</span></td>'
+            f'<td class="am-row-role">{role_badge}</td>'
+            f'<td class="am-row-tools">{len(ident.tools)}</td>'
+            f'{"".join(cells)}</tr>'
+        )
+
     return (
-        '<div class="wrap"><table class="tool-matrix">'
-        "<thead><tr><th>Toolkit</th><th>Executor</th><th>Tools</th>"
-        f"{id_cols}</tr></thead>"
-        f'<tbody>{"".join(rows)}</tbody></table></div>'
+        '<div class="am-wrap"><table class="am-grid">'
+        "<thead><tr>"
+        '<th class="am-corner">Identity</th>'
+        '<th class="am-corner">Role</th>'
+        '<th class="am-corner">Tools</th>'
+        f"{col_headers}"
+        "</tr></thead>"
+        f'<tbody>{"".join(rows_html)}</tbody>'
+        "</table></div>"
     )
 
 
@@ -2692,91 +2057,34 @@ def _tool_matrix(service: Service, identities: IdentityStore) -> str:
     )
 
 
-#: Above this many combined identities/toolkits/destinations, the access
-#: map defaults to the dense table view instead of the graph -- a single
-#: SVG canvas stops being legible well before this, while the table stays
-#: scannable (FR: access map redesign).
-ACCESS_MAP_TABLE_THRESHOLD = 80
-
-
-def _access_map_legend() -> str:
-    return (
-        '<div class="legend">'
-        "<span>each color is one identity</span>"
-        '<span class="l-hot"><i></i>high traffic</span>'
-        "<span>scroll/pinch to zoom, drag to pan, click a node for detail</span>"
-        "</div>"
-    )
-
-
-def _access_map_mount(query: str, *, height_class: str = "") -> str:
-    """The live map's mount point: a container `access-map.js` renders
-
-    into, plus a plain-text notice for the no-script case. Shared by the
-    Overview embed and the dedicated `/ui/access-map` page so the two
-    can't drift out of sync -- there is only one map renderer now, entirely
-    client-side (see `_ACCESS_MAP_JS`).
-    """
-    return (
-        f'<div id="access-map-root" class="map-root{height_class}" '
-        f'data-endpoint="{UI_PREFIX}/access-map/data" data-query="{_e(query)}">'
-        '<p class="muted map-loading">Loading access map&hellip;</p>'
-        '<noscript><p class="muted">Enable JavaScript to view the '
-        "access map.</p></noscript>"
-        "</div>"
-    )
-
-
 def _view_access_map(
     service: Service, identities: IdentityStore, request: Request,
 ) -> str:
-    """The interactive access map page.
+    """The access map page \u2014 identity \u00d7 toolkit grant matrix.
 
-    Server-renders a filter/view-toggle form and the map's mount point
-    (`_access_map_mount`); `access-map.js` -- loaded only on this route and
-    `/ui/` via a scoped CSP `script-src` nonce (see `_shell`) -- fetches
-    `{UI_PREFIX}/access-map/data`, groups nodes by executor/role once past a
-    threshold, and renders a pannable/zoomable graph: nodes expand on
-    click, search narrows live instead of just dimming, and a side panel
-    shows detail without leaving the page.
+    Server-rendered HTML grid, no JavaScript.
     """
     query = request.query_params.get("q", "").strip()
-    view = request.query_params.get("view", "").strip()
-
-    dest_names = {d for _, tk in service.tier1.toolkits.items() for d in tk.destinations}
-    total_nodes = (
-        len(identities.identities) + len(service.tier1.toolkits) + len(dest_names)
+    records, _ = read_audit(
+        os.path.join(service.tier1.audit_dir, "audit.jsonl"), limit=400,
     )
-    table_default = total_nodes > ACCESS_MAP_TABLE_THRESHOLD
-    show_table = view == "table" or (view != "graph" and table_default)
-    q_param = f"&q={_e(query)}" if query else ""
 
     filter_form = (
-        f'<form method="get" action="{UI_PREFIX}/access-map" class="filter-row" '
-        'id="map-filter">'
-        f'<input type="text" name="q" id="map-search" value="{_e(query)}" '
-        'placeholder="Filter identity, toolkit, or resource&hellip;">'
+        f'<form method="get" action="{UI_PREFIX}/access-map" class="filter-row">'
+        f'<input type="text" name="q" value="{_e(query)}" '
+        'placeholder="Filter identity or toolkit&hellip;">'
         f'<button class="ghost" type="submit" title="Filter">{_icon("search", 14)}</button>'
         + (f'<a class="reset" href="{UI_PREFIX}/access-map">reset</a>' if query else "")
-        + '<span class="spacer"></span>'
-        + f'<a class="btn{"" if show_table else " active"}" '
-        f'href="{UI_PREFIX}/access-map?view=graph{q_param}">'
-        f'{_icon("share", 13)}Graph</a>'
-        + f'<a class="btn{" active" if show_table else ""}" '
-        f'href="{UI_PREFIX}/access-map?view=table{q_param}">'
-        f'{_icon("sliders", 13)}Table</a>'
-        "</form>"
+        + "</form>"
     )
 
-    if show_table:
-        body = f'<div class="pad">{_toolkit_access_matrix(service, identities, highlight=query)}</div>'
-    else:
-        body = _access_map_mount(query, height_class=" map-root-full") + _access_map_legend()
+    body = _access_matrix(service, identities, records, highlight=query)
 
     return (
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("share", 14)}Access map</h3></div>'
-        f"<div class=\"pad\">{filter_form}{body}</div>"
+        f'<div class="pad">{filter_form}</div>'
+        f'<div class="pad pad-tight">{body}</div>'
         "</div>"
     )
 
@@ -2790,11 +2098,7 @@ def _view_overview(
     blocked = len(catalog.disabled_by_tier1)
     protected = {r for tk in service.tier1.toolkits.values() for r in tk.protected_resources}
     records, _ = read_audit(os.path.join(service.tier1.audit_dir, "audit.jsonl"), limit=400)
-    # Seeds the map's search box on load (?q=) and its GET form remains a
-    # working fallback if scripts are off (a plain reload, filtering
-    # nothing -- the map itself only renders with scripts, see
-    # `_access_map_mount`); `App.prototype.wireSearch` takes over live
-    # filtering client-side once access-map.js runs.
+    # Seeds the matrix filter (?q=).
     query = request.query_params.get("q", "").strip() if request is not None else ""
 
     parts = []
@@ -2870,19 +2174,6 @@ def _view_overview(
         + "</div>"
     )
 
-    has_call_activity = any(r.get("kind") == "call" for r in records)
-    # With no traffic yet, every edge is thin and every "hot path" feature
-    # has nothing to show -- the map can read as broken rather than as a
-    # topology view that also happens to track traffic. Said once, plainly,
-    # instead of hidden behind a hover on each individual edge.
-    no_traffic_caption = (
-        '<p class="muted caption">'
-        "No call traffic yet &ndash; the map above shows current grants; "
-        "edges thicken and highlight as tools actually get used.</p>"
-        if not has_call_activity
-        else ""
-    )
-
     parts.append(
         '<div class="split"><div>'
         '<div class="card">'
@@ -2891,25 +2182,14 @@ def _view_overview(
         f'<a class="btn" href="{UI_PREFIX}/access-map" title="Open the '
         f'full-page access map">{_icon("share", 13)}Open full page</a>'
         "</div>"
-        # The filter form gets its own row above the map instead of
-        # crowding into .card-head alongside the title and "Open full
-        # page" button -- this card only gets half the page width (the
-        # .split column next to Activity), and a 12rem input plus three
-        # siblings in one flex row left the placeholder text truncated.
-        # One .pad wrapper, matching `_view_access_map`'s own structure,
-        # so the form and the map don't each add a `.card > .pad` gap.
-        "<div class=\"pad\">"
-        # GET form: still a working no-script fallback (a plain reload of
-        # this page with ?q= seeded); `App.prototype.wireSearch` intercepts
-        # it and filters live once access-map.js runs.
-        f'<form method="get" action="{UI_PREFIX}/" class="filter-row" id="map-filter">'
-        f'<input type="text" name="q" id="map-search" value="{_e(query)}" '
+        '<div class="pad">'
+        f'<form method="get" action="{UI_PREFIX}/" class="filter-row">'
+        f'<input type="text" name="q" value="{_e(query)}" '
         'placeholder="Filter identity or toolkit&hellip;">'
         f'<button class="ghost" type="submit" title="Filter">{_icon("search", 14)}</button>'
         + (f'<a class="reset" href="{UI_PREFIX}/">reset</a>' if query else "")
         + "</form>"
-        f"{_access_map_mount(query, height_class=' map-root-split')}"
-        f"{_access_map_legend()}{no_traffic_caption}</div></div>"
+        f'<div class="pad-tight">{_access_matrix(service, identities, records, highlight=query)}</div></div></div>'
         "</div><div>"
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3></div>'
@@ -4953,24 +4233,8 @@ def build_ui_routes(
     def _shell(
         request: Request, title: str, body: str, session: Session, *,
         icon: str, active: str, subtitle: str = "", actions: str = "", status: int = 200,
-        allow_script: bool = False,
     ) -> Response:
         nonce = _nonce()
-        # `allow_script` is opted into only by the routes that render the
-        # interactive access map (Overview and /ui/access-map, see
-        # `build_ui_routes`) -- everywhere else this stays False and the
-        # page gets no `script-src` at all, same as before.
-        script_nonce = _nonce() if allow_script else None
-        # Library first, then the glue that calls into it -- both from this
-        # origin, both under the same nonce. No CDN: the CSP names no
-        # external source anywhere else either (`img-src 'self' data:`), and
-        # a third-party `script-src` would be a change of posture rather
-        # than a shortcut.
-        script_tag = (
-            f'<script nonce="{script_nonce}" src="{CYTOSCAPE_JS_PATH}"></script>'
-            f'<script nonce="{script_nonce}" src="{ACCESS_MAP_JS_PATH}"></script>'
-            if script_nonce else ""
-        )
         change_n, toolkit_n = _request_pending_counts(pending, toolkit_proposals)
         return _respond(
             request,
@@ -4978,17 +4242,16 @@ def build_ui_routes(
                   active=active, nonce=nonce, actions=actions,
                   # Without writable Tier 2 there is no account page: it
                   # could offer nothing but an error message.
-                  account=store is not None, script_tag=script_tag,
+                  account=store is not None,
                   nav_badge=change_n + toolkit_n),
             nonce,
             status,
-            script_nonce=script_nonce,
         )
 
     def guarded(view: Callable[[Request, Session], str], title: str, active: str, *,
                 icon: str, subtitle: str = "",
                 actions: Callable[[Session], str] | None = None,
-                allow_script: bool = False):
+        ):
         """Binds a view to a valid session.
 
         Every read handler runs through this wrapper, every write
@@ -5005,7 +4268,6 @@ def build_ui_routes(
                 request, title, view(request, session), session, icon=icon,
                 active=active, subtitle=subtitle,
                 actions=actions(session) if actions else "",
-                allow_script=allow_script,
             )
 
         return handler
@@ -5968,50 +5230,8 @@ def build_ui_routes(
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
-    async def access_map_data(request: Request) -> Response:
-        """JSON node/edge model behind the interactive access map.
 
-        Session-gated like every other read route (see `guarded`), just
-        without the HTML shell around it -- this is an XHR sibling of
-        `/ui/access-map`, not a public API.
-        """
-        session = _current(request)
-        if session is None:
-            return _to_login()
-        records, _ = read_audit(
-            os.path.join(service.tier1.audit_dir, "audit.jsonl"), limit=400
-        )
-        data = _access_graph_data(service, identities, records)
-        return Response(
-            json.dumps(data), media_type="application/json",
-            headers={"Cache-Control": "no-store"},
-        )
 
-    async def access_map_js(request: Request) -> Response:
-        session = _current(request)
-        if session is None:
-            return _to_login()
-        return Response(
-            _ACCESS_MAP_JS, media_type="application/javascript",
-            headers={"Cache-Control": "no-store"},
-        )
-
-    async def cytoscape_js(request: Request) -> Response:
-        session = _current(request)
-        if session is None:
-            return _to_login()
-        # The one response here that *is* cacheable. Everything else the
-        # console serves carries permission or audit data and is
-        # `no-store`; this is an immutable third-party bundle with none of
-        # it, and re-sending ~425 KB on every dashboard load to preserve a
-        # rule that exists for a different reason would be a poor trade.
-        # `private`, since it still sits behind a session, and the version
-        # is in the path, so an upgrade is a new URL rather than a stale
-        # cache entry.
-        return Response(
-            CYTOSCAPE_JS, media_type="application/javascript",
-            headers={"Cache-Control": "private, max-age=31536000, immutable"},
-        )
 
     return [
         Route("/", root, methods=["GET"]),
@@ -6023,7 +5243,7 @@ def build_ui_routes(
             f"{UI_PREFIX}/",
             guarded(
                 lambda r, s: _view_overview(service, identities, store, r),
-                "Overview", "", icon="gauge", allow_script=True,
+                "Overview", "", icon="gauge",
                 subtitle="Who can reach what, and what's happening right now.",
             ),
             methods=["GET"],
@@ -6032,13 +5252,10 @@ def build_ui_routes(
             f"{UI_PREFIX}/access-map",
             guarded(
                 lambda r, s: _view_access_map(service, identities, r),
-                "Access map", "none", icon="share", allow_script=True,
+                "Access map", "none", icon="share"
             ),
             methods=["GET"],
         ),
-        Route(f"{UI_PREFIX}/access-map/data", access_map_data, methods=["GET"]),
-        Route(ACCESS_MAP_JS_PATH, access_map_js, methods=["GET"]),
-        Route(CYTOSCAPE_JS_PATH, cytoscape_js, methods=["GET"]),
         Route(
             f"{UI_PREFIX}/tools",
             guarded(
