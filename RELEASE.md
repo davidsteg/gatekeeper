@@ -60,6 +60,26 @@ cannot. It is in every release.
 
 ---
 
+## 0.19.0
+
+**Console shell: the sidebar and topbar title now stay fixed to the viewport instead of scrolling with the page; Overview's Access map and Activity cards match height.**
+
+- **The content column, not the whole document, now owns the scrollbar.**
+  `.app`/`.col` are pinned to `100vh` with `.col` scrolling internally, so
+  the sidebar (`.side`) stretches to exactly the viewport height and never
+  grows a scrollbar of its own, however long the page below it gets. The
+  `<900px` mobile layout (sidebar collapses to a horizontal top bar) keeps
+  its previous whole-page scroll, unaffected.
+- **The topbar's subtitle now collapses once the page scrolls.** A small
+  scroll listener toggles `.topbar.is-scrolled`, fading out the `<p>`
+  subtitle so the sticky title bar takes less vertical space while
+  reading; it reappears back at the top.
+- **Overview's Access map and Activity cards render at equal height.**
+  `.split` now stretches its two columns instead of sizing each to its
+  own content, and the embedded map (`map-root-split`) grows to fill the
+  remaining height rather than asserting its own `52vh`. `/ui/access-map`'s
+  full-page map is unaffected.
+
 ## 0.18.1
 
 **`admin.toolkit_list` reports a toolkit's target and credential name. The embedded access map's filter box and lane layout are fixed.**
