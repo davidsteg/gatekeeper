@@ -733,6 +733,74 @@ def test_secrets_masked_in_audit(tmp_path):
     assert record["parameters"]["token"] == "***"
 
 
+def test_secret_field_names_masked_in_every_spelling(tmp_path):
+    """A key-shaped *parameter name* is masked however it is spelled.
+
+    The Redactor is no backstop here: it only knows values gatekeeper
+    stores itself, and these are values an agent passed in as arguments.
+    So the field-name rule has to catch them on its own -- and it used to
+    match names exactly, which meant `api_key` was masked and `apikey`,
+    `x-api-key` and `access_token` went to disk in cleartext.
+    """
+    import json
+
+    from gatekeeper.audit import AuditLog
+
+    log = AuditLog(str(tmp_path / "logs"))
+    log.call(
+        identity="dev",
+        tool_id="demo.echo",
+        tool_version=1,
+        parameters={
+            "apikey": "leak-1",
+            "api_key": "leak-2",
+            "X-Api-Key": "leak-3",
+            "access_token": "leak-4",
+            "client_secret": "leak-5",
+            "Authorization": "leak-6",
+            "userPassword": "leak-7",
+            "nested": {"x-api-key": "leak-8"},
+            "stack": "media-jellyfin",
+        },
+        scopes=[],
+        outcome="ok",
+    )
+    written = (tmp_path / "logs" / "audit.jsonl").read_text(encoding="utf-8")
+    for index in range(1, 9):
+        assert f"leak-{index}" not in written
+    # Masking that swallowed everything would pass the loop above and be
+    # useless -- a field with no secret in its name still has to survive.
+    record = json.loads(written.splitlines()[0])
+    assert record["parameters"]["stack"] == "media-jellyfin"
+
+
+def test_credential_metadata_survives_masking(tmp_path):
+    """The names of the credentials used are *not* masked away (FR-10.7).
+
+    The field-name rule above is deliberately broad, which puts it one
+    careless token away from deleting the very metadata the log exists
+    for: which key a call used, so it can be rotated after a leak.
+    """
+    import json
+
+    from gatekeeper.audit import AuditLog
+
+    log = AuditLog(str(tmp_path / "logs"))
+    log.call(
+        identity="dev",
+        tool_id="jellyfin.request",
+        tool_version=1,
+        parameters={},
+        scopes=[],
+        outcome="ok",
+        credential_names=["jellyfin"],
+    )
+    record = json.loads(
+        (tmp_path / "logs" / "audit.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert record["credentials"] == ["jellyfin"]
+
+
 # --------------------------------------------------------------------------
 # Class 10: HTTP target allowlist and path traversal (FR-8.5 to FR-8.15)
 # --------------------------------------------------------------------------

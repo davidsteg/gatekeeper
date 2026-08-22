@@ -14,19 +14,47 @@ import threading
 import time
 from typing import Any
 
-#: Field names whose values never enter the log -- regardless of where
-#: they appear. From Stage 2, credential values from §11 are added.
-_NEVER_LOG = frozenset({"token", "authorization", "password", "api_key", "secret"})
+#: Substrings that mark a field name as secret-bearing -- regardless of
+#: where it appears. Matched against a *normalized* key (lowercased, with
+#: `-`, `_`, `.` and spaces stripped), so `api_key`, `X-Api-Key`, `apiKey`
+#: and `apikey` all collapse onto the same token. Exact-name matching --
+#: what this used to do -- caught only one spelling of each and let a
+#: parameter named `x-api-key` or `access_token` through in cleartext.
+#: The `Redactor` below is no backstop for that: it only knows values
+#: gatekeeper stores itself, not a token an agent passed in as an argument.
+#: Deliberately generous, because the two failure modes are not symmetric --
+#: a wrongly masked field costs readability, a missed one costs a secret.
+_NEVER_LOG = frozenset({"token", "authorization", "password", "apikey", "secret"})
+
+#: The exceptions to the above: keys that match a `_NEVER_LOG` token but
+#: describe a secret instead of carrying one. Masking these would delete
+#: exactly the metadata the log exists for -- FR-10.7's point is that a
+#: credential's *name* and *kind* are loggable, only its value is not.
+#: Stored normalized, the same way keys are before comparison.
+_LOGGABLE = frozenset({"passwordchanged"})
+
+
+def _is_secret_key(key: str) -> bool:
+    """True if `key` names a field whose value must never be logged."""
+    normalized = key.lower()
+    for char in "-_. ":
+        normalized = normalized.replace(char, "")
+    if normalized in _LOGGABLE:
+        return False
+    return any(token in normalized for token in _NEVER_LOG)
 
 
 @dataclasses.dataclass(slots=True)
 class Redactor:
     """Masks known secrets in outputs (FR-10.6).
 
-    In Stage 1 the list is empty -- there is no credential store yet. The
-    hook exists anyway because `docker compose logs` regularly contains
-    environment variables of the target container, and masking would
-    otherwise need to be retrofitted in ten places later.
+    The set is fed from `CredentialStore.plaintext_values_for_masking()` at
+    startup and refreshed on every create/rotate/delete. It therefore covers
+    exactly the secrets gatekeeper holds itself -- which is why `_NEVER_LOG`
+    above has to stand on its own for everything else: `docker compose logs`
+    regularly contains a target container's environment variables, and an
+    agent can pass a foreign token as a plain tool argument. Neither is a
+    value this Redactor has ever seen.
     """
 
     secrets: tuple[str, ...] = ()
@@ -162,7 +190,7 @@ def _scrub(value: Any, redact: Redactor) -> Any:
     """Removes obvious secrets and masks known values."""
     if isinstance(value, dict):
         return {
-            key: ("***" if key.lower() in _NEVER_LOG else _scrub(item, redact))
+            key: ("***" if _is_secret_key(key) else _scrub(item, redact))
             for key, item in value.items()
         }
     if isinstance(value, list):

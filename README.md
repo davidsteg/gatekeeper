@@ -68,11 +68,11 @@ Once started with `--ui`, gatekeeper hosts an admin dashboard at `/ui` where you
 
 Each tool is a template — a fixed action, not a free-form command. For a local binary that's a program path, arguments, and parameter rules; for an HTTP service (see Integrations below) it's a method and path instead, shown as `REQUEST` on the card. Either way the editor shows the Tier 1 limits it has to stay inside, so you know what's allowed before you save. Defining and granting are two steps — a tool with no grantees exists but is invisible to every agent.
 
-### Integrations: add Sonarr, pfSense, and 18 others without writing YAML
+### Integrations: add Sonarr, pfSense, and 19 others without writing YAML
 
 ![](.readme-assets/integrations.png)
 
-Reaching an outside service (Sonarr, Radarr, Home Assistant, pfSense, n8n, TrueNAS, a plain Linux host over SSH, …) used to mean nothing — gatekeeper could only run local commands and Docker. Now it has `http`, `truenas`, and `ssh` executors alongside `docker`, and a library of 20 starter integrations for common homelab/SaaS services so you don't have to write the request shapes by hand:
+Reaching an outside service (Sonarr, Radarr, Home Assistant, pfSense, n8n, TrueNAS, a plain Linux host over SSH, …) used to mean nothing — gatekeeper could only run local commands and Docker. Now it has `http`, `truenas`, and `ssh` executors alongside `docker`, and a library of 21 starter integrations for common homelab/SaaS services so you don't have to write the request shapes by hand:
 
 ```
  1. Pick a card                2. Paste its YAML once           3. Create a tool
@@ -94,6 +94,23 @@ the same limits before it's saved.
 ![](.readme-assets/credentials.png)
 
 Sonarr's API key, a Home Assistant token, TrueNAS's key — each gets a name here, encrypted at rest. After it's saved there is no "view" button anywhere, for any role: create, rotate, and delete are the only three things you can do with it. gatekeeper injects it into the request itself when a tool calls out; it never comes back through the console, the audit log, or a tool's response.
+
+An agent never sees a key and never sends one. It asks for a tool by name; gatekeeper looks up which credential that tool's toolkit is bound to, decrypts it, and attaches it the way the target service expects:
+
+| Kind | How it reaches the request | Typical service |
+| --- | --- | --- |
+| `api_key_header` | A named header you choose | Sonarr, Radarr, Prowlarr, Bazarr, Jellyseerr (`X-Api-Key`), Jellyfin (`X-Emby-Token`) |
+| `bearer` | `Authorization: Bearer …` | Home Assistant, Netdata |
+| `basic` | `Authorization: Basic …` (value stored as `user:pass`) | anything with HTTP basic auth |
+| `url_query` | A query parameter — the one documented exception, for services with no header option at all | SABnzbd (`?apikey=`) |
+| `url_path` | Substituted into the toolkit's `base_url` | Telegram's bot API |
+| `ws_api_key` | The JSON-RPC login call, not a header | TrueNAS |
+| `docker_tls` | A PEM bundle materialized to a private temp dir | a TLS-secured remote Docker daemon |
+| `ssh_private_key` | The key the `ssh` executor authenticates with | Linux-over-SSH |
+
+The binding lives in `toolkits.yaml` (Tier 1, deploy-time) as a single line — `credential: sonarr` — and names the secret, never holds it. The console cannot repoint a toolkit at a different credential, which is why a compromised admin session cannot make one service's key travel to another host.
+
+Two things follow for the audit log. Every call record names the credential it used (`"credentials": ["sonarr"]`) so you know what to rotate after a leak — and the value itself is masked everywhere it could surface: in the record, in the tool's own response before that response reaches the agent, and in any field whose name looks like a secret. Setting up the master key that encrypts all of this is step 1 of [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#credentials-from-zero-to-a-working-call).
 
 ### Identities: Manage access
 
@@ -359,8 +376,9 @@ workflow, testing, and known pitfalls.
 ## What's not here (yet)
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full list with rationale.
-Short version: no OAuth2 (static credentials only), no `ssh` executor, no
-TrueNAS SCRAM mutual auth.
+Short version: no OAuth2 (static credentials only), no `destinations:` on an
+`ssh` toolkit (one toolkit per host), no TrueNAS SCRAM mutual auth, and no
+nested `params_template` values for the `truenas` executor.
 
 ---
 

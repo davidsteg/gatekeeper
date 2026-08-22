@@ -80,6 +80,19 @@ services:
       GATEKEEPER_PORT: "8080"
       GATEKEEPER_LOG_LEVEL: INFO
 
+      # Required as soon as any toolkit carries a `credential:` line.
+      # Generate once with 'gatekeeper credential-key'; losing it means
+      # re-entering every stored credential. A credentials.yaml with
+      # entries but no key aborts startup rather than running with
+      # masking silently off. See docs/DEPLOYMENT.md.
+      #
+      #   GATEKEEPER_CREDENTIAL_KEY: "<fernet key>"
+      #
+      # Preferred over the line above: mount the key as a file, so it
+      # stays out of 'docker inspect' and the compose file itself.
+      #
+      #   GATEKEEPER_CREDENTIAL_KEY_FILE: /run/secrets/gatekeeper-credential-key
+
       # Optional hardening: split Tier 1 and Tier 2 into separate
       # directories. Then the config mount can be :ro while the UI still
       # writes. Both are directories -- the Docker trap above does not

@@ -239,9 +239,19 @@ class Service:
         tool: ToolDef | None = None
         scopes: list[str] = []
         values: dict[str, str] = {}
+        # Which named credential this call ends up using (FR-10.7) -- the
+        # *name*, never the value. Set once the toolkit is resolved, so a
+        # denial that happens before that still audits an empty list rather
+        # than claiming a credential was involved.
+        credential_names: list[str] = []
         try:
             tool = self._authorize(identity, tool_id)
             toolkit = self._resolve_toolkit(self.tier1.toolkit(tool.toolkit), tool.destination)
+            # After `_resolve_toolkit`, so a destination's credential
+            # override (FR-8.3g-j) is already applied -- the audited name is
+            # the one the executor will actually resolve, not the toolkit's
+            # default.
+            credential_names = [toolkit.credential] if toolkit.credential else []
 
             if not self.limiter.check(identity.id, tool.category):
                 raise Denied(
@@ -296,6 +306,7 @@ class Service:
                 outcome="denied",
                 denial_reason=denial.reason.value,
                 detail=denial.detail,
+                credential_names=credential_names,
             )
             raise
 
@@ -348,6 +359,7 @@ class Service:
             exit_code=result.exit_code,
             duration_ms=result.duration_ms,
             truncated=result.truncated,
+            credential_names=credential_names,
         )
         return result
 

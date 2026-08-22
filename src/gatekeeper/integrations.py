@@ -737,6 +737,57 @@ _INTEGRATIONS_LIST: list[Integration] = [
         ),
     ),
     Integration(
+        key="jellyseerr",
+        display_name="Jellyseerr",
+        # A monogram, not a brand mark: dashboard-icons has no Jellyseerr
+        # entry. "Jr" rather than "Js" on purpose -- Jellystat above already
+        # owns "Js", and two same-lettered circles in the same gallery are
+        # indistinguishable at card size.
+        logo_svg=_monogram("Jr", "#6366f1"),
+        toolkit_yaml=_http_toolkit_yaml(
+            "jellyseerr", port=5055, path_prefixes=["/api/v1/"],
+            header="X-Api-Key", methods=["GET"],
+        ),
+        credential_kind="api_key_header",
+        notes=(
+            "The API key is under Settings -> General in Jellyseerr's own UI. "
+            "Only GET is allowed here: approving or declining a request is a "
+            "write against someone else's media library, and the starter set "
+            "stays read-only on purpose -- add the POST tool by hand if you "
+            "want an agent to be able to do that."
+        ),
+        tool_specs=(
+            _tool(
+                "jellyseerr.list_requests", toolkit="jellyseerr",
+                title="List requests",
+                description="Lists media requests and their approval status.",
+                method="GET", path="/api/v1/request",
+                query={"take": "{take}"},
+                parameters={
+                    "take": {"type": "string", "required": False,
+                              "pattern": "^[0-9]{1,3}$",
+                              "description": "How many requests to return (1-999)."},
+                },
+            ),
+            _tool(
+                "jellyseerr.search", toolkit="jellyseerr", title="Search media",
+                description="Searches movies and series across configured providers.",
+                method="GET", path="/api/v1/search",
+                query={"query": "{query}"},
+                parameters={
+                    "query": {"type": "string", "required": True,
+                               "pattern": "^.{1,200}$",
+                               "description": "Search text."},
+                },
+            ),
+            _tool(
+                "jellyseerr.status", toolkit="jellyseerr", title="Server status",
+                description="Reports Jellyseerr's version and update status.",
+                method="GET", path="/api/v1/status",
+            ),
+        ),
+    ),
+    Integration(
         key="netdata",
         display_name="Netdata",
         logo_svg=_brand_logo("netdata"),

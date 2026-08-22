@@ -8,7 +8,7 @@ The one requirement everything else here serves: **no operation, for no
 role, ever returns a credential value** (FR-10.2). Create, rotate, delete --
 yes. Read -- never. Enforcement is structural, not just a convention: the
 only function in this module that can see a plaintext value is `_resolve`,
-and it is used by nothing outside the HTTP/WebSocket executors and
+and it is used by nothing outside the http/ssh/truenas executors and
 `service.py`'s docker TLS materialization (and this module's own tests,
 which never assert its return value crosses back out through
 `CredentialStore`'s public surface).
@@ -373,10 +373,11 @@ class CredentialStore:
     # -- Internal: the only decrypt point used by executors ---------------
 
     def _resolve(self, name: str) -> ResolvedCredential | None:
-        """Used only by `execute_http.py` / `execute_truenas.py`. Not part
+        """Used only by `execute_http.py` / `execute_ssh.py` /
 
-        of the public API surface exposed through `ui.py` or `store.py` --
-        no route handler may call this.
+        `execute_truenas.py`, and by `service.py`'s docker TLS
+        materialization. Not part of the public API surface exposed
+        through `ui.py` or `store.py` -- no route handler may call this.
         """
         spec = self._raw().get(name)
         if spec is None:
