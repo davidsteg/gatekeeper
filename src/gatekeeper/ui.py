@@ -68,6 +68,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from . import __version__
+from ._vendor_cytoscape import CYTOSCAPE_JS, CYTOSCAPE_VERSION
 from .admin_service import apply_pending
 from .audit import AuditLog
 from .catalog import ToolDef
@@ -103,6 +104,26 @@ UI_PREFIX = "/ui"
 #: making the script fetchable without one, and it avoids adding another
 #: entry to `UI_COMPANION_PATHS`/`AuthMiddleware` for a single small file.
 ACCESS_MAP_JS_PATH = f"{UI_PREFIX}/access-map.js"
+
+#: The vendored Cytoscape.js bundle (`_vendor_cytoscape.py`), served the
+#: same session-gated way and from this origin only -- the CSP names no
+#: external host anywhere, and a CDN `script-src` would change that. The
+#: version is in the path so the immutable cache entry it is served with
+#: (see `cytoscape_js`) is replaced by an upgrade rather than outliving it.
+CYTOSCAPE_JS_PATH = f"{UI_PREFIX}/cytoscape-{CYTOSCAPE_VERSION}.js"
+
+#: Cytoscape injects exactly one `<style>` element when it initialises --
+#: `.__________cytoscape_container { position: relative; }`, and nothing
+#: else; every other style it sets goes through CSSOM (`el.style.foo`),
+#: which CSP does not govern. Allowing that one rule by hash keeps the
+#: console's console clean: without it every dashboard load logs a CSP
+#: violation, and a real violation would then be one line among the noise.
+#: A hash, not `'unsafe-inline'` -- this permits that exact rule and
+#: nothing else, and only on the two routes that load the library at all.
+#: If an upgrade changes the rule, the block comes back (harmlessly: the
+#: container is already positioned by `.map-canvas`) and the console
+#: message says so.
+CYTOSCAPE_STYLE_HASH = "'sha256-pgvDUBa4IjFA2yuSJ2cqcyxmNYJMborsd0ORcRv9vw8='"
 
 #: Paths that a browser hits on its own as soon as someone types the
 #: address. Without special handling, every visit would run into the token requirement
@@ -847,70 +868,36 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 td.ops { white-space: nowrap; }
 td.ops form { display: inline; }
 
-/* -- Access map -- */
-.graph { width: 100%; height: 100%; display: block; touch-action: none; }
+/* -- Call flow pipeline diagram --
+   These were the access map's classes too until the map moved to
+   Cytoscape, which paints to a canvas and takes its colours from the JS
+   stylesheet in `_ACCESS_MAP_JS` instead. What is left here is only what
+   `_call_flow_pipeline()` still emits: a plain row of boxes, no identity
+   colours, no edge variants, no filter states. */
+.graph { width: 100%; height: auto; display: block; }
 .graph text { font-family: inherit; }
 .g-box { fill: var(--sunken); stroke: var(--line); transition: fill .18s, stroke .18s, stroke-width .18s; }
-.g-box.deny { fill: var(--deny-soft); stroke: var(--deny); }
-.g-box.ok { fill: var(--ok-soft); stroke: var(--ok); }
-/* One identity, one color, on both its node and every edge leaving it --
-   so a busy graph reads as "which lines are dev's" instead of every
-   granted path being the same undifferentiated green. */
-.g-box.c1 { fill: var(--cat-1-soft); stroke: var(--cat-1); }
-.g-box.c2 { fill: var(--cat-2-soft); stroke: var(--cat-2); }
-.g-box.c3 { fill: var(--cat-3-soft); stroke: var(--cat-3); }
-.g-box.c4 { fill: var(--cat-4-soft); stroke: var(--cat-4); }
-.g-box.c5 { fill: var(--cat-5-soft); stroke: var(--cat-5); }
-.g-box.c6 { fill: var(--cat-6-soft); stroke: var(--cat-6); }
 .g-t { fill: var(--fg); font-size: 11.5px; font-weight: 600; pointer-events: none; }
 .g-s { fill: var(--muted); font-size: 9.5px; pointer-events: none; }
-.g-count { fill: var(--accent); font-size: 10px; font-weight: 700; pointer-events: none; }
 .g-e { fill: none; stroke: var(--ok); stroke-width: 1.5; opacity: .55; transition: opacity .18s, stroke-width .18s; }
-.g-e.c1 { stroke: var(--cat-1); }
-.g-e.c2 { stroke: var(--cat-2); }
-.g-e.c3 { stroke: var(--cat-3); }
-.g-e.c4 { stroke: var(--cat-4); }
-.g-e.c5 { stroke: var(--cat-5); }
-.g-e.c6 { stroke: var(--cat-6); }
-.g-e.deny { stroke: var(--deny); stroke-dasharray: 5 4; opacity: .7; }
-.g-e.none { stroke: var(--line); stroke-dasharray: 2 3; opacity: .5; }
-.g-e.hot { stroke-width: 2.8; opacity: .9; }
-.g-n { fill: var(--muted); font-size: 9px; pointer-events: none; }
-.g-bg { fill: transparent; }
 .g-node { cursor: help; }
 .g-node:hover .g-box { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
-.g-node:hover .g-box.deny { fill: var(--deny-soft); stroke: var(--deny); stroke-width: 2; }
-.g-node:hover .g-box.ok { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 2; }
-.g-node:hover .g-box.c1 { fill: var(--cat-1-soft); stroke: var(--cat-1); stroke-width: 2; }
-.g-node:hover .g-box.c2 { fill: var(--cat-2-soft); stroke: var(--cat-2); stroke-width: 2; }
-.g-node:hover .g-box.c3 { fill: var(--cat-3-soft); stroke: var(--cat-3); stroke-width: 2; }
-.g-node:hover .g-box.c4 { fill: var(--cat-4-soft); stroke: var(--cat-4); stroke-width: 2; }
-.g-node:hover .g-box.c5 { fill: var(--cat-5-soft); stroke: var(--cat-5); stroke-width: 2; }
-.g-node:hover .g-box.c6 { fill: var(--cat-6-soft); stroke: var(--cat-6); stroke-width: 2; }
 .g-node:hover .g-t { fill: var(--accent); }
-.g-edge-group { cursor: help; }
-.g-edge-group:hover .g-e { opacity: 1; stroke-width: 3; }
-/* Filter result: a match is not decorated -- the point is that everything
-   *else* recedes, so the shape of the map survives even with one hit. */
-.g-node.dim, .g-edge-group.dim { opacity: .2; }
-.g-node.match .g-box { stroke: var(--accent); stroke-width: 2; }
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
 
-/* -- Interactive access map (access-map.js) -- */
+/* -- Interactive access map (access-map.js + Cytoscape) -- */
 .btn.active { color: var(--fg); border-color: var(--accent); background: var(--accent-soft); }
-/* A fixed, resizable box -- the map's content no longer dictates the
-   <svg>'s own size (that would defeat zooming, the whole point of this
-   view); pan/zoom happens inside this fixed viewport instead. */
+/* A fixed box: the map's content must not dictate its own height, or
+   there is nothing to zoom into. Cytoscape draws into `.map-canvas`
+   inside it; the controls sit on top as a sibling so a re-render never
+   disturbs them. */
 .map-root {
   position: relative; height: 52vh; min-height: 380px; max-height: 780px;
   overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius);
-  cursor: grab; background: var(--sunken);
+  background: var(--sunken);
 }
-.map-root:active { cursor: grabbing; }
 .map-root.map-root-full { height: 78vh; min-height: 520px; }
-.map-root .g-node { cursor: pointer; }
-.map-root .g-node.cluster .g-box { stroke-dasharray: 3 3; }
-.map-root .g-logo { pointer-events: none; }
+.map-canvas { position: absolute; inset: 0; }
 .map-root .map-loading { position: absolute; top: .8rem; left: .9rem; margin: 0; }
 .map-controls {
   position: absolute; right: .6rem; bottom: .6rem; display: flex; gap: .3rem; z-index: 2;
@@ -1336,42 +1323,20 @@ _ACCESS_MAP_JS = """
 (function () {
   "use strict";
 
+  // Lane geometry. Unchanged from the hand-drawn SVG renderer this
+  // replaced -- these numbers now feed Cytoscape's `preset` layout instead
+  // of being turned into SVG coordinates by hand, so the map keeps the
+  // same three-column shape (identities | toolkits | destinations) rather
+  // than becoming an unrecognisable force-directed blob.
   var NW = 132, NH = 52, GAP = 14;
+  var LX = 8, MX = 360, DX = MX + NW + 220;
   var TOOLKIT_GROUP_THRESHOLD = 8;
   var IDENTITY_GROUP_THRESHOLD = 20;
-  //: Pan/zoom bounds and the drag-vs-click threshold, all in client pixels
-  //: except MIN_K/MAX_K which are unitless scale factors.
-  var MIN_K = 0.15, MAX_K = 6, CLICK_THRESHOLD_PX = 4;
-
-  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-
-  function el(tag, attrs, ns) {
-    var node = ns ? document.createElementNS(ns, tag) : document.createElement(tag);
-    for (var k in attrs) {
-      if (Object.prototype.hasOwnProperty.call(attrs, k)) node.setAttribute(k, attrs[k]);
-    }
-    return node;
-  }
-
-  function svgEl(tag, attrs) {
-    return el(tag, attrs, "http://www.w3.org/2000/svg");
-  }
-
-  function text(tag, attrs, value) {
-    var node = svgEl(tag, attrs);
-    node.textContent = value;
-    return node;
-  }
+  var MIN_ZOOM = 0.15, MAX_ZOOM = 6, FIT_PAD = 28;
 
   function laneY(index, count, height) {
     var span = count * NH + Math.max(count - 1, 0) * GAP;
     return (height - span) / 2 + index * (NH + GAP);
-  }
-
-  function curve(x1, y1, x2, y2) {
-    var span = (x2 - x1) / 2;
-    return "M" + x1 + " " + y1 + " C" + (x1 + span) + " " + y1 + " "
-      + (x2 - span) + " " + y2 + " " + x2 + " " + y2;
   }
 
   function callTotal(calls) {
@@ -1415,28 +1380,139 @@ _ACCESS_MAP_JS = """
     return out;
   }
 
+  // -- Theme -----------------------------------------------------------
+  // Cytoscape's stylesheet wants literal colours; the console defines its
+  // palette as CSS custom properties and swaps them under
+  // `prefers-color-scheme`. Resolve them once here, and again whenever the
+  // OS scheme flips (see `wireTheme`) -- the old SVG renderer got dark mode
+  // for free by inheriting the properties, this is what replaces that.
+  function readTheme() {
+    var cs = getComputedStyle(document.documentElement);
+    function v(name, fallback) {
+      var got = (cs.getPropertyValue(name) || "").trim();
+      return got || fallback;
+    }
+    // The palette's `-soft` entries are the same colour at a low alpha
+    // (`rgba(r,g,b,.12)` light, `.16` dark). Cytoscape drops the alpha
+    // from `background-color` and takes it from `background-opacity`
+    // instead, so pull the two apart here rather than hardcoding a number
+    // that would then quietly disagree with the stylesheet.
+    function softAlpha(value, fallback) {
+      var m = /rgba\\(\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*([\\d.]+)\\s*\\)/.exec(value || "");
+      return m ? parseFloat(m[1]) : fallback;
+    }
+    var cat = [], catAlpha = [];
+    for (var i = 1; i <= 6; i++) {
+      cat.push(v("--cat-" + i, "#7c8a8f"));
+      catAlpha.push(softAlpha(v("--cat-" + i + "-soft", ""), 0.14));
+    }
+    return {
+      fg: v("--fg", "#12191c"),
+      muted: v("--muted", "#6b7b80"),
+      line: v("--line", "#d9e2e4"),
+      sunken: v("--sunken", "#f3f7f8"),
+      accent: v("--accent", "#0e7490"),
+      cat: cat,
+      catAlpha: catAlpha,
+    };
+  }
+
+  function catIndex(ele) {
+    var c = ele.data("color_class") || "";
+    if (c.charAt(0) !== "c") return -1;
+    var i = parseInt(c.slice(1), 10) - 1;
+    return (i >= 0 && i <= 5) ? i : -1;
+  }
+
+  function styleFor(theme) {
+    return [
+      { selector: "node", style: {
+        shape: "round-rectangle",
+        width: NW, height: NH,
+        "background-color": function (e) {
+          var i = catIndex(e);
+          return i < 0 ? theme.sunken : theme.cat[i];
+        },
+        // A tint of the identity's colour, not the colour itself -- a
+        // saturated fill would leave the label unreadable.
+        "background-opacity": function (e) {
+          var i = catIndex(e);
+          return i < 0 ? 1 : theme.catAlpha[i];
+        },
+        "border-color": function (e) {
+          var i = catIndex(e);
+          return i < 0 ? theme.line : theme.cat[i];
+        },
+        "border-width": 1,
+        label: "data(display)",
+        color: theme.fg,
+        "font-size": 11,
+        "font-weight": 600,
+        "text-valign": "center",
+        "text-halign": "center",
+        "text-wrap": "wrap",
+        "text-max-width": NW - 14,
+        "line-height": 1.35,
+      }},
+      // A cluster reads as "several things behind one box" -- dashed, the
+      // same cue the SVG renderer used.
+      { selector: "node.cluster", style: {
+        "border-style": "dashed", "border-width": 2,
+      }},
+      // Column headers. Plain non-interactive text nodes so they pan and
+      // zoom with the graph instead of floating over it.
+      { selector: "node.lane-label", style: {
+        shape: "rectangle", width: 1, height: 1,
+        "background-opacity": 0, "border-width": 0,
+        label: "data(display)", color: theme.muted,
+        "font-size": 9, "font-weight": 600,
+        "text-valign": "center", "text-halign": "right",
+        "text-margin-x": NW, events: "no",
+      }},
+      { selector: "edge", style: {
+        width: 1.5,
+        "curve-style": "bezier",
+        "line-color": function (e) {
+          var i = catIndex(e);
+          return i < 0 ? theme.line : theme.cat[i];
+        },
+        opacity: 0.55,
+        "target-arrow-shape": "none",
+      }},
+      // Structural (toolkit -> destination) edges are a deploy-time fact,
+      // not traffic: dashed and quiet, never coloured by identity.
+      { selector: "edge.structural", style: {
+        "line-color": theme.line, "line-style": "dashed", opacity: 0.5,
+      }},
+      { selector: "edge.hot", style: { width: 2.8, opacity: 0.9 } },
+      // Search: a match is not decorated, everything else recedes -- the
+      // point is that the shape of the map survives with one hit selected.
+      { selector: "[?dimmed]", style: { opacity: 0.12 } },
+      { selector: "node[?matched]", style: {
+        "border-color": theme.accent, "border-width": 2,
+      }},
+    ];
+  }
+
   function App(root) {
     this.root = root;
     this.endpoint = root.getAttribute("data-endpoint");
     this.query = (root.getAttribute("data-query") || "").toLowerCase();
     this.expanded = {};
     this.data = null;
+    this.cy = null;
+    this.theme = readTheme();
     this.panel = null;
     this.backdrop = null;
-    // Pan/zoom state -- world (SVG user unit) coordinates, independent of
-    // the container's own CSS pixel size. `userAdjusted` is what lets a
-    // re-render (search, cluster expand/collapse, window resize) preserve
-    // the current view instead of snapping back to fit-to-content every
-    // time the underlying data changes.
-    this.tx = 0; this.ty = 0; this.k = 1;
-    this.viewW = 100; this.viewH = 100;
-    this.userAdjusted = false;
-    this.pointers = {};
-    this.dragStart = null;
-    this.dragMoved = 0;
-    this.pinchDist = null;
     this.resizeTimer = null;
   }
+
+  App.prototype.fail = function (message) {
+    var p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = message;
+    this.root.insertBefore(p, this.root.firstChild);
+  };
 
   App.prototype.load = function () {
     var self = this;
@@ -1444,10 +1520,7 @@ _ACCESS_MAP_JS = """
       .then(function (r) { if (!r.ok) throw new Error("fetch failed"); return r.json(); })
       .then(function (data) { self.data = data; self.render(); })
       .catch(function () {
-        var p = document.createElement("p");
-        p.className = "muted";
-        p.textContent = "Could not load the interactive map. The page below still works without scripts.";
-        self.root.insertBefore(p, self.root.firstChild);
+        self.fail("Could not load the access map.");
       });
   };
 
@@ -1458,375 +1531,166 @@ _ACCESS_MAP_JS = """
     return { identities: identities, toolkits: toolkits, destinations: destinations };
   };
 
-  App.prototype.render = function () {
-    var self = this;
-    var q = this.query;
+  // Turns the server's node/edge JSON into Cytoscape elements, positioned
+  // on the same three lanes the SVG renderer used. The server contract is
+  // untouched; this is the only place that knows about both shapes.
+  App.prototype.buildElements = function () {
     var visible = this.visibleNodes();
     var hasDestinations = this.data.meta.has_destinations;
 
     var midItems = visible.toolkits.length;
     var rightItems = hasDestinations ? visible.destinations.length : midItems;
     var lanes = Math.max(visible.identities.length, midItems, rightItems, 1);
-    // "World" size -- the content's own layout extent, unrelated to how
-    // much of it is currently visible on screen (that's viewW/viewH below).
     var worldH = Math.max(lanes * (NH + GAP) + 30, 210);
-    var lx = 8, mx = 360;
-    var dx = mx + NW + 220;
-    var rightmostX = hasDestinations ? dx : mx;
-    var worldW = rightmostX + NW + 8;
 
-    // The <svg>'s own viewBox is sized to the container's rendered CSS
-    // box, not to content -- 1 viewBox unit == 1 CSS pixel. Zoom/pan is
-    // entirely the g-viewport transform below; the outer svg never
-    // resizes itself to fit content the way the old renderer's did.
-    var rect = this.root.getBoundingClientRect();
-    this.viewW = Math.max(rect.width, 100);
-    this.viewH = Math.max(rect.height, 100);
-
-    var svg = svgEl("svg", {
-      "class": "graph", viewBox: "0 0 " + this.viewW + " " + this.viewH,
-      role: "img", "aria-label": "Access map",
-    });
-
-    var viewport = svgEl("g", { "class": "g-viewport" });
-    // A transparent full-extent rect so drag-to-pan works starting from
-    // empty space, not just from directly grabbing a node. Kept OUTSIDE
-    // g-content: its own huge extent would otherwise dominate
-    // g-content's getBBox() and break fitToContent's scale calculation.
-    var catcher = svgEl("rect", {
-      "class": "g-pan-catcher", x: -100000, y: -100000, width: 200000, height: 200000,
-      fill: "transparent",
-    });
-    var content = svgEl("g", { "class": "g-content" });
-    var edgeLayer = svgEl("g", {});
-    var nodeLayer = svgEl("g", {});
-    content.appendChild(edgeLayer);
-    content.appendChild(nodeLayer);
-    viewport.appendChild(catcher);
-    viewport.appendChild(content);
-    svg.appendChild(viewport);
-
-    var idPos = {}; // node id -> {x, y}
+    var els = [];
+    var placed = {};
     var byId = {};
     this.data.nodes.forEach(function (n) { byId[n.id] = n; });
 
-    function matches(node) {
-      if (!q) return null;
-      return (node.label || "").toLowerCase().indexOf(q) !== -1 ? "match" : "dim";
-    }
-
-    function drawNode(node, x, y, extraCls) {
-      idPos[node.id] = { x: x, y: y };
-      var mark = matches(node);
-      var g = svgEl("g", { "class": "g-node" + (mark ? " " + mark : "") + (extraCls || "") });
-      g.dataset.nodeId = node.id;
-      var box = svgEl("rect", {
-        "class": "g-box " + (node.color_class || ""), x: x, y: y, width: NW, height: NH, rx: 8,
-      });
-      g.appendChild(box);
-      g.appendChild(text("text", { "class": "g-t", x: x + NW / 2, y: y + NH / 2 - 2, "text-anchor": "middle" }, node.label));
-      g.appendChild(text("text", { "class": "g-s", x: x + NW / 2, y: y + NH / 2 + 11, "text-anchor": "middle" }, node.sub));
+    function add(node, laneX, index, count) {
       var total = callTotal(node.calls);
-      if (total) {
-        g.appendChild(text("text", { "class": "g-count", x: x + NW / 2, y: y + NH / 2 + 22, "text-anchor": "middle" }, total + " calls"));
-      }
-      var title = svgEl("title", {});
-      title.textContent = node.label + (node.sub ? " \\u2013 " + node.sub : "");
-      g.appendChild(title);
-      // A drag that happened to pass over this node must not also open it
-      // -- dragMoved (tracked by the pointer handlers below) is the signal
-      // that this "click" was really the tail end of a pan gesture.
-      g.addEventListener("click", function () {
-        if (self.dragMoved > CLICK_THRESHOLD_PX) { self.dragMoved = 0; return; }
-        self.onNodeClick(node);
+      var display = node.label
+        + (node.sub ? "\\n" + node.sub : "")
+        + (total ? "\\n" + total + " calls" : "");
+      placed[node.id] = true;
+      els.push({
+        group: "nodes",
+        // Cytoscape positions a node by its centre; the lane maths above
+        // is in top-left corners, like the old renderer's rects.
+        position: { x: laneX + NW / 2, y: laneY(index, count, worldH) + NH / 2 },
+        classes: node.kind === "cluster" ? "cluster" : "",
+        data: {
+          id: node.id, kind: node.kind, label: node.label,
+          color_class: node.color_class || "", display: display,
+          node: node,
+        },
       });
-      nodeLayer.appendChild(g);
     }
 
-    visible.identities.forEach(function (node, i) {
-      drawNode(node, lx, laneY(i, visible.identities.length, worldH), node.kind === "cluster" ? " cluster" : "");
+    visible.identities.forEach(function (n, i) {
+      add(n, LX, i, visible.identities.length);
     });
-    visible.toolkits.forEach(function (node, i) {
-      drawNode(node, mx, laneY(i, midItems, worldH), node.kind === "cluster" ? " cluster" : "");
-    });
+    visible.toolkits.forEach(function (n, i) { add(n, MX, i, midItems); });
     if (hasDestinations) {
-      visible.destinations.forEach(function (node, i) {
-        drawNode(node, dx, laneY(i, rightItems, worldH));
-      });
+      visible.destinations.forEach(function (n, i) { add(n, DX, i, rightItems); });
     }
 
-    // Edges: only drawn between two currently-visible endpoints -- a
-    // collapsed cluster's member edges fold into one edge from/to the
-    // cluster node instead of disappearing.
+    function laneLabel(id, x, textValue) {
+      els.push({
+        group: "nodes", classes: "lane-label",
+        position: { x: x, y: 14 },
+        data: { id: id, display: textValue, color_class: "" },
+        selectable: false,
+      });
+    }
+    laneLabel("lane:identities", LX, "IDENTITIES");
+    laneLabel("lane:toolkits", MX, "TOOLKITS");
+    if (hasDestinations) laneLabel("lane:destinations", DX, "DESTINATIONS");
+
+    // Edges only exist between two currently-visible endpoints: a
+    // collapsed cluster's member edges fold into one edge on the cluster
+    // rather than vanishing.
     function resolve(rawId) {
-      if (idPos[rawId]) return rawId;
+      if (placed[rawId]) return rawId;
       var node = byId[rawId];
       if (!node) return null;
-      var prefix = node.kind + ":" + (node.group || "(none)");
-      var clusterId = "cluster:" + prefix;
-      return idPos[clusterId] ? clusterId : null;
+      var clusterId = "cluster:" + node.kind + ":" + (node.group || "(none)");
+      return placed[clusterId] ? clusterId : null;
     }
 
-    var drawnPairs = {};
+    var pairs = {};
     this.data.edges.forEach(function (edge) {
-      var fromId = resolve(edge.from);
-      var toId = resolve(edge.to);
-      if (!fromId || !toId || fromId === toId) return;
-      var pairKey = fromId + ">" + toId;
-      var already = drawnPairs[pairKey];
-      if (already) {
-        already.total += callTotal(edge.calls);
+      var from = resolve(edge.from), to = resolve(edge.to);
+      if (!from || !to || from === to) return;
+      var key = from + ">" + to;
+      if (pairs[key]) {
+        pairs[key].total += callTotal(edge.calls);
+        pairs[key].hot = pairs[key].hot || edge.hot;
         return;
       }
-      var rec = { total: callTotal(edge.calls), hot: edge.hot, kind: edge.kind, from: fromId, to: toId };
-      drawnPairs[pairKey] = rec;
+      pairs[key] = {
+        from: from, to: to, kind: edge.kind,
+        total: callTotal(edge.calls), hot: !!edge.hot,
+      };
     });
 
-    Object.keys(drawnPairs).forEach(function (key) {
-      var e = drawnPairs[key];
-      var p1 = idPos[e.from], p2 = idPos[e.to];
-      if (!p1 || !p2) return;
-      var y1 = p1.y + NH / 2, y2 = p2.y + NH / 2;
-      var x1 = p1.x + NW, x2 = p2.x;
-      var fromNode = byId[e.from] || { color_class: "" };
-      var cls = "g-e " + (e.kind === "structural" ? "none" : (fromNode.color_class || ""));
-      if (e.hot) cls += " hot";
-      var mark = "";
-      if (q) {
-        var f = matches(byId[e.from] || {}), t = matches(byId[e.to] || {});
-        mark = (f === "match" || t === "match") ? " match" : " dim";
-      }
-      var group = svgEl("g", { "class": "g-edge-group" + mark });
-      var path = svgEl("path", { "class": cls, d: curve(x1, y1, x2, y2) });
-      group.appendChild(path);
-      var title = svgEl("title", {});
-      title.textContent = (byId[e.from] ? byId[e.from].label : "") + " -> "
-        + (byId[e.to] ? byId[e.to].label : "") + (e.total ? " (" + e.total + " calls)" : "");
-      group.appendChild(title);
-      // Edges live in edgeLayer, appended before nodeLayer above -- SVG
-      // paints in document order, so they sit behind nodes without an
-      // insertBefore trick.
-      edgeLayer.appendChild(group);
+    Object.keys(pairs).forEach(function (key) {
+      var e = pairs[key];
+      var source = byId[e.from] || {};
+      var classes = [];
+      if (e.kind === "structural") classes.push("structural");
+      if (e.hot) classes.push("hot");
+      els.push({
+        group: "edges", classes: classes.join(" "),
+        data: {
+          id: "e:" + key, source: e.from, target: e.to,
+          color_class: e.kind === "structural" ? "" : (source.color_class || ""),
+          total: e.total,
+        },
+      });
     });
 
-    nodeLayer.appendChild(text("text", { "class": "g-n", x: lx, y: 14 }, "IDENTITIES"));
-    nodeLayer.appendChild(text("text", { "class": "g-n", x: mx, y: 14 }, "TOOLKITS"));
-    if (hasDestinations) {
-      nodeLayer.appendChild(text("text", { "class": "g-n", x: dx, y: 14 }, "DESTINATIONS"));
-    }
+    return els;
+  };
 
-    // Narrow teardown: only the previous <svg>, never the whole root --
-    // the loading notice (removed once, below) and the control bar
-    // (added once, before the first render) are siblings that must survive
-    // every subsequent render() call triggered by search or cluster-expand.
-    var loading = this.root.querySelector(".map-loading");
-    if (loading) this.root.removeChild(loading);
-    var old = this.root.querySelector("svg.graph");
-    if (old) this.root.removeChild(old);
-    this.root.appendChild(svg);
+  App.prototype.render = function () {
+    var self = this;
+    var els = this.buildElements();
 
-    // Preserve the user's own pan/zoom across data-driven re-renders;
-    // only fit-to-content on the very first render (or after an explicit
-    // Fit click resets nothing -- see ensureControls).
-    if (this.userAdjusted) {
-      this.applyTransform();
+    if (!this.cy) {
+      this.cy = cytoscape({
+        container: this.canvas,
+        elements: els,
+        layout: { name: "preset" },
+        style: styleFor(this.theme),
+        minZoom: MIN_ZOOM, maxZoom: MAX_ZOOM,
+        // Lanes carry meaning -- a node dragged out of its column would
+        // say something false about the topology.
+        autoungrabify: true,
+        boxSelectionEnabled: false,
+      });
+      this.cy.on("tap", "node", function (evt) {
+        var node = evt.target.data("node");
+        if (node) self.onNodeClick(node);
+      });
+      // The graph is a canvas, so nothing about it is reachable from the
+      // DOM -- no element to query, no text to assert on. This handle is
+      // how it stays inspectable at all, from devtools or a smoke test.
+      // It exposes only what this page already fetched and is already
+      // showing to the same signed-in reader.
+      this.root.accessMap = this;
+      this.cy.fit(undefined, FIT_PAD);
     } else {
-      this.fitToContent();
+      // Keep whatever the reader was looking at: expanding a cluster or
+      // typing in the filter must not yank the viewport back to a fit.
+      var pan = this.cy.pan(), zoom = this.cy.zoom();
+      this.cy.elements().remove();
+      this.cy.add(els);
+      this.cy.zoom(zoom);
+      this.cy.pan(pan);
     }
+    this.applyFilter();
   };
 
-  // -- Pan/zoom --------------------------------------------------------
-
-  App.prototype.svgEl_ = function () {
-    return this.root.querySelector("svg.graph");
-  };
-
-  App.prototype.applyTransform = function () {
-    var svg = this.svgEl_();
-    if (!svg) return;
-    var g = svg.querySelector(".g-viewport");
-    if (g) {
-      g.setAttribute("transform", "translate(" + this.tx + " " + this.ty + ") scale(" + this.k + ")");
-    }
-  };
-
-  // Converts a client-space point (e.g. straight from a mouse/pointer
-  // event) into the <svg>'s own coordinate system via its screen CTM --
-  // NOT a naive pixel delta, since CSS can render the svg at any size
-  // independent of its viewBox.
-  App.prototype.clientToSvg = function (clientX, clientY) {
-    var svg = this.svgEl_();
-    if (!svg) return { x: 0, y: 0 };
-    var ctm = svg.getScreenCTM();
-    if (!ctm) return { x: 0, y: 0 };
-    var pt = svg.createSVGPoint();
-    pt.x = clientX;
-    pt.y = clientY;
-    return pt.matrixTransform(ctm.inverse());
-  };
-
-  // Zoom by `factor`, keeping the world point under (clientX, clientY)
-  // visually fixed -- the standard "zoom to cursor" (or pinch midpoint)
-  // math, incremental so wheel and pinch can both call it per-step.
-  App.prototype.zoomAt = function (clientX, clientY, factor) {
-    var pre = this.clientToSvg(clientX, clientY);
-    var newK = clamp(this.k * factor, MIN_K, MAX_K);
-    var applied = newK / this.k;
-    this.tx = pre.x - (pre.x - this.tx) * applied;
-    this.ty = pre.y - (pre.y - this.ty) * applied;
-    this.k = newK;
-    this.userAdjusted = true;
-    this.applyTransform();
-  };
-
-  App.prototype.zoomBy = function (factor) {
-    var rect = this.root.getBoundingClientRect();
-    this.zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, factor);
-  };
-
-  // Fits the full rendered content into the current viewport (a
-  // `contain`-style scale + centered translate), padded so nodes at the
-  // very edge aren't flush against the container's border.
-  App.prototype.fitToContent = function () {
-    var svg = this.svgEl_();
-    if (!svg) return;
-    // .g-content, not .g-viewport -- the viewport also holds the
-    // full-extent pan-catcher rect, which would otherwise dominate the
-    // bounding box and force the scale to its minimum every time.
-    var g = svg.querySelector(".g-content");
-    if (!g) return;
-    var bbox;
-    try {
-      bbox = g.getBBox();
-    } catch (err) {
-      return;
-    }
-    if (!bbox || !bbox.width || !bbox.height) return;
-    var pad = 24;
-    var k = Math.min(
-      this.viewW / (bbox.width + pad * 2),
-      this.viewH / (bbox.height + pad * 2),
-      MAX_K
-    );
-    this.k = Math.max(k, MIN_K);
-    this.tx = this.viewW / 2 - (bbox.x + bbox.width / 2) * this.k;
-    this.ty = this.viewH / 2 - (bbox.y + bbox.height / 2) * this.k;
-    this.applyTransform();
-  };
-
-  App.prototype.ensureControls = function () {
-    var self = this;
-    var bar = document.createElement("div");
-    bar.className = "map-controls";
-    [
-      ["+", "Zoom in", function () { self.zoomBy(1.3); }],
-      ["\\u2212", "Zoom out", function () { self.zoomBy(1 / 1.3); }],
-      ["Fit", "Fit to content", function () {
-        self.fitToContent();
-        // A one-time action, not a persistent mode: the next unrelated
-        // re-render (search, cluster expand) must not silently re-fit
-        // again on its own -- only another explicit Fit click does that.
-        self.userAdjusted = true;
-      }],
-    ].forEach(function (spec) {
-      var b = document.createElement("button");
-      b.type = "button";
-      b.className = "ghost map-control-btn";
-      b.title = spec[1];
-      b.textContent = spec[0];
-      b.addEventListener("click", spec[2]);
-      bar.appendChild(b);
-    });
-    this.root.appendChild(bar);
-  };
-
-  // Wheel-zoom, drag-to-pan, and touch (single-finger pan, two-finger
-  // pinch-zoom) all wired once on the container -- it survives every
-  // render() call, unlike the <svg> element itself, which gets replaced
-  // on each one.
-  App.prototype.wireZoomPan = function () {
-    var self = this;
-    var root = this.root;
-
-    root.addEventListener("wheel", function (e) {
-      e.preventDefault();
-      var factor = Math.pow(1.0015, -e.deltaY);
-      self.zoomAt(e.clientX, e.clientY, factor);
-    }, { passive: false });
-
-    // No setPointerCapture: capturing the pointer on `root` retargets the
-    // browser's own click synthesis away from whatever element was
-    // actually under the cursor (a node, a control button) to the
-    // capturing element instead -- silently breaking every click. Plain
-    // root-level pointerdown plus window-level move/up while a gesture is
-    // active gets the same drag/pinch behavior without that side effect.
-    function onPointerMove(e) {
-      if (!(e.pointerId in self.pointers)) return;
-      self.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
-      var ids = Object.keys(self.pointers);
-      if (ids.length >= 2) {
-        var a = self.pointers[ids[0]], b = self.pointers[ids[1]];
-        var dist = Math.hypot(a.x - b.x, a.y - b.y);
-        var mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        if (self.pinchDist) self.zoomAt(mid.x, mid.y, dist / self.pinchDist);
-        self.pinchDist = dist;
-        return;
-      }
-      if (!self.dragStart) return;
-      var dxClient = e.clientX - self.dragStart.x;
-      var dyClient = e.clientY - self.dragStart.y;
-      self.dragMoved = Math.max(self.dragMoved, Math.hypot(dxClient, dyClient));
-      var svg = self.svgEl_();
-      var ctm = svg && svg.getScreenCTM();
-      if (!ctm) return;
-      // Client-pixel deltas -> viewBox-unit deltas via the CTM's own x/y
-      // scale, cheaper than a full clientToSvg point conversion per move.
-      self.tx = self.dragStart.tx + dxClient / ctm.a;
-      self.ty = self.dragStart.ty + dyClient / ctm.d;
-      self.userAdjusted = true;
-      self.applyTransform();
-    }
-
-    function onPointerUp(e) {
-      delete self.pointers[e.pointerId];
-      self.pinchDist = null;
-      var ids = Object.keys(self.pointers);
-      if (ids.length === 1) {
-        var remaining = self.pointers[ids[0]];
-        self.dragStart = { x: remaining.x, y: remaining.y, tx: self.tx, ty: self.ty };
-        self.dragMoved = 0;
-      } else {
-        self.dragStart = null;
-      }
-      if (ids.length === 0) {
-        window.removeEventListener("pointermove", onPointerMove);
-        window.removeEventListener("pointerup", onPointerUp);
-        window.removeEventListener("pointercancel", onPointerUp);
-      }
-    }
-
-    root.addEventListener("pointerdown", function (e) {
-      // A control button (+/-/Fit) handles its own click; starting a pan
-      // gesture from it would swallow that click for no benefit.
-      if (e.target.closest && e.target.closest(".map-controls")) return;
-      self.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
-      if (Object.keys(self.pointers).length >= 2) {
-        self.dragStart = null;
-        self.pinchDist = null;
-      } else {
-        self.dragStart = { x: e.clientX, y: e.clientY, tx: self.tx, ty: self.ty };
-        self.dragMoved = 0;
-      }
-      window.addEventListener("pointermove", onPointerMove);
-      window.addEventListener("pointerup", onPointerUp);
-      window.addEventListener("pointercancel", onPointerUp);
-    });
-
-    window.addEventListener("resize", function () {
-      window.clearTimeout(self.resizeTimer);
-      self.resizeTimer = window.setTimeout(function () {
-        if (self.data) self.render();
-      }, 120);
+  // Search runs as a data flag the stylesheet reacts to, so narrowing
+  // never rebuilds the graph or disturbs pan/zoom.
+  App.prototype.applyFilter = function () {
+    var cy = this.cy, q = this.query;
+    if (!cy) return;
+    cy.batch(function () {
+      cy.nodes().forEach(function (n) {
+        if (n.hasClass("lane-label")) return;
+        if (!q) { n.data("dimmed", 0); n.data("matched", 0); return; }
+        var hit = (n.data("label") || "").toLowerCase().indexOf(q) !== -1;
+        n.data("matched", hit ? 1 : 0);
+        n.data("dimmed", hit ? 0 : 1);
+      });
+      cy.edges().forEach(function (e) {
+        if (!q) { e.data("dimmed", 0); return; }
+        var lit = e.source().data("matched") || e.target().data("matched");
+        e.data("dimmed", lit ? 0 : 1);
+      });
     });
   };
 
@@ -1933,14 +1797,42 @@ _ACCESS_MAP_JS = """
     this.backdrop.classList.remove("open");
   };
 
+  App.prototype.zoomBy = function (factor) {
+    if (!this.cy) return;
+    var w = this.canvas.clientWidth / 2, h = this.canvas.clientHeight / 2;
+    this.cy.zoom({ level: this.cy.zoom() * factor, renderedPosition: { x: w, y: h } });
+  };
+
+  App.prototype.ensureControls = function () {
+    var self = this;
+    var bar = document.createElement("div");
+    bar.className = "map-controls";
+    [
+      ["+", "Zoom in", function () { self.zoomBy(1.3); }],
+      ["\\u2212", "Zoom out", function () { self.zoomBy(1 / 1.3); }],
+      ["Fit", "Fit to content", function () {
+        if (self.cy) self.cy.fit(undefined, FIT_PAD);
+      }],
+    ].forEach(function (spec) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "ghost map-control-btn";
+      b.title = spec[1];
+      b.textContent = spec[0];
+      b.addEventListener("click", spec[2]);
+      bar.appendChild(b);
+    });
+    this.root.appendChild(bar);
+  };
+
   App.prototype.wireSearch = function () {
     var self = this;
     var input = document.getElementById("map-search");
     var form = document.getElementById("map-filter");
     if (!input || !form) return;
     form.addEventListener("submit", function (e) {
-      // Once the client-side renderer is live, filtering happens without a
-      // reload -- the GET form is only the no-script fallback.
+      // With the renderer live, filtering happens without a reload -- the
+      // GET form is only the no-script fallback.
       e.preventDefault();
     });
     var timer = null;
@@ -1948,8 +1840,30 @@ _ACCESS_MAP_JS = """
       window.clearTimeout(timer);
       timer = window.setTimeout(function () {
         self.query = input.value.toLowerCase();
-        self.render();
+        self.applyFilter();
       }, 150);
+    });
+  };
+
+  App.prototype.wireTheme = function () {
+    var self = this;
+    if (!window.matchMedia) return;
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    function refresh() {
+      self.theme = readTheme();
+      if (self.cy) self.cy.style(styleFor(self.theme));
+    }
+    if (mq.addEventListener) mq.addEventListener("change", refresh);
+    else if (mq.addListener) mq.addListener(refresh);
+  };
+
+  App.prototype.wireResize = function () {
+    var self = this;
+    window.addEventListener("resize", function () {
+      window.clearTimeout(self.resizeTimer);
+      self.resizeTimer = window.setTimeout(function () {
+        if (self.cy) self.cy.resize();
+      }, 120);
     });
   };
 
@@ -1957,9 +1871,23 @@ _ACCESS_MAP_JS = """
     var root = document.getElementById("access-map-root");
     if (!root) return;
     var app = new App(root);
+    if (typeof cytoscape !== "function") {
+      app.fail("Could not load the access map renderer.");
+      return;
+    }
+    var loading = root.querySelector(".map-loading");
+    if (loading) root.removeChild(loading);
+    // Cytoscape owns this element outright; the control bar stays a
+    // sibling so a re-render never disturbs it.
+    var canvas = document.createElement("div");
+    canvas.className = "map-canvas";
+    root.appendChild(canvas);
+    app.canvas = canvas;
+
     app.ensureControls();
-    app.wireZoomPan();
     app.wireSearch();
+    app.wireTheme();
+    app.wireResize();
     app.load();
   }
 
@@ -2090,9 +2018,16 @@ def _respond(
     # render the interactive access map (Overview and /ui/access-map) --
     # nonce-scoped to that single response, never widened to 'self' or a
     # blanket default-src relaxation.
+    # A script-bearing route also has to allow the one `<style>` element
+    # Cytoscape injects for itself (see `CYTOSCAPE_STYLE_HASH`) -- by hash,
+    # so that exact rule and nothing else. Every other route's header is
+    # byte-for-byte what it was before any of this existed.
+    style_src = f"style-src 'nonce-{nonce}'"
+    if script_nonce:
+        style_src += f" {CYTOSCAPE_STYLE_HASH}"
     directives = [
         "default-src 'none'",
-        f"style-src 'nonce-{nonce}'",
+        style_src,
         "img-src 'self' data:",
         "form-action 'self'",
         "frame-ancestors 'none'",
@@ -5058,7 +4993,13 @@ def build_ui_routes(
         # `build_ui_routes`) -- everywhere else this stays False and the
         # page gets no `script-src` at all, same as before.
         script_nonce = _nonce() if allow_script else None
+        # Library first, then the glue that calls into it -- both from this
+        # origin, both under the same nonce. No CDN: the CSP names no
+        # external source anywhere else either (`img-src 'self' data:`), and
+        # a third-party `script-src` would be a change of posture rather
+        # than a shortcut.
         script_tag = (
+            f'<script nonce="{script_nonce}" src="{CYTOSCAPE_JS_PATH}"></script>'
             f'<script nonce="{script_nonce}" src="{ACCESS_MAP_JS_PATH}"></script>'
             if script_nonce else ""
         )
@@ -6061,6 +6002,23 @@ def build_ui_routes(
             headers={"Cache-Control": "no-store"},
         )
 
+    async def cytoscape_js(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        # The one response here that *is* cacheable. Everything else the
+        # console serves carries permission or audit data and is
+        # `no-store`; this is an immutable third-party bundle with none of
+        # it, and re-sending ~425 KB on every dashboard load to preserve a
+        # rule that exists for a different reason would be a poor trade.
+        # `private`, since it still sits behind a session, and the version
+        # is in the path, so an upgrade is a new URL rather than a stale
+        # cache entry.
+        return Response(
+            CYTOSCAPE_JS, media_type="application/javascript",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
+
     return [
         Route("/", root, methods=["GET"]),
         Route("/favicon.ico", favicon, methods=["GET"]),
@@ -6091,6 +6049,7 @@ def build_ui_routes(
         ),
         Route(f"{UI_PREFIX}/access-map/data", access_map_data, methods=["GET"]),
         Route(ACCESS_MAP_JS_PATH, access_map_js, methods=["GET"]),
+        Route(CYTOSCAPE_JS_PATH, cytoscape_js, methods=["GET"]),
         Route(
             f"{UI_PREFIX}/tools",
             guarded(

@@ -60,6 +60,46 @@ cannot. It is in every release.
 
 ---
 
+## 0.16.1
+
+**The access map's pan/zoom/click/drag now run on Cytoscape.js instead of ~700 lines of hand-rolled code.**
+
+That hand-rolled pointer/touch state machine had already shipped one
+silent bug (v0.13.2: `setPointerCapture` on every `pointerdown` broke
+every click and zoom button) -- exactly the kind of code, multi-pointer,
+device-dependent, unverifiable without a real browser, where the next one
+hides. Rather than harden it further, pan/zoom/click/drag/touch now come
+from Cytoscape's own well-exercised core.
+
+- **One new dependency, vendored, not fetched.** `cytoscape.min.js`
+  3.34.1 (MIT), pinned by version and SHA-256 in the new
+  `_vendor_cytoscape.py`, served from this origin only under the same
+  session gate and CSP `script-src` scoping as before (Overview and
+  `/ui/access-map`, and only those two routes -- `test_vendor_cytoscape.py`
+  re-hashes the bundle on every run, and a widened CSP scoping test
+  confirms every other route stays exactly as script-free as it was).
+  It is the one file in this project nobody has read line by line; the
+  module docstring says so plainly and records what was checked instead
+  (byte-identical across two independent CDNs at vendoring time).
+- **Everything else about the map is unchanged.** The JSON contract
+  (`_access_graph_data`), the lane-column layout, the executor/role
+  clustering, the detail side panel, live search, and the light/dark
+  palette all work exactly as before -- Cytoscape replaces only the
+  rendering and interaction layer that kept breaking, fed the same data
+  through a `preset` layout instead of hand-built SVG coordinates.
+- **A real, independently-reproduced bug found and fixed during this
+  migration**: Cytoscape colours nodes via a JS stylesheet, not CSS, so
+  the map's per-identity "soft" tint (a colour at low alpha, e.g.
+  `rgba(96,165,250,.16)`) needed its alpha pulled apart from its colour --
+  gotten wrong on the first pass, it rendered as a solid, saturated fill
+  instead of a tint. Fixed by parsing the alpha out of the existing
+  `--cat-N-soft` custom properties at run time rather than hardcoding a
+  number that could drift from the CSS.
+- Cytoscape self-injects one `<style>` element on init
+  (`.__________cytoscape_container { position: relative; }`); the CSP
+  allows exactly that rule by SHA-256 hash, not `'unsafe-inline'`, and
+  only on the two routes that load the library at all.
+
 ## 0.16.0
 
 **Approve-all for the Requests page's Change tab.**
