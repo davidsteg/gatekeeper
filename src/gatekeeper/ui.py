@@ -952,7 +952,7 @@ td.ops form { display: inline; }
   color: var(--muted); font-size: .72rem; background: var(--surface);
   border-radius: var(--radius-sm); padding: .35rem;
 }
-.am-cell { text-align: center; min-width: 2.8rem; border-radius: var(--radius-sm); transition: all .15s; }
+.am-cell { text-align: center; min-width: 2.8rem; border-radius: var(--radius-sm); transition: all .15s; position: relative; }
 .am-cell.am-none { color: var(--muted); opacity: .2; font-size: .72rem; }
 .am-cell.am-grant {
   background: var(--ok-soft);
@@ -973,26 +973,35 @@ td.ops form { display: inline; }
   box-shadow: 0 0 10px color-mix(in srgb, var(--ok) 35%, transparent);
 }
 .am-cell.am-grant:hover {
-  transform: scale(1.08);
   box-shadow: 0 0 14px color-mix(in srgb, var(--ok) 40%, transparent);
-  z-index: 1;
+  z-index: 10;
 }
-.am-cell details { padding: .25rem; }
-.am-cell summary {
+.am-count {
   cursor: pointer; font-weight: 700; font-size: .82rem;
-  color: var(--ok); list-style: none; transition: color .15s;
+  color: var(--ok); display: block; padding: .25rem;
 }
-.am-cell summary::-webkit-details-marker { display: none; }
-.am-cell details[open] summary { color: var(--fg); }
-.am-cell.am-grant.heat-hot summary { color: var(--fg); }
-.am-detail {
-  text-align: left; padding: .5rem; border-top: 1px solid var(--line);
-  margin-top: .35rem; font-size: .68rem; background: var(--surface);
-  border-radius: var(--radius-sm); min-width: 8rem;
-  box-shadow: var(--shadow);
+.am-cell.am-grant.heat-hot .am-count { color: var(--fg); }
+.am-popup {
+  position: absolute; bottom: calc(100% + 6px); left: 50%;
+  transform: translateX(-50%) scale(.92);
+  opacity: 0; pointer-events: none; transition: opacity .12s, transform .12s;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  padding: .6rem .7rem; min-width: 10rem; max-width: 16rem;
+  text-align: left; z-index: 50;
 }
-.am-tools { margin: .35rem 0 0; padding-left: .8rem; list-style: none; }
-.am-tools li { margin-bottom: .2rem; }
+.am-popup::after {
+  content: ""; position: absolute; top: 100%; left: 50%;
+  transform: translateX(-50%); border: 5px solid transparent;
+  border-top-color: var(--surface);
+}
+.am-cell:hover .am-popup {
+  opacity: 1; transform: translateX(-50%) scale(1);
+}
+.am-popup-title { font-weight: 700; font-size: .75rem; margin-bottom: .3rem; color: var(--fg); }
+.am-popup-stats { font-size: .68rem; margin-bottom: .35rem; }
+.am-tools { margin: .2rem 0 0; padding-left: .8rem; }
+.am-tools li { margin-bottom: .15rem; }
 .am-tools .tool-id { font-size: .68rem; color: var(--accent); }
 
 /* -- Activity -- */
@@ -1924,11 +1933,12 @@ def _access_matrix(
             )
             cells.append(
                 f'<td class="am-cell am-grant{heat}">'
-                f'<details><summary>{len(granted)}</summary>'
-                f'<div class="am-detail">'
-                f'<div class="muted">{call_text}</div>'
+                f'<span class="am-count">{len(granted)}</span>'
+                f'<div class="am-popup">'
+                f'<div class="am-popup-title">{_e(ident.id)} &rarr; {_e(name)}</div>'
+                f'<div class="muted am-popup-stats">{call_text}</div>'
                 f'<ul class="am-tools">{detail_tools}</ul>'
-                f'</div></details>'
+                f'</div>'
                 f"</td>"
             )
         rows_html.append(
