@@ -865,32 +865,89 @@ td.ops form { display: inline; }
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
 
 /* -- Access matrix grid -- */
-.am-wrap { overflow-x: auto; }
-.am-grid { width: 100%; border-collapse: collapse; font-size: .82rem; }
-.am-grid th, .am-grid td { border: 1px solid var(--line); padding: 0; text-align: center; }
-.am-corner { background: var(--sunken); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: .4rem .5rem; white-space: nowrap; }
+.am-wrap { overflow-x: auto; border-radius: var(--radius); }
+.am-wrap::-webkit-scrollbar { height: 6px; }
+.am-wrap::-webkit-scrollbar-track { background: var(--sunken); border-radius: 3px; }
+.am-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.am-wrap::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+.am-grid { width: 100%; border-collapse: separate; border-spacing: 3px; font-size: .82rem; }
+.am-grid th, .am-grid td { border: none; padding: 0; text-align: center; }
+.am-corner {
+  background: var(--surface); font-size: .68rem; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted); padding: .5rem .6rem;
+  white-space: nowrap; border-radius: var(--radius-sm); font-weight: 600;
+}
 .am-corner:first-child { text-align: left; }
 .am-corner:nth-child(2), .am-corner:nth-child(3) { text-align: center; }
-.am-col { min-width: 5rem; max-width: 8rem; padding: .35rem .3rem; vertical-align: bottom; }
-.am-col-name { display: block; font-weight: 600; font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.am-col-exec { display: block; font-size: .68rem; color: var(--muted); margin-top: .15rem; }
-.am-row-id { text-align: left; padding: .35rem .5rem; white-space: nowrap; }
-.am-row-role { padding: .3rem; }
-.am-row-tools { color: var(--muted); font-size: .75rem; }
-.am-cell { text-align: center; min-width: 3rem; }
-.am-cell.am-none { color: var(--muted); opacity: .35; font-size: .75rem; }
-.am-cell.am-grant { background: var(--ok-soft); }
-.am-cell.am-grant.heat-low { background: color-mix(in srgb, var(--ok-soft) 80%, var(--ok) 20%); }
-.am-cell.am-grant.heat-warm { background: color-mix(in srgb, var(--ok-soft) 60%, var(--ok) 40%); }
-.am-cell.am-grant.heat-hot { background: color-mix(in srgb, var(--ok-soft) 40%, var(--ok) 60%); }
+.am-col {
+  min-width: 4.5rem; max-width: 7rem; padding: .4rem .25rem;
+  vertical-align: bottom; border-radius: var(--radius-sm);
+  transition: background .15s;
+}
+.am-col:hover { background: var(--accent-soft); }
+.am-col-name {
+  display: block; font-weight: 700; font-size: .76rem; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; color: var(--fg);
+}
+.am-col-exec {
+  display: flex; align-items: center; justify-content: center; gap: .15rem;
+  font-size: .62rem; color: var(--muted); margin-top: .2rem;
+}
+.am-col-exec svg { opacity: .6; }
+.am-row-id {
+  text-align: left; padding: .4rem .6rem; white-space: nowrap;
+  background: var(--surface); border-radius: var(--radius-sm);
+}
+.am-row-id svg { opacity: .5; vertical-align: middle; margin-right: .35rem; }
+.am-row-id .mono { font-size: .8rem; font-weight: 600; color: var(--fg); }
+.am-row-role { padding: .35rem .3rem; background: var(--surface); border-radius: var(--radius-sm); }
+.am-row-role .pill { font-size: .65rem; padding: .1rem .4rem; }
+.am-row-tools {
+  color: var(--muted); font-size: .72rem; background: var(--surface);
+  border-radius: var(--radius-sm); padding: .35rem;
+}
+.am-cell { text-align: center; min-width: 2.8rem; border-radius: var(--radius-sm); transition: all .15s; }
+.am-cell.am-none { color: var(--muted); opacity: .2; font-size: .72rem; }
+.am-cell.am-grant {
+  background: var(--ok-soft);
+  border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
+}
+.am-cell.am-grant.heat-low {
+  background: color-mix(in srgb, var(--ok-soft) 85%, var(--ok) 15%);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.am-cell.am-grant.heat-warm {
+  background: color-mix(in srgb, var(--ok-soft) 65%, var(--ok) 35%);
+  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 20%, transparent);
+}
+.am-cell.am-grant.heat-hot {
+  background: color-mix(in srgb, var(--ok-soft) 45%, var(--ok) 55%);
+  border-color: var(--ok);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--ok) 35%, transparent);
+}
+.am-cell.am-grant:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ok) 40%, transparent);
+  z-index: 1;
+}
 .am-cell details { padding: .25rem; }
-.am-cell summary { cursor: pointer; font-weight: 700; font-size: .85rem; color: var(--ok); list-style: none; }
+.am-cell summary {
+  cursor: pointer; font-weight: 700; font-size: .82rem;
+  color: var(--ok); list-style: none; transition: color .15s;
+}
 .am-cell summary::-webkit-details-marker { display: none; }
 .am-cell details[open] summary { color: var(--fg); }
-.am-detail { text-align: left; padding-top: .4rem; border-top: 1px solid var(--line); margin-top: .3rem; font-size: .72rem; }
-.am-tools { margin: .3rem 0 0; padding-left: 1rem; }
-.am-tools li { margin-bottom: .15rem; }
-.am-tools .tool-id { font-size: .7rem; }
+.am-cell.am-grant.heat-hot summary { color: var(--fg); }
+.am-detail {
+  text-align: left; padding: .5rem; border-top: 1px solid var(--line);
+  margin-top: .35rem; font-size: .68rem; background: var(--surface);
+  border-radius: var(--radius-sm); min-width: 8rem;
+  box-shadow: var(--shadow);
+}
+.am-tools { margin: .35rem 0 0; padding-left: .8rem; list-style: none; }
+.am-tools li { margin-bottom: .2rem; }
+.am-tools .tool-id { font-size: .68rem; color: var(--accent); }
 
 /* -- Activity -- */
 .chart { width: 100%; height: auto; display: block; }
@@ -1791,7 +1848,8 @@ def _access_matrix(
 
     rows_html = []
     for ident in idents:
-        role_badge = f'<span class="pill{" ok" if ident.role == "admin" else " accent" if ident.role == "viewer" else ""}">{_e(ident.role)}</span>'
+        role_icon = "shield" if ident.role == "admin" else "eye" if ident.role == "viewer" else "key"
+        role_badge = f'<span class="pill{" ok" if ident.role == "admin" else " accent" if ident.role == "viewer" else ""}">{_icon(role_icon, 10)}{_e(ident.role)}</span>'
         cells = []
         for name, _tk in toolkits:
             kit_tools = tools_by_kit.get(name, set())
@@ -1821,7 +1879,7 @@ def _access_matrix(
                 f"</td>"
             )
         rows_html.append(
-            f'<tr><td class="am-row-id"><span class="mono">{_e(ident.id)}</span></td>'
+            f'<tr><td class="am-row-id">{_icon(role_icon, 13)}<span class="mono">{_e(ident.id)}</span></td>'
             f'<td class="am-row-role">{role_badge}</td>'
             f'<td class="am-row-tools">{len(ident.tools)}</td>'
             f'{"".join(cells)}</tr>'
