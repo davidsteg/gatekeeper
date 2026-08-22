@@ -868,21 +868,6 @@ tbody tr.t-warn td:first-child { box-shadow: inset 3px 0 var(--warn); }
 td.ops { white-space: nowrap; }
 td.ops form { display: inline; }
 
-/* -- Call flow pipeline diagram --
-   These were the access map's classes too until the map moved to
-   Cytoscape, which paints to a canvas and takes its colours from the JS
-   stylesheet in `_ACCESS_MAP_JS` instead. What is left here is only what
-   `_call_flow_pipeline()` still emits: a plain row of boxes, no identity
-   colours, no edge variants, no filter states. */
-.graph { width: 100%; height: auto; display: block; }
-.graph text { font-family: inherit; }
-.g-box { fill: var(--sunken); stroke: var(--line); transition: fill .18s, stroke .18s, stroke-width .18s; }
-.g-t { fill: var(--fg); font-size: 11.5px; font-weight: 600; pointer-events: none; }
-.g-s { fill: var(--muted); font-size: 9.5px; pointer-events: none; }
-.g-e { fill: none; stroke: var(--ok); stroke-width: 1.5; opacity: .55; transition: opacity .18s, stroke-width .18s; }
-.g-node { cursor: help; }
-.g-node:hover .g-box { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
-.g-node:hover .g-t { fill: var(--accent); }
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
 
 /* -- Interactive access map (access-map.js + Cytoscape) -- */
@@ -942,16 +927,6 @@ td.ops form { display: inline; }
 .legend i { display: inline-block; width: 14px; height: 0; margin-right: .3rem; vertical-align: middle; }
 .legend .l-deny i { border-top: 2px dashed var(--deny); }
 .legend .l-hot i { border-top: 3px solid var(--accent); }
-
-/* -- Call flow pipeline -- */
-.flow-scroll { overflow-x: auto; }
-/* 10px measured wider than its 130px node box for the longest caption
-   ("JSON-RPC 2.0, tools/list, tools/call") -- text ran past both edges of
-   the box instead of staying inside it. 8px keeps every caption in this
-   pipeline within its node, longest included. */
-.flow-scroll .g-s { font-size: 8px; fill: var(--muted); }
-.flow-scroll .g-t { font-size: 12.5px; }
-.flow-empty { text-align: center; color: var(--muted); font-size: .82rem; padding: .8rem 0; }
 
 /* -- Activity -- */
 .chart { width: 100%; height: auto; display: block; }
@@ -2581,69 +2556,6 @@ def _feed(records: list[dict[str, Any]], limit: int = 7) -> str:
 
 # -- Views: read ----------------------------------------------------------
 
-# -- Call pipeline -------------------------------------------------------
-
-
-def _call_flow_pipeline() -> str:
-    """The 8 layers that every call passes through -- as a horizontal SVG.
-
-    Each layer is a node with a name and a short explanation. The arrows
-    show the path from the agent to execution. The diagram answers
-    the question that otherwise only the code answers: in what order
-    do the protective mechanisms engage, and what does each layer do.
-    """
-    layers = [
-        ("MCP", "JSON-RPC 2.0, tools/list, tools/call"),
-        ("Auth", "Bearer token → identity"),
-        ("Authorize", "May this identity call this tool?"),
-        ("Registry", "Look up the active definition"),
-        ("Validate", "Type, regex, path resolution"),
-        ("argv-build", "Structured args, never a shell"),
-        ("Executor", "docker or local, timeouts, caps"),
-        ("Audit", "JSON Lines, rotation, redaction"),
-    ]
-    n = len(layers)
-    bw, bh, gap = 130.0, 58.0, 10.0
-    arrow = 14.0
-    total_w = n * bw + (n - 1) * (gap + arrow)
-    height = bh + 36.0
-    y = 8.0
-
-    nodes = []
-    edges = []
-    for i, (name, desc) in enumerate(layers):
-        x = i * (bw + gap + arrow)
-        rx = x + bw
-        cy = y + bh / 2
-        nodes.append(
-            f'<g class="g-node">'
-            f'<rect class="g-box" x="{x:.0f}" y="{y:.0f}" width="{bw:.0f}" '
-            f'height="{bh:.0f}" rx="7"/>'
-            f'<text class="g-t" x="{x + bw / 2:.0f}" y="{y + bh / 2 - 6:.0f}" '
-            f'text-anchor="middle">{_e(name)}</text>'
-            f'<text class="g-s" x="{x + bw / 2:.0f}" y="{y + bh / 2 + 10:.0f}" '
-            f'text-anchor="middle">{_e(desc)}</text>'
-            f"<title>{_e(name)}: {_e(desc)}</title>"
-            f"</g>"
-        )
-        if i < n - 1:
-            ax = rx + 2
-            ax2 = ax + arrow
-            edges.append(
-                f'<line x1="{ax:.0f}" y1="{cy:.0f}" x2="{ax2:.0f}" y2="{cy:.0f}" '
-                f'class="g-e"/>'
-                f'<polygon class="g-e" points="{ax2:.0f},{cy - 4:.0f} '
-                f'{ax2 + 4:.0f},{cy:.0f} {ax2:.0f},{cy + 4:.0f}"/>'
-            )
-
-    return (
-        f'<svg class="graph" viewBox="0 0 {total_w:.0f} {height:.0f}" '
-        f'role="img" aria-label="Call flow pipeline">'
-        f'{"".join(edges)}{"".join(nodes)}'
-        "</svg>"
-    )
-
-
 # -- Tool matrix -----------------------------------------------------------
 
 
@@ -2817,9 +2729,8 @@ def _view_access_map(
 
 def _view_overview(
     service: Service, identities: IdentityStore, store: ConfigStore | None,
-    request: Request | None = None, session: Session | None = None,
+    request: Request | None = None,
 ) -> str:
-    ready = service.executor_ready
     catalog = service.catalog
     active = sum(1 for t in catalog.tools.values() if t.enabled)
     blocked = len(catalog.disabled_by_tier1)
@@ -2860,9 +2771,9 @@ def _view_overview(
             _note(
                 "<strong>The catalog is empty, which is the state after "
                 "installation.</strong> gatekeeper can currently do nothing at "
-                "all. The Tier 1 boundaries below say what would be possible; "
-                f'a tool has to be created before any of it is &ndash; <a href="{UI_PREFIX}'
-                '/tools">start here</a>.',
+                f'all. The <a href="{UI_PREFIX}/toolkits/reference">Tier 1 boundaries'
+                '</a> say what would be possible; a tool has to be created before '
+                f'any of it is &ndash; <a href="{UI_PREFIX}/tools">start here</a>.',
                 icon="sliders",
                 tone="good",
             )
@@ -2905,41 +2816,6 @@ def _view_overview(
         + "</div>"
     )
 
-    # Call pipeline: the 8 layers that every call passes through. This is
-    # documentation, not a status readout -- it looks the same on every
-    # visit, so it stays collapsed by default rather than pushing the
-    # things that actually change (the map, the activity) below the fold.
-    parts.append(
-        '<details class="card">'
-        f'<summary class="card-head"><h3>{_icon("layers", 14)}Call flow &ndash; '
-        f'8 layers every request passes</h3><span class="spacer"></span>'
-        f'<span class="chev">{_icon("chevron", 14)}</span></summary>'
-        f'<div class="pad flow-scroll">{_call_flow_pipeline()}</div>'
-        "</details>"
-    )
-
-    if ready:
-        exec_cells = '<div class="pills">' + "".join(
-            f'<span class="pill {"ok" if ok else "deny"}">'
-            f'{_icon("check" if ok else "ban", 13)}{_e(name)}: '
-            f'{"reachable" if ok else "unreachable"}</span>'
-            for name, ok in sorted(ready.items())
-        ) + "</div>"
-    elif session is not None:
-        exec_cells = (
-            '<div class="inline-row">'
-            '<span class="muted">not probed yet</span>'
-            f'<form method="post" action="{UI_PREFIX}/probe-executors">'
-            f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
-            f'<button class="ghost" type="submit">{_icon("refresh", 13)}Check now</button>'
-            "</form></div>"
-        )
-    else:
-        exec_cells = (
-            '<span class="muted">not probed yet &ndash; '
-            "call <code>/health/ready</code></span>"
-        )
-
     has_call_activity = any(r.get("kind") == "call" for r in records)
     # With no traffic yet, every edge is thin and every "hot path" feature
     # has nothing to show -- the map can read as broken rather than as a
@@ -2971,9 +2847,6 @@ def _view_overview(
         + "</form></div>"
         f'<div class="pad">{_access_map_mount(query)}'
         f"{_access_map_legend()}{no_traffic_caption}</div></div>"
-        '<div class="card">'
-        f'<div class="card-head"><h3>{_icon("server", 14)}Executors</h3></div>'
-        f'<div class="pad">{exec_cells}</div></div>'
         "</div><div>"
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3></div>'
@@ -2990,69 +2863,6 @@ def _view_overview(
         "</div></div>"
     )
 
-    # Tool matrix: each tool as a row with status, category, idempotency
-    # and who may call it. Answers the question that the access map
-    # only shows aggregated: which concrete tool is granted to whom.
-    if catalog.tools:
-        parts.append(
-            '<div class="card">'
-            f'<div class="card-head"><h3>{_icon("sliders", 14)}Tool matrix &ndash; '
-            f'{len(catalog.tools)} tools</h3></div>'
-            f'<div class="pad">{_tool_matrix(service, identities)}</div>'
-            "</div>"
-        )
-
-    toolkit_cards = "".join(
-        '<div class="card">'
-        f'<div class="card-head"><span class="name mono">{_e(name)}</span>'
-        f'<span class="pill accent">{_icon(_executor_icon(tk.executor), 12)}{_e(tk.executor)}</span></div>'
-        '<div class="rows">'
-        f'<div class="row"><div class="row-l">{_icon("chip", 14)}Binaries</div>'
-        f"<div>{_pills(tk.binaries, quiet=True)}</div></div>"
-        f'<div class="row"><div class="row-l">{_icon("ban", 14)}Denied arguments</div>'
-        f"<div>{_pills(tk.denied_args, tone='deny')}</div></div>"
-        f'<div class="row"><div class="row-l">{_icon("folder", 14)}Path roots</div>'
-        f"<div>{_pills(tk.path_roots, quiet=True)}</div></div>"
-        f'<div class="row"><div class="row-l">{_icon("lock", 14)}Protected resources</div>'
-        f"<div>{_pills(tk.protected_resources, tone='deny')}</div></div>"
-        f'<div class="row"><div class="row-l">{_icon("gauge", 14)}Ceilings</div>'
-        f'<div>{_pills([f"timeout {tk.max_timeout_seconds}s", f"output {tk.max_output_bytes} B"], quiet=True)}</div></div>'
-        "</div></div>"
-        for name, tk in sorted(service.tier1.toolkits.items())
-    )
-
-    limits = "".join(
-        f"<tr><td><code>{_e(cat)}</code></td>"
-        f"<td class='mono'>{lim.count}</td><td class='mono'>{lim.window_seconds} s</td></tr>"
-        for cat, lim in sorted(service.tier1.rate_limits.items())
-    )
-
-    # Deploy-time configuration: it looks the same on every visit until the
-    # next redeploy, unlike everything above (grants, traffic, tool state),
-    # which changes from inside this same UI. Collapsed by default for the
-    # same reason the call-flow pipeline is -- reference material should not
-    # outweigh what actually changes on the page.
-    parts.append(
-        '<details class="card">'
-        f'<summary class="card-head"><h3>{_icon("lock", 14)}Tier 1 &ndash; immutable '
-        f'at runtime &ndash; {len(service.tier1.toolkits)} toolkits</h3>'
-        '<span class="spacer"></span>'
-        f'<span class="chev">{_icon("chevron", 14)}</span></summary>'
-        '<div class="pad">'
-        + _note(
-            "These boundaries come from <code>toolkits.yaml</code> and cannot be "
-            "edited here, by anyone, at any time. Changing them requires a "
-            "redeploy (FR-4.11) &ndash; that is what makes every tool below safe "
-            "to create from a web form.",
-            icon="lock",
-        )
-        + toolkit_cards
-        + f'<h2>{_icon("gauge", 14)}Rate limits</h2>'
-        '<div class="wrap"><table>'
-        "<thead><tr><th>Category</th><th>Calls</th><th>Window</th></tr></thead>"
-        f"<tbody>{limits}</tbody></table></div>"
-        "</div></details>"
-    )
     return "".join(parts)
 
 
@@ -3085,7 +2895,8 @@ def _param_cell(tool: ToolDef) -> str:
 
 
 def _view_tools(
-    service: Service, identities: IdentityStore, session: Session, store: ConfigStore | None
+    service: Service, identities: IdentityStore, session: Session, store: ConfigStore | None,
+    request: Request | None = None,
 ) -> str:
     rev = store.tools_revision() if store else ""
     can_write = session.can_write and store is not None
@@ -3129,6 +2940,28 @@ def _view_tools(
         broken = _note(
             "<strong>Rejected by Tier 1 and therefore not loaded.</strong> They "
             f"stay in the file so they can be fixed:<ul>{items}</ul>"
+        )
+
+    # Cards (grouped, per-tool detail) vs Matrix (dense, one row per tool) --
+    # same toggle pattern as the access map's graph/table switch.
+    view = request.query_params.get("view", "").strip() if request is not None else ""
+    show_matrix = view == "matrix"
+    toggle = (
+        '<div class="filter-row">'
+        '<span class="spacer"></span>'
+        f'<a class="btn{"" if show_matrix else " active"}" '
+        f'href="{UI_PREFIX}/tools?view=cards">{_icon("layers", 13)}Cards</a>'
+        f'<a class="btn{" active" if show_matrix else ""}" '
+        f'href="{UI_PREFIX}/tools?view=matrix">{_icon("sliders", 13)}Matrix</a>'
+        "</div>"
+    )
+
+    if show_matrix:
+        return (
+            toggle + broken
+            + '<div class="card"><div class="pad">'
+            + _tool_matrix(service, identities)
+            + "</div></div>"
         )
 
     sections = []
@@ -3282,7 +3115,7 @@ def _view_tools(
             f'</div>'
         )
 
-    return broken + "".join(sections)
+    return toggle + broken + "".join(sections)
 
 
 def _view_identities(
@@ -5940,27 +5773,6 @@ def build_ui_routes(
             )
         return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
 
-    async def probe_executors_action(request: Request) -> Response:
-        # Not gated by `writer`: this reads reachability, it does not
-        # touch config, so it works the same in a read-only deployment
-        # as the `/health/ready` endpoint it wraps for the UI.
-        session = _current(request)
-        if session is None:
-            return _to_login()
-        form = await request.form()
-        if not _csrf_ok(session, form):
-            audit.write(
-                {
-                    "kind": "admin_denied",
-                    "actor": session.identity,
-                    "path": request.url.path,
-                    "reason": "csrf_mismatch",
-                }
-            )
-            return _csrf_refused(request, session)
-        await service.probe_executors()
-        return RedirectResponse(f"{UI_PREFIX}/", status_code=303)
-
     # -- Misc -----------------------------------------------------------
 
     async def root(_request: Request) -> Response:
@@ -6028,17 +5840,12 @@ def build_ui_routes(
         Route(
             f"{UI_PREFIX}/",
             guarded(
-                lambda r, s: _view_overview(service, identities, store, r, s),
+                lambda r, s: _view_overview(service, identities, store, r),
                 "Overview", "", icon="gauge", allow_script=True,
-                subtitle=(
-                    "What actually applies at runtime. The Tier 1 boundaries come "
-                    "from <code>toolkits.yaml</code> and cannot change until the "
-                    "next redeploy."
-                ),
+                subtitle="Who can reach what, and what's happening right now.",
             ),
             methods=["GET"],
         ),
-        Route(f"{UI_PREFIX}/probe-executors", probe_executors_action, methods=["POST"]),
         Route(
             f"{UI_PREFIX}/access-map",
             guarded(
@@ -6053,7 +5860,7 @@ def build_ui_routes(
         Route(
             f"{UI_PREFIX}/tools",
             guarded(
-                lambda r, s: _view_tools(service, identities, s, store),
+                lambda r, s: _view_tools(service, identities, s, store, r),
                 "Tools", "/tools", icon="sliders", actions=_tools_actions,
                 subtitle=(
                     "Defining and granting are two separate steps: a tool with no "
