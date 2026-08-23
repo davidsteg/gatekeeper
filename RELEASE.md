@@ -60,6 +60,38 @@ cannot. It is in every release.
 
 ---
 
+## 0.27.2
+
+**Fix: the chart's hover tooltip rendered ~3x oversized, still hiding half its text off-screen.**
+
+0.27.1 fixed the tooltip being clipped by moving it into one wide
+`<foreignObject>` spanning the whole chart. That fixed the clipping but
+not the real bug: content inside a `<foreignObject>` is painted through
+the enclosing `<svg>`'s own viewBox-to-viewport scale -- this chart's
+`viewBox="0 0 300 112"` rendered at up to ~1000 CSS px wide is roughly a
+3x transform, and that transform applies to *everything* in the
+foreignObject's subtree, including CSS `rem`/`px` sizes. A `.7rem`
+tooltip came out looking like a `2rem` one, badly overlapping the bars
+next to it.
+
+Moved the tooltip out of the `<svg>` entirely: it's now a plain HTML
+`<div>` positioned as a sibling of the chart, overlaid via `position:
+absolute; inset: 0` on a wrapping `.chart-wrap` -- ordinary CSS box
+layout, not subject to the SVG's internal coordinate transform at all.
+Verified live: tooltip font now renders at the correct 11.2px (`.7rem`)
+instead of the ~34px it was rendering at before.
+
+Also: the access map's hover popups were getting clipped by last
+release's `overflow-y: hidden` fix far more often than expected -- a
+popup extends below *its own row's cell*, not below the table, so it
+doesn't take a last-row cell to hit the bottom edge. `.am-tools` is
+already capped at max-height 9rem, so a popup's tallest possible size is
+bounded and known; reserved that much as `padding-bottom` on the
+scroll container so `hidden` has room to never actually need to clip a
+real popup. Also gave both scrollable areas (the access map and the new
+recent-events card) a thin, themed scrollbar instead of the browser's
+unstyled default.
+
 ## 0.27.1
 
 **Fixes two real regressions from 0.27.0's own fixes.**
