@@ -31,6 +31,19 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Only if a `file` toolkit in toolkits.yaml declares `run_as` (FR-8.18):
+    # becoming another user needs privilege this container deliberately does
+    # not have, so it would have to start as root (`user: "0:0"` above) and
+    # get exactly these two capabilities back. Everything else stays dropped,
+    # and no-new-privileges stays on -- it blocks privilege *gain* via setuid
+    # binaries on execve, not a privileged process dropping to a lesser user.
+    # Do not do this speculatively: without `run_as` anywhere it buys
+    # nothing, and with it, the owning uid is almost always the right target
+    # rather than root (see docs/DEPLOYMENT.md).
+    #
+    # cap_add:
+    #   - SETUID
+    #   - SETGID
     read_only: true
     tmpfs:
       - /tmp:size=16m

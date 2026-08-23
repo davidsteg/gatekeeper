@@ -354,6 +354,10 @@ class Service:
                     timeout_seconds=timeout_seconds,
                     max_output_bytes=max_output_bytes,
                     idempotent=tool.idempotent,
+                    # Tier 1, never a parameter: which user the operation
+                    # runs as is fixed on the toolkit at deploy time, the
+                    # same way FR-8.3i fixes a destination in the tool id.
+                    run_as=toolkit.run_as,
                 )
             else:
                 assert toolkit.executor == "truenas" and rpc_call is not None

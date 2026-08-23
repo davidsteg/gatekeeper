@@ -334,3 +334,66 @@ def test_reject_delete_leaves_toolkits_yaml_unchanged(tmp_path, sandbox):
     rejected = store.reject(item.id, decided_by="root", reason="not yet")
     assert rejected.status == "rejected"
     assert open(toolkits_path, encoding="utf-8").read() == before
+
+
+# -- run_as: redeploy-only, not proposable -------------------------------------
+
+
+def test_propose_refuses_run_as_in_a_create_proposal(tmp_path, sandbox):
+    """`run_as` (the `file` executor's per-toolkit OS user) is the one Tier 1
+
+    field that decides *with whose authority* a call runs rather than what
+    is allowed. On the review card it would read like any other line of
+    YAML, and "a human clicked deploy" is too thin a boundary for that --
+    so it stays a redeploy, where the same person also decides whether the
+    container may hold the privilege to honour it at all.
+    """
+    store, _service, _tp = _env(tmp_path, sandbox)
+    spec = {
+        "executor": "file",
+        "path_roots": [str(sandbox)],
+        "protected_resources": [],
+        "max_timeout_seconds": 10,
+        "max_output_bytes": 4096,
+        "run_as": "root",
+    }
+    try:
+        store.propose(name="agentcfg", spec=spec, actor="hermes")
+        assert False, "expected ToolkitProposalWriteRefused"
+    except ToolkitProposalWriteRefused as exc:
+        assert "run_as" in str(exc)
+    assert store.list() == []
+
+
+def test_propose_refuses_run_as_in_an_update_proposal(tmp_path, sandbox):
+    store, _service, _tp = _env(tmp_path, sandbox)
+    try:
+        store.propose(name="demo", spec={"run_as": "root"}, actor="hermes", kind="update")
+        assert False, "expected ToolkitProposalWriteRefused"
+    except ToolkitProposalWriteRefused as exc:
+        assert "run_as" in str(exc)
+
+
+def test_deploy_refuses_a_run_as_proposal_written_behind_propose(tmp_path, sandbox):
+    """Defense in depth, mirroring the update branch's own re-check: `deploy`
+
+    validates the input it is about to write, not merely one it trusts
+    `propose` to have vetted. Simulated by writing the proposal straight
+    into the queue file, which is the only way this state can arise.
+    """
+    store, _service, toolkits_path = _env(tmp_path, sandbox)
+    legit = store.propose(name="agentcfg", spec={"executor": "local", "binaries": [PYTHON]},
+                          actor="hermes")
+
+    queue_path = os.path.join(str(tmp_path), "toolkit_proposals.yaml")
+    raw = yaml.safe_load(open(queue_path, encoding="utf-8").read())
+    raw["proposals"][0]["spec"]["run_as"] = "root"
+    open(queue_path, "w", encoding="utf-8").write(yaml.safe_dump(raw))
+
+    before = open(toolkits_path, encoding="utf-8").read()
+    try:
+        store.deploy(legit.id, decided_by="root")
+        assert False, "expected ToolkitProposalWriteRefused"
+    except ToolkitProposalWriteRefused as exc:
+        assert "run_as" in str(exc)
+    assert open(toolkits_path, encoding="utf-8").read() == before

@@ -60,6 +60,86 @@ cannot. It is in every release.
 
 ---
 
+## 0.28.0
+
+**A `file` toolkit can now say which OS user its file operations run as (`run_as`) -- per toolkit, never globally, and never silently.**
+
+The `file` executor works in-process, which is exactly what makes it safe
+(no shell, no argv, one fixed operation per tool) and also its one limit:
+every read and write happens as whatever user gatekeeper itself runs as,
+`568` in the shipped image. A directory that belongs to somebody else with
+mode `0700` is therefore unreachable no matter how `path_roots` is written
+-- not because Tier 1 forbids it, but because the kernel does. The obvious
+workaround, widening the container's own rights, is FR-4.9's union-of-needs
+mistake applied to file ownership: every toolkit gains what one toolkit
+needed.
+
+A `file` toolkit may now declare `run_as` in `toolkits.yaml`, either an
+account inside the image or the numeric `uid:gid` pair for a host uid that
+has none:
+
+```yaml
+  agentcfg:
+    executor: file
+    path_roots: [/mnt/raid/agent]
+    run_as: "3001:3001"
+```
+
+What the field is and is not:
+
+- **Per toolkit, and only `file`.** `run_as` on a `docker`/`local`/`http`/
+  `truenas`/`ssh` toolkit aborts startup rather than being ignored --
+  config that reads as "these run as somebody else" and does not is worse
+  than config that refuses to start. A `file` toolkit without the field
+  takes the same in-process path as before, byte for byte; a test asserts
+  that path still spawns nothing.
+- **Redeploy-only.** No parameter, no tool field, no `/admin/mcp` call
+  picks a user -- the rule FR-8.3i already states for destinations. It is
+  refused even in a human-reviewed toolkit proposal, because it decides
+  *with whose authority* an operation runs rather than what is allowed,
+  and the redeploy is where the same person also decides whether the
+  container may hold the privilege to honour it.
+- **No silent fallback.** A process that cannot become the requested user
+  fails the call and says so. Running it as the container user instead
+  would make `run_as` a suggestion, and would dress a `Permission denied`
+  up as though the override had been in effect.
+
+An in-process executor cannot assume another user: `seteuid` is
+process-wide, leaks into every concurrent call, and is reversible by
+construction -- the opposite of a privilege boundary. So a `run_as`
+operation runs in a short-lived child (`_runas.py`) that drops privileges
+irreversibly first -- real, effective *and* saved ids together,
+supplementary groups replaced -- verifies the drop took effect including
+that root is no longer regainable, and only then touches the filesystem.
+It re-checks the path against `path_roots`/`protected_resources` on the
+privileged side too, and takes its request over stdin rather than argv: a
+`file.write` carries the whole file content, which has no business in
+`/proc/<pid>/cmdline`. A setuid-root helper binary in the image was the
+alternative and is worse -- permanently privileged, reachable by anything
+in the container.
+
+Because the child is a real process it can also hang, so the `file`
+executor now honours `timeout_seconds` on this path, with FR-6.9's
+distinction intact: a killed non-idempotent write reports `unknown`, not
+`failed`.
+
+**Deploying this costs the container its unprivileged start, so scope it
+deliberately.** `run_as` needs `user: "0:0"` plus `cap_add: [SETUID,
+SETGID]` (everything else stays dropped; `no-new-privileges` stays on).
+Prefer the owning uid over `root`: it is bounded by that user's own
+permissions, whereas root additionally needs `CAP_DAC_OVERRIDE`, which
+reads every file on every mount. `docs/DEPLOYMENT.md` has the full
+recipe, `compose.yaml` the commented block, and startup logs a warning
+line naming the user for every toolkit that declares one. A deployment
+that adds none of this is completely unaffected.
+
+Also in this release, from commits that had not been published yet:
+`admin.toolkit_delete` (propose removing a Tier 1 toolkit over
+`/admin/mcp`, same always-pending human-deploys path as
+`toolkit_propose`/`toolkit_update`), and `/ui/requests` grant_set review
+cards now show only the tools a proposal actually adds or removes instead
+of re-listing the identity's whole resulting set.
+
 ## 0.27.3
 
 **Fix: the access map's hover popup, properly this time -- clipped popups *and* the blank space below the table both gone.**

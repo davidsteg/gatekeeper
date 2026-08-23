@@ -257,6 +257,7 @@ The point v1 left open: *how* does a container reach the host at all. The founda
 | `http` | SaaS and LAN APIs (GitHub, *arr, Uptime Kuma …) | HTTP request with toolkit credential | **v1 active** |
 | `truenas` | ZFS, pool status, dataset management | JSON-RPC 2.0 over WebSocket, API key | **v1 active** |
 | `ssh` | Host commands without API equivalent (`ps`, `top`) | SSH with host-side restricted key | v1 optional (§17) |
+| `file` | Reading and editing files below the path roots | in-process, no shell and no argv | **v1 active** |
 
 - **FR-8.1** Tools do not select an executor themselves — they belong to a toolkit, and the toolkit binds the executor (FR-4.8). A toolkit whose executor is not enabled at deploy time is rejected along with all its associated tools.
 - **FR-8.2** The `docker` executor gets the socket. This is **root-equivalent on the host** and stands in tension with NFR-1. This is deliberately accepted because gatekeeper is exactly the whitelist *that restricts this access* — but it means: a bug in gatekeeper is a root bug. From this follows the strictness of §6.
@@ -303,6 +304,23 @@ The same control concept as for process execution, translated to HTTP. What the 
   - Size limitation as in FR-6.5, additionally limiting the field count for list responses.
   - Responses are marked in the MCP result as **external, untrusted data**, so that the agent does not treat them as instructions.
   - This marking is a mitigation, not a solution. The actual control remains that an agent only possesses tools whose abuse is tolerable — in particular FR-5.1a applies.
+
+### The `file` Executor
+
+Giving an agent file access through `local` would mean allowlisting `cat`, `tee`, `sed` and then arguing about their flags — a binary whose argument surface is a small programming language is exactly what FR-4.1/4.2 cannot bound. The `file` executor exists so the boundary can be stated in terms of the operation instead of the program.
+
+- **FR-8.16** A tool on a `file` toolkit declares one fixed `file_operation` — `read`, `write`, `patch` or `list` — and nothing else. There is no binary, no argv, and therefore no argument allowlist to get wrong: the operation is chosen at definition time, not by a parameter. The operation runs in-process, in Python, with no shell and no subprocess.
+- **FR-8.17** Every path is resolved with `realpath` and checked against the toolkit's `path_roots` and `protected_resources` before anything is opened (FR-4.3, FR-4.12). This is the whole target restriction — the `file` counterpart of `allowed_path_prefixes` for `http`.
+
+#### Running as a Different User (`run_as`)
+
+The in-process design has one consequence: operations run as whatever OS user gatekeeper itself runs as (568 in the shipped image, NFR-1). A directory the agent is legitimately meant to edit but that belongs to another user with mode `0700` is then unreachable — not because Tier 1 forbids it, but because the kernel does. Widening the container's own rights to fix this would be the union-of-needs mistake FR-4.9 warns against, applied to file ownership: every toolkit would gain what one toolkit needed.
+
+- **FR-8.18** A `file` toolkit MAY declare `run_as` (Level 1, `toolkits.yaml`) — either an account name resolved through the container's passwd database (`hermes`) or a numeric `uid:gid` pair (`3001:3001`). Its operations then execute as that user. A toolkit that does not declare it behaves exactly as before the field existed: in-process, as gatekeeper itself. A bare numeric uid is rejected — the group would otherwise depend on a passwd entry a host uid does not have inside the image.
+- **FR-8.19** `run_as` is rejected on every other executor. `docker`, `local`, `http`, `truenas` and `ssh` are unaffected by the field's existence; a `run_as` on one of them aborts startup rather than being ignored, because a configuration that reads as "these operations run as somebody else" and does not is worse than one that refuses to start.
+- **FR-8.20 The Agent Can Never Choose the User.** There is no parameter, tool field, or admin-API call through which a call can pick who it runs as — the same rule FR-8.3i states for destinations, for the same reason. `run_as` is settable only by a redeploy: unlike `executor`/`binaries`/`denied_args`, it is refused even in a human-reviewed toolkit proposal, because it decides *with whose authority* an operation runs rather than what is allowed, and the redeploy is where the same person also decides whether the container may hold the privilege to honour it.
+- **FR-8.21** Assuming another user is not something an in-process executor can do — `seteuid` is process-wide, leaks into every concurrent call, and is reversible by construction. A `run_as` operation therefore runs in a short-lived child process that drops privileges irreversibly (real, effective *and* saved ids, supplementary groups replaced) before touching the filesystem, verifies the drop took effect, and re-checks the path against Level 1 on the privileged side as well. The request reaches it over stdin, never argv: a `file.write` carries the file's whole content, which must not become visible through `/proc/<pid>/cmdline`.
+- **FR-8.22 No Silent Fallback.** A process without the privilege to become the requested user fails the call and says so. It never runs the operation as the container user instead — that would make `run_as` a suggestion, and would present a `Permission denied` as if the override had been in effect. Honouring `run_as` requires the container to start as root with `CAP_SETUID` and `CAP_SETGID`; a deployment that grants neither keeps every `file` toolkit that declares no `run_as` working exactly as before.
 
 ### Toolkit Catalog v1
 

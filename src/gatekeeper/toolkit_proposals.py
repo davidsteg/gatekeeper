@@ -88,6 +88,17 @@ KINDS = frozenset({"create", "update", "delete"})
 #: yet either way).
 UPDATE_WRITABLE_FIELDS = frozenset({"executor", "binaries", "denied_args"})
 
+#: Fields no proposal of any kind may carry -- not even a `"create"` one,
+#: which otherwise takes a toolkit's full body. `run_as` (`tier1.py`, the
+#: `file` executor's per-toolkit OS user) is here because it is the one
+#: Tier 1 field that decides *with whose authority* an operation runs
+#: rather than what is allowed: a proposal naming a privileged user reads
+#: like any other line of YAML on the review card, and "a human clicked
+#: deploy" is too thin a boundary for that. It stays a redeploy, where the
+#: same person also decides whether the container may hold the privilege
+#: to honour it at all.
+PROPOSAL_FORBIDDEN_FIELDS = frozenset({"run_as"})
+
 #: Audit `action` names, keyed by `kind` -- one for `propose()`, one for
 #: `deploy()`.
 _PROPOSE_ACTION_NAMES = {
@@ -254,6 +265,13 @@ class ToolkitProposalStore:
                     "update proposal. path_roots, protected_resources, and "
                     "limits require a redeploy."
                 )
+        forbidden = set(spec) & PROPOSAL_FORBIDDEN_FIELDS
+        if forbidden:
+            raise ToolkitProposalWriteRefused(
+                f"Cannot propose {sorted(forbidden)} -- it decides which OS "
+                "user a toolkit's file operations run as, and is settable "
+                "only by a redeploy of toolkits.yaml."
+            )
         if kind == "delete" and spec:
             raise ToolkitProposalWriteRefused(
                 "A delete proposal takes no 'spec' -- there is nothing to "
@@ -396,6 +414,16 @@ class ToolkitProposalStore:
                         "re-proposed under a different name (adding a new "
                         "toolkit is all a 'create' proposal supports; use an "
                         "update proposal to edit an existing one)."
+                    )
+                # Defense in depth, same reasoning as the update branch's
+                # `illegal` check above: propose() already refused this, but
+                # deploy() re-checks the input it is actually about to write.
+                forbidden = set(item.spec) & PROPOSAL_FORBIDDEN_FIELDS
+                if forbidden:
+                    raise ToolkitProposalWriteRefused(
+                        f"Cannot deploy {sorted(forbidden)} from a proposal -- "
+                        "it decides which OS user a toolkit's file operations "
+                        "run as, and is settable only by a redeploy."
                     )
                 merged_toolkits[item.name] = item.spec
 

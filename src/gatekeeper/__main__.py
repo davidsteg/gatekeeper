@@ -89,6 +89,23 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
 
+    # A `file` toolkit with `run_as` performs its operations as somebody
+    # other than this process. That is deliberate and deploy-time, but it
+    # must not be invisible: the startup log is the one place where "this
+    # build, on this host, is configured to write files as X" is recorded
+    # without anyone having to go and read toolkits.yaml. A user name or a
+    # uid:gid pair, never a secret.
+    for name, toolkit in sorted(tier1.toolkits.items()):
+        if toolkit.run_as:
+            logger.warning(
+                "Toolkit %r: file operations run as %r, not as this process "
+                "(%s). Requires CAP_SETUID/CAP_SETGID; calls fail rather "
+                "than fall back if the privilege is missing.",
+                name,
+                toolkit.run_as,
+                _whoami(),
+            )
+
     try:
         audit = AuditLog(
             tier1.audit_dir,
