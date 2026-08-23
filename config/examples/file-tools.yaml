@@ -1,0 +1,104 @@
+# file.* tool definitions for gatekeeper — deploy after v0.22.0 image is running
+# and toolkits.yaml has executor: file for the "file" toolkit.
+#
+# path is a string with pattern ^/mnt/raid/ (not type: path, which requires derived).
+# The file executor validates path against path_roots + protected_resources at call time.
+# content/old_string/new_string are string parameters (FR-5.7: pattern or size-bounded).
+#
+# To install: admin.tool_create for each tool, then enable + grant to homelab.
+
+tools:
+  - id: file.read
+    enabled: false
+    toolkit: file
+    category: read
+    executor: file
+    file_operation: read
+    title: "Read file"
+    description: "Read a file under /mnt/raid. Path must be absolute under /mnt/raid."
+    parameters:
+      path:
+        type: string
+        required: true
+        pattern: "^/mnt/raid/"
+        description: "Absolute file path under /mnt/raid"
+    required_scopes:
+      - "file:read"
+    timeout_seconds: 10
+    max_output_bytes: 65536
+    idempotent: true
+
+  - id: file.write
+    enabled: false
+    toolkit: file
+    category: write
+    executor: file
+    file_operation: write
+    title: "Write file"
+    description: "Write content to a file under /mnt/raid. Creates parent directories."
+    parameters:
+      path:
+        type: string
+        required: true
+        pattern: "^/mnt/raid/"
+        description: "Absolute file path under /mnt/raid"
+      content:
+        type: string
+        required: true
+        pattern: "[\\s\\S]*"
+        description: "File content to write"
+    required_scopes:
+      - "file:write"
+    timeout_seconds: 10
+    max_output_bytes: 65536
+    idempotent: false
+
+  - id: file.patch
+    enabled: false
+    toolkit: file
+    category: write
+    executor: file
+    file_operation: patch
+    title: "Patch file"
+    description: "Replace a unique string in a file under /mnt/raid."
+    parameters:
+      path:
+        type: string
+        required: true
+        pattern: "^/mnt/raid/"
+        description: "Absolute file path under /mnt/raid"
+      old_string:
+        type: string
+        required: true
+        pattern: "[\\s\\S]*"
+        description: "String to find (must be unique in the file)"
+      new_string:
+        type: string
+        required: true
+        pattern: "[\\s\\S]*"
+        description: "Replacement string"
+    required_scopes:
+      - "file:write"
+    timeout_seconds: 10
+    max_output_bytes: 65536
+    idempotent: false
+
+  - id: file.list
+    enabled: false
+    toolkit: file
+    category: read
+    executor: file
+    file_operation: list
+    title: "List directory"
+    description: "List entries in a directory under /mnt/raid."
+    parameters:
+      path:
+        type: string
+        required: true
+        pattern: "^/mnt/raid/"
+        description: "Absolute directory path under /mnt/raid"
+    required_scopes:
+      - "file:read"
+    timeout_seconds: 10
+    max_output_bytes: 65536
+    idempotent: true
