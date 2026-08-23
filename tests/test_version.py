@@ -27,3 +27,26 @@ def test_version_matches_pyproject():
 
 def test_version_is_not_a_hardcoded_placeholder():
     assert gatekeeper.__version__ != "0.0.0+unknown"
+
+
+def test_server_reports_real_version_not_hardcoded():
+    """The MCP `Server` object must report the real package version,
+    not a hardcoded ``"0.1.0"`` placeholder.
+
+    Regression test for the bug where ``serverInfo.version`` always
+    reported ``0.1.0`` regardless of the installed release, because
+    the version string was hardcoded in ``build_mcp_server`` instead of
+    reading ``gatekeeper.__version__``.
+    """
+    import inspect
+
+    from gatekeeper.server import build_mcp_server
+
+    source = inspect.getsource(build_mcp_server)
+    assert '"0.1.0"' not in source, (
+        "build_mcp_server still hardcodes version=\"0.1.0\" — "
+        "use gatekeeper.__version__ instead"
+    )
+    assert "__version__" in source, (
+        "build_mcp_server must use __version__ for the Server version"
+    )

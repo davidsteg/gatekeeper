@@ -60,6 +60,17 @@ cannot. It is in every release.
 
 ---
 
+## 0.20.9
+
+**Test layers: ruff lint guard + serverInfo.version regression test.**
+
+- `tests/test_lint.py`: runs `ruff check src/` inside pytest so
+  import-ordering and style failures surface locally (not only in CI).
+- `tests/test_version.py`: regression test that `build_mcp_server`
+  uses `__version__`, not a hardcoded `"0.1.0"`.
+
+---
+
 ## 0.20.8
 
 **Fix: `serverInfo.version` reports actual version instead of hardcoded `0.1.0`.**
