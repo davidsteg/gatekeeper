@@ -60,6 +60,59 @@ cannot. It is in every release.
 
 ---
 
+## 0.27.0
+
+**Overview: fixes a CSP bug in the previous release, plus several real layout bugs on the Activity/Access map cards.**
+
+**The hero's outcome bar was silently broken since 0.26.0.** It used
+`<div style="width:N%">` for the ok/denied split; this console's CSP
+(`style-src 'nonce-...'`, no `unsafe-inline`) does not cover per-element
+`style=""` attributes -- only the one nonce'd `<style>` block -- so the
+browser silently dropped the width and the bar never showed a
+proportional split. Same landmine `_integration_logo`'s docstring already
+warned about, hit for real this time. Rebuilt as an inline SVG (`<rect
+width="N">`, a plain geometry attribute, not CSS) instead.
+
+**Layout fixes, all pre-existing (not introduced by 0.24.0-0.26.0, just
+made more visible by a taller chart and a live deployment with more
+toolkits and history than the dev fixtures):**
+
+- `.am-wrap` was `overflow: visible` despite the `::-webkit-scrollbar`
+  rules right below it clearly intending a scrollable box -- a wide
+  access map (many toolkits) spilled out past the card's edge instead of
+  scrolling sideways. Now `overflow-x: auto`.
+- `.filter-row` (the search box + button on the access map, overview, and
+  tools pages) had no CSS rule at all -- input and button fell back to
+  inline-flow baseline alignment, which is what actually made the search
+  button look misaligned. Now a proper flex row.
+- `.spacer` (pushes toolbar buttons to the right) was scoped to
+  `.card-head .spacer` only, so it did nothing inside `.filter-row`'s
+  Cards/Matrix toggle on the Tools page. Unscoped -- `flex: 1` is a no-op
+  outside a flex box anyway, so this costs nothing where it already
+  worked.
+- The Activity card's chart+feed split had a broken `.card > .pad`
+  selector two levels too deep to ever match, so the whole block had zero
+  padding -- chart and feed sat flush against the card's edges, which is
+  why the feed's scrollbar looked like it was bleeding past the border.
+  Split Activity and Recent events into two separate cards (also just
+  more consistent with the rest of the page), each getting real padding
+  for free from the existing `.card > .pad` rule, and the feed now
+  stretches to fill its card's full height instead of a fixed 200px.
+- The access map's tool-list popup had no cap on height or width-safety
+  for long destination-qualified tool ids (`docker.compose_up@nas-2`) --
+  added `overflow-wrap` and a scrollable max-height so a long grant list
+  or a long id can't push the popup off-screen.
+- The chart's axis labels were sized for the chart's *old* height and
+  read oversized once the chart got taller in 0.26.0 -- reduced from 9px
+  to 7px.
+
+**New: a real hover tooltip on the activity chart.** The `<title>` added
+in 0.26.0 for hover counts relies on the browser's native (OS-styled,
+often slow) tooltip, which most people never notice is there at all.
+Replaced with a themed, instant CSS `:hover` tooltip matching the access
+map's own popups -- positioned via `<foreignObject>` at plain SVG x/y/
+width/height (not `style=""`, same CSP reason as the hero bar fix above).
+
 ## 0.26.0
 
 **Overview: a real temperature gradient on the access map, and a taller, gradient-filled activity chart.**

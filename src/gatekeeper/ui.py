@@ -742,7 +742,12 @@ h2::before { content: "//"; color: var(--accent); font-weight: 700; }
   border-radius: var(--radius) var(--radius) 0 0;
 }
 .card-head .name { font-weight: 650; letter-spacing: -.01em; }
-.card-head .spacer { flex: 1; }
+/* Unscoped, not just `.card-head .spacer`: the same push-right spacer is
+   also used inside `.filter-row` (the tools page's Cards/Matrix toggle),
+   which wasn't itself a flex container until the `.filter-row` fix above
+   -- `flex: 1` is a no-op outside a flex/grid box, so widening this
+   costs nothing anywhere it was already working. */
+.spacer { flex: 1; }
 /* A <summary> reuses .card-head so a disclosure looks identical to every
    other card until it is opened. Closed, there is nothing below the divider
    to divide from, so the bottom border and rounding come back. */
@@ -825,12 +830,11 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
 }
 .ov-hero-l { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
 .ov-hero-bar {
-  display: flex; height: 7px; border-radius: 999px; overflow: hidden;
+  display: block; width: 100%; height: 7px; border-radius: 999px; overflow: hidden;
   background: var(--sunken); margin-bottom: .55rem;
 }
-.ov-hero-bar .seg { height: 100%; }
-.ov-hero-bar .seg.ok { background: var(--ok); }
-.ov-hero-bar .seg.bad { background: var(--deny); }
+.ov-hero-bar .seg.ok { fill: var(--ok); }
+.ov-hero-bar .seg.bad { fill: var(--deny); }
 .ov-hero-legend { display: flex; gap: 1.1rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); }
 .ov-hero-legend .lg { display: flex; align-items: center; gap: .4rem; }
 .ov-hero-legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--line); }
@@ -1001,7 +1005,13 @@ td.ops form { display: inline; }
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
 
 /* -- Access matrix grid -- */
-.am-wrap { overflow: visible; border-radius: var(--radius); }
+/* overflow-x: auto, not visible -- a wide matrix (many toolkits) needs to
+   scroll sideways inside its own box. It was "visible" despite the
+   ::-webkit-scrollbar rules right below it actually styling one, which
+   never had anything to apply to -- the table just spilled out past the
+   card's edge instead of scrolling. (Per spec, overflow-x other than
+   visible forces overflow-y to auto too -- there's no partial mix.) */
+.am-wrap { overflow-x: auto; border-radius: var(--radius); }
 .am-wrap::-webkit-scrollbar { height: 6px; }
 .am-wrap::-webkit-scrollbar-track { background: var(--sunken); border-radius: 3px; }
 .am-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
@@ -1121,6 +1131,10 @@ td.ops form { display: inline; }
   border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,.5);
   padding: .6rem .7rem; min-width: 10rem; max-width: 16rem;
   text-align: left; z-index: 100;
+  /* A destination-qualified tool id ("docker.compose_up@nas-secondary")
+     or an unusually long identity/toolkit name shouldn't be able to push
+     the popup wider than max-width and off past the card's edge. */
+  overflow-wrap: anywhere;
 }
 .am-popup::after {
   content: ""; position: absolute; bottom: 100%; left: 50%;
@@ -1132,14 +1146,29 @@ td.ops form { display: inline; }
 }
 .am-popup-title { font-weight: 700; font-size: .75rem; margin-bottom: .3rem; color: var(--fg); }
 .am-popup-stats { font-size: .68rem; margin-bottom: .35rem; }
-.am-tools { margin: .2rem 0 0; padding-left: .8rem; }
+.am-tools {
+  margin: .2rem 0 0; padding-left: .8rem;
+  max-height: 9rem; overflow-y: auto;
+}
 .am-tools li { margin-bottom: .15rem; }
-.am-tools .tool-id { font-size: .68rem; color: var(--accent); }
+.am-tools .tool-id { font-size: .68rem; color: var(--accent); overflow-wrap: anywhere; }
 .tool-id-link { text-decoration: none; }
 .tool-id-link:hover .tool-id { color: var(--fg); text-decoration: underline; }
 
 /* -- Activity -- */
 .chart { width: 100%; height: auto; display: block; }
+/* One <foreignObject> per hour already places this at the right x/y in
+   SVG-user-unit space (see `_activity_chart`) -- this only needs to fill
+   that box and give `.c-tip` a local positioning context. */
+.c-tip-zone { width: 100%; height: 100%; position: relative; cursor: default; }
+.c-tip {
+  position: absolute; top: 2px; left: 50%; transform: translateX(-50%) scale(.92);
+  opacity: 0; pointer-events: none; transition: opacity .12s, transform .12s;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  box-shadow: 0 6px 18px rgba(0,0,0,.45); padding: .25rem .55rem; font-size: .7rem;
+  white-space: nowrap; z-index: 20; color: var(--fg);
+}
+.c-tip-zone:hover .c-tip { opacity: 1; transform: translateX(-50%) scale(1); }
 .c-grid { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; opacity: .4; }
 .c-grid.c-grid-base { stroke-dasharray: none; opacity: .6; }
 .c-bar { transition: opacity .12s; }
@@ -1148,13 +1177,14 @@ td.ops form { display: inline; }
 .c-deny { fill: var(--deny); }
 .c-base { fill: var(--line); }
 .c-now-dot { fill: var(--accent); }
-.c-ax { fill: var(--muted); font-size: 9px; font-family: inherit; }
+.c-ax { fill: var(--muted); font-size: 7px; font-family: inherit; }
 .c-ax-now { fill: var(--accent); font-weight: 700; }
-.activity-split { display: grid; grid-template-columns: 70% 30%; gap: .8rem; }
-.activity-chart-col { min-width: 0; }
-.activity-feed-col { min-width: 0; display: flex; flex-direction: column; }
-.activity-feed-col .feed { max-height: 200px; overflow-y: auto; }
-@media (max-width: 768px) { .activity-split { grid-template-columns: 1fr; } }
+/* A .pad that scrolls instead of growing -- used where a `.split` card's
+   content (the recent-events feed) can run longer than its sibling and
+   needs to fill exactly the height the grid gives it, not spill past the
+   card's own border. Padding stays the normal `.card > .pad` value so the
+   scrollbar has room before the card's edge, not on top of it. */
+.pad.pad-scroll { overflow-y: auto; min-height: 0; }
 .feed { display: flex; flex-direction: column; }
 .feed-item { display: flex; gap: .55rem; padding: .7rem 1rem; align-items: baseline; border-top: 1px solid var(--line); font-size: .82rem; }
 .feed-item .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
@@ -1215,6 +1245,12 @@ a.btn {
 }
 a.btn:hover { color: var(--fg); border-color: var(--muted); }
 a.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-solid); }
+/* Was referenced by every filter form (access map, overview, tools) with
+   no matching rule -- input, button, and the "reset" link fell back to
+   plain inline flow and lined up on text baseline instead of centered,
+   which is what actually made the search button look unaligned. */
+.filter-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.filter-row input[type="text"] { flex: 1; min-width: 10rem; }
 a.reset { align-self: center; color: var(--muted); text-decoration: none; font-size: .83rem; padding: .4rem .3rem; }
 a.reset:hover { color: var(--accent); }
 .checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: .3rem; }
@@ -2264,12 +2300,35 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
             f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
             "</svg>"
         )
+    # A themed, always-fast CSS :hover tooltip -- the <title> on each <g>
+    # above is a real fallback (assistive tech, and browsers that for some
+    # reason don't run the CSS), but a native SVG title's OS-controlled
+    # popup delay and unstyled look reads as "no hover feedback at all" to
+    # most people since there's no visual cue it's even there. This one
+    # appears instantly and matches the rest of the console's popups
+    # (`.am-popup` uses the same absolute + opacity-transition pattern).
+    #
+    # Positioned with plain SVG x/y/width/height attributes via
+    # <foreignObject>, not CSS `left`/`width` in a `style=""` -- the CSP's
+    # style-src nonce covers only the one <style> block, not per-element
+    # inline styles, so a `style="left:N%"` here would silently do nothing
+    # (see `_integration_logo`'s docstring for the same landmine, and the
+    # hero's outcome bar above, which hit it for real).
+    tips = "".join(
+        f'<foreignObject x="{index * slot_w:.1f}" y="0" width="{slot_w:.1f}" height="{height:.0f}">'
+        '<div xmlns="http://www.w3.org/1999/xhtml" class="c-tip-zone">'
+        '<div class="c-tip">'
+        f'{_e((now - timedelta(hours=hours - 1 - index)).strftime("%H:%M"))} '
+        f'&ndash; {ok} ok, {bad} denied/failed</div></div></foreignObject>'
+        for index, (ok, bad) in enumerate(buckets)
+    )
     return (
         f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
         f'aria-label="Calls per hour">{defs}{grid}{"".join(bars)}'
         f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
         f'<text class="c-ax c-ax-now" x="{width:.0f}" y="{height - 3:.0f}" '
         f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
+        f"{tips}"
         "</svg>"
     )
 
@@ -2548,13 +2607,20 @@ def _view_overview(
         f'<span class="ov-hero-n">{_ov_totals["total"]}</span>'
         '<span class="ov-hero-l">Calls (12h)</span>'
         '</a>'
-        '<div class="ov-hero-bar">'
+        # An SVG rect pair, not two <div style="width:N%">s: the CSP's
+        # style-src has no 'unsafe-inline', and a nonce only covers the
+        # single <style> block, not per-element style="" attributes -- one
+        # here would silently do nothing rather than error (see
+        # `_integration_logo`'s docstring for the same landmine). SVG
+        # width/x are plain geometry attributes, not style, so they aren't
+        # subject to that restriction at all.
+        '<svg class="ov-hero-bar" viewBox="0 0 100 1" preserveAspectRatio="none">'
         + (
-            f'<div class="seg ok" style="width:{_ov_ok_w:.1f}%"></div>'
-            f'<div class="seg bad" style="width:{_ov_bad_w:.1f}%"></div>'
+            f'<rect class="seg ok" x="0" y="0" width="{_ov_ok_w:.1f}" height="1"/>'
+            f'<rect class="seg bad" x="{_ov_ok_w:.1f}" y="0" width="{_ov_bad_w:.1f}" height="1"/>'
             if _ov_totals["total"] else ""
         )
-        + '</div>'
+        + '</svg>'
         '<div class="ov-hero-legend">'
         f'<span class="lg ok"><i></i>{_ov_totals["ok"]} ok</span>'
         f'<span class="lg bad"><i></i>{_ov_bad} denied/failed</span>'
@@ -2585,21 +2651,19 @@ def _view_overview(
     )
 
     parts.append(
+        '<div class="split">'
         '<div class="card">'
         f'<div class="card-head"><h3>{_icon("activity", 14)}Activity</h3>'
         '<span class="spacer"></span>'
         f'<a class="btn" href="{UI_PREFIX}/stats">{_icon("bar-chart", 13)}Full stats</a>'
         "</div>"
-        '<div class="activity-split">'
-        '<div class="activity-chart-col">'
         '<div class="subhead">Calls, last 12 h</div>'
-        f'<div class="pad pad-tight">{_activity_chart(records)}</div>'
-        '</div>'
-        '<div class="activity-feed-col">'
-        '<div class="subhead">Recent events</div>'
-        f'<div class="feed">{_feed(records)}</div>'
-        '</div>'
-        '</div>'
+        f'<div class="pad">{_activity_chart(records)}</div>'
+        "</div>"
+        '<div class="card">'
+        f'<div class="card-head"><h3>{_icon("clock", 14)}Recent events</h3></div>'
+        f'<div class="pad pad-scroll">{_feed(records, limit=20)}</div>'
+        "</div>"
         "</div>"
     )
 
