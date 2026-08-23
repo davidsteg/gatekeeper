@@ -3182,7 +3182,9 @@ _PENDING_TONE = {
 }
 
 
-def _resolved_tool_badge(store: ConfigStore | None, tool_id: str) -> str:
+def _resolved_tool_badge(
+    store: ConfigStore | None, tool_id: str, *, marker: str = "", marker_tone: str = ""
+) -> str:
     """One tool, resolved against the live catalog -- so a reviewer sees
     whether it exists and what it currently is, not just a bare id.
 
@@ -3192,20 +3194,86 @@ def _resolved_tool_badge(store: ConfigStore | None, tool_id: str) -> str:
     every tool id rendered on the Change tab of `/ui/requests` is looked up here, and a
     missing tool gets a distinct, unmissable warning state instead of
     looking identical to a real one.
+
+    `marker`, if given, is rendered as a leading pill (e.g. "+" for a
+    `grant_set` addition) -- used to tell a diffed row apart from a plain
+    one without a second wrapping element.
     """
+    lead = f'<span class="pill {marker_tone}">{_e(marker)}</span> ' if marker else ""
     flat = store.service.catalog.flat_spec_of(tool_id) if store is not None else None
     if flat is None:
         return (
-            f'<div class="row"><span class="pill deny">missing</span> '
+            f'<div class="row">{lead}<span class="pill deny">missing</span> '
             f'<code>{_e(tool_id)}</code> &mdash; no such tool in the catalog</div>'
         )
     tone = "ok" if flat.get("enabled") else "warn"
     state = "enabled" if flat.get("enabled") else "disabled"
     return (
-        f'<div class="row"><span class="pill {tone}">{_e(state)}</span> '
+        f'<div class="row">{lead}<span class="pill {tone}">{_e(state)}</span> '
         f'<code>{_e(tool_id)}</code> &mdash; {_e(flat.get("title") or tool_id)} '
         f'(<code>{_e(flat.get("category", ""))}</code>)</div>'
     )
+
+
+def _grant_set_summary(item: PendingAction, store: ConfigStore | None) -> str:
+    """Diffs a `grant_set` proposal against the identity's tools at the
+    time it was proposed, rendering only what changed.
+
+    `grant_set` is a full-replacement API -- adding one tool to an
+    identity that already has forty means the payload's `tools` list
+    still names all forty-one. Rendering that literally buries the one
+    real change under forty unchanged rows, so instead this diffs
+    `tools` against the `prev_tools` snapshot taken at propose time
+    (`AdminService.grant_set`) and shows only the added/removed ids,
+    collapsing the rest to a count.
+
+    `prev_tools` is absent on proposals queued before this diff existed
+    (and on payloads hand-built in tests) -- falls back to the old
+    "N tool grant(s), one row each" rendering in that case.
+    """
+    identity_id = item.payload.get("identity_id", "")
+    tools = item.payload.get("tools") or []
+    prev_tools = item.payload.get("prev_tools")
+    if prev_tools is None:
+        header = f'identity <code>{_e(identity_id)}</code> &rarr; {len(tools)} tool grant(s)'
+        if not tools:
+            return header
+        return header + "".join(_resolved_tool_badge(store, t) for t in sorted(tools))
+
+    catalog = store.service.catalog if store is not None else None
+
+    def _normalize(ids: Any) -> set[str]:
+        out: set[str] = set()
+        for tid in ids:
+            resolved = catalog.grantable_ids(tid) if catalog is not None else []
+            out.update(resolved or [tid])
+        return out
+
+    proposed = _normalize(tools)
+    previous = _normalize(prev_tools)
+    added = sorted(proposed - previous)
+    removed = sorted(previous - proposed)
+    unchanged = sorted(proposed & previous)
+
+    header = (
+        f'identity <code>{_e(identity_id)}</code> &rarr; '
+        f'<span class="pill ok">+{len(added)}</span> '
+        f'<span class="pill deny">&minus;{len(removed)}</span> '
+        f'<span class="muted">{len(unchanged)} unchanged</span>'
+    )
+    rows = []
+    for tid in added:
+        rows.append(_resolved_tool_badge(store, tid, marker="+", marker_tone="ok"))
+    for tid in removed:
+        rows.append(_resolved_tool_badge(store, tid, marker="−", marker_tone="deny"))
+    # An unchanged grant that's missing or disabled stays a live safety
+    # concern -- collapsing it into the plain "N unchanged" count would
+    # hide exactly the gap `_resolved_tool_badge` exists to surface.
+    for tid in unchanged:
+        flat = catalog.flat_spec_of(tid) if catalog is not None else None
+        if flat is None or not flat.get("enabled"):
+            rows.append(_resolved_tool_badge(store, tid))
+    return header + "".join(rows)
 
 
 def _pending_payload_summary(item: PendingAction, store: ConfigStore | None = None) -> str:
@@ -3225,11 +3293,7 @@ def _pending_payload_summary(item: PendingAction, store: ConfigStore | None = No
             f"enabled=<code>{_e(spec.get('enabled', False))}</code>"
         )
     if item.action == "grant_set":
-        tools = item.payload.get("tools") or []
-        header = f'identity <code>{_e(item.payload.get("identity_id", ""))}</code> &rarr; {len(tools)} tool grant(s)'
-        if not tools:
-            return header
-        return header + "".join(_resolved_tool_badge(store, t) for t in sorted(tools))
+        return _grant_set_summary(item, store)
     if item.action == "cred_propose":
         payload = item.payload
         header = payload.get("header")

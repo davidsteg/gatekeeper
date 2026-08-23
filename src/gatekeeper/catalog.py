@@ -734,6 +734,19 @@ class Catalog:
                 return spec
         return None
 
+    def grantable_ids(self, tool_id: str) -> list[str]:
+        """The catalog id(s) a grant against `tool_id` actually resolves to.
+
+        `tool_id` as written in tools.yaml stays bare even when the toolkit
+        declares `destinations` -- the loader fans it out into one
+        grantable id per destination (`<tool_id>@<destination>`), and only
+        those expanded ids ever land in `self.tools`.
+        """
+        if tool_id in self.tools:
+            return [tool_id]
+        prefix = f"{tool_id}@"
+        return sorted(tid for tid in self.tools if tid.startswith(prefix))
+
     def flat_spec_of(self, tool_id: str) -> dict[str, Any] | None:
         """The effective, editable flat spec for `tool_id` -- the shape
         `parse_tool_spec`/the `/ui` YAML editor/`admin.tool_update` all

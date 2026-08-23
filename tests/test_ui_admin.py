@@ -889,6 +889,87 @@ async def test_pending_page_distinguishes_real_from_missing_tools_in_a_grant(adm
     assert "no such tool in the catalog" in page.text
 
 
+async def test_pending_page_shows_only_the_delta_of_a_grant_set(admin_env):
+    """A `grant_set` proposal is a full-replacement payload -- changing one
+    tool on an identity that already has several still names all of them.
+    The review card must show only what changed (added/removed), not one
+    row per tool in the resulting set, or a reviewer has to eyeball the
+    whole list to spot the actual change.
+    """
+    store = admin_env["store"]
+    pending = admin_env["pending"]
+    # `bot` starts with only `demo.show` granted (see admin_env) -- give it
+    # a second grant directly so there is an "unchanged" tool to collapse.
+    store.save_identity(
+        identity_id="bot",
+        role="agent",
+        tools=["demo.show", "demo.echo"],
+        scopes=["stack:*"],
+        actor="root",
+        rev=store.identities_revision(),
+        replaces="bot",
+    )
+    # Propose swapping `demo.show` for nothing new -- i.e. just dropping it,
+    # keeping `demo.echo` unchanged.
+    pending.propose(
+        action="grant_set",
+        actor="hermes",
+        payload={
+            "identity_id": "bot",
+            "role": "agent",
+            "tools": ["demo.echo"],
+            "scopes": ["stack:*"],
+            "prev_tools": ["demo.echo", "demo.show"],
+        },
+        base_rev=store.identities_revision(),
+    )
+
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+
+    assert "demo.show" in page.text
+    assert "1 unchanged" in page.text
+    # `demo.echo` is unchanged and enabled -- it collapses into the count
+    # and gets no row of its own, or the diff isn't actually filtering
+    # anything.
+    assert "demo.echo" not in page.text
+
+
+async def test_pending_page_still_flags_a_missing_tool_left_unchanged_in_a_grant(admin_env):
+    """A `grant_set` diff collapses unchanged tools to a count -- but an
+    unchanged grant to a tool that no longer exists in the catalog is
+    exactly the silent-right-to-nothing gap
+    `test_pending_page_distinguishes_real_from_missing_tools_in_a_grant`
+    guards against, so it must keep its own warning row even when nothing
+    about it changed in this proposal.
+    """
+    pending = admin_env["pending"]
+    pending.propose(
+        action="grant_set",
+        actor="hermes",
+        payload={
+            "identity_id": "bot",
+            "role": "agent",
+            "tools": ["demo.show", "demo.ghost"],
+            "scopes": ["stack:*"],
+            "prev_tools": ["demo.show", "demo.ghost"],
+        },
+        base_rev=admin_env["store"].identities_revision(),
+    )
+
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+
+    assert "0 unchanged" not in page.text
+    assert "demo.ghost" in page.text
+    assert "missing" in page.text
+    assert "no such tool in the catalog" in page.text
+
+
 # -- Toolkits (plan "Follow-up 2") -------------------------------------------
 
 
