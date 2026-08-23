@@ -60,6 +60,32 @@ cannot. It is in every release.
 
 ---
 
+## 0.23.3
+
+**Fix: a tool whose shape no longer fit its toolkit's executor could crash every future startup.**
+
+`load_catalog` only caught its `Tier1Violation` exception subclass to
+gracefully disable a stale tool definition; `_parse_tool` also raises the
+plain `ConfigError` base class for a tool whose *shape* doesn't match its
+toolkit's executor (e.g. a `binary`/`argv`-shaped tool with no
+`file_operation`, after the toolkit's executor changed from `local` to
+`file`). That case was uncaught -- it crashed catalog loading entirely,
+which crashed every subsequent `gatekeeper serve` startup (`cmd_serve`
+exits 2 on any `ConfigError`), not merely disabled the one tool. Combined
+with `restart: unless-stopped`, a single stale tool definition left after a
+`toolkit_update`/`toolkit_propose` executor change (or a redeploy that
+changes one) could crash-loop the whole service until someone edited
+`tools.yaml` on the host directly.
+
+`load_catalog`'s per-entry `try` now catches `ConfigError` broadly (which
+includes `Tier1Violation`) -- any tool definition that fails to parse
+against the *current* Tier 1 is logged and disabled, exactly what FR-4.7
+already promised for the narrower case. `strict=True` (CI) still aborts on
+either exception, unchanged. What still raises unconditionally --
+`tools.yaml` itself being structurally broken (a non-mapping entry, an
+unresolvable `current_version`, a duplicate tool ID) -- is intentionally
+unaffected: that is the file being corrupt, not one entry going stale.
+
 ## 0.23.2
 
 **Security fix: `admin.toolkit_update` applied instantly from `/admin/mcp`, with no human review.**

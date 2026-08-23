@@ -760,6 +760,22 @@ def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
     logged and disabled -- not silently tolerated. With
     `strict=True` startup aborts instead (for CI).
 
+    Per-entry parsing catches `ConfigError` broadly, not just its
+    `Tier1Violation` subclass: `_parse_tool` also raises the plain base
+    class for a definition whose *shape* no longer matches its toolkit's
+    executor (e.g. a tool with no `file_operation` after its toolkit's
+    executor changed from `local` to `file` via `admin.toolkit_update` or a
+    redeploy) -- structurally the same problem FR-4.7 describes, just not
+    routed through the narrower subclass. Before this widened, one such
+    entry crashed catalog loading entirely -- refusing every subsequent
+    startup, not merely disabling the one tool -- which is a far worse
+    outcome than FR-4.7 promises for exactly the kind of drift a toolkit
+    executor change is expected to produce. What still raises unconditionally
+    below (a non-mapping entry, an unresolvable `current_version`, a
+    duplicate tool ID after expansion) is `tools.yaml` being structurally
+    broken, not one stale entry -- continuing past those would produce an
+    incoherent catalog, not a degraded-but-honest one.
+
     A missing file is not an error but the state after
     installation: gatekeeper ships no catalog; tools are created in the
     UI. The caller logs this -- a mistyped path should
@@ -800,7 +816,7 @@ def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
 
         try:
             tool = _parse_tool(spec, tier1)
-        except Tier1Violation as exc:
+        except ConfigError as exc:
             if strict:
                 raise
             disabled.append(str(exc))
