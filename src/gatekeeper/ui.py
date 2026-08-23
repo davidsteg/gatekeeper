@@ -3057,15 +3057,25 @@ def _toolkit_proposal_card(
             f'{_icon("ban", 14)}Reject</a>'
         )
     meta = f'{_icon("users", 12)}{_e(item.actor)} &middot; {_e(item.created_at)}'
-    spec_yaml = yaml.safe_dump({item.name: item.spec}, sort_keys=False, allow_unicode=True)
+    is_update = item.kind == "update"
+    spec_yaml = yaml.safe_dump(
+        {item.name: item.spec} if not is_update else item.spec,
+        sort_keys=False, allow_unicode=True,
+    )
+    label = "Proposed changes" if is_update else "Proposed toolkit"
     detail_rows = (
-        f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Proposed toolkit</div>'
+        f'<div class="row"><div class="row-l">{_icon("sliders", 14)}{label}</div>'
         f'<div><pre class="mono">{_e(spec_yaml)}</pre></div></div>'
         + _decided_row(item)
+    )
+    kind_pill = (
+        '<span class="pill accent">update</span>' if is_update
+        else '<span class="pill accent">create</span>'
     )
     return (
         '<details class="card"><summary class="card-head">'
         f'<span class="name mono">{_e(item.name)}</span>'
+        f"{kind_pill}"
         f'<span class="pill {tone}">{_e(item.status)}</span>'
         f'<span class="row-l muted">{meta}</span>'
         f'<span class="spacer"></span>{ops}'
@@ -3094,7 +3104,8 @@ def _toolkit_tab(
     """
     parts = [
         _note(
-            "Adding a toolkit normally needs a redeploy (Tier 1 is "
+            "Adding a toolkit, or changing an existing one's executor/"
+            "binaries/denied_args, normally needs a redeploy (Tier 1 is "
             "immutable at runtime) -- a proposal below is the one way "
             "around that, and only a human can make it take effect. Live "
             "toolkits are on the <a href=\""
@@ -3120,7 +3131,9 @@ def _toolkit_tab(
         parts.append(
             _note(
                 "No proposals yet. This fills up when an admin-role agent "
-                "on /admin/mcp calls admin.toolkit_propose -- e.g. Hermes "
+                "on /admin/mcp calls admin.toolkit_propose (a brand-new "
+                "toolkit) or admin.toolkit_update (an executor/binaries/"
+                "denied_args change to an existing one) -- e.g. Hermes "
                 "hitting an 'Unknown toolkit' wall and drafting the fix "
                 "itself instead of a human hand-editing toolkits.yaml.",
                 icon="share",
@@ -3204,13 +3217,38 @@ def _view_requests(
 
 def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
     """Deliberately heavier than `_pending_reject_confirm`/the Change tab's
-    Approve: this is a Tier 1 change, not a Tier 2 one -- it widens what is
-    *possible* at all on this deployment, not just who can do what, and it
-    takes effect immediately, with no further review after this click.
+    Approve: this is a Tier 1 change, not a Tier 2 one -- it widens (or, for
+    an update, changes) what is *possible* at all on this deployment, not
+    just who can do what, and it takes effect immediately, with no further
+    review after this click.
     """
-    spec_yaml = yaml.safe_dump({item.name: item.spec}, sort_keys=False, allow_unicode=True)
-    return (
-        _note(
+    is_update = item.kind == "update"
+    spec_yaml = yaml.safe_dump(
+        {item.name: item.spec} if not is_update else item.spec,
+        sort_keys=False, allow_unicode=True,
+    )
+    if is_update:
+        warning = (
+            "<strong>This changes Tier 1.</strong> Tier 1 is the reason the "
+            "admin token is not equivalent to root: nothing in it normally "
+            "takes effect without a human editing toolkits.yaml and "
+            "redeploying. Approving this merges the fields below into the "
+            f"existing toolkit {_e(item.name)!r} in toolkits.yaml "
+            "<em>and reloads it into this running process immediately</em> "
+            "-- an executor change takes effect for every tool on that "
+            "toolkit the moment you click, with no further review "
+            "afterwards. path_roots, protected_resources, and limits are "
+            "unaffected -- only executor/binaries/denied_args can appear "
+            "below."
+        )
+        action_label = "Approve &amp; deploy update"
+        confirm_label = (
+            "I understand this immediately changes what this toolkit can "
+            "reach, with no further review."
+        )
+        prompt = f"<p><strong>Approve &amp; deploy this change to {_e(item.name)}?</strong></p>"
+    else:
+        warning = (
             "<strong>This changes Tier 1.</strong> Tier 1 is the reason the "
             "admin token is not equivalent to root: nothing in it normally "
             "takes effect without a human editing toolkits.yaml and "
@@ -3218,21 +3256,26 @@ def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
             "toolkits.yaml <em>and reloads it into this running process "
             "immediately</em> -- every binary, path root, and destination "
             "it lists becomes reachable the moment you click, with no "
-            "further review afterwards.",
-            tone="bad", icon="alert",
+            "further review afterwards."
         )
+        action_label = "Approve &amp; Deploy"
+        confirm_label = (
+            "I understand this immediately expands what this deployment can "
+            "reach, with no further review."
+        )
+        prompt = f"<p><strong>Approve &amp; deploy toolkit {_e(item.name)}?</strong></p>"
+    return (
+        _note(warning, tone="bad", icon="alert")
         + '<div class="editor card"><div class="pad">'
-        f"<p><strong>Approve &amp; deploy toolkit {_e(item.name)}?</strong></p>"
+        f"{prompt}"
         f"<p class='muted'>Proposed by {_e(item.actor)} at {_e(item.created_at)}.</p>"
         f'<pre class="mono">{_e(spec_yaml)}</pre>'
         f'<form method="post" action="{UI_PREFIX}/toolkits/deploy">'
         f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
         f'<input type="hidden" name="id" value="{_e(item.id)}">'
         '<div class="field"><label>'
-        '<input type="checkbox" name="confirm" value="yes" required> '
-        "I understand this immediately expands what this deployment can "
-        "reach, with no further review.</label></div>"
-        f'<button class="solid-danger" type="submit">{_icon("alert", 14)}Approve &amp; Deploy</button> '
+        f'<input type="checkbox" name="confirm" value="yes" required> {confirm_label}</label></div>'
+        f'<button class="solid-danger" type="submit">{_icon("alert", 14)}{action_label}</button> '
         f'<a class="btn" href="{UI_PREFIX}/requests?tab=toolkit">{_icon("back", 14)}Cancel</a>'
         "</form></div></div>"
     )

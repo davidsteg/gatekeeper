@@ -388,23 +388,29 @@ class AdminService:
         return {"applied": False, "pending": True, "proposal_id": item.id}
 
     def toolkit_update(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
-        """Updates a toolkit's executor type, binaries, and denied_args.
+        """Proposes changing a toolkit's executor type, binaries, and/or
 
-        Narrowly scoped: only ``executor``, ``binaries``, and
-        ``denied_args`` can be changed. Security-critical fields
-        (``path_roots``, ``protected_resources``, ``limits``) remain
-        deploy-time only. Applies immediately via ``reload_config``.
+        denied_args. Narrowly scoped: only those three fields can be
+        proposed; security-critical fields (``path_roots``,
+        ``protected_resources``, ``limits``) remain deploy-time only and
+        are rejected. Like `toolkit_propose`, this changes Tier 1 -- what is
+        possible at all, not just who can do what -- so it is always written
+        to the toolkit-proposal queue and never applies on its own; a human
+        reviews it at `/ui/requests` (Toolkit tab) and, if they approve,
+        gatekeeper validates, writes toolkits.yaml, and reloads it into the
+        running process itself. There is no code path from `/admin/mcp` that
+        can make this take effect by itself (FR-2.8's self-approval
+        prevention applies here the same as it does to `toolkit_propose`).
         """
         name = _require_str(args, "name")
         updates = dict(_require_dict(args, "updates"))
         if not updates:
             return {"applied": False, "error": "No updates provided."}
 
-        self.store.save_toolkit(
-            name, updates, actor=actor,
-            rev=args.get("rev", self.store.toolkits_revision()),
+        item = self.toolkit_proposals.propose(
+            name=name, spec=updates, actor=actor, kind="update"
         )
-        return {"applied": True, "toolkit": name, "changes": updates}
+        return {"applied": False, "pending": True, "proposal_id": item.id}
 
     def cred_propose(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
         """Proposes a *named, typed, headerless-or-not credential slot* --

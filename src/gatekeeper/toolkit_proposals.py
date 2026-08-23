@@ -11,22 +11,36 @@ an ordinary tool/grant change, and so `EXPOSED_ACTIONS`/`admin_server.py`'s
 drift-check has one fewer place to accidentally expose `deploy`/`reject`
 from `/admin/mcp`.
 
+Two proposal ``kind``s share this one queue and one review surface
+(`/ui/requests`, Toolkit tab), because both change Tier 1 and neither may
+ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
+
+- ``"create"`` (`admin.toolkit_propose`) -- drafts a brand-new toolkit.
+  ``spec`` is the toolkit's full body; the name must not already exist.
+- ``"update"`` (`admin.toolkit_update`) -- narrowly-scoped edits to an
+  *existing* toolkit's ``executor``/``binaries``/``denied_args`` only
+  (``_UPDATE_WRITABLE_FIELDS``); ``spec`` holds just the changed fields,
+  merged into the toolkit's existing body at deploy time. Every other Tier 1
+  field (``path_roots``, ``protected_resources``, limits) stays reachable
+  only by a redeploy -- this exists so an executor swap (e.g. `local` ->
+  `file`) doesn't require one, not to open a general editing surface.
+
 `deploy` is the only function that ever writes `toolkits.yaml`:
 
-1. Reads the live file, merges the proposed toolkit in under its name --
-   which must not collide with an existing one (adding a *new* toolkit is
-   all this pass supports; editing an existing one is deliberately out of
-   scope, see the plan).
+1. Reads the live file. For ``"create"``, merges the proposed toolkit in
+   under its name, which must not collide with an existing one. For
+   ``"update"``, merges the proposed fields into the *existing* toolkit's
+   body, which must already exist.
 2. Writes the merged content to a temp file and validates it with the exact
    `load_tier1()` startup uses. Nothing real is touched if this fails.
 3. Only then: atomically writes the real file (`_atomic.py`, the same
    primitives `store.py`/`pending.py` use).
 4. Calls `Service.reload_config(...)` synchronously, in-process -- the same
-   function the existing SIGHUP handler already calls, so the new toolkit is
+   function the existing SIGHUP handler already calls, so the change is
    live with no restart. If it errors (defensive only: step 2 already
    validated the exact bytes just written), the proposal is left `pending`
    and the failure is surfaced -- not silently swallowed.
-5. Audits before/after toolkit names, marks the proposal `deployed`.
+5. Audits before/after state, marks the proposal `deployed`.
 """
 
 from __future__ import annotations
@@ -56,6 +70,17 @@ from .tier1 import load_tier1
 #: surfaces as a collision or a Tier-1 validation error instead.
 STATUSES = frozenset({"pending", "deployed", "rejected"})
 
+#: The two shapes a proposal can take -- see the module docstring.
+KINDS = frozenset({"create", "update"})
+
+#: Fields `"update"`-kind proposals may change. Everything else
+#: (`path_roots`, `protected_resources`, limits) stays deploy-time only
+#: (FR-4.11) -- checked both at `propose()` (immediate feedback to the
+#: agent) and again at `deploy()` (the authoritative gate; `propose()`'s
+#: check is not itself a security boundary since nothing has been written
+#: yet either way).
+UPDATE_WRITABLE_FIELDS = frozenset({"executor", "binaries", "denied_args"})
+
 
 class ToolkitProposalWriteRefused(ConfigError):
     """A toolkit-proposal write was refused -- with a human-readable reason."""
@@ -64,13 +89,19 @@ class ToolkitProposalWriteRefused(ConfigError):
 @dataclasses.dataclass(frozen=True, slots=True)
 class ToolkitProposal:
     id: str
-    #: The toolkit's name -- the key it would get under `toolkits:` in
-    #: toolkits.yaml.
+    #: The toolkit's name -- the key it would get (or already has) under
+    #: `toolkits:` in toolkits.yaml.
     name: str
-    #: The toolkit's body (executor, binaries, path_roots, ...) -- exactly
-    #: what would sit under `toolkits.<name>:`.
+    #: For `kind="create"`: the toolkit's full body (executor, binaries,
+    #: path_roots, ...) -- exactly what would sit under `toolkits.<name>:`.
+    #: For `kind="update"`: just the changed fields, a subset of
+    #: `UPDATE_WRITABLE_FIELDS`, merged into the existing toolkit's body
+    #: at deploy time.
     spec: dict[str, Any]
     actor: str
+    #: `"create"` (default, backward-compatible with proposals written
+    #: before this field existed) or `"update"` -- see the module docstring.
+    kind: str = "create"
     status: str = "pending"
     created_at: str = ""
     decided_by: str | None = None
@@ -83,6 +114,7 @@ class ToolkitProposal:
             "name": self.name,
             "spec": self.spec,
             "actor": self.actor,
+            "kind": self.kind,
             "status": self.status,
             "created_at": self.created_at,
             "decided_by": self.decided_by,
@@ -97,6 +129,7 @@ def _from_spec(spec: dict[str, Any]) -> ToolkitProposal:
         name=str(spec.get("name")),
         spec=dict(spec.get("spec") or {}),
         actor=str(spec.get("actor")),
+        kind=str(spec.get("kind") or "create"),
         status=str(spec.get("status") or "pending"),
         created_at=str(spec.get("created_at") or ""),
         decided_by=spec.get("decided_by"),
@@ -156,11 +189,28 @@ class ToolkitProposalStore:
 
     # -- Writes ----------------------------------------------------------------
 
-    def propose(self, *, name: str, spec: dict[str, Any], actor: str) -> ToolkitProposal:
+    def propose(
+        self, *, name: str, spec: dict[str, Any], actor: str, kind: str = "create"
+    ) -> ToolkitProposal:
         if not name or not isinstance(name, str):
             raise ToolkitProposalWriteRefused(
                 "A toolkit proposal needs a non-empty 'name'."
             )
+        if kind not in KINDS:
+            raise ToolkitProposalWriteRefused(f"Unknown proposal kind {kind!r}.")
+        if kind == "update":
+            if not spec:
+                raise ToolkitProposalWriteRefused(
+                    "An update proposal needs at least one changed field."
+                )
+            illegal = set(spec) - UPDATE_WRITABLE_FIELDS
+            if illegal:
+                raise ToolkitProposalWriteRefused(
+                    f"Cannot propose changing {sorted(illegal)} -- only "
+                    f"{sorted(UPDATE_WRITABLE_FIELDS)} are writable via an "
+                    "update proposal. path_roots, protected_resources, and "
+                    "limits require a redeploy."
+                )
         with self._lock:
             entries = self._load()
             item = ToolkitProposal(
@@ -168,6 +218,7 @@ class ToolkitProposalStore:
                 name=name,
                 spec=spec,
                 actor=actor,
+                kind=kind,
                 status="pending",
                 created_at=now_iso(),
             )
@@ -177,7 +228,7 @@ class ToolkitProposalStore:
                 {
                     "kind": "admin_change",
                     "actor": actor,
-                    "action": "toolkit_propose",
+                    "action": "toolkit_propose" if kind == "create" else "toolkit_update_propose",
                     "target": name,
                     "spec": spec,
                 }
@@ -248,19 +299,42 @@ class ToolkitProposalStore:
                 raise ToolkitProposalWriteRefused(
                     "toolkits.yaml: section 'toolkits' is not a mapping."
                 )
-            if item.name in toolkit_section:
-                raise ToolkitProposalWriteRefused(
-                    f"A toolkit named {item.name!r} already exists in "
-                    "toolkits.yaml -- deploying this proposal would silently "
-                    "overwrite it. Reject this proposal and have it "
-                    "re-proposed under a different name (adding a new "
-                    "toolkit is all this supports; editing an existing one "
-                    "is deliberately out of scope)."
-                )
+
+            merged_toolkits = dict(toolkit_section)
+            before_fields: dict[str, Any] | None = None
+            if item.kind == "update":
+                existing = toolkit_section.get(item.name)
+                if not isinstance(existing, dict):
+                    raise ToolkitProposalWriteRefused(
+                        f"No toolkit named {item.name!r} exists in toolkits.yaml "
+                        "-- it may have been renamed or removed by a redeploy "
+                        "since this proposal was made. Reject this proposal."
+                    )
+                illegal = set(item.spec) - UPDATE_WRITABLE_FIELDS
+                if illegal:
+                    # Defense in depth: propose() already rejected this, but
+                    # deploy() re-checks its own authoritative input rather
+                    # than trusting a value it merely wrote earlier.
+                    raise ToolkitProposalWriteRefused(
+                        f"Cannot change {sorted(illegal)} at runtime -- only "
+                        f"{sorted(UPDATE_WRITABLE_FIELDS)} are writable via an "
+                        "update proposal."
+                    )
+                before_fields = {k: existing.get(k) for k in item.spec}
+                merged_toolkits[item.name] = {**existing, **item.spec}
+            else:
+                if item.name in toolkit_section:
+                    raise ToolkitProposalWriteRefused(
+                        f"A toolkit named {item.name!r} already exists in "
+                        "toolkits.yaml -- deploying this proposal would silently "
+                        "overwrite it. Reject this proposal and have it "
+                        "re-proposed under a different name (adding a new "
+                        "toolkit is all a 'create' proposal supports; use an "
+                        "update proposal to edit an existing one)."
+                    )
+                merged_toolkits[item.name] = item.spec
 
             merged = dict(raw)
-            merged_toolkits = dict(toolkit_section)
-            merged_toolkits[item.name] = item.spec
             merged["toolkits"] = merged_toolkits
             merged_text = _dump(merged)
 
@@ -309,23 +383,27 @@ class ToolkitProposalStore:
             match["decided_by"] = decided_by
             match["decided_at"] = now_iso()
             self._write(entries)
-            self.audit.write(
-                {
-                    "kind": "admin_change",
-                    "actor": decided_by,
-                    "action": "toolkit_deploy",
-                    "target": item.name,
-                    "proposal_id": proposal_id,
-                    "original_actor": item.actor,
-                    "before_toolkits": before_names,
-                    "after_toolkits": sorted(merged_toolkits),
-                }
-            )
+            record: dict[str, Any] = {
+                "kind": "admin_change",
+                "actor": decided_by,
+                "action": "toolkit_deploy" if item.kind == "create" else "toolkit_update_deploy",
+                "target": item.name,
+                "proposal_id": proposal_id,
+                "original_actor": item.actor,
+                "before_toolkits": before_names,
+                "after_toolkits": sorted(merged_toolkits),
+            }
+            if before_fields is not None:
+                record["before_fields"] = before_fields
+                record["after_fields"] = item.spec
+            self.audit.write(record)
             return _from_spec(match)
 
 
 __all__ = [
+    "KINDS",
     "STATUSES",
+    "UPDATE_WRITABLE_FIELDS",
     "ToolkitProposal",
     "ToolkitProposalStore",
     "ToolkitProposalWriteRefused",
