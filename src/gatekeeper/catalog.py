@@ -41,6 +41,12 @@ class Parameter:
     derived: str | None = None
     must_resolve_under: str | None = None
     flag: str | None = None
+    #: FR-6.3's control-character reject exists to catch shell/argv/URL
+    #: metacharacter smuggling; it doesn't apply to a value that is never
+    #: interpreted structurally, only written verbatim (the `file` executor's
+    #: `content`/`old_string`/`new_string` -- ordinary text files contain
+    #: newlines and tabs). Off by default; a parameter opts out explicitly.
+    allow_control_characters: bool = False
 
     @property
     def is_derived(self) -> bool:
@@ -206,6 +212,7 @@ def _parse_parameter(name: str, spec: dict[str, Any], where: str) -> Parameter:
         derived=derived,
         must_resolve_under=spec.get("must_resolve_under"),
         flag=spec.get("flag"),
+        allow_control_characters=bool(spec.get("allow_control_characters", False)),
     )
 
 

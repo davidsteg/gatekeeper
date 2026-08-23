@@ -60,6 +60,26 @@ cannot. It is in every release.
 
 ---
 
+## 0.23.1
+
+**Fix: `file.write`/`file.patch` rejected any multi-line content.**
+
+`validate.py`'s control-character check (FR-6.3) ran on every string
+parameter before its pattern was consulted, rejecting `\n`/`\t` unconditionally
+— including `file.write`'s `content` and `file.patch`'s `old_string`/
+`new_string`. Since `config/examples/file-tools.yaml` deliberately uses a
+permissive `[\s\S]*` pattern to allow arbitrary file content, this meant
+writing or patching any real (multi-line) file was silently impossible, with
+no test exercising the path (existing tests called `execute_file.run`
+directly, bypassing `validate.py` entirely).
+
+Fixed with a per-parameter opt-out: `Parameter.allow_control_characters`
+(`catalog.py`, set via `allow_control_characters: true` in a tool's YAML).
+Off by default everywhere — FR-6.3 still applies to every other parameter
+unchanged. Only `file.write`/`file.patch`'s content-bearing parameters opt
+out, because their values are written to disk verbatim and never interpreted
+as argv/URL/RPC structure, unlike every other parameter FR-6.3 protects.
+
 ## 0.23.0
 
 **`admin.toolkit_update` + `file` executor registration fix.**

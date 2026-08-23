@@ -81,7 +81,8 @@ def _validate_scalar(param: Parameter, value: Any) -> str:
             f"Parameter {name!r} expects a string.",
         )
 
-    _reject_control_characters(name, value)
+    if not param.allow_control_characters:
+        _reject_control_characters(name, value)
 
     if param.type == "enum":
         if value not in param.values:

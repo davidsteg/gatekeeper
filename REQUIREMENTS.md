@@ -206,7 +206,7 @@ toolkits:
 
 - **FR-6.1** **No shell interpreter** is used. Execution exclusively via argv list (`shell=False`). No concatenation of agent inputs into a command string.
 - **FR-6.2** Validation is done as an **allowlist** (regex/enum per parameter), not as a blacklist of forbidden characters. A metacharacter blocklist is functionally ineffective with FR-6.1 and was also incomplete in v1 (missing were, among others, newline, `\`, `*`, `?`, `'`, `"`, `#`, `!`).
-- **FR-6.3** As defense-in-depth, control characters and null bytes in all parameters are still rejected — with an audit entry, because their occurrence is an attack indicator.
+- **FR-6.3** As defense-in-depth, control characters and null bytes in all parameters are still rejected — with an audit entry, because their occurrence is an attack indicator. The one opt-out is a parameter marked `allow_control_characters: true` (`catalog.py`'s `Parameter`), for a value that is written verbatim rather than interpreted as argv/URL/RPC structure — the `file` executor's `content`/`old_string`/`new_string`, where a real text file's newlines and tabs must be representable at all.
 - **FR-6.4 Timeout:** Every call has a hard timeout. On expiry, the process tree is terminated and the call is audited as a failure.
 - **FR-6.5 Output Limitation:** stdout/stderr are truncated at `max_output_bytes`, with indication in the result. Without this, a single `logs` command can produce gigabyte-sized responses.
 - **FR-6.6** Log-like tools enforce a quantity limit (e.g. `--tail`) as a mandatory parameter with an upper bound.

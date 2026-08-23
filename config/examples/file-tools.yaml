@@ -3,7 +3,9 @@
 #
 # path is a string with pattern ^/mnt/raid/ (not type: path, which requires derived).
 # The file executor validates path against path_roots + protected_resources at call time.
-# content/old_string/new_string are string parameters (FR-5.7: pattern or size-bounded).
+# content/old_string/new_string are string parameters (FR-5.7: pattern or size-bounded)
+# with allow_control_characters: true -- they are written verbatim, never interpreted
+# as argv/URL/RPC structure, so real file content (newlines, tabs) must pass FR-6.3.
 #
 # To install: admin.tool_create for each tool, then enable + grant to homelab.
 
@@ -46,6 +48,7 @@ tools:
         type: string
         required: true
         pattern: "[\\s\\S]*"
+        allow_control_characters: true
         description: "File content to write"
     required_scopes:
       - "file:write"
@@ -71,11 +74,13 @@ tools:
         type: string
         required: true
         pattern: "[\\s\\S]*"
+        allow_control_characters: true
         description: "String to find (must be unique in the file)"
       new_string:
         type: string
         required: true
         pattern: "[\\s\\S]*"
+        allow_control_characters: true
         description: "Replacement string"
     required_scopes:
       - "file:write"
