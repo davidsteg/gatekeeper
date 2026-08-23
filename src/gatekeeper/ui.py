@@ -553,6 +553,11 @@ _STYLE = """
   --ok: #0c7a4f;   --ok-soft: rgba(12,122,79,.12);
   --deny: #bb2740; --deny-soft: rgba(187,39,64,.10);
   --warn: #8a5600; --warn-soft: rgba(138,86,0,.13);
+  /* Access map heat ramp only (FR n/a -- a display concern, not a status
+     one): green -> amber -> orange as call volume climbs. Orange, not
+     --deny's crimson, so "this pair is busy" never reads as "this pair
+     is dangerous" -- --deny stays the only color that means that. */
+  --heat-hot: #c2410c;
   /* One color per identity on the access map, so a busy graph reads as
      "these lines belong to dev, those to homelab" at a glance instead of
      every granted edge being the same green. Picked to sit clearly apart
@@ -592,6 +597,7 @@ _STYLE = """
     --ok: #46c08a;   --ok-soft: rgba(70,192,138,.14);
     --deny: #ff8296; --deny-soft: rgba(255,130,150,.14);
     --warn: #e0b341; --warn-soft: rgba(224,179,65,.15);
+    --heat-hot: #fb923c;
     --cat-1: #60a5fa; --cat-1-soft: rgba(96,165,250,.16);
     --cat-2: #a78bfa; --cat-2-soft: rgba(167,139,250,.16);
     --cat-3: #f472b6; --cat-3-soft: rgba(244,114,182,.16);
@@ -1066,35 +1072,47 @@ td.ops form { display: inline; }
   transition: all .15s; position: relative;
 }
 .am-cell.am-none { color: var(--muted); opacity: .25; font-size: .72rem; }
+/* Heat ramp: green (quiet) -> amber (busy) -> orange (busiest), not
+   shades of one color -- a temperature a reader can tell apart at a
+   glance instead of having to compare saturation. A granted pair with
+   no calls yet stays green-quiet regardless of volume; heat only climbs
+   once there's traffic to measure. */
 .am-cell.am-grant {
   background: var(--ok-soft);
   border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .am-cell.am-grant.heat-low {
-  background: color-mix(in srgb, var(--ok-soft) 85%, var(--ok) 15%);
-  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  background: color-mix(in srgb, var(--ok-soft) 80%, var(--ok) 20%);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
 }
 .am-cell.am-grant.heat-warm {
-  background: color-mix(in srgb, var(--ok-soft) 65%, var(--ok) 35%);
-  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 20%, transparent);
+  background: color-mix(in srgb, var(--warn-soft) 55%, var(--warn) 45%);
+  border-color: var(--warn);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--warn) 30%, transparent);
 }
 .am-cell.am-grant.heat-hot {
-  background: color-mix(in srgb, var(--ok-soft) 45%, var(--ok) 55%);
-  border-color: var(--ok);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--ok) 35%, transparent);
+  background: color-mix(in srgb, var(--heat-hot) 45%, var(--surface) 55%);
+  border-color: var(--heat-hot);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--heat-hot) 45%, transparent);
 }
 .am-cell.am-grant:hover {
   box-shadow: 0 0 14px color-mix(in srgb, var(--ok) 40%, transparent);
   transform: translateY(-1px);
   z-index: 10;
 }
+.am-cell.am-grant.heat-warm:hover {
+  box-shadow: 0 0 14px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.am-cell.am-grant.heat-hot:hover {
+  box-shadow: 0 0 18px color-mix(in srgb, var(--heat-hot) 55%, transparent);
+}
 .am-count {
   cursor: pointer; font-weight: 700; font-size: .82rem;
   color: var(--ok); display: block; padding: .3rem .25rem;
 }
-.am-cell.am-grant.heat-hot .am-count { color: var(--fg); }
+.am-cell.am-grant.heat-warm .am-count { color: var(--fg); }
+.am-cell.am-grant.heat-hot .am-count { color: var(--fg); font-size: .88rem; }
 .am-popup {
   position: absolute; top: calc(100% + 6px); left: 50%;
   transform: translateX(-50%) scale(.92);
@@ -1129,7 +1147,9 @@ td.ops form { display: inline; }
 .c-ok { fill: var(--ok); }
 .c-deny { fill: var(--deny); }
 .c-base { fill: var(--line); }
+.c-now-dot { fill: var(--accent); }
 .c-ax { fill: var(--muted); font-size: 9px; font-family: inherit; }
+.c-ax-now { fill: var(--accent); font-weight: 700; }
 .activity-split { display: grid; grid-template-columns: 70% 30%; gap: .8rem; }
 .activity-chart-col { min-width: 0; }
 .activity-feed-col { min-width: 0; display: flex; flex-direction: column; }
@@ -2148,7 +2168,7 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
     buckets = _bucket_calls(records, hours, now=now)
     peak = max((o + d for o, d in buckets), default=0)
 
-    width, height, pad = 300.0, 86.0, 16.0
+    width, height, pad = 300.0, 112.0, 16.0
     slot_w = width / hours
     bw = slot_w * 0.6
     usable = height - pad - 6
@@ -2157,7 +2177,25 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
     # Random per-render, not just per-bar: two charts on the same page would
     # otherwise both emit id="cbar0", and `clip-path: url(#cbar0)` resolves
     # to whichever element comes first in the document for *both* charts.
+    # The gradient ids below need the same guard for the same reason.
     chart_uid = secrets.token_hex(3)
+    grad_ok, grad_bad = f"cgrad-ok-{chart_uid}", f"cgrad-bad-{chart_uid}"
+    # A flat fill reads as a sticker; a top-lighter/bottom-richer gradient
+    # reads as a filled column, which is what a stacked bar is supposed to
+    # look like. stop-opacity, not two colors, so it still tracks --ok/
+    # --deny exactly (light/dark theme, no separate gradient palette).
+    defs = (
+        "<defs>"
+        f'<linearGradient id="{grad_ok}" x1="0" y1="0" x2="0" y2="1">'
+        '<stop offset="0%" stop-color="var(--ok)" stop-opacity="0.6"/>'
+        '<stop offset="100%" stop-color="var(--ok)" stop-opacity="1"/>'
+        "</linearGradient>"
+        f'<linearGradient id="{grad_bad}" x1="0" y1="0" x2="0" y2="1">'
+        '<stop offset="0%" stop-color="var(--deny)" stop-opacity="0.6"/>'
+        '<stop offset="100%" stop-color="var(--deny)" stop-opacity="1"/>'
+        "</linearGradient>"
+        "</defs>"
+    )
 
     # The 0% line is the actual axis baseline -- solid, so it reads as a
     # fixed reference even where no bar reaches it. 50%/100% are dashed:
@@ -2177,18 +2215,19 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
         h_ok = usable * ok / peak if peak else 0
         h_bad = usable * bad / peak if peak else 0
         total_h = h_ok + h_bad
+        is_now = index == hours - 1
         if total_h > 0:
             hour_label = (now - timedelta(hours=hours - 1 - index)).strftime("%H:%M")
             clip_id = f"cbar-{chart_uid}-{index}"
             segs = ""
             if h_bad > 0:
                 segs += (
-                    f'<rect class="c-deny" x="{x:.1f}" y="{base_y - h_bad:.1f}" '
+                    f'<rect fill="url(#{grad_bad})" x="{x:.1f}" y="{base_y - h_bad:.1f}" '
                     f'width="{bw:.1f}" height="{h_bad + 0.5:.1f}"/>'
                 )
             if h_ok > 0:
                 segs += (
-                    f'<rect class="c-ok" x="{x:.1f}" y="{base_y - total_h:.1f}" '
+                    f'<rect fill="url(#{grad_ok})" x="{x:.1f}" y="{base_y - total_h:.1f}" '
                     f'width="{bw:.1f}" height="{h_ok + 0.5:.1f}"/>'
                 )
             bars.append(
@@ -2203,6 +2242,14 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
                 f'<rect class="c-base" x="{x:.1f}" y="{base_y - 2:.1f}" '
                 f'width="{bw:.1f}" height="2" rx="1"/>'
             )
+        # "You are here": the current hour is the one bar whose count can
+        # still change on a page refresh -- worth anchoring visually so a
+        # reader doesn't have to read the right-hand axis label to find it.
+        if is_now:
+            bars.append(
+                f'<circle class="c-now-dot" cx="{x + bw / 2:.1f}" '
+                f'cy="{base_y - total_h - 5:.1f}" r="1.8"/>'
+            )
 
     first = (now - timedelta(hours=hours - 1)).strftime("%H:%M")
     has_data = peak > 0
@@ -2213,15 +2260,15 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
             f'<text class="c-ax" x="{width / 2:.0f}" y="{height / 2:.0f}" '
             f'text-anchor="middle">No tool calls in the last {hours} hours</text>'
             f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
-            f'<text class="c-ax" x="{width:.0f}" y="{height - 3:.0f}" '
+            f'<text class="c-ax c-ax-now" x="{width:.0f}" y="{height - 3:.0f}" '
             f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
             "</svg>"
         )
     return (
         f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
-        f'aria-label="Calls per hour">{grid}{"".join(bars)}'
+        f'aria-label="Calls per hour">{defs}{grid}{"".join(bars)}'
         f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
-        f'<text class="c-ax" x="{width:.0f}" y="{height - 3:.0f}" '
+        f'<text class="c-ax c-ax-now" x="{width:.0f}" y="{height - 3:.0f}" '
         f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
         "</svg>"
     )

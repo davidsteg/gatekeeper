@@ -60,6 +60,27 @@ cannot. It is in every release.
 
 ---
 
+## 0.26.0
+
+**Overview: a real temperature gradient on the access map, and a taller, gradient-filled activity chart.**
+
+The access map's heat coloring was shades of one hue (green, more or
+less saturated) -- differentiating "busy" from "quiet" meant comparing
+saturation, which doesn't read at a glance in a wide, dense matrix.
+Granted-but-quiet pairs stay green; busy pairs now go amber (reusing
+`--warn`); the busiest go a dedicated burnt orange (`--heat-hot`, new
+token) rather than `--deny`'s crimson, so "this pair sees a lot of
+traffic" never reads as "this pair is dangerous" -- `--deny` stays the
+only color that means that.
+
+The activity chart is about 30% taller and its bars now use a
+top-lighter/bottom-richer gradient fill (`<linearGradient>`, stop-opacity
+only -- still tracks `--ok`/`--deny` exactly in both themes, no separate
+gradient palette to maintain) instead of a flat color, so a filled bar
+reads as a filled column rather than a sticker. The current hour gets a
+small accent-colored dot above its bar and a bolded axis label, so "now"
+doesn't require reading all the way to the right-hand edge to find.
+
 ## 0.25.1
 
 **Fix: the activity chart's gridlines were nearly invisible.**
