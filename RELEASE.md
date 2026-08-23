@@ -60,6 +60,27 @@ cannot. It is in every release.
 
 ---
 
+## 0.24.0
+
+**Overview: stat tiles are now links, and pending requests surface on the front page.**
+
+The stat tiles at the top of `/ui/` (Tools active, Identities, Protected
+resources, Tools disabled, Calls, Success rate, Events) were static — the
+`.stat-link` CSS class needed to make them clickable had existed in the
+stylesheet but nothing ever used it. Each tile now links to the page that
+explains its number (Tools, Identities, the Tier 1 reference, Stats,
+Audit).
+
+A pending Tier 1 change or toolkit proposal previously showed only as a
+small badge on the "Requests" nav item — easy to miss if you weren't
+looking at the sidebar. The Overview page now shows a banner with the
+count and a direct link to `/ui/requests` when anything is awaiting
+review, using the same counting logic the Requests page itself uses.
+
+Also fixed in passing: the "Events" tile's icon name (`"list"`) didn't
+match any defined icon and rendered blank; it now uses the same `"clock"`
+icon as the Audit page it links to.
+
 ## 0.23.3
 
 **Fix: a tool whose shape no longer fit its toolkit's executor could crash every future startup.**
