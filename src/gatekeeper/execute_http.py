@@ -190,7 +190,7 @@ async def run(
     method: str,
     path: str,
     query: dict[str, str],
-    body: dict[str, str] | None,
+    body: Any | None,
     toolkit: Toolkit,
     credentials: CredentialStore | None,
     timeout_seconds: int,

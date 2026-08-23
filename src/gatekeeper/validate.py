@@ -111,6 +111,28 @@ def _substitute(template: str, values: dict[str, str]) -> str:
     return PLACEHOLDER_RE.sub(replace, template)
 
 
+def _resolve_body_template(template: Any, values: dict[str, str]) -> Any:
+    """Recursively resolves a (possibly nested) body template.
+
+    Leaf strings get ``{param}`` substitution; non-string leaves (numbers,
+    bools, null) pass through unchanged so static JSON structure can be
+    mixed with parameterised values.
+    """
+    if isinstance(template, str):
+        missing = _placeholders_missing(template, values)
+        if missing:
+            raise Denied(
+                DenialReason.PARAM_MISSING,
+                f"Body template needs {sorted(missing)}.",
+            )
+        return _substitute(template, values)
+    if isinstance(template, dict):
+        return {k: _resolve_body_template(v, values) for k, v in template.items()}
+    if isinstance(template, list):
+        return [_resolve_body_template(v, values) for v in template]
+    return template  # int, float, bool, None — pass through
+
+
 def _resolve_path(param: Parameter, raw: str) -> str:
     """Resolves a derived path and checks it against its root.
 
@@ -298,17 +320,9 @@ def build_http_request(
             )
         query[key] = _substitute(template, values)
 
-    body: dict[str, str] | None = None
+    body: Any = None
     if tool.body_template is not None:
-        body = {}
-        for key, template in tool.body_template.items():
-            missing = _placeholders_missing(template, values)
-            if missing:
-                raise Denied(
-                    DenialReason.PARAM_MISSING,
-                    f"Body template {key!r} needs {sorted(missing)}.",
-                )
-            body[key] = _substitute(template, values)
+        body = _resolve_body_template(tool.body_template, values)
 
     return tool.http_method, path, query, body
 
