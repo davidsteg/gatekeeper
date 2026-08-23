@@ -60,6 +60,21 @@ cannot. It is in every release.
 
 ---
 
+## 0.21.0
+
+**HTTP executor: nested JSON body templates.**
+
+The `body` field in a tool spec now supports nested dicts, lists, and
+scalar values — not just flat string→string maps. APIs like Tdarr that
+expect `{"data":{"collection":"…","mode":"…"}}` can now be expressed.
+
+- Leaf strings are `{param}` templates (same substitution as before).
+- Non-string leaves (numbers, bools, null) pass through as static JSON.
+- Flat body templates (existing tools) continue to work unchanged.
+- 10 new tests in `tests/test_nested_body.py`.
+
+---
+
 ## 0.20.9
 
 **Test layers: ruff lint guard + serverInfo.version regression test.**

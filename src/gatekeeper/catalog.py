@@ -88,16 +88,15 @@ class ToolDef:
 
     # -- `http` executor (FR-8.5 to FR-8.7) ----------------------------
     #: Scheme/host are never here -- they live exclusively on the toolkit
-    #: (FR-8.5). `query_template`/`body_template` are deliberately flat
-    #: string->string maps, not arbitrary nested JSON: every value is a
-    #: template resolved by the same `{param}` substitution as `argv` and
-    #: `path_template`, so "one parameter expands to exactly one value"
-    #: (FR-8.7, the HTTP counterpart of FR-5.4) holds without a separate
-    #: nested-structure case to reason about.
+    #: (FR-8.5). `query_template` is a flat string->string map. `body_template`
+    #: supports nested structures (dict/list/str) so APIs that expect a
+    #: JSON body like `{"data":{"collection":...}}` can be expressed —
+    #: every leaf string is a template resolved by `{param}` substitution,
+    #: so FR-8.7 still holds at the value level.
     http_method: str | None = None
     path_template: str | None = None
     query_template: dict[str, str] = dataclasses.field(default_factory=dict)
-    body_template: dict[str, str] | None = None
+    body_template: dict[str, Any] | list[Any] | str | None = None
 
     # -- `truenas` executor (FR-8.3a-f) --------------------------------
     #: JSON-RPC method name. Not agent-suppliable -- fixed per tool, exactly
@@ -326,7 +325,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     http_method: str | None = None
     path_template: str | None = None
     query_template: dict[str, str] = {}
-    body_template: dict[str, str] | None = None
+    body_template: dict[str, Any] | list[Any] | str | None = None
     rpc_method: str | None = None
     params_template: dict[str, str] | None = None
     #: Every template string that may contain a `{param}` placeholder --
@@ -354,10 +353,10 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         query_template = _str_str_map(spec.get("query"), where, "query")
         raw_body = spec.get("body")
         if raw_body is not None:
-            body_template = _str_str_map(raw_body, where, "body")
+            body_template = _nested_body_map(raw_body, where, "body")
         all_templates.append(path_template)
         all_templates.extend(query_template.values())
-        all_templates.extend((body_template or {}).values())
+        all_templates.extend(_collect_template_strings(body_template))
 
     elif toolkit.executor == "truenas":
         rpc_method = spec.get("method")
@@ -439,6 +438,57 @@ def _str_str_map(value: Any, where: str, field: str) -> dict[str, str]:
     ):
         raise ConfigError(f"{where}: '{field}' must be a mapping of string to string")
     return dict(value)
+
+
+def _nested_body_map(
+    value: Any, where: str, field: str
+) -> Any:
+    """A body template that may be nested.
+
+    Unlike ``_str_str_map`` (flat string→string), the HTTP body template
+    supports nested dicts and lists so APIs like Tdarr that expect
+    ``{"data":{"collection":"…","mode":"…"}}`` can be expressed.  Every
+    leaf must be a string (a ``{param}`` template); non-string leaves
+    (numbers, bools, null) are passed through as-is so static JSON
+    structure can be mixed with parameterised values.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return {k: _nested_body_map(v, where, field) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_nested_body_map(v, where, field) for v in value]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    raise ConfigError(
+        f"{where}: '{field}' must be a string, mapping, list, number, bool, or null"
+    )
+
+
+def _collect_template_strings(
+    body: dict[str, Any] | list[Any] | str | None,
+) -> list[str]:
+    """Flattens a nested body template to its leaf string values.
+
+    Used by ``_parse_tool`` to collect every ``{param}`` placeholder for
+    the missing-parameter check — recursively, the same way
+    ``_str_str_map``'s ``.values()`` did for the flat case.
+    """
+    if body is None:
+        return []
+    if isinstance(body, str):
+        return [body]
+    if isinstance(body, dict):
+        out: list[str] = []
+        for v in body.values():
+            out.extend(_collect_template_strings(v))
+        return out
+    if isinstance(body, list):
+        out = []
+        for v in body:
+            out.extend(_collect_template_strings(v))
+        return out
+    return []
 
 
 #: Bookkeeping keys that live on a raw `tools.yaml` entry (versioned shape)
