@@ -1122,7 +1122,8 @@ td.ops form { display: inline; }
 
 /* -- Activity -- */
 .chart { width: 100%; height: auto; display: block; }
-.c-grid { stroke: var(--line); stroke-width: 1; }
+.c-grid { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; opacity: .4; }
+.c-grid.c-grid-base { stroke-dasharray: none; opacity: .6; }
 .c-bar { transition: opacity .12s; }
 .c-bar:hover { opacity: .8; }
 .c-ok { fill: var(--ok); }
@@ -2158,8 +2159,14 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
     # to whichever element comes first in the document for *both* charts.
     chart_uid = secrets.token_hex(3)
 
+    # The 0% line is the actual axis baseline -- solid, so it reads as a
+    # fixed reference even where no bar reaches it. 50%/100% are dashed:
+    # a bar at peak height necessarily overlaps the 100% line, and a solid
+    # stroke there would look like a stray line poking out above/beside
+    # the bar rather than a scale marker.
     grid = "".join(
-        f'<line class="c-grid" x1="0" y1="{base_y - usable * f:.1f}" '
+        f'<line class="c-grid{" c-grid-base" if f == 0.0 else ""}" '
+        f'x1="0" y1="{base_y - usable * f:.1f}" '
         f'x2="{width:.1f}" y2="{base_y - usable * f:.1f}"/>'
         for f in (0.0, 0.5, 1.0)
     )
