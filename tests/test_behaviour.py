@@ -457,6 +457,74 @@ def test_tool_for_a_removed_toolkit_is_disabled_not_fatal(tmp_path, tier1, tool_
         load_catalog(str(tools_path), empty, strict=True)
 
 
+def test_tool_whose_shape_no_longer_fits_its_toolkits_executor_is_disabled_not_fatal(
+    tmp_path, sandbox
+):
+    """FR-4.7 also covers a toolkit *changing executor* (via
+
+    admin.toolkit_update/toolkit_propose, or a plain redeploy), not just a
+    toolkit disappearing outright: an old tool definition shaped for the
+    previous executor (e.g. `binary`/`argv`, no `file_operation`) no longer
+    parses under the new one. Before this test's fix, that raised a plain
+    `ConfigError` (not `Tier1Violation`) from inside `_parse_tool`, which
+    `load_catalog`'s narrower `except Tier1Violation` did not catch --
+    crashing catalog loading entirely, and with it every subsequent
+    startup, rather than disabling just the one stale tool.
+    """
+    import yaml as _yaml
+
+    from gatekeeper.errors import ConfigError
+
+    toolkits_path = tmp_path / "toolkits.yaml"
+    toolkits_path.write_text(
+        _yaml.safe_dump(
+            {
+                "toolkits": {
+                    "demo": {
+                        "executor": "file",
+                        "path_roots": [str(sandbox)],
+                        "protected_resources": [],
+                        "max_timeout_seconds": 10,
+                        "max_output_bytes": 4096,
+                    }
+                },
+                "audit": {"dir": str(tmp_path / "logs")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    file_tier1 = load_tier1(str(toolkits_path))
+
+    # Shaped for the toolkit's old (e.g. `local`) executor: binary/argv,
+    # no `file_operation` -- now invalid under the toolkit's current
+    # (`file`) executor.
+    stale_tool = {
+        "id": "demo.chown",
+        "toolkit": "demo",
+        "binary": "/usr/bin/chown",
+        "argv": [],
+        "title": "x",
+        "description": "x",
+        "category": "write",
+        "idempotent": False,
+        "enabled": True,
+        "parameters": {},
+        "required_scopes": [],
+        "timeout_seconds": 5,
+        "max_output_bytes": 1024,
+    }
+    tools_path = tmp_path / "tools.yaml"
+    tools_path.write_text(_yaml.safe_dump({"tools": [stale_tool]}), encoding="utf-8")
+
+    catalog = load_catalog(str(tools_path), file_tier1)
+    assert catalog.tools == {}
+    assert len(catalog.disabled_by_tier1) == 1
+    assert "file_operation" in catalog.disabled_by_tier1[0]
+
+    with pytest.raises(ConfigError):
+        load_catalog(str(tools_path), file_tier1, strict=True)
+
+
 def test_init_refuses_to_clobber(tmp_path):
     assert _run_init(tmp_path)[0] == 0
     before = (tmp_path / "identities.yaml").read_text(encoding="utf-8")
