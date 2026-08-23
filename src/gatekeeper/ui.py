@@ -49,6 +49,7 @@ import dataclasses
 import hmac
 import html
 import json
+import math
 import os
 import re
 import secrets
@@ -78,7 +79,7 @@ from .identity import (
     UI_ROLES,
     IdentityStore,
 )
-from .integrations import INTEGRATIONS, Integration
+from .integrations import INTEGRATIONS, Integration, monogram
 from .pending import PendingAction, PendingStore, PendingWriteRefused
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
@@ -449,23 +450,53 @@ _DASHBOARD_ICON_SLUGS: dict[str, str] = {
 
 
 def _dashboard_icon_url(toolkit_name: str) -> str | None:
-    """URL to the dashboardicons.com SVG for a toolkit, or None if no match.
+    """URL to the dashboardicons.com SVG for a toolkit, or None if no match
+    can be made with reasonable confidence.
 
-    Tries the slug map first, then the toolkit name directly (most
-    dashboardicons slugs match the service name: jellyfin, sonarr, radarr,
-    prowlarr, bazarr, immich, n8n, etc.).
+    Tries the slug map first, then a known-integration containment match
+    (e.g. "jellyfin" in "jellyfin-prod"). Deliberately does *not* fall back
+    to guessing the toolkit name directly against the CDN: a toolkit named
+    "backup" or "media" with no `backup.svg` on the CDN would 404 silently,
+    and that can never be recovered from -- the CSP forbids scripts
+    entirely (`_respond`), so there is no `onerror` to swap in a fallback
+    once the browser has already committed to a broken `<img>`. Returning
+    None here instead lets the caller use `_toolkit_badge`'s monogram,
+    which always renders something.
     """
     name = toolkit_name.strip().lower()
     slug = _DASHBOARD_ICON_SLUGS.get(name)
     if slug:
         return f"{_DASHBOARD_ICON_CDN}/{slug}.svg"
-    # Try integration key match (e.g. "jellyfin" in "jellyfin-prod")
     integration = _guess_integration(name)
     if integration:
         slug = _DASHBOARD_ICON_SLUGS.get(integration, integration)
         return f"{_DASHBOARD_ICON_CDN}/{slug}.svg"
-    # Last resort: try the name itself — many services match directly
-    return f"{_DASHBOARD_ICON_CDN}/{name}.svg"
+    return None
+
+
+#: Fallback palette for `_toolkit_badge` -- the same category colors the
+#: access map already uses to tell identities apart, reused here so an
+#: unmatched toolkit gets a varied, deliberate color rather than one flat
+#: grey icon repeated for every toolkit the CDN doesn't recognize.
+_BADGE_COLORS = ["--cat-1", "--cat-2", "--cat-3", "--cat-4", "--cat-5", "--cat-6"]
+
+
+def _toolkit_badge(name: str) -> str:
+    """A colored-monogram fallback for a toolkit with no confident logo.
+
+    Reuses `integrations.monogram()` -- the same flat-circle-plus-initials
+    drawing already used there for Tdarr/Jellyseerr, which have no
+    dashboard-icons source either -- instead of a second copy of the same
+    SVG. Color is picked deterministically from `_BADGE_COLORS` by the
+    toolkit name (passed through as a `var(--cat-N)` reference, which
+    `monogram()`'s `color` accepts same as a literal hex), so the same
+    toolkit always gets the same badge and a page with several unmatched
+    toolkits doesn't read as "everything unknown looks identical."
+    """
+    words = [w for w in re.split(r"[\s_-]+", name.strip()) if w]
+    letters = ("".join(w[0] for w in words[:2]) or name[:1] or "?").upper()
+    color = _BADGE_COLORS[sum(ord(c) for c in name) % len(_BADGE_COLORS)]
+    return monogram(_e(letters), f"var({color})", css_class="am-col-logo am-col-badge")
 
 
 def _target(obj: Toolkit | Destination) -> str:
@@ -748,10 +779,6 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
   font-size: 1.5rem; font-weight: 650; line-height: 1.1; letter-spacing: -.01em;
 }
 .stat .l { color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; }
-.stat-link { text-decoration: none; color: var(--fg); display: flex; align-items: center; gap: .75rem; width: 100%; }
-.stat-link:hover { background: var(--sunken); border-radius: var(--radius-sm); }
-.stat-link:hover .l { color: var(--fg); }
-.stat-link .n { color: var(--accent); }
 
 /* Same reasoning as .grid's margin-bottom: this is a bare grid container,
    not a .card, so it carries none of .card's own trailing margin -- without
@@ -761,6 +788,64 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
 .split .card { flex: 1; display: flex; flex-direction: column; }
 .split .card > .pad { flex: 1; display: flex; flex-direction: column; }
 @media (max-width: 1080px) { .split { grid-template-columns: 1fr; } }
+
+/* -- Overview hero: the gauge is the one thing on the page answering
+   "is everything okay right now" at a glance; the chip row underneath
+   is static posture, deliberately smaller so it doesn't compete. -- */
+.ov-hero { display: flex; align-items: center; gap: 1.5rem; padding: 1.1rem 1.4rem; }
+/* Both are <a href="…/stats"> now, not <div> -- the gauge and the call
+   count are the two numbers Stats itself opens on, so clicking either
+   here should go straight there instead of leaving "Full stats" down in
+   the Activity card as the only way in. */
+.ov-hero-gauge {
+  flex: none; display: block; border-radius: var(--radius); transition: opacity .12s;
+}
+.ov-hero-gauge:hover { opacity: .82; }
+.gauge-track { stroke: var(--line); }
+.gauge-n {
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  font-size: 1.3rem; font-weight: 700; fill: var(--fg);
+}
+.gauge-l { font-size: .5rem; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); }
+.ov-hero-main { flex: 1; min-width: 0; }
+.ov-hero-headline {
+  display: flex; align-items: baseline; gap: .5rem; margin-bottom: .6rem;
+  text-decoration: none; width: fit-content;
+}
+.ov-hero-headline:hover .ov-hero-n { color: var(--accent); }
+.ov-hero-n {
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  font-size: 2.2rem; font-weight: 700; letter-spacing: -.02em; color: var(--fg); line-height: 1;
+}
+.ov-hero-l { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+.ov-hero-bar {
+  display: flex; height: 7px; border-radius: 999px; overflow: hidden;
+  background: var(--sunken); margin-bottom: .55rem;
+}
+.ov-hero-bar .seg { height: 100%; }
+.ov-hero-bar .seg.ok { background: var(--ok); }
+.ov-hero-bar .seg.bad { background: var(--deny); }
+.ov-hero-legend { display: flex; gap: 1.1rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); }
+.ov-hero-legend .lg { display: flex; align-items: center; gap: .4rem; }
+.ov-hero-legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--line); }
+.ov-hero-legend .ok i { background: var(--ok); }
+.ov-hero-legend .bad i { background: var(--deny); }
+@media (max-width: 620px) { .ov-hero { flex-direction: column; align-items: flex-start; } }
+
+.chiprow { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .8rem; }
+.chip-stat {
+  display: flex; align-items: center; gap: .4rem; text-decoration: none; color: var(--fg);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+  padding: .32rem .7rem .32rem .6rem; font-size: .78rem; box-shadow: var(--shadow);
+}
+.chip-stat:hover { border-color: var(--accent); color: var(--accent); }
+.chip-stat b {
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  font-weight: 700; color: var(--fg);
+}
+.chip-stat:hover b { color: var(--accent); }
+.chip-stat.t-deny { border-color: color-mix(in srgb, var(--deny) 35%, var(--line)); }
+.chip-stat.t-deny b { color: var(--deny); }
 
 .pill {
   display: inline-flex; align-items: center; gap: .25rem;
@@ -915,21 +1000,21 @@ td.ops form { display: inline; }
 .am-wrap::-webkit-scrollbar-track { background: var(--sunken); border-radius: 3px; }
 .am-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 .am-wrap::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-.am-grid { width: 100%; border-collapse: separate; border-spacing: 3px; font-size: .82rem; table-layout: auto; }
+.am-grid { width: 100%; border-collapse: separate; border-spacing: 4px; font-size: .82rem; table-layout: auto; }
 .am-grid th, .am-grid td { border: none; padding: 0; text-align: center; }
 .am-corner {
   background: var(--surface); font-size: .68rem; text-transform: uppercase;
-  letter-spacing: .06em; color: var(--muted); padding: .5rem .6rem;
+  letter-spacing: .06em; color: var(--muted); padding: .55rem .6rem;
   white-space: nowrap; border-radius: var(--radius-sm); font-weight: 600;
 }
 .am-corner:first-child { text-align: left; }
 .am-corner:nth-child(2), .am-corner:nth-child(3) { text-align: center; }
 .am-col {
-  min-width: 4.5rem; max-width: 7rem; padding: .4rem .25rem;
+  min-width: 4.5rem; max-width: 7rem; padding: .5rem .3rem;
   vertical-align: bottom; border-radius: var(--radius-sm);
-  transition: background .15s;
+  border-bottom: 2px solid var(--line); transition: background .15s, border-color .15s;
 }
-.am-col:hover { background: var(--accent-soft); }
+.am-col:hover { background: var(--accent-soft); border-color: var(--accent); }
 .am-col-link {
   text-decoration: none; color: var(--fg); display: block;
   padding: .2rem .1rem; border-radius: var(--radius-sm);
@@ -949,7 +1034,7 @@ td.ops form { display: inline; }
   display: block; font-size: .62rem; color: var(--muted); margin-top: .15rem;
 }
 .am-row-id {
-  text-align: left; padding: .4rem .6rem; white-space: nowrap;
+  text-align: left; padding: .5rem .7rem; white-space: nowrap;
   background: var(--surface); border-radius: var(--radius-sm);
 }
 .am-row-link {
@@ -960,20 +1045,31 @@ td.ops form { display: inline; }
 .am-row-link:hover svg { opacity: .8; }
 .am-row-id svg { opacity: .5; vertical-align: middle; margin-right: .35rem; transition: opacity .15s; }
 .am-row-id .mono { font-size: .8rem; font-weight: 600; color: var(--fg); transition: color .15s; }
-.am-row-role { padding: .35rem .3rem; background: var(--surface); border-radius: var(--radius-sm); }
+.am-row-role { padding: .5rem .3rem; background: var(--surface); border-radius: var(--radius-sm); }
 .am-row-role .pill { font-size: .65rem; padding: .1rem .4rem; }
 .am-grid tbody tr:hover .am-row-id { background: var(--accent-soft); }
 .am-grid tbody tr:hover .am-row-role { background: var(--accent-soft); }
 .am-grid tbody tr:hover .am-row-tools { background: var(--accent-soft); color: var(--fg); }
 .am-row-tools {
   color: var(--muted); font-size: .72rem; background: var(--surface);
-  border-radius: var(--radius-sm); padding: .35rem;
+  border-radius: var(--radius-sm); padding: .5rem;
 }
-.am-cell { text-align: center; min-width: 2.8rem; border-radius: var(--radius-sm); transition: all .15s; position: relative; }
-.am-cell.am-none { color: var(--muted); opacity: .2; font-size: .72rem; }
+/* Zebra striping on the label columns only -- the grant cells already
+   carry their own heat color, so striping them too would just muddy the
+   one signal (call volume) the matrix exists to show. */
+.am-grid tbody tr:nth-child(even) .am-row-id,
+.am-grid tbody tr:nth-child(even) .am-row-role,
+.am-grid tbody tr:nth-child(even) .am-row-tools,
+.am-grid tbody tr:nth-child(even) .am-cell.am-none { background: var(--sunken); }
+.am-cell {
+  text-align: center; min-width: 3rem; border-radius: var(--radius-sm);
+  transition: all .15s; position: relative;
+}
+.am-cell.am-none { color: var(--muted); opacity: .25; font-size: .72rem; }
 .am-cell.am-grant {
   background: var(--ok-soft);
   border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .am-cell.am-grant.heat-low {
   background: color-mix(in srgb, var(--ok-soft) 85%, var(--ok) 15%);
@@ -991,11 +1087,12 @@ td.ops form { display: inline; }
 }
 .am-cell.am-grant:hover {
   box-shadow: 0 0 14px color-mix(in srgb, var(--ok) 40%, transparent);
+  transform: translateY(-1px);
   z-index: 10;
 }
 .am-count {
   cursor: pointer; font-weight: 700; font-size: .82rem;
-  color: var(--ok); display: block; padding: .25rem;
+  color: var(--ok); display: block; padding: .3rem .25rem;
 }
 .am-cell.am-grant.heat-hot .am-count { color: var(--fg); }
 .am-popup {
@@ -1025,6 +1122,9 @@ td.ops form { display: inline; }
 
 /* -- Activity -- */
 .chart { width: 100%; height: auto; display: block; }
+.c-grid { stroke: var(--line); stroke-width: 1; }
+.c-bar { transition: opacity .12s; }
+.c-bar:hover { opacity: .8; }
 .c-ok { fill: var(--ok); }
 .c-deny { fill: var(--deny); }
 .c-base { fill: var(--line); }
@@ -1474,18 +1574,55 @@ def _note(text: str, *, icon: str = "alert", tone: str = "") -> str:
     return f'<div class="note {tone}">{_icon(icon, 16)}<div>{text}</div></div>'
 
 
-def _stat(
+def _stat(number: Any, label: str, icon: str, tone: str = "", title: str = "") -> str:
+    title_attr = f' title="{_e(title)}"' if title else ""
+    return (
+        f'<div class="stat {tone}"{title_attr}><div class="chip">{_icon(icon, 18)}</div>'
+        f'<div><div class="n">{_e(number)}</div>'
+        f'<div class="l">{_e(label)}</div></div></div>'
+    )
+
+
+def _chip(
     number: Any, label: str, icon: str, tone: str = "", title: str = "", href: str = "",
 ) -> str:
+    """A compact, clickable posture readout for the overview's second row.
+
+    Deliberately smaller and denser than `.stat` -- the hero above already
+    carries the headline number, this row is a scan-able summary underneath
+    it, not a second row of equally-weighted tiles.
+    """
     title_attr = f' title="{_e(title)}"' if title else ""
-    inner = (
-        f'<div class="chip">{_icon(icon, 18)}</div>'
-        f'<div><div class="n">{_e(number)}</div>'
-        f'<div class="l">{_e(label)}</div></div>'
+    return (
+        f'<a class="chip-stat {tone}" href="{_e(href)}"{title_attr}>'
+        f'{_icon(icon, 14)}<b>{_e(number)}</b>{_e(label)}</a>'
     )
-    if href:
-        inner = f'<a class="stat-link" href="{_e(href)}">{inner}</a>'
-    return f'<div class="stat {tone}"{title_attr}>{inner}</div>'
+
+
+def _radial_gauge(pct: int, tone: str, *, size: int = 116, stroke: int = 9, has_data: bool = True) -> str:
+    """Success rate as a ring, filled server-side via `stroke-dasharray`.
+
+    No JS and no client-side chart library -- the CSP forbids scripts
+    entirely, so the arc length is plain arithmetic done once at render
+    time, same approach as `_activity_chart`'s bars.
+    """
+    r = size / 2 - stroke
+    c = 2 * math.pi * r
+    filled = c * max(0, min(100, pct)) / 100 if has_data else 0
+    cx = cy = size / 2
+    color = {"t-ok": "var(--ok)", "t-warn": "var(--warn)", "t-deny": "var(--deny)"}.get(tone, "var(--line)")
+    center = f"{pct}%" if has_data else "&ndash;"
+    return (
+        f'<svg class="gauge" width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
+        f'role="img" aria-label="Success rate {pct if has_data else 0}%">'
+        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" class="gauge-track" stroke-width="{stroke}"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{color}" stroke-width="{stroke}" '
+        f'stroke-linecap="round" stroke-dasharray="{filled:.1f} {c:.1f}" '
+        f'transform="rotate(-90 {cx} {cy})"/>'
+        f'<text x="{cx}" y="{cy - 4}" text-anchor="middle" class="gauge-n">{center}</text>'
+        f'<text x="{cx}" y="{cy + 14}" text-anchor="middle" class="gauge-l">Success rate</text>'
+        '</svg>'
+    )
 
 
 def _post_button(
@@ -1928,7 +2065,7 @@ def _access_matrix(
         if icon_url:
             icon_html = f'<img src="{_e(icon_url)}" class="am-col-logo" alt="" loading="lazy" width="18" height="18">'
         else:
-            icon_html = _icon(_executor_icon(tk.executor), 14)
+            icon_html = _toolkit_badge(name)
         col_headers += (
             f'<th class="am-col" title="{_e(name)}">'
             f'<a class="am-col-link" href="{UI_PREFIX}/tools?view=cards">'
@@ -1998,33 +2135,65 @@ def _access_matrix(
 
 
 def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
-    """Calls per hour, succeeded vs. rejected -- as stacked bars."""
+    """Calls per hour, succeeded vs. rejected -- as stacked, capsule-rounded bars.
+
+    Each bar's ok/bad split is clipped to one rounded shape (rather than two
+    independently-rounded rects) so the segment boundary reads as a single
+    pill with a color seam, not two stacked lozenges pinched where they
+    meet. A `<title>` per bar gives exact counts on hover -- no JS, no
+    tooltip library, just what SVG already does natively.
+    """
     now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     buckets = _bucket_calls(records, hours, now=now)
     peak = max((o + d for o, d in buckets), default=0)
 
-    width, height, pad = 300.0, 78.0, 14.0
+    width, height, pad = 300.0, 86.0, 16.0
     slot_w = width / hours
-    bw = slot_w * 0.62
+    bw = slot_w * 0.6
+    usable = height - pad - 6
+    base_y = height - pad
+    corner = min(bw / 2, 3.0)
+    # Random per-render, not just per-bar: two charts on the same page would
+    # otherwise both emit id="cbar0", and `clip-path: url(#cbar0)` resolves
+    # to whichever element comes first in the document for *both* charts.
+    chart_uid = secrets.token_hex(3)
+
+    grid = "".join(
+        f'<line class="c-grid" x1="0" y1="{base_y - usable * f:.1f}" '
+        f'x2="{width:.1f}" y2="{base_y - usable * f:.1f}"/>'
+        for f in (0.0, 0.5, 1.0)
+    )
+
     bars = []
     for index, (ok, bad) in enumerate(buckets):
         x = index * slot_w + (slot_w - bw) / 2
-        usable = height - pad - 6
         h_ok = usable * ok / peak if peak else 0
         h_bad = usable * bad / peak if peak else 0
-        if h_bad > 0:
+        total_h = h_ok + h_bad
+        if total_h > 0:
+            hour_label = (now - timedelta(hours=hours - 1 - index)).strftime("%H:%M")
+            clip_id = f"cbar-{chart_uid}-{index}"
+            segs = ""
+            if h_bad > 0:
+                segs += (
+                    f'<rect class="c-deny" x="{x:.1f}" y="{base_y - h_bad:.1f}" '
+                    f'width="{bw:.1f}" height="{h_bad + 0.5:.1f}"/>'
+                )
+            if h_ok > 0:
+                segs += (
+                    f'<rect class="c-ok" x="{x:.1f}" y="{base_y - total_h:.1f}" '
+                    f'width="{bw:.1f}" height="{h_ok + 0.5:.1f}"/>'
+                )
             bars.append(
-                f'<rect class="c-deny" x="{x:.1f}" y="{height - pad - h_bad:.1f}" '
-                f'width="{bw:.1f}" height="{h_bad:.1f}" rx="1.5"/>'
+                f'<clipPath id="{clip_id}"><rect x="{x:.1f}" y="{base_y - total_h:.1f}" '
+                f'width="{bw:.1f}" height="{total_h:.1f}" rx="{corner:.1f}"/></clipPath>'
+                f'<g class="c-bar" clip-path="url(#{clip_id})">{segs}'
+                f'<title>{_e(hour_label)} &ndash; {ok} ok, {bad} denied/failed</title>'
+                "</g>"
             )
-        if h_ok > 0:
+        else:
             bars.append(
-                f'<rect class="c-ok" x="{x:.1f}" y="{height - pad - h_bad - h_ok:.1f}" '
-                f'width="{bw:.1f}" height="{h_ok:.1f}" rx="1.5"/>'
-            )
-        if h_ok == 0 and h_bad == 0:
-            bars.append(
-                f'<rect class="c-base" x="{x:.1f}" y="{height - pad - 2:.1f}" '
+                f'<rect class="c-base" x="{x:.1f}" y="{base_y - 2:.1f}" '
                 f'width="{bw:.1f}" height="2" rx="1"/>'
             )
 
@@ -2033,7 +2202,7 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
     if not has_data:
         return (
             f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
-            f'aria-label="Calls per hour (none in last {hours}h)">'
+            f'aria-label="Calls per hour (none in last {hours}h)">{grid}'
             f'<text class="c-ax" x="{width / 2:.0f}" y="{height / 2:.0f}" '
             f'text-anchor="middle">No tool calls in the last {hours} hours</text>'
             f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
@@ -2043,7 +2212,7 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
         )
     return (
         f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
-        f'aria-label="Calls per hour">{"".join(bars)}'
+        f'aria-label="Calls per hour">{grid}{"".join(bars)}'
         f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
         f'<text class="c-ax" x="{width:.0f}" y="{height - 3:.0f}" '
         f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
@@ -2303,38 +2472,61 @@ def _view_overview(
             )
         )
 
-    # Call stats sit in the top tile row alongside the catalog stats.
+    # The gauge and outcome bar are the page's headline -- everything else
+    # in the top section is static posture, this is what changed since the
+    # last time someone looked.
     _ov_totals = _outcome_totals(records)
     _ov_success = int(_ov_totals["ok"] / _ov_totals["total"] * 100) if _ov_totals["total"] else 0
+    _ov_tone = (
+        "" if not _ov_totals["total"]
+        else "t-ok" if _ov_success >= 80 else ("t-warn" if _ov_success >= 50 else "t-deny")
+    )
+    _ov_bad = _ov_totals["denied"] + _ov_totals["failed"]
+    _ov_ok_w = _ov_totals["ok"] / _ov_totals["total"] * 100 if _ov_totals["total"] else 0
+    _ov_bad_w = 100 - _ov_ok_w if _ov_totals["total"] else 0
 
     parts.append(
-        '<div class="grid">'
-        + _stat(active, "Tools active", "sliders", "t-ok", href=f"{UI_PREFIX}/tools")
-        + _stat(
-            len(identities.identities), "Identities", "key",
+        '<div class="card ov-hero">'
+        f'<a class="ov-hero-gauge" href="{UI_PREFIX}/stats" title="Full stats">'
+        f'{_radial_gauge(_ov_success, _ov_tone, has_data=bool(_ov_totals["total"]))}</a>'
+        '<div class="ov-hero-main">'
+        f'<a class="ov-hero-headline" href="{UI_PREFIX}/stats">'
+        f'<span class="ov-hero-n">{_ov_totals["total"]}</span>'
+        '<span class="ov-hero-l">Calls (12h)</span>'
+        '</a>'
+        '<div class="ov-hero-bar">'
+        + (
+            f'<div class="seg ok" style="width:{_ov_ok_w:.1f}%"></div>'
+            f'<div class="seg bad" style="width:{_ov_bad_w:.1f}%"></div>'
+            if _ov_totals["total"] else ""
+        )
+        + '</div>'
+        '<div class="ov-hero-legend">'
+        f'<span class="lg ok"><i></i>{_ov_totals["ok"]} ok</span>'
+        f'<span class="lg bad"><i></i>{_ov_bad} denied/failed</span>'
+        f'<span class="lg muted"><i></i>{len(records)} events logged</span>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+
+    parts.append(
+        '<div class="chiprow">'
+        + _chip(active, "tools active", "sliders", href=f"{UI_PREFIX}/tools")
+        + _chip(
+            len(identities.identities), "identities", "key",
             href=f"{UI_PREFIX}/identities",
         )
-        + _stat(
-            len(protected), "Protected resources", "lock", "t-deny",
+        + _chip(
+            len(protected), "protected resources", "lock", "t-deny",
             title="Toolkit targets blocked for every identity, from toolkits.yaml (FR-4.12)",
             href=f"{UI_PREFIX}/toolkits/reference",
         )
-        + _stat(
-            blocked, "Tools disabled", "ban", "t-deny" if blocked else "",
+        + _chip(
+            blocked, "tools disabled", "ban", "t-deny" if blocked else "",
             title="Tool definitions rejected at load time for violating a Tier 1 rule",
             href=f"{UI_PREFIX}/tools",
         )
-        + _stat(
-            _ov_totals["total"], "Calls (12h)", "activity",
-            "t-ok" if _ov_totals["total"] else "",
-            href=f"{UI_PREFIX}/stats",
-        )
-        + _stat(
-            f"{_ov_success}%", "Success rate", "check",
-            "t-ok" if _ov_success >= 80 else ("t-warn" if _ov_success >= 50 else "t-deny"),
-            href=f"{UI_PREFIX}/stats",
-        )
-        + _stat(len(records), "Events", "clock", href=f"{UI_PREFIX}/audit")
         + "</div>"
     )
 
