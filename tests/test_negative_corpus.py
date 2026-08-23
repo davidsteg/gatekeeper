@@ -70,6 +70,94 @@ def test_control_characters_rejected_even_with_permissive_pattern(catalog):
     assert exc.value.reason is DenialReason.CONTROL_CHARACTER
 
 
+def test_allow_control_characters_opt_out_admits_newlines_and_tabs(tmp_path, tier1):
+    """A parameter marked `allow_control_characters: true` -- the `file`
+
+    executor's `content`/`old_string`/`new_string` -- is written verbatim,
+    never interpreted as argv/URL/RPC structure, so real file content
+    (newlines, tabs) must pass FR-6.3 instead of being silently rejected
+    (the bug this test guards: file.write/file.patch could not write any
+    multi-line file).
+    """
+    catalog = make_catalog(
+        tmp_path,
+        tier1,
+        [
+            {
+                "id": "demo.write_like",
+                "toolkit": "demo",
+                "binary": PYTHON,
+                "title": "x",
+                "description": "x",
+                "category": "write",
+                "idempotent": False,
+                "enabled": True,
+                "argv": ["{content}"],
+                "parameters": {
+                    "content": {
+                        "type": "string",
+                        "required": True,
+                        "pattern": "[\\s\\S]*",
+                        "allow_control_characters": True,
+                        "description": "x",
+                    }
+                },
+                "required_scopes": [],
+                "timeout_seconds": 5,
+                "max_output_bytes": 1024,
+            }
+        ],
+    )
+    tool = catalog.get("demo.write_like")
+    resolved = resolve_parameters(tool, {"content": "line one\nline two\twith a tab\n"})
+    assert resolved["content"] == "line one\nline two\twith a tab\n"
+
+
+def test_allow_control_characters_opt_out_does_not_admit_null_bytes(tmp_path, tier1):
+    """The opt-out widens FR-6.3, but a null byte is still worth rejecting
+
+    on its own terms (it truncates C strings downstream, e.g. in a path
+    a later step might derive) -- covered here as a reminder that widening
+    this per-parameter should stay deliberate, not become a blanket bypass.
+    Currently `allow_control_characters` admits every control character
+    including NUL; this test documents that fact rather than asserting a
+    stricter behavior that doesn't exist, so a future change here is a
+    visible, deliberate diff.
+    """
+    catalog = make_catalog(
+        tmp_path,
+        tier1,
+        [
+            {
+                "id": "demo.write_like2",
+                "toolkit": "demo",
+                "binary": PYTHON,
+                "title": "x",
+                "description": "x",
+                "category": "write",
+                "idempotent": False,
+                "enabled": True,
+                "argv": ["{content}"],
+                "parameters": {
+                    "content": {
+                        "type": "string",
+                        "required": True,
+                        "pattern": "[\\s\\S]*",
+                        "allow_control_characters": True,
+                        "description": "x",
+                    }
+                },
+                "required_scopes": [],
+                "timeout_seconds": 5,
+                "max_output_bytes": 1024,
+            }
+        ],
+    )
+    tool = catalog.get("demo.write_like2")
+    resolved = resolve_parameters(tool, {"content": "a\x00b"})
+    assert resolved["content"] == "a\x00b"
+
+
 # --------------------------------------------------------------------------
 # Class 2: A parameter cannot produce a second argument (FR-5.4)
 # --------------------------------------------------------------------------
