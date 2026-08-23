@@ -1009,9 +1009,19 @@ td.ops form { display: inline; }
    scroll sideways inside its own box. It was "visible" despite the
    ::-webkit-scrollbar rules right below it actually styling one, which
    never had anything to apply to -- the table just spilled out past the
-   card's edge instead of scrolling. (Per spec, overflow-x other than
-   visible forces overflow-y to auto too -- there's no partial mix.) */
-.am-wrap { overflow-x: auto; border-radius: var(--radius); }
+   card's edge instead of scrolling.
+   overflow-y is explicitly "hidden", not left to default: per spec,
+   overflow-x other than visible forces the other axis away from visible
+   too, and it would otherwise compute to "auto". Every granted cell's
+   `.am-popup` is `position: absolute` and still occupies its full laid-
+   out size even at `opacity: 0` (hidden, not removed), so with the axes
+   coupled to "auto" the popups belonging to cells anywhere in the table
+   -- not just the last row -- inflated .am-wrap's scrollable area with
+   space that renders as nothing, and scrolling down led into that empty
+   space. Hidden trades away a popup that would hang off the very bottom
+   row getting clipped instead of floating fully clear -- much rarer, and
+   nowhere near as confusing as a wall of empty scrollable space. */
+.am-wrap { overflow-x: auto; overflow-y: hidden; border-radius: var(--radius); }
 .am-wrap::-webkit-scrollbar { height: 6px; }
 .am-wrap::-webkit-scrollbar-track { background: var(--sunken); border-radius: 3px; }
 .am-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
@@ -1157,10 +1167,13 @@ td.ops form { display: inline; }
 
 /* -- Activity -- */
 .chart { width: 100%; height: auto; display: block; }
-/* One <foreignObject> per hour already places this at the right x/y in
-   SVG-user-unit space (see `_activity_chart`) -- this only needs to fill
-   that box and give `.c-tip` a local positioning context. */
-.c-tip-zone { width: 100%; height: 100%; position: relative; cursor: default; }
+/* A single <foreignObject> spans the whole chart (see `_activity_chart`);
+   this row divides it into equal hourly zones with plain flex, not
+   per-zone `style="left:N%"` -- a `.c-tip` can then overflow past its
+   own zone into the shared row's space without being clipped, unlike a
+   per-bar-width foreignObject (too narrow to hold the tooltip at all). */
+.c-tip-row { display: flex; width: 100%; height: 100%; }
+.c-tip-zone { flex: 1; min-width: 0; position: relative; cursor: default; }
 .c-tip {
   position: absolute; top: 2px; left: 50%; transform: translateX(-50%) scale(.92);
   opacity: 0; pointer-events: none; transition: opacity .12s, transform .12s;
@@ -1184,8 +1197,15 @@ td.ops form { display: inline; }
    needs to fill exactly the height the grid gives it, not spill past the
    card's own border. Padding stays the normal `.card > .pad` value so the
    scrollbar has room before the card's edge, not on top of it. */
-.pad.pad-scroll { overflow-y: auto; min-height: 0; }
-.feed { display: flex; flex-direction: column; }
+/* max-height, not just flex:1 -- a `.split` grid row auto-sizes to fit
+   its tallest participant's own natural content height, so an uncapped
+   feed (up to 20 items) *was* the tallest thing on the row and stretched
+   the chart's card to match it, leaving a wall of empty space below the
+   chart. Capped near the chart's own typical rendered height (300x112
+   viewBox against the flexible ~2/3-width column) so the two cards stay
+   close in height across common widths, with the feed scrolling for
+   anything past that instead of growing past it. */
+.pad.pad-scroll { overflow-y: auto; min-height: 0; max-height: 420px; }
 .feed-item { display: flex; gap: .55rem; padding: .7rem 1rem; align-items: baseline; border-top: 1px solid var(--line); font-size: .82rem; }
 .feed-item .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
 .feed-item.t-ok .dot { background: var(--ok); }
@@ -2308,19 +2328,26 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
     # appears instantly and matches the rest of the console's popups
     # (`.am-popup` uses the same absolute + opacity-transition pattern).
     #
-    # Positioned with plain SVG x/y/width/height attributes via
-    # <foreignObject>, not CSS `left`/`width` in a `style=""` -- the CSP's
-    # style-src nonce covers only the one <style> block, not per-element
-    # inline styles, so a `style="left:N%"` here would silently do nothing
-    # (see `_integration_logo`'s docstring for the same landmine, and the
-    # hero's outcome bar above, which hit it for real).
+    # One <foreignObject> spanning the whole chart, not one per bar: a
+    # <foreignObject> clips its content to its own box, so a per-bar zone
+    # only `slot_w` (~25 units) wide clipped the tooltip's text the moment
+    # it needed more room than that -- the earlier version rendered
+    # visibly broken/cut-off. The zones inside are an equal-width flex
+    # row instead (a static `display:flex`/`flex:1` in the stylesheet,
+    # not per-zone `style="left:N%"`), so a tooltip can overflow into a
+    # neighboring column's space without needing per-element positioning
+    # that CSP would drop anyway (see the note on the hero bar above).
     tips = "".join(
-        f'<foreignObject x="{index * slot_w:.1f}" y="0" width="{slot_w:.1f}" height="{height:.0f}">'
-        '<div xmlns="http://www.w3.org/1999/xhtml" class="c-tip-zone">'
+        '<div class="c-tip-zone">'
         '<div class="c-tip">'
         f'{_e((now - timedelta(hours=hours - 1 - index)).strftime("%H:%M"))} '
-        f'&ndash; {ok} ok, {bad} denied/failed</div></div></foreignObject>'
+        f'&ndash; {ok} ok, {bad} denied/failed</div></div>'
         for index, (ok, bad) in enumerate(buckets)
+    )
+    tips = (
+        f'<foreignObject x="0" y="0" width="{width:.0f}" height="{height:.0f}">'
+        f'<div xmlns="http://www.w3.org/1999/xhtml" class="c-tip-row">{tips}</div>'
+        "</foreignObject>"
     )
     return (
         f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '

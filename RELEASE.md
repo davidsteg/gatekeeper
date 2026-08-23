@@ -60,6 +60,44 @@ cannot. It is in every release.
 
 ---
 
+## 0.27.1
+
+**Fixes two real regressions from 0.27.0's own fixes.**
+
+**The chart's new hover tooltip rendered visibly broken** -- clipped mid-
+word, overlapping neighboring bars. 0.27.0 gave each hour its own
+`<foreignObject>` exactly `slot_w` (~25 of 300 user units) wide to hold
+the tooltip; a `<foreignObject>` clips its content to its own box, so
+anything wider than that sliver -- which a "14:00 &ndash; 3 ok, 1
+denied/failed" tooltip always was -- got cut off rather than overflowing
+into view. Replaced with a single `<foreignObject>` spanning the whole
+chart, divided into equal hourly zones with a plain flex row (no
+per-zone positioning needed, let alone one that would've hit the same
+`style=""` CSP wall as the hero bar did last release) -- a tooltip can
+now overflow past its own zone into the shared box instead of being
+clipped.
+
+**The access map grew a wall of empty scrollable space below the
+table.** 0.27.0's `.am-wrap { overflow-x: auto }` fix for the table
+spilling out past its card had a side effect: per spec, a non-visible
+overflow-x forces overflow-y away from "visible" too, defaulting it to
+"auto". Every granted cell's hover popup is `position: absolute` and
+still occupies its full laid-out size at `opacity: 0` (hidden, not
+removed) -- with both axes now "auto", those normally-invisible popups
+inflated the table's scrollable area, and scrolling down led into empty
+space with nothing in it. Set `overflow-y: hidden` explicitly instead of
+leaving it to that default; the trade-off is a popup hanging off the
+very bottom row can get clipped instead of floating fully clear, far
+rarer and far less confusing than the empty-space bug it replaces.
+
+**Also:** the Activity/Recent-events split (new in 0.27.0) let the feed
+grow to fit all 20 items before the grid measured row height, so an
+uncapped feed became the tallest thing on the row and stretched the
+chart's card to match -- a wall of empty space below the chart. The
+feed's pad now caps at a fixed max-height close to the chart's own
+typical rendered height and scrolls past that instead of growing past
+it, keeping both cards close in height.
+
 ## 0.27.0
 
 **Overview: fixes a CSP bug in the previous release, plus several real layout bugs on the Activity/Access map cards.**
