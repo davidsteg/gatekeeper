@@ -13,6 +13,8 @@ import logging
 from typing import Any
 
 import mcp.types as types
+
+from gatekeeper import __version__
 from mcp.server.lowlevel import Server
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -189,7 +191,7 @@ def build_mcp_server(service: Service) -> Server[None]:
 
     return Server(
         "gatekeeper",
-        version="0.1.0",
+        version=__version__,
         instructions=(
             "Controlled access to host operations. Every tool performs one "
             "fixed action; there are no free-form commands. A timeout on a "

@@ -60,6 +60,15 @@ cannot. It is in every release.
 
 ---
 
+## 0.20.8
+
+**Fix: `serverInfo.version` reports actual version instead of hardcoded `0.1.0`.**
+
+The MCP `initialize` response reported `version: "0.1.0"` regardless of
+the installed release. Now uses `gatekeeper.__version__`.
+
+---
+
 ## 0.20.7
 
 **Fix: `grant_set` accepts bare tool IDs for multi-destination toolkits.**
