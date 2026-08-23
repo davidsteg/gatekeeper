@@ -295,6 +295,8 @@ class Service:
                 http_request = validate.build_http_request(tool, values, toolkit)
             elif toolkit.executor == "truenas":
                 rpc_call = validate.build_rpc_call(tool, values, toolkit)
+            elif toolkit.executor == "file":
+                pass  # parameters resolved directly into the call below
         except Denied as denial:
             self.metrics[(tool_id, identity.id, "denied")] += 1
             self.audit.call(
@@ -337,6 +339,21 @@ class Service:
                     toolkit=toolkit, credentials=self.credentials,
                     timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes,
                     idempotent=tool.idempotent, redact=self.audit.redact,
+                )
+            elif toolkit.executor == "file":
+                from .execute_file import run as _file_run
+                assert tool.file_operation is not None
+                result = await _file_run(
+                    operation=tool.file_operation,
+                    path=values.get("path", ""),
+                    content=values.get("content"),
+                    old_string=values.get("old_string"),
+                    new_string=values.get("new_string"),
+                    path_roots=list(toolkit.path_roots),
+                    protected=list(toolkit.protected_resources),
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent,
                 )
             else:
                 assert toolkit.executor == "truenas" and rpc_call is not None
