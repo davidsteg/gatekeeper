@@ -107,19 +107,12 @@ class AdminService:
     def _grantable_ids(self, tool_id: str) -> list[str]:
         """The catalog id(s) `grant_set` actually accepts for `tool_id`.
 
-        `tool_id` as written in tools.yaml stays bare even when the
-        toolkit declares `destinations` -- `_expand_tool` (catalog.py) fans
-        it out into one grantable id per destination
-        (`<tool_id>@<destination>`), and only those expanded ids ever land
-        in `catalog.tools`. Surfaced here so `tool_get`/`tool_list` don't
-        show a tool as "enabled" while every grant against its bare id is
-        silently rejected as unknown.
+        Surfaced here so `tool_get`/`tool_list` don't show a tool as
+        "enabled" while every grant against its bare id is silently
+        rejected as unknown. See `Catalog.grantable_ids` for why the
+        expansion is necessary.
         """
-        tools = self.store.service.catalog.tools
-        if tool_id in tools:
-            return [tool_id]
-        prefix = f"{tool_id}@"
-        return sorted(tid for tid in tools if tid.startswith(prefix))
+        return self.store.service.catalog.grantable_ids(tool_id)
 
     def tool_list(self, _actor: str, args: dict[str, Any]) -> dict[str, Any]:
         include_deleted = bool(args.get("include_deleted", False))
@@ -330,6 +323,11 @@ class AdminService:
             "role": existing.role,
             "tools": sorted(set(raw_tools)),
             "scopes": scopes,
+            # Snapshotted here (not diffed against live state at render
+            # time) so an archived proposal still shows the diff it was
+            # approved on, instead of diffing against the post-application
+            # state and reading as "nothing changed".
+            "prev_tools": sorted(existing.tools),
         }
         item = self.pending.propose(
             action="grant_set",
