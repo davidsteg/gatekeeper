@@ -279,13 +279,21 @@ _TOOLS: list[types.Tool] = [
     ),
     types.Tool(
         name="admin.toolkit_update",
-        title="Update a toolkit's executor/binaries",
+        title="Propose updating a toolkit's executor/binaries",
         description=(
-            "Updates an existing toolkit's executor type, binaries, and "
-            "denied_args. Only these three fields are writable at runtime — "
-            "path_roots, protected_resources, and limits remain deploy-time "
-            "only (FR-4.11). Applies immediately via reload_config. "
-            "Example: switch executor from 'local' to 'file' by passing "
+            "Proposes changing an existing toolkit's executor type, "
+            "binaries, and/or denied_args. Only these three fields can be "
+            "proposed — path_roots, protected_resources, and limits remain "
+            "deploy-time only (FR-4.11) and are rejected. Like "
+            "admin.toolkit_propose, this changes Tier 1 -- what is possible "
+            "at all, not just who can do what -- so it is always written to "
+            "the toolkit-proposal queue and never applies on its own. A "
+            "human reviews it at /ui/requests (Toolkit tab) and, if they "
+            "approve, gatekeeper validates, writes toolkits.yaml, and "
+            "reloads it into the running process itself -- no redeploy "
+            "needed, but also no way for this call to make it live by "
+            "itself. Example: propose switching executor from 'local' to "
+            "'file' by passing "
             "updates={\"executor\": \"file\", \"binaries\": [], \"denied_args\": []}."
         ),
         inputSchema={
@@ -294,7 +302,7 @@ _TOOLS: list[types.Tool] = [
                 "name": {"type": "string", "description": "Toolkit name"},
                 "updates": {
                     "type": "object",
-                    "description": "Fields to change (executor, binaries, denied_args only)",
+                    "description": "Fields to propose changing (executor, binaries, denied_args only)",
                     "properties": {
                         "executor": {"type": "string"},
                         "binaries": {"type": "array", "items": {"type": "string"}},
@@ -302,7 +310,6 @@ _TOOLS: list[types.Tool] = [
                     },
                     "additionalProperties": False,
                 },
-                "rev": {"type": "string", "description": "Current toolkits.yaml revision (optional)"},
             },
             "required": ["name", "updates"],
             "additionalProperties": False,

@@ -195,7 +195,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
                 audit=audit,
                 tools_path=_config_path("tools.yaml", args.tools),
                 identities_path=_config_path("identities.yaml", args.identities),
-                toolkits_path=_config_path("toolkits.yaml", args.toolkits),
             )
             # A third Tier 2 file, alongside tools.yaml/identities.yaml --
             # proposals from /admin/mcp that a human has not yet approved

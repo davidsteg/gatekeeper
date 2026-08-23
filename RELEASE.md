@@ -60,6 +60,36 @@ cannot. It is in every release.
 
 ---
 
+## 0.23.2
+
+**Security fix: `admin.toolkit_update` applied instantly from `/admin/mcp`, with no human review.**
+
+v0.23.0 gave `ConfigStore` a narrowly-*field*-scoped (`executor`/`binaries`/
+`denied_args` only) but not narrowly-*approval*-scoped write path to
+`toolkits.yaml`: `admin.toolkit_update` called it directly and applied the
+change immediately via `reload_config`, with no pending-approval step. This
+contradicted the two-tier model's key invariant -- restated in `store.py`'s
+own module docstring the whole time this was live, one function below the
+contradiction -- that Tier 1 is never runtime-writable without a human in
+the loop, and that nothing reachable from `/admin/mcp` can write
+`toolkits.yaml` on its own (`docs/ARCHITECTURE.md`). In practice, an
+admin-role MCP token could flip a toolkit's executor (e.g. `local` ->
+`ssh`) live, unreviewed, the moment it called the tool.
+
+Found while investigating an unrelated read-only-mount failure report: the
+only thing that had stopped an instant, unreviewed executor change on a
+report from the field was the operator's own `:ro` config mount -- an
+accident of that deployment, not a control the software enforced.
+
+Fixed: `admin.toolkit_update` now proposes into the same
+`toolkit_proposals.yaml` queue `admin.toolkit_propose` already used
+(`ToolkitProposalStore` gains a `kind` field, `"create"` or `"update"`),
+reviewed and approved only by a human at `/ui/requests` (Toolkit tab),
+exactly like a new-toolkit proposal. `ConfigStore.save_toolkit` (the
+function that made this possible) is removed entirely -- `store.py`'s
+guarantee that it has no function writing `toolkits.yaml` is true again,
+not just asserted.
+
 ## 0.23.1
 
 **Fix: `file.write`/`file.patch` rejected any multi-line content.**
