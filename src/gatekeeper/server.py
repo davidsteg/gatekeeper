@@ -13,14 +13,14 @@ import logging
 from typing import Any
 
 import mcp.types as types
-
-from gatekeeper import __version__
 from mcp.server.lowlevel import Server
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from gatekeeper import __version__
 
 from ._authctx import SCOPE_IDENTITY
 from ._authctx import identity_from as _identity_from
