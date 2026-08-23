@@ -387,6 +387,25 @@ class AdminService:
         item = self.toolkit_proposals.propose(name=name, spec=spec, actor=actor)
         return {"applied": False, "pending": True, "proposal_id": item.id}
 
+    def toolkit_update(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Updates a toolkit's executor type, binaries, and denied_args.
+
+        Narrowly scoped: only ``executor``, ``binaries``, and
+        ``denied_args`` can be changed. Security-critical fields
+        (``path_roots``, ``protected_resources``, ``limits``) remain
+        deploy-time only. Applies immediately via ``reload_config``.
+        """
+        name = _require_str(args, "name")
+        updates = dict(_require_dict(args, "updates"))
+        if not updates:
+            return {"applied": False, "error": "No updates provided."}
+
+        self.store.save_toolkit(
+            name, updates, actor=actor,
+            rev=args.get("rev", self.store.toolkits_revision()),
+        )
+        return {"applied": True, "toolkit": name, "changes": updates}
+
     def cred_propose(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
         """Proposes a *named, typed, headerless-or-not credential slot* --
 
@@ -471,6 +490,7 @@ _EXPOSED: tuple[str, ...] = (
     "pending_list",
     "toolkit_list",
     "toolkit_propose",
+    "toolkit_update",
     "cred_propose",
 )
 

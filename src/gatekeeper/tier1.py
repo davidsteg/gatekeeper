@@ -20,7 +20,7 @@ import yaml
 from .errors import ConfigError, read_config_file
 
 #: Executor types implemented.
-KNOWN_EXECUTORS = frozenset({"docker", "local", "http", "truenas", "ssh"})
+KNOWN_EXECUTORS = frozenset({"docker", "local", "http", "truenas", "ssh", "file"})
 
 #: FR-8.6: methods an `http` toolkit may allow at all. A toolkit may
 #: narrow this further; it may never widen it.
