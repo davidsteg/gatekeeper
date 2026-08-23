@@ -153,6 +153,46 @@ toolkits:
     max_timeout_seconds: 15
     max_output_bytes: 16384
 
+  # FR-8.16/8.17: the `file` executor. No binary and no argv -- each tool
+  # declares one fixed operation (read/write/patch/list), so there is no
+  # argument surface to allowlist. Giving an agent the same reach through
+  # `local` would mean enabling /bin/cat, /usr/bin/tee, /bin/sed and then
+  # arguing about their flags.
+  #
+  # path_roots is the whole target restriction here, the way
+  # allowed_path_prefixes is for http -- keep it as narrow as the job
+  # actually needs.
+  agentcfg:
+    executor: file
+    binaries: []
+    path_roots:
+      - /mnt/raid/agent
+    protected_resources: [gatekeeper, dockhand, traefik]
+    max_timeout_seconds: 15
+    max_output_bytes: 262144
+
+    # FR-8.18: which OS user these operations run as. Commented out on
+    # purpose -- this is the one line in this file that changes *with whose
+    # authority* a call runs, not what is allowed, and it is not free:
+    #
+    #   * It only makes sense when the files genuinely belong to someone
+    #     else (a directory that is drwx------ under another uid). If the
+    #     container user can already read them, leave it unset.
+    #   * The container must then start as root with cap_add SETUID and
+    #     SETGID -- see docs/DEPLOYMENT.md. Without that privilege calls on
+    #     this toolkit FAIL; they never quietly run as the container user.
+    #   * Prefer the owning uid over root. '3001:3001' is bounded by that
+    #     user's own permissions; root additionally needs CAP_DAC_OVERRIDE,
+    #     which reads every file on every mount.
+    #   * A redeploy is the only way to set it -- /admin/mcp refuses it even
+    #     as a human-reviewed proposal (FR-8.20).
+    #
+    # Either an account inside the image, or the numeric 'uid:gid' pair for
+    # a host uid that has no passwd entry there (a bare '3001' is rejected:
+    # the group would be left to a lookup that cannot succeed).
+    #
+    # run_as: "3001:3001"
+
 # FR-6.8
 rate_limits:
   read:

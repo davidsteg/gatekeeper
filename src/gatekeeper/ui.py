@@ -3986,7 +3986,18 @@ def _tier1_reference(service: Service) -> str:
             f'<div class="row"><div class="row-l">Denied arguments</div>'
             f"<div>{_pills(tk.denied_args, tone='deny')}</div></div>"
             f'<div class="row"><div class="row-l">Path roots</div><div>{_pills(tk.path_roots)}</div></div>'
-            f'<div class="row"><div class="row-l">Ceilings</div>'
+            # Only when set, and never quietly: a `file` toolkit whose
+            # operations run as someone other than gatekeeper itself is the
+            # one Tier 1 line that changes *whose* authority a call carries,
+            # so it belongs on the same card as the binaries and the roots
+            # rather than only in toolkits.yaml.
+            + (
+                f'<div class="row"><div class="row-l">Runs as</div>'
+                f"<div>{_pills([tk.run_as], tone='deny')}</div></div>"
+                if tk.run_as
+                else ""
+            )
+            + f'<div class="row"><div class="row-l">Ceilings</div>'
             # A literal character, not an entity: everything in _pills goes
             # through _e(), which would escape the ampersand and print the
             # entity itself.

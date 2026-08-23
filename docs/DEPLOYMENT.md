@@ -167,6 +167,78 @@ an unprivileged user plus the Docker socket's group, not root.
 version and its image digest — `latest` moving underneath a running
 deployment without anyone deciding to is exactly what NFR-5 says not to do.
 
+## Running file operations as another user (`run_as`)
+
+A `file` toolkit performs its read/write/patch/list operations as whatever
+user gatekeeper runs as — `568:568` in every example above. A directory that
+belongs to somebody else with mode `0700` is then unreachable, however the
+toolkit's `path_roots` are written. `run_as` on that toolkit (Tier 1,
+`toolkits.yaml`, `file` executor only) says which user its operations should
+run as instead:
+
+```yaml
+toolkits:
+  agentcfg:
+    executor: file
+    path_roots:
+      - /mnt/raid/agent
+    protected_resources: [gatekeeper, dockhand, traefik]
+    # Either an account that exists inside the container image:
+    #   run_as: hermes
+    # or, for a host uid that has no passwd entry in the image, the
+    # numeric pair -- the same notation as compose's own `user:`.
+    run_as: "3001:3001"
+    max_timeout_seconds: 15
+    max_output_bytes: 262144
+```
+
+**This costs the container its unprivileged start, so scope it deliberately.**
+Becoming another user requires privilege the shipped `user: "568:568"` +
+`cap_drop: ALL` container deliberately does not have. To honour `run_as`, the
+container starts as root and is given back exactly two capabilities:
+
+```yaml
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+```
+
+`no-new-privileges: true` stays on — it blocks privilege *gain* through
+setuid binaries on `execve`, which is unrelated to a privileged process
+dropping to a lesser user.
+
+Three things worth being deliberate about before doing this:
+
+- **Prefer the owner over root.** `run_as: "3001:3001"` (the uid that owns
+  the files) is bounded by that user's own permissions. `run_as: root` is
+  not, and additionally needs `CAP_DAC_OVERRIDE` to read a directory it does
+  not own — a capability that reads every file on every mount. If the goal is
+  "reach this one agent's config directory", the owning uid is the answer and
+  root is not.
+- **Only the toolkits that declare it are affected.** A `file` toolkit
+  without `run_as` still runs in-process as the container user, and
+  `http`/`docker`/`local`/`truenas`/`ssh` toolkits are untouched — `run_as`
+  is rejected on them at startup. Give the elevated toolkit its own narrow
+  `path_roots` rather than adding `run_as` to an existing broad one.
+- **It is a redeploy, on purpose.** `run_as` cannot be added through
+  `/admin/mcp`, not even as a human-reviewed toolkit proposal. It decides
+  with whose authority a call runs, and belongs in the same decision as the
+  capabilities above.
+- **Every ancestor directory has to be traversable by that user.** Ordinary
+  Unix rules, but the easy one to trip over: `run_as: "3001:3001"` reaching
+  `/mnt/raid/agent/hermes-media/config.yaml` needs `x` on `/mnt/raid` and
+  `/mnt/raid/agent` for uid 3001, not only on the last directory. A
+  `Permission denied` naming the file when the file itself is readable is
+  almost always a parent directory.
+
+Startup logs a warning line per toolkit that declares `run_as`, naming the
+user and the process's own identity. If the container is not privileged
+enough to assume that user, calls on that toolkit **fail** with a message
+saying so — they never quietly run as the container user instead.
+
 ## A known deployment (reference)
 
 One running instance, for agents that operate against it directly:

@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
+from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, read_config_file
 
 #: Executor types implemented.
@@ -110,6 +111,27 @@ class Toolkit:
     #: project's posture on target verification (FR-8.9's DNS-rebinding
     #: check for `http`) argues squarely against accepting here instead.
     ssh_known_hosts: str | None = None
+
+    # -- `file` executor only ------------------------------------------
+
+    #: The OS user the `file` executor's read/write/patch/list operations
+    #: run as, either a name resolved through the container's passwd
+    #: database (`"hermes"`) or a numeric `"uid:gid"` pair (`"3001:3001"`,
+    #: the same notation `compose.yaml`'s own `user:` uses). `None` -- the
+    #: default, and what every toolkit written before this field existed
+    #: gets -- means the operations run in-process as whatever user
+    #: gatekeeper itself runs as, exactly as before.
+    #:
+    #: Tier 1 and only Tier 1: there is no parameter, tool field, or admin
+    #: API through which a call can pick a user (FR-8.3i says the same
+    #: about destinations), and `toolkit_proposals.py` refuses it even in a
+    #: human-reviewed proposal. Changing which user a toolkit's file
+    #: operations run as is a redeploy.
+    #:
+    #: Rejected on any other executor. `http`/`docker`/`local`/`truenas`/
+    #: `ssh` are unaffected by this field existing -- accepting it there
+    #: silently would promise something none of them implements.
+    run_as: str | None = None
 
     def check_binary(self, binary: str) -> None:
         """FR-4.1: the executable must be exactly in the allowlist."""
@@ -509,6 +531,28 @@ def load_tier1(path: str) -> Tier1:
         ssh_user: str | None = None
         ssh_known_hosts: str | None = None
 
+        # `run_as` (file executor only). Parsed for every executor rather
+        # than only inside the `file` branch below, so a `run_as` on an
+        # `http`/`docker`/`local`/`truenas`/`ssh` toolkit aborts startup
+        # instead of sitting in the file being silently ignored -- a
+        # configuration that reads as "these operations run as someone
+        # else" and does not is worse than one that refuses to start.
+        run_as = spec.get("run_as")
+        if run_as is not None:
+            if executor != "file":
+                raise ConfigError(
+                    f"{where}: 'run_as' is only supported on a 'file' toolkit, "
+                    f"not on {executor!r}. The other executors reach their "
+                    "target as a remote user (ssh_user), through a socket, or "
+                    "with a credential -- none of them runs local file "
+                    "operations there is a user to choose for."
+                )
+            run_as = str(run_as).strip()
+            try:
+                parse_run_as(run_as)
+            except RunAsError as exc:
+                raise ConfigError(f"{where}: {exc}") from None
+
         dest_names = _toolkit_destinations(spec, executor, where, destinations)
 
         if executor in ("docker", "local", "ssh"):
@@ -617,6 +661,7 @@ def load_tier1(path: str) -> Tier1:
             ssh_port=ssh_port,
             ssh_user=ssh_user,
             ssh_known_hosts=ssh_known_hosts,
+            run_as=run_as,
         )
 
     limits = raw.get("rate_limits") or {}
