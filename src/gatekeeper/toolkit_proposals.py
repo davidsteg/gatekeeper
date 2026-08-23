@@ -11,8 +11,8 @@ an ordinary tool/grant change, and so `EXPOSED_ACTIONS`/`admin_server.py`'s
 drift-check has one fewer place to accidentally expose `deploy`/`reject`
 from `/admin/mcp`.
 
-Two proposal ``kind``s share this one queue and one review surface
-(`/ui/requests`, Toolkit tab), because both change Tier 1 and neither may
+Three proposal ``kind``s share this one queue and one review surface
+(`/ui/requests`, Toolkit tab), because all three change Tier 1 and none may
 ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
 
 - ``"create"`` (`admin.toolkit_propose`) -- drafts a brand-new toolkit.
@@ -24,13 +24,20 @@ ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
   field (``path_roots``, ``protected_resources``, limits) stays reachable
   only by a redeploy -- this exists so an executor swap (e.g. `local` ->
   `file`) doesn't require one, not to open a general editing surface.
+- ``"delete"`` (`admin.toolkit_delete`) -- removes an *existing* toolkit.
+  ``spec`` is always empty; the name must already exist and, at deploy
+  time, must not still be referenced by any non-deleted tool (deleting a
+  toolkit out from under a live tool is exactly the "way to bring the
+  service down" `catalog.parse_tool_spec` guards against).
 
 `deploy` is the only function that ever writes `toolkits.yaml`:
 
 1. Reads the live file. For ``"create"``, merges the proposed toolkit in
    under its name, which must not collide with an existing one. For
    ``"update"``, merges the proposed fields into the *existing* toolkit's
-   body, which must already exist.
+   body, which must already exist. For ``"delete"``, removes the named
+   toolkit's key entirely, refusing if any non-deleted tool still
+   references it.
 2. Writes the merged content to a temp file and validates it with the exact
    `load_tier1()` startup uses. Nothing real is touched if this fails.
 3. Only then: atomically writes the real file (`_atomic.py`, the same
@@ -70,8 +77,8 @@ from .tier1 import load_tier1
 #: surfaces as a collision or a Tier-1 validation error instead.
 STATUSES = frozenset({"pending", "deployed", "rejected"})
 
-#: The two shapes a proposal can take -- see the module docstring.
-KINDS = frozenset({"create", "update"})
+#: The three shapes a proposal can take -- see the module docstring.
+KINDS = frozenset({"create", "update", "delete"})
 
 #: Fields `"update"`-kind proposals may change. Everything else
 #: (`path_roots`, `protected_resources`, limits) stays deploy-time only
@@ -81,9 +88,45 @@ KINDS = frozenset({"create", "update"})
 #: yet either way).
 UPDATE_WRITABLE_FIELDS = frozenset({"executor", "binaries", "denied_args"})
 
+#: Audit `action` names, keyed by `kind` -- one for `propose()`, one for
+#: `deploy()`.
+_PROPOSE_ACTION_NAMES = {
+    "create": "toolkit_propose",
+    "update": "toolkit_update_propose",
+    "delete": "toolkit_delete_propose",
+}
+_DEPLOY_ACTION_NAMES = {
+    "create": "toolkit_deploy",
+    "update": "toolkit_update_deploy",
+    "delete": "toolkit_delete_deploy",
+}
+
 
 class ToolkitProposalWriteRefused(ConfigError):
     """A toolkit-proposal write was refused -- with a human-readable reason."""
+
+
+def _tools_referencing_toolkit(tools_path: str, toolkit_name: str) -> set[str]:
+    """Tool ids in `tools_path` whose `toolkit` field is `toolkit_name` and
+    which are not soft-deleted (`store.py`'s `ConfigStore.delete_tool`) --
+    the set `deploy()` must refuse a `"delete"` proposal over, since
+    `catalog.parse_tool_spec` treats a dangling `toolkit` reference as a
+    Tier 1 violation, not a syntax error.
+    """
+    if not os.path.exists(tools_path):
+        return set()
+    with open(tools_path, encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle.read()) or {}
+    entries = raw.get("tools")
+    if not isinstance(entries, list):
+        return set()
+    return {
+        str(entry.get("id"))
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("toolkit") == toolkit_name
+        and not entry.get("deleted", False)
+    }
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -211,6 +254,11 @@ class ToolkitProposalStore:
                     "update proposal. path_roots, protected_resources, and "
                     "limits require a redeploy."
                 )
+        if kind == "delete" and spec:
+            raise ToolkitProposalWriteRefused(
+                "A delete proposal takes no 'spec' -- there is nothing to "
+                "change, only a toolkit to remove."
+            )
         with self._lock:
             entries = self._load()
             item = ToolkitProposal(
@@ -228,7 +276,7 @@ class ToolkitProposalStore:
                 {
                     "kind": "admin_change",
                     "actor": actor,
-                    "action": "toolkit_propose" if kind == "create" else "toolkit_update_propose",
+                    "action": _PROPOSE_ACTION_NAMES[kind],
                     "target": name,
                     "spec": spec,
                 }
@@ -322,6 +370,23 @@ class ToolkitProposalStore:
                     )
                 before_fields = {k: existing.get(k) for k in item.spec}
                 merged_toolkits[item.name] = {**existing, **item.spec}
+            elif item.kind == "delete":
+                existing = toolkit_section.get(item.name)
+                if not isinstance(existing, dict):
+                    raise ToolkitProposalWriteRefused(
+                        f"No toolkit named {item.name!r} exists in toolkits.yaml "
+                        "-- it may already have been removed. Reject this "
+                        "proposal."
+                    )
+                referencing = _tools_referencing_toolkit(self.tools_path, item.name)
+                if referencing:
+                    raise ToolkitProposalWriteRefused(
+                        f"Toolkit {item.name!r} is still referenced by "
+                        f"{len(referencing)} tool(s): {sorted(referencing)}. "
+                        "Delete or reassign those tools first."
+                    )
+                before_fields = {item.name: existing}
+                del merged_toolkits[item.name]
             else:
                 if item.name in toolkit_section:
                     raise ToolkitProposalWriteRefused(
@@ -386,7 +451,7 @@ class ToolkitProposalStore:
             record: dict[str, Any] = {
                 "kind": "admin_change",
                 "actor": decided_by,
-                "action": "toolkit_deploy" if item.kind == "create" else "toolkit_update_deploy",
+                "action": _DEPLOY_ACTION_NAMES[item.kind],
                 "target": item.name,
                 "proposal_id": proposal_id,
                 "original_actor": item.actor,

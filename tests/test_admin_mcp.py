@@ -580,6 +580,28 @@ async def test_toolkit_propose_always_lands_in_proposal_store(admin_mcp_env):
     assert pending.list() == []
 
 
+async def test_toolkit_delete_always_pending(admin_mcp_env):
+    """Like `admin.toolkit_propose`/`admin.toolkit_update`, this always
+    lands in `ToolkitProposalStore` -- never `PendingStore` -- and never
+    applies on its own, even though "demo" is not itself referenced by any
+    live tool in this fixture's env.
+    """
+    app, _store, pending, toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.toolkit_delete", {"name": "demo"})
+    payload = json.loads(result.content[0].text)
+    assert payload["pending"] is True
+    assert payload["applied"] is False
+
+    proposed = toolkit_proposals.list(status="pending")
+    assert len(proposed) == 1
+    assert proposed[0].name == "demo"
+    assert proposed[0].kind == "delete"
+    assert proposed[0].actor == "hermes"
+    assert pending.list() == []
+
+
 async def test_toolkit_deploy_and_reject_absent_from_admin_mcp_tool_list(admin_mcp_env):
     """Same structural self-approval prevention as `pending.py`'s
     approve/reject, extended to this surface: `ToolkitProposalStore.deploy`/

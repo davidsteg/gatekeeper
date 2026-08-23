@@ -1055,6 +1055,43 @@ async def test_toolkits_reject_leaves_toolkits_yaml_unchanged(admin_env):
     assert toolkit_proposals.get(item.id).status == "rejected"
     assert "zfs" not in admin_env["service"].tier1.toolkits
 
+
+async def test_toolkits_delete_proposal_shows_delete_pill(admin_env):
+    """The Toolkit tab must tell a delete proposal apart from a create/
+    update one at a glance -- see `_toolkit_proposal_card`'s `kind_pill`.
+    """
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    toolkit_proposals.propose(name="demo", spec={}, actor="hermes", kind="delete")
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/requests?tab=toolkit")
+        assert page.status_code == 200
+        assert 'pill bad">delete<' in page.text
+
+
+async def test_toolkits_delete_deploy_refused_while_tool_still_references_toolkit(admin_env):
+    """"demo" is referenced by `demo.show`/etc in this fixture's tools.yaml
+    -- deploying its deletion must be refused, and toolkits.yaml must stay
+    untouched, exactly like the store-level guarantee in
+    `test_toolkit_proposals.py`, now proven through the real HTTP route.
+    """
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    service = admin_env["service"]
+    item = toolkit_proposals.propose(name="demo", spec={}, actor="hermes", kind="delete")
+    app = admin_env["app"]
+    async with _client(app) as client:
+        csrf = await _signed_in(client)
+        response = await client.post(
+            f"{UI_PREFIX}/toolkits/deploy",
+            data={"id": item.id, "_csrf": csrf},
+            follow_redirects=False,
+        )
+        assert response.status_code == 400
+        assert "still referenced" in response.text
+    assert "demo" in service.tier1.toolkits
+    assert toolkit_proposals.get(item.id).status == "pending"
+
 # -- Approve-all (batch) ------------------------------------------------------
 
 

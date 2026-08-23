@@ -410,6 +410,20 @@ class AdminService:
         )
         return {"applied": False, "pending": True, "proposal_id": item.id}
 
+    def toolkit_delete(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Proposes removing an existing toolkit from Tier 1. Like
+        `toolkit_propose`/`toolkit_update`, this changes Tier 1 -- what is
+        possible at all, not just who can do what -- so it is always
+        written to the toolkit-proposal queue and never applies on its
+        own. `ToolkitProposalStore.deploy` refuses it at approval time if
+        the toolkit no longer exists or any non-deleted tool still
+        references it; there is no such check here since nothing has been
+        written yet either way.
+        """
+        name = _require_str(args, "name")
+        item = self.toolkit_proposals.propose(name=name, spec={}, actor=actor, kind="delete")
+        return {"applied": False, "pending": True, "proposal_id": item.id}
+
     def cred_propose(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
         """Proposes a *named, typed, headerless-or-not credential slot* --
 
@@ -495,6 +509,7 @@ _EXPOSED: tuple[str, ...] = (
     "toolkit_list",
     "toolkit_propose",
     "toolkit_update",
+    "toolkit_delete",
     "cred_propose",
 )
 

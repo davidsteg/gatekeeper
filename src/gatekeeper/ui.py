@@ -3541,18 +3541,27 @@ def _toolkit_proposal_card(
         )
     meta = f'{_icon("users", 12)}{_e(item.actor)} &middot; {_e(item.created_at)}'
     is_update = item.kind == "update"
-    spec_yaml = yaml.safe_dump(
-        {item.name: item.spec} if not is_update else item.spec,
-        sort_keys=False, allow_unicode=True,
-    )
-    label = "Proposed changes" if is_update else "Proposed toolkit"
-    detail_rows = (
-        f'<div class="row"><div class="row-l">{_icon("sliders", 14)}{label}</div>'
-        f'<div><pre class="mono">{_e(spec_yaml)}</pre></div></div>'
-        + _decided_row(item)
-    )
+    is_delete = item.kind == "delete"
+    if is_delete:
+        detail_rows = (
+            f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Removes '
+            f'this toolkit</div><div></div></div>'
+            + _decided_row(item)
+        )
+    else:
+        spec_yaml = yaml.safe_dump(
+            {item.name: item.spec} if not is_update else item.spec,
+            sort_keys=False, allow_unicode=True,
+        )
+        label = "Proposed changes" if is_update else "Proposed toolkit"
+        detail_rows = (
+            f'<div class="row"><div class="row-l">{_icon("sliders", 14)}{label}</div>'
+            f'<div><pre class="mono">{_e(spec_yaml)}</pre></div></div>'
+            + _decided_row(item)
+        )
     kind_pill = (
-        '<span class="pill accent">update</span>' if is_update
+        '<span class="pill bad">delete</span>' if is_delete
+        else '<span class="pill accent">update</span>' if is_update
         else '<span class="pill accent">create</span>'
     )
     return (
@@ -3706,11 +3715,29 @@ def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
     review after this click.
     """
     is_update = item.kind == "update"
-    spec_yaml = yaml.safe_dump(
+    is_delete = item.kind == "delete"
+    spec_yaml = "" if is_delete else yaml.safe_dump(
         {item.name: item.spec} if not is_update else item.spec,
         sort_keys=False, allow_unicode=True,
     )
-    if is_update:
+    if is_delete:
+        warning = (
+            "<strong>This changes Tier 1.</strong> Tier 1 is the reason the "
+            "admin token is not equivalent to root: nothing in it normally "
+            "takes effect without a human editing toolkits.yaml and "
+            "redeploying. Approving this removes toolkit "
+            f"{_e(item.name)!r} from toolkits.yaml <em>and reloads it into "
+            "this running process immediately</em> -- every tool on that "
+            "toolkit stops working the moment you click, with no further "
+            "review afterwards."
+        )
+        action_label = "Approve &amp; deploy delete"
+        confirm_label = (
+            "I understand this immediately removes this toolkit and "
+            "breaks every tool still on it, with no further review."
+        )
+        prompt = f"<p><strong>Approve &amp; deploy deleting {_e(item.name)}?</strong></p>"
+    elif is_update:
         warning = (
             "<strong>This changes Tier 1.</strong> Tier 1 is the reason the "
             "admin token is not equivalent to root: nothing in it normally "
@@ -3752,8 +3779,8 @@ def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
         + '<div class="editor card"><div class="pad">'
         f"{prompt}"
         f"<p class='muted'>Proposed by {_e(item.actor)} at {_e(item.created_at)}.</p>"
-        f'<pre class="mono">{_e(spec_yaml)}</pre>'
-        f'<form method="post" action="{UI_PREFIX}/toolkits/deploy">'
+        + (f'<pre class="mono">{_e(spec_yaml)}</pre>' if spec_yaml else "")
+        + f'<form method="post" action="{UI_PREFIX}/toolkits/deploy">'
         f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
         f'<input type="hidden" name="id" value="{_e(item.id)}">'
         '<div class="field"><label>'

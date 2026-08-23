@@ -303,10 +303,12 @@ every routine change.
   rather than erasing it).
 - **Drafting a new toolkit is possible, deploying it never is — from here.**
   `admin.toolkit_list` reads the live Tier 1 configuration; `admin.toolkit_propose`
-  drafts a brand-new toolkit, but always lands in its own review surface,
-  the Toolkit tab of `/ui/requests` — never the Change tab — a toolkit
-  changes what is *possible* at all (Tier 1), not just who can do what
-  (Tier 2), so it gets a heavier,
+  drafts a brand-new toolkit, `admin.toolkit_update` proposes a narrow
+  edit, and `admin.toolkit_delete` proposes removing one (refused at
+  deploy time if a tool still references it) — all three always land in
+  their own review surface, the Toolkit tab of `/ui/requests` — never the
+  Change tab — a toolkit changes what is *possible* at all (Tier 1), not
+  just who can do what (Tier 2), so it gets a heavier,
   explicit confirmation. A human clicking "Approve & Deploy" is the only
   thing that ever writes `toolkits.yaml`: gatekeeper validates the merged
   config with the same loader startup uses, writes it atomically, and
