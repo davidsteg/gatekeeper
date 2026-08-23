@@ -315,6 +315,28 @@ _TOOLS: list[types.Tool] = [
             "additionalProperties": False,
         },
     ),
+    types.Tool(
+        name="admin.toolkit_delete",
+        title="Propose deleting a toolkit",
+        description=(
+            "Proposes removing an existing toolkit from Tier 1. Refused at "
+            "deploy time if the toolkit no longer exists or any non-deleted "
+            "tool still references it. Like admin.toolkit_propose/"
+            "toolkit_update, this changes Tier 1 -- what is possible at "
+            "all, not just who can do what -- so it is always written to "
+            "the toolkit-proposal queue and never applies on its own. A "
+            "human reviews it at /ui/requests (Toolkit tab) and, if they "
+            "approve, gatekeeper removes it from toolkits.yaml and reloads "
+            "it into the running process itself -- no restart needed, but "
+            "also no way for this call to make it take effect by itself."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "Toolkit name"}},
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+    ),
 ]
 
 # Kept honest at import time, not merely by convention: if these two lists

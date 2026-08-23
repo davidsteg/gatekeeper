@@ -229,3 +229,108 @@ def test_deploy_unknown_proposal_refused(tmp_path, sandbox):
         assert False, "expected ToolkitProposalWriteRefused"
     except ToolkitProposalWriteRefused:
         pass
+
+
+# -- Delete -------------------------------------------------------------------
+
+
+def _write_tools(tools_path, entries):
+    open(tools_path, "w", encoding="utf-8").write(
+        yaml.safe_dump({"tools": entries})
+    )
+
+
+def test_delete_propose_rejects_nonempty_spec(tmp_path, sandbox):
+    store, _service, _tp = _env(tmp_path, sandbox)
+    try:
+        store.propose(name="demo", spec={"executor": "local"}, actor="hermes", kind="delete")
+        assert False, "expected ToolkitProposalWriteRefused"
+    except ToolkitProposalWriteRefused as exc:
+        assert "no 'spec'" in str(exc)
+
+
+def test_deploy_delete_removes_toolkit_and_reloads(tmp_path, sandbox):
+    store, service, toolkits_path = _env(tmp_path, sandbox)
+    assert "demo" in service.tier1.toolkits
+
+    item = store.propose(name="demo", spec={}, actor="hermes", kind="delete")
+    deployed = store.deploy(item.id, decided_by="root")
+
+    assert deployed.status == "deployed"
+    assert "demo" not in service.tier1.toolkits
+
+    on_disk = yaml.safe_load(open(toolkits_path, encoding="utf-8").read())
+    assert "demo" not in on_disk["toolkits"]
+    assert store.get(item.id).status == "deployed"
+
+
+def test_deploy_delete_rejects_missing_toolkit_and_leaves_state_untouched(tmp_path, sandbox):
+    store, service, toolkits_path = _env(tmp_path, sandbox)
+    before = open(toolkits_path, encoding="utf-8").read()
+    old_tier1 = service.tier1
+
+    item = store.propose(name="ghost", spec={}, actor="hermes", kind="delete")
+    try:
+        store.deploy(item.id, decided_by="root")
+        assert False, "expected ToolkitProposalWriteRefused (no such toolkit)"
+    except ToolkitProposalWriteRefused as exc:
+        assert "No toolkit named" in str(exc)
+
+    assert open(toolkits_path, encoding="utf-8").read() == before
+    assert service.tier1 is old_tier1
+    assert store.get(item.id).status == "pending"
+
+
+def test_deploy_delete_rejects_when_tool_still_references_toolkit(tmp_path, sandbox):
+    store, service, toolkits_path = _env(tmp_path, sandbox)
+    before = open(toolkits_path, encoding="utf-8").read()
+    _write_tools(store.tools_path, [{"id": "demo.run", "toolkit": "demo"}])
+
+    item = store.propose(name="demo", spec={}, actor="hermes", kind="delete")
+    try:
+        store.deploy(item.id, decided_by="root")
+        assert False, "expected ToolkitProposalWriteRefused (still referenced)"
+    except ToolkitProposalWriteRefused as exc:
+        assert "demo.run" in str(exc)
+
+    assert open(toolkits_path, encoding="utf-8").read() == before
+    assert "demo" in service.tier1.toolkits
+    assert store.get(item.id).status == "pending"
+
+
+def test_deploy_delete_ignores_soft_deleted_referencing_tool(tmp_path, sandbox):
+    store, service, _toolkits_path = _env(tmp_path, sandbox)
+    # Versioned shape, matching what `catalog.soft_delete_entry` actually
+    # produces -- a flat `deleted: true` entry with no `versions:` list
+    # would not be recognized as deleted by `load_catalog` itself (only
+    # `_tools_referencing_toolkit`'s raw check would see it), which would
+    # make this test pass for the wrong reason.
+    _write_tools(
+        store.tools_path,
+        [
+            {
+                "id": "demo.run",
+                "toolkit": "demo",
+                "enabled": True,
+                "deleted": True,
+                "current_version": 1,
+                "versions": [{"version": 1, "spec": {"toolkit": "demo"}}],
+            }
+        ],
+    )
+
+    item = store.propose(name="demo", spec={}, actor="hermes", kind="delete")
+    deployed = store.deploy(item.id, decided_by="root")
+
+    assert deployed.status == "deployed"
+    assert "demo" not in service.tier1.toolkits
+
+
+def test_reject_delete_leaves_toolkits_yaml_unchanged(tmp_path, sandbox):
+    store, _service, toolkits_path = _env(tmp_path, sandbox)
+    before = open(toolkits_path, encoding="utf-8").read()
+    item = store.propose(name="demo", spec={}, actor="hermes", kind="delete")
+
+    rejected = store.reject(item.id, decided_by="root", reason="not yet")
+    assert rejected.status == "rejected"
+    assert open(toolkits_path, encoding="utf-8").read() == before

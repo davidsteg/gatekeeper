@@ -17,13 +17,15 @@ and Tier 2 change-approval flow diagrams.
 
 A toolkit **proposal** (`toolkit_proposals.yaml`) is the one deliberate,
 narrow exception: an `admin.toolkit_propose` call from `/admin/mcp` can
-draft a brand-new Tier 1 toolkit, and `admin.toolkit_update` can propose a
+draft a brand-new Tier 1 toolkit, `admin.toolkit_update` can propose a
 narrowly-scoped change (`executor`/`binaries`/`denied_args` only, never
-`path_roots`/`protected_resources`/limits) to an *existing* one -- but
-either way it only ever lands in this separate Tier 2 file -- never
-`pending.yaml` -- and only a human clicking "Approve & Deploy" at
-`/ui/requests` (Toolkit tab) writes it into `toolkits.yaml` and reloads it into
-the running process (`Service.reload_config`, no restart). See
+`path_roots`/`protected_resources`/limits) to an *existing* one, and
+`admin.toolkit_delete` can propose removing an *existing* one (refused at
+deploy time if any non-deleted tool still references it) -- but either way
+it only ever lands in this separate Tier 2 file -- never `pending.yaml` --
+and only a human clicking "Approve & Deploy" at `/ui/requests` (Toolkit
+tab) writes it into `toolkits.yaml` and reloads it into the running
+process (`Service.reload_config`, no restart). See
 [`toolkit_proposals.py`](../src/gatekeeper/toolkit_proposals.py).
 
 **Key invariant:** `store.py` (`ConfigStore`, Tier 2 writes) has no function
@@ -221,13 +223,15 @@ src/gatekeeper/
                        admin-role agent's higher-risk admin.* calls land in;
                        approved only via /ui/requests, Change tab (human + CSRF)
   toolkit_proposals.py  ToolkitProposalStore (toolkit_proposals.yaml) --
-                       admin.toolkit_propose (new toolkit, kind="create")
-                       and admin.toolkit_update (executor/binaries/
-                       denied_args change to an existing one, kind="update")
-                       both land here, never pending.yaml. deploy() merges +
-                       validates via load_tier1() before writing
-                       toolkits.yaml, then calls Service.reload_config()
-                       in-process (no restart). Only reachable from
+                       admin.toolkit_propose (new toolkit, kind="create"),
+                       admin.toolkit_update (executor/binaries/
+                       denied_args change to an existing one, kind="update"),
+                       and admin.toolkit_delete (remove an existing one,
+                       kind="delete") all land here, never pending.yaml.
+                       deploy() merges/removes + validates via load_tier1()
+                       before writing toolkits.yaml, then calls
+                       Service.reload_config() in-process (no restart).
+                       Only reachable from
                        /ui/requests, Toolkit tab (human + CSRF)
   service.py          Call pipeline: auth -> authorize -> registry ->
                        validate -> build request -> execute -> audit;
