@@ -60,6 +60,26 @@ cannot. It is in every release.
 
 ---
 
+## 0.22.0
+
+**Built-in `file` executor: read/write/patch/list without shell.**
+
+New executor type `file` that performs file operations directly in
+Python — no shell, no process spawn, no argv chaining (FR-4 safe).
+
+- `file.read` — read a file (bounded by `max_output_bytes`)
+- `file.write` — write content, creates parent directories
+- `file.patch` — replace a unique `old_string` with `new_string`
+- `file.list` — list directory entries (files/dirs prefixed)
+
+Path validation: `path_roots` enforced via `realpath` (no `..`
+escape, no symlink breakout), `protected_resources` reject any
+path touching `gatekeeper`/`dockhand`/`ix-dockhand`/`traefik`.
+
+12 new tests in `tests/test_file_executor.py`.
+
+---
+
 ## 0.21.0
 
 **HTTP executor: nested JSON body templates.**

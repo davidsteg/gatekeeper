@@ -104,6 +104,11 @@ class ToolDef:
     rpc_method: str | None = None
     params_template: dict[str, str] | None = None
 
+    # -- `file` executor (built-in Python) -----------------------------
+    #: One of ``read``/``write``/``patch``/``list``. The path comes from
+    #: a parameter (validated against ``path_roots`` at call time).
+    file_operation: str | None = None
+
     # -- Multi-destination (FR-8.3h) ------------------------------------
     #: Set only on the destination-qualified copies produced by
     #: `_expand_tool` (id = "<toolkit>.<action>@<destination>"). None on
@@ -328,6 +333,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     body_template: dict[str, Any] | list[Any] | str | None = None
     rpc_method: str | None = None
     params_template: dict[str, str] | None = None
+    file_operation: str | None = None
     #: Every template string that may contain a `{param}` placeholder --
     #: collected here so the typo guard below covers all executor shapes
     #: uniformly, the same way it already covers argv/scopes/derived.
@@ -365,6 +371,14 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         params_template = _str_str_map(spec.get("params"), where, "params")
         all_templates.extend(params_template.values())
 
+    elif toolkit.executor == "file":
+        op = spec.get("file_operation") or spec.get("operation")
+        if op not in ("read", "write", "patch", "list"):
+            raise ConfigError(
+                f"{where}: field 'file_operation' must be one of read/write/patch/list"
+            )
+        file_operation = op
+
     # Every placeholder must point to a declared parameter. A typo
     # in the template would otherwise only surface at runtime -- and
     # then land as an unresolvable placeholder in the request.
@@ -398,6 +412,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         body_template=body_template,
         rpc_method=rpc_method,
         params_template=params_template,
+        file_operation=file_operation,
     )
     _validate_against_tier1(tool, toolkit)
     return tool
