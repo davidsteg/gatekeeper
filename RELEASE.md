@@ -60,6 +60,41 @@ cannot. It is in every release.
 
 ---
 
+## 0.27.3
+
+**Fix: the access map's hover popup, properly this time -- clipped popups *and* the blank space below the table both gone.**
+
+The last three releases each traded one symptom for another here, because
+the constraint was never actually established. It is this: the matrix
+needs `overflow-x: auto` to scroll sideways when there are many toolkits,
+and CSS does not allow the *other* axis to stay `visible` when one axis
+scrolls -- it is forced to a clipping/scrolling value. (`overflow-y:
+clip` plus `overflow-clip-margin`, the obvious escape, computes straight
+back to `hidden` here; measured in-browser, not assumed.) A cell's popup
+therefore **cannot** leave that box, and the only real question is how to
+make it fit inside. The two failed attempts:
+
+- leaving the forced `auto`: popups keep their laid-out size at
+  `opacity: 0`, so they inflated the scroll area and scrolling down led
+  into a void (0.27.0);
+- `hidden` + a tall `padding-bottom`: a popup hangs below *its own row's
+  cell*, not below the table, so upper rows still clipped -- and 224px of
+  permanently blank space read as broken on its own (0.27.1/0.27.2).
+
+Now: the popup's height is bounded (`max-height: 9rem`, with the tool
+list taking the leftover room and scrolling, so the identity/toolkit
+title and call counts stay pinned), and rows near the bottom of the
+table open their popup *upward* instead -- decided in `_access_matrix`,
+which is the only place the row count is known. A table of three rows or
+fewer has no rows above to open into either, so it alone also reserves
+room at the top. Everything else keeps its column headers flush.
+
+Verified in a browser against a 16-toolkit, 4-identity matrix
+reproducing the reported layout: all 26 popups on the Overview and all
+26 on the full-page map render with **zero** clipping, zero dead
+vertical scroll, horizontal scrolling intact, on both the 4-row and the
+filtered 2-row table -- with the reserved space down from 224px to 72px.
+
 ## 0.27.2
 
 **Fix: the chart's hover tooltip rendered ~3x oversized, still hiding half its text off-screen.**
