@@ -749,7 +749,8 @@ details[open] > summary.card-head .chev { transform: rotate(90deg); }
 }
 .stat .l { color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; }
 .stat-link { text-decoration: none; color: var(--fg); display: flex; align-items: center; gap: .75rem; width: 100%; }
-.stat-link:hover { background: var(--sunken); border-radius: 11px; }
+.stat-link:hover { background: var(--sunken); border-radius: var(--radius-sm); }
+.stat-link:hover .l { color: var(--fg); }
 .stat-link .n { color: var(--accent); }
 
 /* Same reasoning as .grid's margin-bottom: this is a bare grid container,
@@ -1473,13 +1474,18 @@ def _note(text: str, *, icon: str = "alert", tone: str = "") -> str:
     return f'<div class="note {tone}">{_icon(icon, 16)}<div>{text}</div></div>'
 
 
-def _stat(number: Any, label: str, icon: str, tone: str = "", title: str = "") -> str:
+def _stat(
+    number: Any, label: str, icon: str, tone: str = "", title: str = "", href: str = "",
+) -> str:
     title_attr = f' title="{_e(title)}"' if title else ""
-    return (
-        f'<div class="stat {tone}"{title_attr}><div class="chip">{_icon(icon, 18)}</div>'
+    inner = (
+        f'<div class="chip">{_icon(icon, 18)}</div>'
         f'<div><div class="n">{_e(number)}</div>'
-        f'<div class="l">{_e(label)}</div></div></div>'
+        f'<div class="l">{_e(label)}</div></div>'
     )
+    if href:
+        inner = f'<a class="stat-link" href="{_e(href)}">{inner}</a>'
+    return f'<div class="stat {tone}"{title_attr}>{inner}</div>'
 
 
 def _post_button(
@@ -2240,6 +2246,8 @@ def _view_access_map(
 def _view_overview(
     service: Service, identities: IdentityStore, store: ConfigStore | None,
     request: Request | None = None,
+    pending: PendingStore | None = None,
+    toolkit_proposals: ToolkitProposalStore | None = None,
 ) -> str:
     catalog = service.catalog
     active = sum(1 for t in catalog.tools.values() if t.enabled)
@@ -2270,6 +2278,16 @@ def _view_overview(
                 f"definitions were not loaded:<ul>{rows}</ul>"
             )
         )
+    change_n, toolkit_n = _request_pending_counts(pending, toolkit_proposals)
+    if change_n or toolkit_n:
+        parts.append(
+            _note(
+                f'<strong>{change_n + toolkit_n}</strong> request'
+                f'{"s" if change_n + toolkit_n != 1 else ""} awaiting your decision '
+                f'&ndash; <a href="{UI_PREFIX}/requests">review {"them" if change_n + toolkit_n != 1 else "it"}</a>.',
+                icon="share",
+            )
+        )
     if not service.tier1.toolkits:
         parts.append(_no_toolkits_note())
     elif not catalog.tools:
@@ -2291,25 +2309,32 @@ def _view_overview(
 
     parts.append(
         '<div class="grid">'
-        + _stat(active, "Tools active", "sliders", "t-ok")
-        + _stat(len(identities.identities), "Identities", "key")
+        + _stat(active, "Tools active", "sliders", "t-ok", href=f"{UI_PREFIX}/tools")
+        + _stat(
+            len(identities.identities), "Identities", "key",
+            href=f"{UI_PREFIX}/identities",
+        )
         + _stat(
             len(protected), "Protected resources", "lock", "t-deny",
             title="Toolkit targets blocked for every identity, from toolkits.yaml (FR-4.12)",
+            href=f"{UI_PREFIX}/toolkits/reference",
         )
         + _stat(
             blocked, "Tools disabled", "ban", "t-deny" if blocked else "",
             title="Tool definitions rejected at load time for violating a Tier 1 rule",
+            href=f"{UI_PREFIX}/tools",
         )
         + _stat(
             _ov_totals["total"], "Calls (12h)", "activity",
             "t-ok" if _ov_totals["total"] else "",
+            href=f"{UI_PREFIX}/stats",
         )
         + _stat(
             f"{_ov_success}%", "Success rate", "check",
             "t-ok" if _ov_success >= 80 else ("t-warn" if _ov_success >= 50 else "t-deny"),
+            href=f"{UI_PREFIX}/stats",
         )
-        + _stat(len(records), "Events", "list")
+        + _stat(len(records), "Events", "clock", href=f"{UI_PREFIX}/audit")
         + "</div>"
     )
 
@@ -5429,7 +5454,9 @@ def build_ui_routes(
         Route(
             f"{UI_PREFIX}/",
             guarded(
-                lambda r, s: _view_overview(service, identities, store, r),
+                lambda r, s: _view_overview(
+                    service, identities, store, r, pending, toolkit_proposals,
+                ),
                 "Overview", "", icon="gauge",
                 subtitle="Who can reach what, and what's happening right now.",
             ),
