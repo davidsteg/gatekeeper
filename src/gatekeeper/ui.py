@@ -1016,12 +1016,22 @@ td.ops form { display: inline; }
    `.am-popup` is `position: absolute` and still occupies its full laid-
    out size even at `opacity: 0` (hidden, not removed), so with the axes
    coupled to "auto" the popups belonging to cells anywhere in the table
-   -- not just the last row -- inflated .am-wrap's scrollable area with
-   space that renders as nothing, and scrolling down led into that empty
-   space. Hidden trades away a popup that would hang off the very bottom
-   row getting clipped instead of floating fully clear -- much rarer, and
-   nowhere near as confusing as a wall of empty scrollable space. */
-.am-wrap { overflow-x: auto; overflow-y: hidden; border-radius: var(--radius); }
+   inflated .am-wrap's scrollable area with space that renders as
+   nothing, and scrolling down led into that empty space.
+   Turned out "hidden" alone just swapped that bug for a worse one: any
+   row's popup extends `calc(100% + 6px)` below *that row's own cell*,
+   not below the table, so it doesn't take a last-row cell to overflow
+   .am-wrap's bottom edge -- most rows' popups got clipped, not "far
+   rarer" as first thought. The actual fix is to give the clipped box
+   room: `.am-tools` is capped at max-height 9rem (see below), so a
+   popup's *tallest possible* size is bounded and known -- reserve that
+   much space as padding-bottom so hidden crops nothing a real popup
+   would ever reach, without reopening the empty-scrollable-space bug
+   (this bottom margin is fixed and small, not open-ended). */
+.am-wrap {
+  overflow-x: auto; overflow-y: hidden; padding-bottom: 14rem; border-radius: var(--radius);
+  scrollbar-width: thin; scrollbar-color: var(--line) var(--sunken);
+}
 .am-wrap::-webkit-scrollbar { height: 6px; }
 .am-wrap::-webkit-scrollbar-track { background: var(--sunken); border-radius: 3px; }
 .am-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
@@ -1166,13 +1176,16 @@ td.ops form { display: inline; }
 .tool-id-link:hover .tool-id { color: var(--fg); text-decoration: underline; }
 
 /* -- Activity -- */
+.chart-wrap { position: relative; }
 .chart { width: 100%; height: auto; display: block; }
-/* A single <foreignObject> spans the whole chart (see `_activity_chart`);
-   this row divides it into equal hourly zones with plain flex, not
-   per-zone `style="left:N%"` -- a `.c-tip` can then overflow past its
-   own zone into the shared row's space without being clipped, unlike a
-   per-bar-width foreignObject (too narrow to hold the tooltip at all). */
-.c-tip-row { display: flex; width: 100%; height: 100%; }
+/* A plain HTML row overlaid on the chart (see `_activity_chart`), NOT a
+   <foreignObject> inside the SVG -- foreignObject content is painted
+   through the SVG's own viewBox-to-viewport scale, so a .7rem tooltip
+   rendered 3x too large there, same as the bars. `inset: 0` lines this
+   up exactly with the <svg> sibling that establishes `.chart-wrap`'s
+   box; equal hourly zones are plain flex, not per-zone `style="left:N%"`
+   (same CSP reason as everywhere else here). */
+.c-tip-row { position: absolute; inset: 0; display: flex; }
 .c-tip-zone { flex: 1; min-width: 0; position: relative; cursor: default; }
 .c-tip {
   position: absolute; top: 2px; left: 50%; transform: translateX(-50%) scale(.92);
@@ -1205,7 +1218,17 @@ td.ops form { display: inline; }
    viewBox against the flexible ~2/3-width column) so the two cards stay
    close in height across common widths, with the feed scrolling for
    anything past that instead of growing past it. */
-.pad.pad-scroll { overflow-y: auto; min-height: 0; max-height: 420px; }
+.pad.pad-scroll {
+  overflow-y: auto; min-height: 0; max-height: 420px;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+}
+/* Thin and themed, matching .am-wrap's own scrollbar -- the unstyled
+   native default (wide, OS-grey) stands out against the rest of the
+   console instead of reading as part of it. */
+.pad.pad-scroll::-webkit-scrollbar { width: 6px; }
+.pad.pad-scroll::-webkit-scrollbar-track { background: transparent; }
+.pad.pad-scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.pad.pad-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 .feed-item { display: flex; gap: .55rem; padding: .7rem 1rem; align-items: baseline; border-top: 1px solid var(--line); font-size: .82rem; }
 .feed-item .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
 .feed-item.t-ok .dot { background: var(--ok); }
@@ -2320,6 +2343,14 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
             f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
             "</svg>"
         )
+    svg = (
+        f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
+        f'aria-label="Calls per hour">{defs}{grid}{"".join(bars)}'
+        f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
+        f'<text class="c-ax c-ax-now" x="{width:.0f}" y="{height - 3:.0f}" '
+        f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
+        "</svg>"
+    )
     # A themed, always-fast CSS :hover tooltip -- the <title> on each <g>
     # above is a real fallback (assistive tech, and browsers that for some
     # reason don't run the CSS), but a native SVG title's OS-controlled
@@ -2328,15 +2359,15 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
     # appears instantly and matches the rest of the console's popups
     # (`.am-popup` uses the same absolute + opacity-transition pattern).
     #
-    # One <foreignObject> spanning the whole chart, not one per bar: a
-    # <foreignObject> clips its content to its own box, so a per-bar zone
-    # only `slot_w` (~25 units) wide clipped the tooltip's text the moment
-    # it needed more room than that -- the earlier version rendered
-    # visibly broken/cut-off. The zones inside are an equal-width flex
-    # row instead (a static `display:flex`/`flex:1` in the stylesheet,
-    # not per-zone `style="left:N%"`), so a tooltip can overflow into a
-    # neighboring column's space without needing per-element positioning
-    # that CSP would drop anyway (see the note on the hero bar above).
+    # A plain HTML sibling of the <svg>, absolutely overlaid via CSS --
+    # NOT a <foreignObject> inside the SVG. A <foreignObject>'s content is
+    # painted through the SVG's own viewBox-to-viewport transform (here,
+    # ~3x: a 300-unit-wide viewBox rendered at ~1000 CSS px), so anything
+    # sized in rem/px inside one is scaled by that same factor along with
+    # the bars -- a .7rem tooltip rendered enormous, not .7rem. Outside
+    # the <svg> entirely, "1rem" is 1rem again. The row is still a plain
+    # flex of equal zones (no per-zone `style="left:N%"`, same CSP reason
+    # as everywhere else in this function).
     tips = "".join(
         '<div class="c-tip-zone">'
         '<div class="c-tip">'
@@ -2344,20 +2375,7 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
         f'&ndash; {ok} ok, {bad} denied/failed</div></div>'
         for index, (ok, bad) in enumerate(buckets)
     )
-    tips = (
-        f'<foreignObject x="0" y="0" width="{width:.0f}" height="{height:.0f}">'
-        f'<div xmlns="http://www.w3.org/1999/xhtml" class="c-tip-row">{tips}</div>'
-        "</foreignObject>"
-    )
-    return (
-        f'<svg class="chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
-        f'aria-label="Calls per hour">{defs}{grid}{"".join(bars)}'
-        f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
-        f'<text class="c-ax c-ax-now" x="{width:.0f}" y="{height - 3:.0f}" '
-        f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
-        f"{tips}"
-        "</svg>"
-    )
+    return f'<div class="chart-wrap">{svg}<div class="c-tip-row">{tips}</div></div>'
 
 
 _TONE = {"ok": "t-ok", "denied": "t-deny", "failed": "t-deny", "unknown": "t-warn"}
