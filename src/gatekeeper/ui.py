@@ -1005,33 +1005,37 @@ td.ops form { display: inline; }
 .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
 
 /* -- Access matrix grid -- */
-/* overflow-x: auto, not visible -- a wide matrix (many toolkits) needs to
-   scroll sideways inside its own box. It was "visible" despite the
-   ::-webkit-scrollbar rules right below it actually styling one, which
-   never had anything to apply to -- the table just spilled out past the
-   card's edge instead of scrolling.
-   overflow-y is explicitly "hidden", not left to default: per spec,
-   overflow-x other than visible forces the other axis away from visible
-   too, and it would otherwise compute to "auto". Every granted cell's
-   `.am-popup` is `position: absolute` and still occupies its full laid-
-   out size even at `opacity: 0` (hidden, not removed), so with the axes
-   coupled to "auto" the popups belonging to cells anywhere in the table
-   inflated .am-wrap's scrollable area with space that renders as
-   nothing, and scrolling down led into that empty space.
-   Turned out "hidden" alone just swapped that bug for a worse one: any
-   row's popup extends `calc(100% + 6px)` below *that row's own cell*,
-   not below the table, so it doesn't take a last-row cell to overflow
-   .am-wrap's bottom edge -- most rows' popups got clipped, not "far
-   rarer" as first thought. The actual fix is to give the clipped box
-   room: `.am-tools` is capped at max-height 9rem (see below), so a
-   popup's *tallest possible* size is bounded and known -- reserve that
-   much space as padding-bottom so hidden crops nothing a real popup
-   would ever reach, without reopening the empty-scrollable-space bug
-   (this bottom margin is fixed and small, not open-ended). */
+/* A wide matrix (many toolkits) must scroll sideways inside its own box,
+   so overflow-x is `auto`. That single fact drives everything below,
+   because of a CSS rule with no way around it: when one axis is a scroll
+   value, the other cannot stay `visible` -- it is forced to a
+   clipping/scrolling value (`clip` likewise computes to `hidden` here;
+   measured, not assumed). So a cell's `.am-popup` can never escape this
+   box, and the only real question is how to make it fit *inside*.
+   Two earlier attempts failed and are worth not repeating:
+     - leaving overflow-y at its forced `auto`: hover popups are
+       `position: absolute` and keep their full laid-out size even at
+       `opacity: 0`, so they inflated the scrollable area and scrolling
+       down led into a void of empty space;
+     - `hidden` plus a large `padding-bottom` to hold the tallest popup:
+       a popup hangs below *its own row's cell*, not below the table, so
+       reserving room only at the bottom still clipped upper rows -- and
+       224px of permanently blank space looked broken on its own.
+   What works (and is verified in-browser): bound the popup's height, and
+   let rows near the bottom open *upward* instead (`.am-up`, decided
+   server-side in `_access_matrix` where the row count is known). Every
+   popup then resolves inside the box, and the leftover padding-bottom is
+   only what the last downward-opening row needs -- 4.5rem, not 14. */
 .am-wrap {
-  overflow-x: auto; overflow-y: hidden; padding-bottom: 14rem; border-radius: var(--radius);
+  overflow-x: auto; overflow-y: hidden; padding-bottom: 4.5rem; border-radius: var(--radius);
   scrollbar-width: thin; scrollbar-color: var(--line) var(--sunken);
 }
+/* A short table has no rows above to open into either, so its upward
+   popups need the same reserve at the top that every table keeps at the
+   bottom. Only applied when the row count actually calls for it
+   (`_access_matrix` decides), so the usual taller matrix keeps its
+   column headers flush against the filter row. */
+.am-wrap.am-wrap-short { padding-top: 4.5rem; }
 .am-wrap::-webkit-scrollbar { height: 6px; }
 .am-wrap::-webkit-scrollbar-track { background: var(--sunken); border-radius: 3px; }
 .am-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
@@ -1155,21 +1159,38 @@ td.ops form { display: inline; }
      or an unusually long identity/toolkit name shouldn't be able to push
      the popup wider than max-width and off past the card's edge. */
   overflow-wrap: anywhere;
+  /* Bounded height is what makes the whole thing fit (see .am-wrap): the
+     column layout lets the tool list -- the only part that grows -- take
+     the leftover room and scroll, while the title and call counts stay
+     pinned and always readable. */
+  max-height: 9rem; display: flex; flex-direction: column;
 }
+/* Rows near the bottom of the table open upward instead, so the popup
+   resolves into the rows above rather than off the wrapper's edge. */
+.am-cell.am-up .am-popup { top: auto; bottom: calc(100% + 6px); }
 .am-popup::after {
   content: ""; position: absolute; bottom: 100%; left: 50%;
   transform: translateX(-50%); border: 5px solid transparent;
   border-bottom-color: var(--surface);
 }
+.am-cell.am-up .am-popup::after {
+  bottom: auto; top: 100%;
+  border-bottom-color: transparent; border-top-color: var(--surface);
+}
 .am-cell:hover .am-popup {
   opacity: 1; transform: translateX(-50%) scale(1);
 }
-.am-popup-title { font-weight: 700; font-size: .75rem; margin-bottom: .3rem; color: var(--fg); }
-.am-popup-stats { font-size: .68rem; margin-bottom: .35rem; }
+.am-popup-title { font-weight: 700; font-size: .75rem; margin-bottom: .3rem; color: var(--fg); flex: none; }
+.am-popup-stats { font-size: .68rem; margin-bottom: .35rem; flex: none; }
 .am-tools {
   margin: .2rem 0 0; padding-left: .8rem;
-  max-height: 9rem; overflow-y: auto;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
 }
+.am-tools::-webkit-scrollbar { width: 6px; }
+.am-tools::-webkit-scrollbar-track { background: transparent; }
+.am-tools::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.am-tools::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 .am-tools li { margin-bottom: .15rem; }
 .am-tools .tool-id { font-size: .68rem; color: var(--accent); overflow-wrap: anywhere; }
 .tool-id-link { text-decoration: none; }
@@ -2176,8 +2197,21 @@ def _access_matrix(
             f"</th>"
         )
 
+    # Which rows' hover popups open upward instead of downward. The popup
+    # cannot escape `.am-wrap` (its overflow-x:auto forces the vertical
+    # axis to clip too -- see the CSS), so a row with too little table
+    # left below it would have its popup cropped. Only the row count is
+    # needed to decide, and only this function knows it; the CSS just
+    # honours the resulting `.am-up`. Two rows' worth of remaining table
+    # plus `.am-wrap`'s padding-bottom is what a max-height:9rem popup
+    # needs, so anything nearer the end than that flips.
+    _ROWS_BELOW_FOR_DOWNWARD = 2
+    row_total = len(idents)
+
     rows_html = []
-    for ident in idents:
+    for row_index, ident in enumerate(idents):
+        opens_up = (row_total - 1 - row_index) < _ROWS_BELOW_FOR_DOWNWARD
+        up_class = " am-up" if opens_up else ""
         role_icon = "shield" if ident.role == "admin" else "eye" if ident.role == "viewer" else "key"
         role_badge = f'<span class="pill{" ok" if ident.role == "admin" else " accent" if ident.role == "viewer" else ""}">{_icon(role_icon, 10)}{_e(ident.role)}</span>'
         cells = []
@@ -2200,7 +2234,7 @@ def _access_matrix(
                 if pair["total"] else "no calls yet"
             )
             cells.append(
-                f'<td class="am-cell am-grant{heat}">'
+                f'<td class="am-cell am-grant{heat}{up_class}">'
                 f'<span class="am-count">{len(granted)}</span>'
                 f'<div class="am-popup">'
                 f'<div class="am-popup-title">{_e(ident.id)} &rarr; {_e(name)}</div>'
@@ -2218,8 +2252,13 @@ def _access_matrix(
             f'{"".join(cells)}</tr>'
         )
 
+    # With three rows or fewer, even the topmost upward-opening popup has
+    # only the column header above it -- not enough -- so such a table
+    # also reserves room at the top (`.am-wrap-short`). Taller matrices
+    # always have real rows to open into and skip it.
+    short_class = " am-wrap-short" if row_total <= 3 else ""
     return (
-        '<div class="am-wrap"><table class="am-grid">'
+        f'<div class="am-wrap{short_class}"><table class="am-grid">'
         "<thead><tr>"
         '<th class="am-corner">Identity</th>'
         '<th class="am-corner">Role</th>'
