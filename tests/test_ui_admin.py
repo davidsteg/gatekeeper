@@ -221,19 +221,13 @@ def test_admin_cannot_use_a_denied_argument(admin_env):
 
 
 def test_no_route_writes_tier1(admin_env):
-    """`ConfigStore` (Tier 2) still has no path through which toolkits.yaml
-    is written, and among the UI's routes, only one -- `/ui/toolkits/deploy`
-    -- may ever touch it, and only for a human, through `writer` (session +
-    `role: admin` + CSRF), never automatically and never from `/admin/mcp`.
-
-    '/ui/toolkits/reference' and '/ui/requests' (Toolkit tab) are GET-only
-    and render read-only/copy-pasteable material. '/ui/toolkits/reject' POSTs
-    but only ever writes toolkit_proposals.yaml (Tier 2), never
-    toolkits.yaml. Since plan "Follow-up 2", exactly one route writes
-    Tier 1 at all -- '/ui/toolkits/deploy', via `ToolkitProposalStore.deploy`
-    (see `toolkit_proposals.py`) -- and even it only for a human, through
-    `writer` (session + `role: admin` + CSRF), never automatically and
-    never from `/admin/mcp`.
+    """`ConfigStore` has a narrowly-scoped `save_toolkit` (since v0.23.0)
+    that can change ``executor``/``binaries``/``denied_args`` — but never
+    the security-critical fields (``path_roots``, ``protected_resources``,
+    ``limits``). Among the UI's routes, only ``/ui/toolkits/deploy`` may
+    write Tier 1 directly, and only for a human through `writer` (session
+    + ``role: admin`` + CSRF), never automatically and never from
+    ``/admin/mcp``.
     """
     tier1_writing_routes = {f"{UI_PREFIX}/toolkits/deploy"}
     proposal_only_routes = {f"{UI_PREFIX}/toolkits/reject"}
@@ -250,8 +244,28 @@ def test_no_route_writes_tier1(admin_env):
             f"'toolkit' path (the only exceptions are {sorted(tier1_writing_routes)} "
             f"and {sorted(proposal_only_routes)})"
         )
-    assert not hasattr(admin_env["store"], "save_toolkit")
-    assert "toolkits" not in "".join(dir(admin_env["store"]))
+    # save_toolkit exists now, but must reject security-critical fields
+    assert hasattr(admin_env["store"], "save_toolkit")
+    from gatekeeper.store import WriteRefused
+    store = admin_env["store"]
+    # Must reject path_roots changes
+    with pytest.raises(WriteRefused):
+        store.save_toolkit(
+            "demo", {"path_roots": ["/etc"]}, actor="root",
+            rev=store.tools_revision(),
+        )
+    # Must reject protected_resources changes
+    with pytest.raises(WriteRefused):
+        store.save_toolkit(
+            "demo", {"protected_resources": []}, actor="root",
+            rev=store.tools_revision(),
+        )
+    # Must reject limits changes
+    with pytest.raises(WriteRefused):
+        store.save_toolkit(
+            "demo", {"limits": {}}, actor="root",
+            rev=store.tools_revision(),
+        )
 
 
 def test_free_text_parameter_still_refused(admin_env):

@@ -277,6 +277,37 @@ _TOOLS: list[types.Tool] = [
             "additionalProperties": False,
         },
     ),
+    types.Tool(
+        name="admin.toolkit_update",
+        title="Update a toolkit's executor/binaries",
+        description=(
+            "Updates an existing toolkit's executor type, binaries, and "
+            "denied_args. Only these three fields are writable at runtime — "
+            "path_roots, protected_resources, and limits remain deploy-time "
+            "only (FR-4.11). Applies immediately via reload_config. "
+            "Example: switch executor from 'local' to 'file' by passing "
+            "updates={\"executor\": \"file\", \"binaries\": [], \"denied_args\": []}."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Toolkit name"},
+                "updates": {
+                    "type": "object",
+                    "description": "Fields to change (executor, binaries, denied_args only)",
+                    "properties": {
+                        "executor": {"type": "string"},
+                        "binaries": {"type": "array", "items": {"type": "string"}},
+                        "denied_args": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "additionalProperties": False,
+                },
+                "rev": {"type": "string", "description": "Current toolkits.yaml revision (optional)"},
+            },
+            "required": ["name", "updates"],
+            "additionalProperties": False,
+        },
+    ),
 ]
 
 # Kept honest at import time, not merely by convention: if these two lists

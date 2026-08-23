@@ -60,6 +60,28 @@ cannot. It is in every release.
 
 ---
 
+## 0.23.0
+
+**`admin.toolkit_update` + `file` executor registration fix.**
+
+Two fixes:
+
+1. **`file` executor was never registered in `KNOWN_EXECUTORS`.** The
+   v0.22.0 `file` executor would have been rejected by `load_tier1` at
+   startup with "executor 'file' is not enabled at this stage". Fixed.
+
+2. **New `admin.toolkit_update` tool** — lets the admin change a
+   toolkit's `executor`, `binaries`, and `denied_args` at runtime via
+   `/admin/mcp`, without a manual file edit + redeploy. Security-critical
+   fields (`path_roots`, `protected_resources`, `limits`) remain
+   deploy-time only (FR-4.11) and are rejected. Applies immediately via
+   `reload_config`.
+
+6 new tests in `tests/test_toolkit_update.py` covering the rejection
+contract and the full executor-switch + reload path.
+
+---
+
 ## 0.22.0
 
 **Built-in `file` executor: read/write/patch/list without shell.**

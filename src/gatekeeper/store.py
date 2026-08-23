@@ -83,19 +83,31 @@ def _fingerprint(record: Any) -> str:
 
 @dataclasses.dataclass(slots=True)
 class ConfigStore:
-    """Owns the Tier 2 files and the runtime state derived from them."""
+    """Owns the Tier 2 files and the runtime state derived from them.
+
+    Since v0.23.0, also owns a narrowly-scoped write path for Tier 1
+    toolkit executor changes (``toolkits_path``). Tier 1's security
+    boundary (path_roots, protected_resources, binaries) remains
+    deploy-time only — ``toolkit_update`` can only change the executor
+    type and the binaries/denied_args that go with it, never the
+    security-critical fields.
+    """
 
     service: Service
     identities: Any  # IdentityStore -- as Any to avoid a circular import
     audit: AuditLog
     tools_path: str
     identities_path: str
+    toolkits_path: str = ""
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
     # -- State -----------------------------------------------------------
 
     def tools_revision(self) -> str:
         return revision(self.tools_path)
+
+    def toolkits_revision(self) -> str:
+        return revision(self.toolkits_path)
 
     def identities_revision(self) -> str:
         return revision(self.identities_path)
@@ -267,6 +279,84 @@ class ConfigStore:
                     "action": "dangling_grant",
                     "target": tool_id,
                     "identities": holders,
+                }
+            )
+
+    # -- Toolkits (Tier 1 — narrowly scoped write) -----------------------
+
+    # Fields that toolkit_update is ALLOWED to change. Everything else
+    # (path_roots, protected_resources, limits) stays deploy-time only.
+    _TK_WRITABLE_FIELDS = frozenset({"executor", "binaries", "denied_args"})
+
+    def save_toolkit(
+        self,
+        name: str,
+        updates: dict[str, Any],
+        *,
+        actor: str,
+        rev: str,
+    ) -> None:
+        """Updates a toolkit's executor type, binaries, and denied_args.
+
+        Only ``executor``, ``binaries``, and ``denied_args`` can be
+        changed at runtime — never ``path_roots``, ``protected_resources``,
+        or ``limits`` (those remain deploy-time only, FR-4.11).
+        After writing, calls ``reload_config`` to apply the change live.
+        """
+        if not self.toolkits_path:
+            raise WriteRefused(
+                "toolkits_path not configured — toolkit_update requires the "
+                "UI to know the toolkits.yaml path."
+            )
+
+        # Reject any attempt to change security-critical fields
+        illegal = set(updates) - self._TK_WRITABLE_FIELDS
+        if illegal:
+            raise WriteRefused(
+                f"Cannot change {sorted(illegal)} at runtime — only "
+                f"{sorted(self._TK_WRITABLE_FIELDS)} are writable via toolkit_update. "
+                "path_roots, protected_resources, and limits require a redeploy."
+            )
+
+        with self._lock:
+            self._check(self.toolkits_path, rev)
+
+            with open(self.toolkits_path) as f:
+                raw = yaml.safe_load(f) or {}
+
+            toolkits = raw.get("toolkits") or {}
+            if name not in toolkits:
+                raise WriteRefused(f"No toolkit named {name!r}.")
+
+            tk = toolkits[name]
+            if not isinstance(tk, dict):
+                raise WriteRefused(f"Toolkit {name!r} is not a mapping.")
+
+            # Apply only the allowed fields
+            for field, value in updates.items():
+                tk[field] = value
+
+            toolkits[name] = tk
+            raw["toolkits"] = toolkits
+
+            _atomic_write(self.toolkits_path, _dump(raw))
+
+            # Reload everything so the new executor takes effect immediately
+            error = self.service.reload_config(
+                toolkits_path=self.toolkits_path,
+                tools_path=self.tools_path,
+                identities_path=self.identities_path,
+            )
+            if error:
+                raise WriteRefused(f"Reload after toolkit_update failed: {error}")
+
+            self.audit.write(
+                {
+                    "kind": "admin_change",
+                    "actor": actor,
+                    "action": "toolkit_update",
+                    "target": name,
+                    "changes": updates,
                 }
             )
 
