@@ -60,6 +60,19 @@ cannot. It is in every release.
 
 ---
 
+## 0.25.1
+
+**Fix: the activity chart's gridlines were nearly invisible.**
+
+`.c-grid` used `var(--line)` -- the same near-background-color token used
+for card borders -- which in dark mode sits at #1e2a2e against a #101619
+card, too low-contrast to read as a scale reference once bars covered
+most of the height they'd otherwise be visible against. Switched to
+`var(--muted)` with explicit opacity: the 0% baseline is solid at .6
+opacity (a fixed reference even where no bar reaches it), the 50%/100%
+lines are dashed at .4 opacity so a bar sitting at peak height doesn't
+make the 100% line look like a stray solid stroke poking out beside it.
+
 ## 0.25.0
 
 **Overview: a full visual redesign, not just clickable tiles.**
