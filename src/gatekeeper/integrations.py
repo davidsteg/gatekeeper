@@ -12,7 +12,7 @@ Logos are inline SVG, never a hotlinked image (the console's CSP is
 `img-src 'self' data:`, no external requests). Most are the services' own
 marks, sourced from homarr-labs/dashboard-icons under Apache License 2.0
 (see `_BRAND_LOGOS` below); Tdarr has no such source available and falls
-back to a plain colored-circle monogram via `_monogram()`.
+back to a plain colored-circle monogram via `monogram()`.
 """
 
 from __future__ import annotations
@@ -39,15 +39,23 @@ class Integration:
     notes: str = ""
 
 
-def _monogram(letters: str, color: str) -> str:
+def monogram(letters: str, color: str, *, css_class: str = "") -> str:
     """A flat-color circular badge with 1-3 letters -- the shared visual
 
     language for every integration logo, so twelve services read as one system
-    instead of twelve mismatched icon styles.
+    instead of twelve mismatched icon styles. Not module-private: `ui.py`
+    reuses this for the access map's toolkit-badge fallback rather than
+    keeping a second copy of the same circle-plus-initials drawing code.
+    `color` may be any valid SVG paint, including a `var(--token)` reference,
+    so a caller that needs to stay theme-aware isn't limited to literal hex.
+    `css_class`, when given, is added to the `<svg>` so a caller like the
+    access map can size/position it via its own CSS instead of the fixed
+    28x28 default.
     """
     size = 14 if len(letters) > 2 else 16
+    class_attr = f' class="{css_class}"' if css_class else ""
     return (
-        '<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" '
+        f'<svg{class_attr} viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" '
         'width="28" height="28" role="img" aria-hidden="true">'
         f'<circle cx="16" cy="16" r="15" fill="{color}"/>'
         f'<text x="16" y="21" text-anchor="middle" '
@@ -317,7 +325,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
     Integration(
         key="tdarr",
         display_name="Tdarr",
-        logo_svg=_monogram("Td", "#26c6da"),
+        logo_svg=monogram("Td", "#26c6da"),
         toolkit_yaml=_http_toolkit_yaml(
             "tdarr", port=8265, path_prefixes=["/api/v2/"], header=None,
         ),
@@ -709,7 +717,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
     Integration(
         key="jellystat",
         display_name="Jellystat",
-        logo_svg=_monogram("Js", "#8e44ad"),
+        logo_svg=monogram("Js", "#8e44ad"),
         toolkit_yaml=_http_toolkit_yaml(
             "jellystat", port=3000, path_prefixes=["/stats/", "/api/"],
             header="x-api-token",
@@ -743,7 +751,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
         # entry. "Jr" rather than "Js" on purpose -- Jellystat above already
         # owns "Js", and two same-lettered circles in the same gallery are
         # indistinguishable at card size.
-        logo_svg=_monogram("Jr", "#6366f1"),
+        logo_svg=monogram("Jr", "#6366f1"),
         toolkit_yaml=_http_toolkit_yaml(
             "jellyseerr", port=5055, path_prefixes=["/api/v1/"],
             header="X-Api-Key", methods=["GET"],

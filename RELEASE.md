@@ -60,6 +60,39 @@ cannot. It is in every release.
 
 ---
 
+## 0.25.0
+
+**Overview: a full visual redesign, not just clickable tiles.**
+
+The flat 7-tile stat grid from 0.24.0 is replaced with a hero: a
+server-rendered radial gauge (plain SVG `stroke-dasharray` arithmetic, no
+JS or chart library — the CSP forbids scripts entirely) showing the
+success rate at a glance, next to the call count, an ok/denied outcome
+bar, and a legend. The gauge and call count link to `/ui/stats`, same as
+the tiles they replace. The remaining posture counts (tools active,
+identities, protected resources, tools disabled) move to a smaller
+chip row underneath — still clickable, deliberately less visually loud
+than the hero above it.
+
+The activity chart's bars are now clipped to one rounded shape per bar
+instead of two independently-rounded rects, so the ok/denied color seam
+reads as a single pill rather than two lozenges pinched together; added
+horizontal gridlines and a native `<title>` tooltip per bar (exact
+counts on hover, no JS). The access map got more breathing room, zebra
+striping on the identity/role/tools columns, and a subtle inset
+highlight on granted cells.
+
+Fixed in the same pass: `_dashboard_icon_url` had a bug where it always
+guessed a dashboardicons.com URL from the raw toolkit name as a last
+resort, even for toolkits with no icon there — producing a silently
+broken `<img>` with no way to recover (the CSP forbids `onerror`
+fallbacks along with every other script). It now returns `None` unless
+there's a real slug or integration match, and the access map falls back
+to a colored-monogram badge (reusing `integrations.py`'s existing
+`monogram()`, now shared instead of duplicated) so an unmatched toolkit
+gets a deliberate, varied look instead of a broken image or one flat
+generic icon repeated for everything.
+
 ## 0.24.0
 
 **Overview: stat tiles are now links, and pending requests surface on the front page.**
