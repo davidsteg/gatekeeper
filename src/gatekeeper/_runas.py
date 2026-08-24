@@ -40,13 +40,17 @@ Why this and not the alternatives:
 Three properties this file exists to guarantee:
 
 1. **The privilege drop is one-way.** Real and saved ids are set together
-   (`setresuid`/`setresgid`), supplementary groups are replaced, the
+   (`setresuid`/`setresgid`), supplementary groups are replaced, every
    capability set is emptied, and all of it is verified -- including an
    explicit attempt to regain root that must fail. A child that cannot
    prove it dropped does not run the operation. The capability half is not
    redundant with the id half: leaving uid 0 makes the kernel clear the
    capability sets, but a change between two *non-root* uids does not, and
    a child that kept `CAP_SETUID` is one call away from being root again.
+   The one set that cannot be emptied is the bounding set -- lowering it
+   needs `CAP_SETPCAP`, which no deployment here grants -- so the child
+   sets `no_new_privs` instead, which makes a full bounding set harmless
+   by closing the `execve` route it would be reached through.
 2. **It never silently falls back.** If the process is not privileged
    enough to become the requested user, the call fails with a message
    saying so. It does not quietly run as the container user, which would
@@ -163,23 +167,45 @@ CAP_SETUID = 7
 _CAP_VERSION_3 = 0x20080522
 
 
-def effective_capabilities() -> int | None:
-    """The process's effective capability set as a bitmask, or `None`.
+#: The per-process capability sets, as `/proc/self/status` names them.
+#: `CapBnd` is deliberately absent: the bounding set cannot be lowered
+#: without `CAP_SETPCAP`, which the deployment does not grant and which it
+#: would be a strange trade to grant *in order to* drop capabilities. What
+#: makes a full bounding set harmless is `_set_no_new_privs`, not this.
+_CAP_SETS = ("CapEff", "CapPrm", "CapInh", "CapAmb")
 
-    Read out of `/proc/self/status` rather than through `capget`: it is the
-    same kernel-maintained set, needs no `ctypes`, and a machine without
-    procfs (a non-Linux dev box) answers "unknown" instead of raising --
-    which is a different thing from "holds nothing", and the callers below
-    treat it as such.
+
+def capability_sets() -> dict[str, int] | None:
+    """Every per-process capability set as a bitmask, or `None`.
+
+    Read out of `/proc/self/status` rather than through `capget`: they are
+    the same kernel-maintained sets, need no `ctypes`, and a machine
+    without procfs (a non-Linux dev box) answers "unknown" instead of
+    raising -- which is a different thing from "holds nothing", and the
+    callers below treat it as such.
+
+    All four rather than just the effective one, because the effective set
+    is the least of the four for this purpose: a capability sitting in the
+    permitted set can be made effective again at will, and one in the
+    ambient set survives the next `execve`. Reporting only `CapEff` would
+    call a process clean that is one `capset` away from not being.
     """
+    found: dict[str, int] = {}
     try:
         with open("/proc/self/status", encoding="ascii") as handle:
             for line in handle:
-                if line.startswith("CapEff:"):
-                    return int(line.split(":", 1)[1].strip(), 16)
+                field, _, value = line.partition(":")
+                if field in _CAP_SETS:
+                    found[field] = int(value.strip(), 16)
     except (OSError, ValueError):
         return None
-    return None
+    return found or None
+
+
+def effective_capabilities() -> int | None:
+    """Just the effective set -- what a process can use *right now*."""
+    sets = capability_sets()
+    return None if sets is None else sets.get("CapEff")
 
 
 def can_change_user() -> bool:
@@ -233,6 +259,41 @@ def _clear_capabilities() -> None:
     if libc.capset(ctypes.byref(header), ctypes.byref(data)) != 0:
         errno = ctypes.get_errno()
         raise OSError(errno, os.strerror(errno), "capset")
+
+
+#: `PR_SET_NO_NEW_PRIVS` (`linux/prctl.h`).
+_PR_SET_NO_NEW_PRIVS = 38
+
+
+def _set_no_new_privs() -> bool:
+    """Forbids this process ever gaining privilege through `execve`.
+
+    The half `_clear_capabilities` cannot reach. Emptying the effective,
+    permitted, inheritable and ambient sets settles what this process
+    holds; it settles nothing about the *bounding* set, which stays full
+    because lowering it needs `CAP_SETPCAP` -- a capability the deployment
+    deliberately does not grant. While the bounding set is full, a
+    setuid-root binary or a file carrying capabilities remains a way back
+    up for anything this process goes on to exec.
+
+    `no_new_privs` closes that entire class, needs no privilege of its own,
+    and cannot be undone once set. The container ordinarily sets it too
+    (`no-new-privileges: true` in `compose.yaml`), but that is a line
+    somebody can leave out of a hand-written deployment; this one cannot be
+    left out. It costs nothing: the helper performs its file operation
+    in-process and never execs anything.
+
+    Defence in depth, not the boundary itself -- the boundary is the
+    verified id drop and the emptied capability sets -- so a kernel that
+    does not know the option is reported, not fatal.
+    """
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        return bool(libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0)
+    except (OSError, AttributeError, TypeError):
+        return False
 
 
 def _privilege_diagnosis(uid: int, gid: int) -> str:
@@ -355,16 +416,26 @@ def become(uid: int, gid: int, name: str | None) -> None:
         except (OSError, AttributeError, TypeError) as exc:
             # Not fatal by itself: what decides is whether anything was
             # actually left behind, which the check below asks directly.
-            if effective_capabilities():
+            if any((capability_sets() or {}).values()):
                 raise RunAsError(
                     f"privilege drop to uid={uid} could not clear the "
-                    f"capability set ({exc}) -- refusing to run the operation"
+                    f"capability sets ({exc}) -- refusing to run the operation"
                 ) from None
-        remaining = effective_capabilities()
+        # Every set, not just the effective one. Zeroing the permitted and
+        # inheritable sets is what empties the ambient set as a side effect
+        # (the kernel keeps ambient a subset of both), and that is a kernel
+        # invariant this module relies on -- so it asks, rather than
+        # assuming it held.
+        remaining = {
+            field: value
+            for field, value in (capability_sets() or {}).items()
+            if value
+        }
         if remaining:
+            listed = ", ".join(f"{f}={v:016x}" for f, v in sorted(remaining.items()))
             raise RunAsError(
                 f"privilege drop to uid={uid} left capabilities behind "
-                f"(CapEff={remaining:016x}) -- refusing to run the operation"
+                f"({listed}) -- refusing to run the operation"
             )
         if _can_regain_root():
             raise RunAsError(
@@ -397,6 +468,12 @@ def _main() -> int:
     something genuinely unexpected (a crash before this ran) rather than
     an ordinary "file not found".
     """
+    # Before anything else, the request included: from here on this
+    # process cannot gain privilege through `execve`, whatever it goes on
+    # to do. See `_set_no_new_privs` for why that is not already covered by
+    # emptying the capability sets.
+    _set_no_new_privs()
+
     try:
         request = json.loads(sys.stdin.buffer.read().decode("utf-8"))
         if not isinstance(request, dict):
