@@ -18,12 +18,15 @@ ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
 - ``"create"`` (`admin.toolkit_propose`) -- drafts a brand-new toolkit.
   ``spec`` is the toolkit's full body; the name must not already exist.
 - ``"update"`` (`admin.toolkit_update`) -- narrowly-scoped edits to an
-  *existing* toolkit's ``executor``/``binaries``/``denied_args`` only
-  (``_UPDATE_WRITABLE_FIELDS``); ``spec`` holds just the changed fields,
+  *existing* toolkit's ``executor``/``binaries``/``denied_args``/``run_as``
+  only (``UPDATE_WRITABLE_FIELDS``); ``spec`` holds just the changed fields,
   merged into the toolkit's existing body at deploy time. Every other Tier 1
   field (``path_roots``, ``protected_resources``, limits) stays reachable
   only by a redeploy -- this exists so an executor swap (e.g. `local` ->
-  `file`) doesn't require one, not to open a general editing surface.
+  `file`) or a change of the OS user a `file` toolkit runs as doesn't
+  require one, not to open a general editing surface. The line it holds is
+  *reach*: a proposal may change who an operation runs as, never where that
+  operation may go.
 - ``"delete"`` (`admin.toolkit_delete`) -- removes an *existing* toolkit.
   ``spec`` is always empty; the name must already exist and, at deploy
   time, must not still be referenced by any non-deleted tool (deleting a
@@ -65,6 +68,7 @@ from ._atomic import atomic_write as _atomic_write
 from ._atomic import dump as _dump
 from ._atomic import revision as _revision
 from ._atomic import writable as _writable
+from ._runas import RunAsError, parse_run_as
 from .audit import AuditLog
 from .catalog import now_iso
 from .errors import ConfigError
@@ -86,18 +90,25 @@ KINDS = frozenset({"create", "update", "delete"})
 #: agent) and again at `deploy()` (the authoritative gate; `propose()`'s
 #: check is not itself a security boundary since nothing has been written
 #: yet either way).
-UPDATE_WRITABLE_FIELDS = frozenset({"executor", "binaries", "denied_args"})
-
-#: Fields no proposal of any kind may carry -- not even a `"create"` one,
-#: which otherwise takes a toolkit's full body. `run_as` (`tier1.py`, the
-#: `file` executor's per-toolkit OS user) is here because it is the one
-#: Tier 1 field that decides *with whose authority* an operation runs
-#: rather than what is allowed: a proposal naming a privileged user reads
-#: like any other line of YAML on the review card, and "a human clicked
-#: deploy" is too thin a boundary for that. It stays a redeploy, where the
-#: same person also decides whether the container may hold the privilege
-#: to honour it at all.
-PROPOSAL_FORBIDDEN_FIELDS = frozenset({"run_as"})
+#:
+#: `run_as` is here as of 0.29.0. 0.28.0 introduced it as redeploy-only and
+#: refused it in every proposal, on the grounds that it decides *with whose
+#: authority* an operation runs rather than what is allowed. What that ban
+#: did not survive is that it was bypassable in two steps: a `"create"`
+#: proposal already carries a toolkit's *full* body, `path_roots` included,
+#: so an agent could propose a broad `file` toolkit and then update it --
+#: the ban cost friction and bought no boundary. The boundary that does
+#: hold is the one below it in the stack: `run_as` only does anything if
+#: the *container* was started privileged enough to change user
+#: (`CAP_SETUID`/`CAP_SETGID`, docs/DEPLOYMENT.md), and no proposal can
+#: reach that decision. On a deployment that never granted it, a deployed
+#: `run_as` makes calls fail rather than escalate.
+#:
+#: What still requires a redeploy is what a `run_as` can be *pointed at*:
+#: `path_roots` and `protected_resources` stay out of this set, so a
+#: proposal can change who an operation runs as but never widen where it
+#: may reach.
+UPDATE_WRITABLE_FIELDS = frozenset({"executor", "binaries", "denied_args", "run_as"})
 
 #: Audit `action` names, keyed by `kind` -- one for `propose()`, one for
 #: `deploy()`.
@@ -265,13 +276,19 @@ class ToolkitProposalStore:
                     "update proposal. path_roots, protected_resources, and "
                     "limits require a redeploy."
                 )
-        forbidden = set(spec) & PROPOSAL_FORBIDDEN_FIELDS
-        if forbidden:
-            raise ToolkitProposalWriteRefused(
-                f"Cannot propose {sorted(forbidden)} -- it decides which OS "
-                "user a toolkit's file operations run as, and is settable "
-                "only by a redeploy of toolkits.yaml."
-            )
+        if "run_as" in spec and spec["run_as"] is not None:
+            # Shape only, and only for immediate feedback -- `deploy()` is
+            # the authoritative gate (it re-validates the whole merged file
+            # with the exact `load_tier1` startup uses, which is also what
+            # enforces "only a `file` toolkit may carry this"). Checking it
+            # here means an agent learns about a typo now instead of leaving
+            # a proposal in the queue that can only ever fail at review.
+            try:
+                parse_run_as(str(spec["run_as"]))
+            except RunAsError as exc:
+                raise ToolkitProposalWriteRefused(
+                    f"Cannot propose this 'run_as': {exc}"
+                ) from None
         if kind == "delete" and spec:
             raise ToolkitProposalWriteRefused(
                 "A delete proposal takes no 'spec' -- there is nothing to "
@@ -414,16 +431,6 @@ class ToolkitProposalStore:
                         "re-proposed under a different name (adding a new "
                         "toolkit is all a 'create' proposal supports; use an "
                         "update proposal to edit an existing one)."
-                    )
-                # Defense in depth, same reasoning as the update branch's
-                # `illegal` check above: propose() already refused this, but
-                # deploy() re-checks the input it is actually about to write.
-                forbidden = set(item.spec) & PROPOSAL_FORBIDDEN_FIELDS
-                if forbidden:
-                    raise ToolkitProposalWriteRefused(
-                        f"Cannot deploy {sorted(forbidden)} from a proposal -- "
-                        "it decides which OS user a toolkit's file operations "
-                        "run as, and is settable only by a redeploy."
                     )
                 merged_toolkits[item.name] = item.spec
 

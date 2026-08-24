@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 
+import pytest
 import yaml
 
 from conftest import PYTHON
@@ -336,64 +337,172 @@ def test_reject_delete_leaves_toolkits_yaml_unchanged(tmp_path, sandbox):
     assert open(toolkits_path, encoding="utf-8").read() == before
 
 
-# -- run_as: redeploy-only, not proposable -------------------------------------
+# -- run_as via an update proposal (0.29.0) -----------------------------------
 
 
-def test_propose_refuses_run_as_in_a_create_proposal(tmp_path, sandbox):
-    """`run_as` (the `file` executor's per-toolkit OS user) is the one Tier 1
-
-    field that decides *with whose authority* a call runs rather than what
-    is allowed. On the review card it would read like any other line of
-    YAML, and "a human clicked deploy" is too thin a boundary for that --
-    so it stays a redeploy, where the same person also decides whether the
-    container may hold the privilege to honour it at all.
-    """
-    store, _service, _tp = _env(tmp_path, sandbox)
-    spec = {
+def _file_toolkit_spec(sandbox, **extra):
+    return {
         "executor": "file",
+        "binaries": [],
         "path_roots": [str(sandbox)],
         "protected_resources": [],
         "max_timeout_seconds": 10,
         "max_output_bytes": 4096,
-        "run_as": "root",
+        **extra,
     }
+
+
+def _env_with_file_toolkit(tmp_path, sandbox, **extra):
+    """`_env` plus a second, `file`-executor toolkit to point `run_as` at."""
+    store, service, toolkits_path = _env(tmp_path, sandbox)
+    raw = yaml.safe_load(open(toolkits_path, encoding="utf-8").read())
+    raw["toolkits"]["files"] = _file_toolkit_spec(sandbox, **extra)
+    open(toolkits_path, "w", encoding="utf-8").write(yaml.safe_dump(raw))
+    service.reload_config(
+        toolkits_path=toolkits_path,
+        tools_path=str(tmp_path / "tools.yaml"),
+        identities_path=str(tmp_path / "identities.yaml"),
+    )
+    return store, service, toolkits_path
+
+
+def test_propose_run_as_update_creates_a_proposal(tmp_path, sandbox):
+    store, _service, _tp = _env_with_file_toolkit(tmp_path, sandbox)
+    item = store.propose(
+        name="files", spec={"run_as": "3001:3001"}, actor="hermes", kind="update"
+    )
+    assert item.status == "pending"
+    assert item.kind == "update"
+    assert item.spec == {"run_as": "3001:3001"}
+
+
+def test_propose_run_as_by_account_name(tmp_path, sandbox):
+    store, _service, _tp = _env_with_file_toolkit(tmp_path, sandbox)
+    item = store.propose(name="files", spec={"run_as": "root"}, actor="hermes", kind="update")
+    assert store.get(item.id).spec == {"run_as": "root"}
+
+
+@pytest.mark.parametrize("value", ["3001", "", "ro ot", "../root", "ro/ot", "3001:"])
+def test_propose_rejects_a_malformed_run_as_immediately(tmp_path, sandbox, value):
+    """Shape is checked at propose time so a typo surfaces now, rather than
+
+    sitting in the queue until a human tries to deploy it and gets a
+    Tier-1 validation failure they did not cause.
+    """
+    store, _service, _tp = _env_with_file_toolkit(tmp_path, sandbox)
     try:
-        store.propose(name="agentcfg", spec=spec, actor="hermes")
-        assert False, "expected ToolkitProposalWriteRefused"
+        store.propose(name="files", spec={"run_as": value}, actor="hermes", kind="update")
+        raise AssertionError("expected ToolkitProposalWriteRefused")
     except ToolkitProposalWriteRefused as exc:
         assert "run_as" in str(exc)
     assert store.list() == []
 
 
-def test_propose_refuses_run_as_in_an_update_proposal(tmp_path, sandbox):
-    store, _service, _tp = _env(tmp_path, sandbox)
-    try:
-        store.propose(name="demo", spec={"run_as": "root"}, actor="hermes", kind="update")
-        assert False, "expected ToolkitProposalWriteRefused"
-    except ToolkitProposalWriteRefused as exc:
-        assert "run_as" in str(exc)
+def test_deploy_run_as_update_writes_it_and_reloads(tmp_path, sandbox):
+    store, service, toolkits_path = _env_with_file_toolkit(tmp_path, sandbox)
+    assert service.tier1.toolkit("files").run_as is None
+
+    item = store.propose(
+        name="files", spec={"run_as": "3001:3001"}, actor="hermes", kind="update"
+    )
+    deployed = store.deploy(item.id, decided_by="root")
+
+    assert deployed.status == "deployed"
+    raw = yaml.safe_load(open(toolkits_path, encoding="utf-8").read())
+    assert raw["toolkits"]["files"]["run_as"] == "3001:3001"
+    # Live in the same process, no restart -- same guarantee as an
+    # executor change.
+    assert service.tier1.toolkit("files").run_as == "3001:3001"
+    # The rest of the toolkit's body is untouched by the merge.
+    assert raw["toolkits"]["files"]["path_roots"] == [str(sandbox)]
 
 
-def test_deploy_refuses_a_run_as_proposal_written_behind_propose(tmp_path, sandbox):
-    """Defense in depth, mirroring the update branch's own re-check: `deploy`
+def test_deploy_run_as_update_leaves_other_toolkits_alone(tmp_path, sandbox):
+    store, service, toolkits_path = _env_with_file_toolkit(tmp_path, sandbox)
+    item = store.propose(
+        name="files", spec={"run_as": "3001:3001"}, actor="hermes", kind="update"
+    )
+    store.deploy(item.id, decided_by="root")
+    assert service.tier1.toolkit("demo").run_as is None
+    raw = yaml.safe_load(open(toolkits_path, encoding="utf-8").read())
+    assert "run_as" not in raw["toolkits"]["demo"]
 
-    validates the input it is about to write, not merely one it trusts
-    `propose` to have vetted. Simulated by writing the proposal straight
-    into the queue file, which is the only way this state can arise.
+
+def test_deploy_refuses_run_as_on_a_non_file_toolkit(tmp_path, sandbox):
+    """`load_tier1` is the authoritative gate and it rejects `run_as`
+
+    anywhere but a `file` toolkit -- so the proposal is refused at deploy
+    with toolkits.yaml untouched, rather than being written and then
+    failing the reload.
     """
-    store, _service, toolkits_path = _env(tmp_path, sandbox)
-    legit = store.propose(name="agentcfg", spec={"executor": "local", "binaries": [PYTHON]},
-                          actor="hermes")
-
-    queue_path = os.path.join(str(tmp_path), "toolkit_proposals.yaml")
-    raw = yaml.safe_load(open(queue_path, encoding="utf-8").read())
-    raw["proposals"][0]["spec"]["run_as"] = "root"
-    open(queue_path, "w", encoding="utf-8").write(yaml.safe_dump(raw))
-
+    store, _service, toolkits_path = _env_with_file_toolkit(tmp_path, sandbox)
     before = open(toolkits_path, encoding="utf-8").read()
+    item = store.propose(name="demo", spec={"run_as": "root"}, actor="hermes", kind="update")
     try:
-        store.deploy(legit.id, decided_by="root")
-        assert False, "expected ToolkitProposalWriteRefused"
+        store.deploy(item.id, decided_by="root")
+        raise AssertionError("expected ToolkitProposalWriteRefused")
     except ToolkitProposalWriteRefused as exc:
         assert "run_as" in str(exc)
     assert open(toolkits_path, encoding="utf-8").read() == before
+
+
+def test_run_as_and_executor_can_change_in_one_proposal(tmp_path, sandbox):
+    """A `local` toolkit switching to `file` *and* naming its user at once.
+
+    Has to work as one proposal: the two fields are only valid together,
+    so splitting them would make the first half un-deployable on its own.
+    """
+    store, service, toolkits_path = _env_with_file_toolkit(tmp_path, sandbox)
+    item = store.propose(
+        name="demo",
+        spec={"executor": "file", "binaries": [], "run_as": "3001:3001"},
+        actor="hermes",
+        kind="update",
+    )
+    store.deploy(item.id, decided_by="root")
+    assert service.tier1.toolkit("demo").executor == "file"
+    assert service.tier1.toolkit("demo").run_as == "3001:3001"
+
+
+def test_path_roots_and_friends_stay_redeploy_only(tmp_path, sandbox):
+    """The line this change deliberately does not cross: `run_as` may say
+
+    *who* an operation runs as, never *where* it may reach.
+    """
+    store, _service, _tp = _env_with_file_toolkit(tmp_path, sandbox)
+    for field, value in (
+        ("path_roots", ["/"]),
+        ("protected_resources", []),
+        ("max_output_bytes", 1 << 30),
+        ("max_timeout_seconds", 3600),
+    ):
+        try:
+            store.propose(name="files", spec={field: value}, actor="hermes", kind="update")
+            raise AssertionError(f"expected {field!r} to be refused")
+        except ToolkitProposalWriteRefused as exc:
+            assert field in str(exc)
+
+
+def test_update_writable_fields_is_exactly_these_four(tmp_path, sandbox):
+    """A guard on the set itself, so widening it stays a deliberate edit
+
+    with a test to change rather than a one-word diff that reads as
+    harmless.
+    """
+    from gatekeeper.toolkit_proposals import UPDATE_WRITABLE_FIELDS
+
+    assert UPDATE_WRITABLE_FIELDS == {"executor", "binaries", "denied_args", "run_as"}
+
+
+def test_deploy_run_as_null_clears_it(tmp_path, sandbox):
+    """Handing the toolkit back to the container user has to be proposable
+
+    too -- otherwise the only way to undo a `run_as` is the redeploy the
+    change exists to avoid.
+    """
+    store, service, toolkits_path = _env_with_file_toolkit(tmp_path, sandbox, run_as="3001:3001")
+    assert service.tier1.toolkit("files").run_as == "3001:3001"
+
+    item = store.propose(name="files", spec={"run_as": None}, actor="hermes", kind="update")
+    store.deploy(item.id, decided_by="root")
+    assert service.tier1.toolkit("files").run_as is None
