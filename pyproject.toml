@@ -1,6 +1,6 @@
 [project]
 name = "gatekeeper"
-version = "0.30.2"
+version = "0.31.0"
 description = "Controlled MCP server for host operations"
 requires-python = ">=3.12"
 dependencies = [

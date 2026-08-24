@@ -12,7 +12,17 @@ services:
     container_name: gatekeeper
     restart: unless-stopped
 
-    # NFR-1: unprivileged. 568:568 is the homelab convention.
+    # NFR-1: unprivileged. 568:568 is the homelab convention, and it is the
+    # image's own default (Dockerfile: USER 568:568) -- this line restates it
+    # rather than causing it. gatekeeper never changes its own uid at
+    # runtime, so whatever the container is started as is what it stays.
+    #
+    # A `file` toolkit with `run_as` needs THIS LINE changed to "0:0", plus
+    # the cap_add block further down. Change it here; do not add a second
+    # `user:` key below. A mapping with two `user:` keys does not merge --
+    # compose keeps one of them, and if it keeps this one you get the state
+    # that looks like a gatekeeper bug: cap_add accepted, container still
+    # 568:568, CapEff empty, every run_as call failing.
     user: "568:568"
     # The Docker socket belongs to root:docker on the host. For the
     # unprivileged user to use it, the container needs the GID of that
@@ -38,18 +48,24 @@ services:
     # stays on -- it blocks privilege *gain* via setuid binaries on execve,
     # not a privileged process dropping to a lesser user.
     #
-    # BOTH halves are required. Uncommenting cap_add on its own does nothing:
+    # BOTH halves are required. Uncommenting this on its own does nothing:
     # Docker puts these capabilities in the permitted set of uid 0 ONLY, so
-    # while `user:` above still says "568:568" the container comes up with an
-    # empty CapEff and every run_as call fails. Change that line to "0:0" as
-    # well -- edit it, do not add a second `user:` key.
+    # while `user:` above still reads "568:568" the container comes up with
+    # an empty CapEff and every run_as call fails with a message saying so.
+    # Edit the `user:` line above to "0:0" -- there is deliberately no
+    # `user:` key in this block to uncomment, because two of them in one
+    # service is the failure that reads like a gatekeeper bug.
+    #
+    # To verify what the container actually got, rather than what the file
+    # asks for:
+    #   docker inspect -f '{{.Config.User}} {{.HostConfig.CapAdd}}' gatekeeper
+    #   docker exec gatekeeper grep -E '^(Uid|CapEff):' /proc/self/status
     #
     # Do not do this speculatively: without `run_as` anywhere it buys
     # nothing, and with it, the owning uid is almost always the right target
     # rather than root (see docs/DEPLOYMENT.md).
     #
-    # user: "0:0"
-    # cap_add:
+    # cap_add:            # requires user: "0:0" above
     #   - SETUID
     #   - SETGID
     read_only: true

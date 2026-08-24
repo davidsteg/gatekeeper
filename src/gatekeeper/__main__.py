@@ -124,18 +124,53 @@ def cmd_serve(args: argparse.Namespace) -> int:
                 "run_as is NOT usable: this process (%s, %s) holds no privilege "
                 "to change user, so every call on %s will fail rather than fall "
                 "back. Both halves are needed -- 'user: \"0:0\"' AND "
-                "'cap_add: [SETUID, SETGID]'; %s. See docs/DEPLOYMENT.md.",
+                "'cap_add: [SETUID, SETGID]'. %s See docs/DEPLOYMENT.md.",
                 _whoami(),
                 state,
                 ", ".join(repr(n) for n in run_as_toolkits),
                 (
-                    "the container is not running as root, so 'cap_add' alone "
-                    "grants nothing -- Docker puts those capabilities in uid 0's "
-                    "permitted set only"
+                    # The uid nobody set on purpose. gatekeeper changes its
+                    # own identity nowhere -- a test asserts that no module
+                    # but the run_as helper even calls setuid -- so a process
+                    # at 568 was *started* at 568, and the only thing that
+                    # does that is the image's own `USER 568:568`. Which
+                    # means: the compose `user:` never reached this
+                    # container, and hunting for an internal privilege drop
+                    # will not find one. Say so here, because that hunt is
+                    # the obvious next move and it is a dead end.
+                    "This process is not root. gatekeeper never changes its "
+                    "own uid, so it was started this way: the image default "
+                    "is 'USER 568:568' and the compose 'user:' did not reach "
+                    "this container. Check for a second 'user:' key in the "
+                    "service (compose keeps only one), a container that was "
+                    "restarted rather than recreated, or a compose file at a "
+                    "different path than the one edited. What the container "
+                    "actually got: docker inspect -f "
+                    "'{{.Config.User}} {{.HostConfig.CapAdd}}' <container>."
                     if os.geteuid() != 0
-                    else "the container is root but the capabilities were dropped"
+                    else
+                    "This process is root, so 'user:' is in effect and the "
+                    "capabilities are what is missing: 'cap_drop: ALL' took "
+                    "effect and a matching 'cap_add: [SETUID, SETGID]' did "
+                    "not."
                 ),
             )
+            if _require_run_as():
+                # Opt-in, because a toolkit may carry `run_as` for a call
+                # nobody makes today, and aborting on that would be a
+                # regression for a deployment that is merely over-declared.
+                # Where it is switched on, it removes the state this whole
+                # class of report comes from: a container that starts, passes
+                # its healthcheck, looks entirely fine, and fails every
+                # run_as call until somebody reads the log.
+                print(
+                    "Configuration error: GATEKEEPER_REQUIRE_RUN_AS is set and "
+                    f"this process ({_whoami()}, {state}) cannot assume another "
+                    "user. Refusing to start with a run_as toolkit that could "
+                    "not work. See docs/DEPLOYMENT.md.",
+                    file=sys.stderr,
+                )
+                return 2
 
     # Ambient capabilities would otherwise be inherited by *every* process
     # this one spawns, not only the run_as helper that needs them. They are
@@ -471,6 +506,23 @@ def bootstrap(
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
     return token, password
+
+
+def _require_run_as() -> bool:
+    """Whether an unusable `run_as` should abort startup rather than log.
+
+    Off by default: a toolkit may declare `run_as` for a call nobody makes,
+    and refusing to start over that would break a deployment that is only
+    over-declared. On, it turns a container that starts healthy and fails
+    every `run_as` call into one that does not start at all -- which is the
+    louder half of the trade, and the right one where `run_as` is load
+    bearing.
+    """
+    return os.environ.get("GATEKEEPER_REQUIRE_RUN_AS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def _whoami() -> str:

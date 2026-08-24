@@ -60,6 +60,67 @@ cannot. It is in every release.
 
 ---
 
+## 0.31.0
+
+**Reported again: `user: "0:0"` and `cap_add` both set, container recreated, and the process is still `uid=568` with an empty `CapEff` — so something inside gatekeeper must be dropping privileges. Nothing is. This release makes that checkable instead of arguable, and removes the `compose.yaml` trap that most likely caused it.**
+
+There is no internal privilege drop, and now a test says so rather than a
+changelog entry. `test_no_internal_drop.py` parses every module under
+`src/gatekeeper` and fails if any of them calls `setuid`, `seteuid`,
+`setreuid`, `setresuid`, the four `gid` equivalents, `setgroups` or
+`initgroups` — with one allowance, `_runas.py`, whose calls run in the
+short-lived helper *child* after the server has already forked and exec'd
+it. Parsed rather than grepped, so the many docstrings that discuss
+`setresuid` do not count as calling it. Further tests pin the other places
+a drop could hide: that `become` is called from the helper's own entry
+point and nowhere else, that the Dockerfile's only `USER` line is
+`USER 568:568`, and that `ENTRYPOINT` goes straight to the console script
+with no `gosu`/`su-exec`/`setpriv` wrapper in the image.
+
+Which leaves the question the report should actually have been pointed at.
+gatekeeper is started as some uid and stays it, so a process at 568 was
+*started* at 568, and what starts it there is the image default —
+`USER 568:568`. A compose `user:` overrides that unconditionally. If the
+process is 568, the `user:` never reached the container, and no amount of
+reading Python will explain why.
+
+**The likeliest reason is a trap 0.30.0 shipped in `compose.yaml` itself.**
+The commented block for enabling `run_as` contained its own
+`# user: "0:0"` line, three lines under a comment warning not to add a
+second `user:` key. Uncommenting the block did exactly that. A YAML mapping
+with a repeated key does not merge — compose keeps one, and if it keeps the
+`"568:568"` at the top of the service the result is precisely the reported
+state: `cap_add` accepted, container still 568, `CapEff` empty, every
+`run_as` call failing with a message about capabilities. The block no longer
+contains a `user:` key to uncomment; it says to edit the existing line and
+explains why there is nothing to uncomment. A test asserts the service
+declares exactly one `user:` key and that no commented-out one is waiting.
+
+The startup error now names all of this. Where the process is not root it
+says gatekeeper never changes its own uid, that the image default is
+`USER 568:568`, and lists what to check in order of likelihood: two `user:`
+keys, a container restarted rather than recreated, or a compose file at a
+different path than the one edited — with the `docker inspect -f
+'{{.Config.User}}'` that settles all three. The previous wording named the
+right cause ("Docker grants capabilities to uid 0 only") but left the reader
+to work out that the container was not root *despite the file*, which is the
+step where the search turns inward and stalls.
+
+New, and off unless asked for: `GATEKEEPER_REQUIRE_RUN_AS=1` refuses to
+start when a toolkit declares `run_as` and the process cannot assume another
+user, exiting `2` with the reason. Without it — the default, unchanged — such
+a container starts, logs an `ERROR`, passes its healthcheck, looks entirely
+healthy, and fails every `run_as` call until somebody reads the log. It stays
+opt-in because a toolkit may carry `run_as` for a call nobody makes, and
+aborting on that would turn a merely over-declared deployment into one that
+will not boot.
+
+`docs/DEPLOYMENT.md` gains both: a section for "the container still comes up
+as 568" with the three causes and the command that distinguishes them, and
+one for the new switch. Ten tests cover the release, including a counter-test
+that the compose assertion really does fail against the block as 0.30.0
+shipped it.
+
 ## 0.30.2
 
 **Fix: the `tests (root)` job named one test file, so the privilege tests added in 0.30.1 never ran in CI.**
