@@ -282,9 +282,12 @@ _TOOLS: list[types.Tool] = [
         title="Propose updating a toolkit's executor/binaries",
         description=(
             "Proposes changing an existing toolkit's executor type, "
-            "binaries, and/or denied_args. Only these three fields can be "
+            "binaries, denied_args, and/or run_as (the OS user a 'file' "
+            "toolkit's operations run as). Only these four fields can be "
             "proposed — path_roots, protected_resources, and limits remain "
-            "deploy-time only (FR-4.11) and are rejected. Like "
+            "deploy-time only (FR-4.11) and are rejected, so a proposal can "
+            "change who an operation runs as but never widen where it may "
+            "reach. Like "
             "admin.toolkit_propose, this changes Tier 1 -- what is possible "
             "at all, not just who can do what -- so it is always written to "
             "the toolkit-proposal queue and never applies on its own. A "
@@ -294,7 +297,9 @@ _TOOLS: list[types.Tool] = [
             "needed, but also no way for this call to make it live by "
             "itself. Example: propose switching executor from 'local' to "
             "'file' by passing "
-            "updates={\"executor\": \"file\", \"binaries\": [], \"denied_args\": []}."
+            "updates={\"executor\": \"file\", \"binaries\": [], \"denied_args\": []}, "
+            "or pointing an existing 'file' toolkit at another user with "
+            "updates={\"run_as\": \"3001:3001\"}."
         ),
         inputSchema={
             "type": "object",
@@ -302,11 +307,29 @@ _TOOLS: list[types.Tool] = [
                 "name": {"type": "string", "description": "Toolkit name"},
                 "updates": {
                     "type": "object",
-                    "description": "Fields to propose changing (executor, binaries, denied_args only)",
+                    "description": "Fields to propose changing (executor, binaries, denied_args, run_as only)",
                     "properties": {
                         "executor": {"type": "string"},
                         "binaries": {"type": "array", "items": {"type": "string"}},
                         "denied_args": {"type": "array", "items": {"type": "string"}},
+                        "run_as": {
+                            # null, not just a string: handing a toolkit back
+                            # to the container user has to be proposable too,
+                            # or the only way to undo a run_as would be the
+                            # redeploy this whole path exists to avoid.
+                            "type": ["string", "null"],
+                            "description": (
+                                "'file' toolkits only: the OS user its file "
+                                "operations run as -- an account name in the "
+                                "container image ('hermes') or a numeric "
+                                "'uid:gid' pair ('3001:3001'). A bare uid is "
+                                "rejected. null clears it, handing the "
+                                "toolkit back to the container user. Only "
+                                "takes effect where the container was started "
+                                "privileged enough to change user; elsewhere "
+                                "the calls fail."
+                            ),
+                        },
                     },
                     "additionalProperties": False,
                 },

@@ -60,6 +60,55 @@ cannot. It is in every release.
 
 ---
 
+## 0.29.0
+
+**`run_as` is now changeable through a human-reviewed toolkit proposal, not only by a redeploy.**
+
+0.28.0 shipped `run_as` (which OS user a `file` toolkit's operations run
+as) as the one Tier 1 field refused in every proposal, on the grounds that
+it decides *with whose authority* an operation runs rather than what is
+allowed. That ban does not survive contact with `admin.toolkit_propose`,
+which already carries a toolkit's **full** body, `path_roots` included: an
+agent could propose a broad `file` toolkit and then update it. The ban cost
+friction and bought no boundary, so it is gone rather than left standing as
+something that reads like a guarantee and is not one.
+
+`run_as` joins `executor`/`binaries`/`denied_args` in
+`UPDATE_WRITABLE_FIELDS`:
+
+```
+admin.toolkit_update(name="agentcfg", updates={"run_as": "3001:3001"})
+```
+
+Still always-pending, still never live until a human approves it at
+`/ui/requests`. `null` clears it, handing the toolkit back to the container
+user — the inverse had to be proposable too, or undoing a `run_as` would
+need the redeploy this path exists to avoid.
+
+**What did not move, and is where the boundary actually lives:**
+
+- **The container's privilege.** `run_as` only does anything where the
+  container was started with `CAP_SETUID`/`CAP_SETGID`. No proposal can
+  reach that decision. On a deployment that never granted it, a deployed
+  `run_as` makes the calls *fail*, not escalate.
+- **`path_roots` and `protected_resources`** stay redeploy-only. So a
+  proposal may change *who* an operation runs as, never *where* it may
+  reach. A test asserts `UPDATE_WRITABLE_FIELDS` is exactly those four
+  names, so widening it stays a deliberate edit with a test to change
+  rather than a one-word diff.
+
+Be clear-eyed about what this does open: on a deployment that has already
+granted the capabilities for one toolkit, an approved proposal can point an
+*existing* `file` toolkit — including one whose `path_roots` are already
+broad — at a more privileged user. The review card now says so explicitly
+rather than leaving `run_as` to read as one more line of YAML: when a
+proposal carries the field, the Approve & Deploy dialog names the user and
+states that every file operation on that toolkit would run as it.
+
+The tool schema gained `run_as` too — opening only the server-side set
+would have left the MCP schema silently rejecting it one level up, so
+there are tests at both layers.
+
 ## 0.28.0
 
 **A `file` toolkit can now say which OS user its file operations run as (`run_as`) -- per toolkit, never globally, and never silently.**

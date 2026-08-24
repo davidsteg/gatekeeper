@@ -580,6 +580,66 @@ async def test_toolkit_propose_always_lands_in_proposal_store(admin_mcp_env):
     assert pending.list() == []
 
 
+async def test_toolkit_update_accepts_run_as(admin_mcp_env):
+    """`run_as` has to reach the queue through the real MCP surface, not
+
+    only through the store: 0.28.0 refused it at both layers, so opening
+    only `UPDATE_WRITABLE_FIELDS` would leave the tool schema silently
+    rejecting it one level up.
+    """
+    app, _store, pending, toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.toolkit_update", {"name": "demo", "updates": {"run_as": "3001:3001"}}
+        )
+    payload = json.loads(result.content[0].text)
+    assert payload["pending"] is True
+    assert payload["applied"] is False
+
+    proposed = toolkit_proposals.list(status="pending")
+    assert len(proposed) == 1
+    assert proposed[0].kind == "update"
+    assert proposed[0].spec == {"run_as": "3001:3001"}
+    assert pending.list() == []
+
+
+async def test_toolkit_update_schema_exposes_run_as_and_nothing_else_new(admin_mcp_env):
+    """The schema is the contract an agent reads. It must list `run_as`
+
+    and must NOT have grown path_roots/protected_resources/limits along
+    with it -- those stay redeploy-only, which is the line this change
+    deliberately does not cross.
+    """
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    updates = tools["admin.toolkit_update"].input_schema["properties"]["updates"]
+    assert set(updates["properties"]) == {
+        "executor", "binaries", "denied_args", "run_as",
+    }
+    assert updates["additionalProperties"] is False
+    # null is allowed, so a run_as can be handed back to the container user
+    # without a redeploy -- the inverse of setting it.
+    assert "null" in updates["properties"]["run_as"]["type"]
+
+
+async def test_toolkit_update_rejects_a_malformed_run_as(admin_mcp_env):
+    """A typo comes back as an error on the call, not as a queued proposal
+
+    that only fails when a human tries to deploy it.
+    """
+    app, _store, _pending, toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.toolkit_update", {"name": "demo", "updates": {"run_as": "3001"}}
+        )
+    assert result.is_error
+    assert toolkit_proposals.list() == []
+
+
 async def test_toolkit_delete_always_pending(admin_mcp_env):
     """Like `admin.toolkit_propose`/`admin.toolkit_update`, this always
     lands in `ToolkitProposalStore` -- never `PendingStore` -- and never

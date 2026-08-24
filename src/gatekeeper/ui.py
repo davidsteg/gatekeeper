@@ -3597,7 +3597,7 @@ def _toolkit_tab(
     parts = [
         _note(
             "Adding a toolkit, or changing an existing one's executor/"
-            "binaries/denied_args, normally needs a redeploy (Tier 1 is "
+            "binaries/denied_args/run_as, normally needs a redeploy (Tier 1 is "
             "immutable at runtime) -- a proposal below is the one way "
             "around that, and only a human can make it take effect. Live "
             "toolkits are on the <a href=\""
@@ -3625,7 +3625,7 @@ def _toolkit_tab(
                 "No proposals yet. This fills up when an admin-role agent "
                 "on /admin/mcp calls admin.toolkit_propose (a brand-new "
                 "toolkit) or admin.toolkit_update (an executor/binaries/"
-                "denied_args change to an existing one) -- e.g. Hermes "
+                "denied_args/run_as change to an existing one) -- e.g. Hermes "
                 "hitting an 'Unknown toolkit' wall and drafting the fix "
                 "itself instead of a human hand-editing toolkits.yaml.",
                 icon="share",
@@ -3748,9 +3748,25 @@ def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
             "-- an executor change takes effect for every tool on that "
             "toolkit the moment you click, with no further review "
             "afterwards. path_roots, protected_resources, and limits are "
-            "unaffected -- only executor/binaries/denied_args can appear "
-            "below."
+            "unaffected -- only executor/binaries/denied_args/run_as can "
+            "appear below."
         )
+        # `run_as` is the one updatable field that changes *with whose
+        # authority* the toolkit's operations run rather than what they may
+        # touch, so it gets said out loud here rather than being left to
+        # read as one more line of YAML on the card. Only when it is
+        # actually in the proposal -- a standing warning on every update
+        # would be noise, and noise is what gets clicked through.
+        if "run_as" in item.spec:
+            warning += (
+                " <strong>This proposal changes run_as</strong> -- every "
+                "file operation on this toolkit would run as "
+                f"<code>{_e(str(item.spec['run_as']))}</code> instead of as "
+                "gatekeeper itself, within this toolkit's existing "
+                "path_roots. It only takes effect where this container was "
+                "started privileged enough to change user; elsewhere the "
+                "calls fail rather than fall back."
+            )
         action_label = "Approve &amp; deploy update"
         confirm_label = (
             "I understand this immediately changes what this toolkit can "

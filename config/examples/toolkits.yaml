@@ -184,8 +184,10 @@ toolkits:
     #   * Prefer the owning uid over root. '3001:3001' is bounded by that
     #     user's own permissions; root additionally needs CAP_DAC_OVERRIDE,
     #     which reads every file on every mount.
-    #   * A redeploy is the only way to set it -- /admin/mcp refuses it even
-    #     as a human-reviewed proposal (FR-8.20).
+    #   * An admin agent can propose changing it over /admin/mcp, but only
+    #     a human approving it at /ui/requests makes it live -- and neither
+    #     can grant the container the capability to honour it, nor widen
+    #     path_roots below (FR-8.20a).
     #
     # Either an account inside the image, or the numeric 'uid:gid' pair for
     # a host uid that has no passwd entry there (a bare '3001' is rejected:

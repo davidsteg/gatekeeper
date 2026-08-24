@@ -223,10 +223,13 @@ Three things worth being deliberate about before doing this:
   `http`/`docker`/`local`/`truenas`/`ssh` toolkits are untouched — `run_as`
   is rejected on them at startup. Give the elevated toolkit its own narrow
   `path_roots` rather than adding `run_as` to an existing broad one.
-- **It is a redeploy, on purpose.** `run_as` cannot be added through
-  `/admin/mcp`, not even as a human-reviewed toolkit proposal. It decides
-  with whose authority a call runs, and belongs in the same decision as the
-  capabilities above.
+- **The capabilities are the boundary, not the YAML.** Since 0.29.0 an
+  admin-role agent can *propose* a `run_as` change over `/admin/mcp`
+  (`admin.toolkit_update`), which a human then approves at `/ui/requests`.
+  What no proposal can touch is this section's `cap_add` block, or the
+  toolkit's `path_roots` — so the question "may anything here run as
+  another user at all, and over which directories" stays exactly where you
+  answer it now, at deploy. Grant the capabilities only if you mean it.
 - **Every ancestor directory has to be traversable by that user.** Ordinary
   Unix rules, but the easy one to trip over: `run_as: "3001:3001"` reaching
   `/mnt/raid/agent/hermes-media/config.yaml` needs `x` on `/mnt/raid` and
