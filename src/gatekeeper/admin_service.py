@@ -214,6 +214,14 @@ class AdminService:
                 # store stays write-only (FR-10.2) regardless.
                 "target": _target(tk),
                 "credential": tk.credential,
+                # `file` executor only; `None` on every other toolkit and
+                # on any `file` toolkit that never declared it -- reported
+                # plainly rather than omitted, for the same reason as
+                # `target`/`credential` above: a field that exists on
+                # `Toolkit` but is missing from this dict reads as "not
+                # configured", which for `run_as` means an approved
+                # toolkit_update proposal looking like it never took effect.
+                "run_as": tk.run_as,
             }
             for name, tk in sorted(tier1.toolkits.items())
         ]
