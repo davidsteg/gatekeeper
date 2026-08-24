@@ -706,3 +706,107 @@ def test_ambient_capabilities_are_enough_without_being_root():
     # And the capabilities did not survive the drop -- a non-root-to-non-root
     # uid change does not clear them, so `become` has to do it itself.
     assert completed.stdout.rstrip().endswith(" 0")
+
+
+@needs_linux
+def test_the_helper_child_forbids_gaining_privilege_through_exec(tmp_path):
+    """`no_new_privs` is set before the child reads its own request.
+
+    Emptying the capability sets says what the child holds; it says nothing
+    about the bounding set, which stays full because lowering it needs
+    CAP_SETPCAP. So the child closes the `execve` route instead -- and does
+    it first, so it holds even on the paths that never reach the drop.
+
+    Runs unprivileged too: `run_as` is the user the test already is, which
+    needs no privilege and exercises the same entry point.
+    """
+    path = os.path.join(str(tmp_path), "x.txt")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("data")
+    request = json.dumps(
+        {
+            "run_as": ME,
+            "operation": "read",
+            "path": path,
+            "path_roots": [str(tmp_path)],
+            "protected": [],
+            "max_output_bytes": 4096,
+        }
+    )
+    source = (
+        f"import sys\nsys.path.insert(0, {_SRC!r})\n"
+        "from gatekeeper._runas import _main\n"
+        "_main()\n"
+        # ...to stderr, so it does not land in the JSON result on stdout.
+        "print(next(l.split(':')[1].strip() for l in open('/proc/self/status')\n"
+        "           if l.startswith('NoNewPrivs')), file=sys.stderr)\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", source],
+        input=request,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["outcome"] == "ok"
+    assert completed.stderr.strip().endswith("1"), "NoNewPrivs must be 1"
+
+
+@needs_root
+def test_no_new_privs_does_not_stand_in_the_way_of_the_drop():
+    """The reason it can be set unconditionally: `no_new_privs` restricts
+
+    what `execve` may grant, and nothing about `setresuid`. If it did cost
+    the drop anything, it would not be worth having.
+    """
+    uid, gid = _nobody()
+    completed = _probe(
+        f"""
+        from gatekeeper._runas import _set_no_new_privs, become
+
+        assert _set_no_new_privs() is True
+        become({uid}, {gid}, None)
+        print(os.getresuid(), os.getresgid())
+        """
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert f"({uid}, {uid}, {uid})" in completed.stdout
+    assert f"({gid}, {gid}, {gid})" in completed.stdout
+
+
+@needs_root
+def test_the_drop_empties_every_capability_set_not_only_the_effective_one():
+    """A capability in the permitted set is one `capset` from being usable
+
+    again, and one in the ambient set survives the next `execve` -- so
+    "CapEff is zero" is not the property worth asserting. The ambient
+    deployment is the one that can actually get this wrong: a
+    non-root-to-non-root id change clears nothing by itself.
+    """
+    uid, gid = _nobody()
+    completed = _probe(
+        _KEEP_CAPS_AND_DROP_TO,
+        f"""
+        from gatekeeper._runas import become, capability_sets
+
+        _set(_SETID, _SETID, _SETID)
+        assert ctypes.CDLL(None).prctl(8, 1, 0, 0, 0) == 0  # PR_SET_KEEPCAPS
+        os.setresgid(1, 1, 1)
+        os.setresuid(1, 1, 1)
+        _set(_SETID, _SETID, _SETID)
+        # ...and into the ambient set, which is what survives an execve:
+        # PR_CAP_AMBIENT=47, PR_CAP_AMBIENT_RAISE=2.
+        for _cap in (CAP_SETUID, CAP_SETGID):
+            assert ctypes.CDLL(None).prctl(47, 2, _cap, 0, 0) == 0
+
+        before = capability_sets()
+        assert before["CapAmb"] == _SETID, before
+        become({uid}, {gid}, None)
+        print(sorted(capability_sets().items()))
+        """
+    )
+    assert completed.returncode == 0, completed.stderr
+    after = dict(eval(completed.stdout))  # noqa: S307 -- our own repr, one line
+    assert set(after) >= {"CapEff", "CapPrm", "CapInh", "CapAmb"}
+    assert all(value == 0 for value in after.values()), after
