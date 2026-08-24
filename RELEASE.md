@@ -60,6 +60,38 @@ cannot. It is in every release.
 
 ---
 
+## 0.29.1
+
+**Fix: `admin.toolkit_list` never reported `run_as` -- an approved toolkit_update proposal looked like it never took effect, with no restart able to fix that.**
+
+Reported as: `run_as: root` on a `file` toolkit was genuinely approved and
+deployed (the audit log showed the correct `before: null -> after:
+"root"`), but `admin.toolkit_list` kept reporting nothing for it,
+restart included. Traced it against 0.29.0's own change: `run_as` joined
+`toolkits.yaml`, the loader (`load_tier1`), the toolkit-update proposal
+path, and the `/ui` reference card -- but `admin_service.py`'s
+`toolkit_list` dict comprehension was never taught the field, so it
+simply never appeared in the response. Both halves that actually matter
+were already correct and verified by a fresh reproduction: `toolkits.yaml`
+carried the write (persistence is one write path, shared unconditionally
+by create/update/delete), and `Service.reload_config` reassigns
+`self.tier1` synchronously in the same process, so the value was live the
+entire time. `toolkit_list` just never looked. Restarting the container
+could not have fixed it, because the dict was missing the key regardless
+of what `tier1.toolkit(name).run_as` held.
+
+This is the same shape of bug `target`/`credential` needed fixing for
+once already, per `toolkit_list`'s own docstring -- a field that exists
+on `Toolkit` but is missing from this one reporting dict reads as "not
+configured" to whoever asked, when it was really just unreported.
+
+Fix is one line: `"run_as": tk.run_as` in the dict, reported plainly
+(`None` on every toolkit that never set it, not merely absent). Three
+tests guard it: presence when unset, the actual value when a toolkit
+declares it at load time, and the exact reported scenario end to end --
+propose a `run_as` update, deploy it, and read it back from
+`toolkit_list` on the same running process with no restart in between.
+
 ## 0.29.0
 
 **`run_as` is now changeable through a human-reviewed toolkit proposal, not only by a redeploy.**

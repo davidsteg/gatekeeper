@@ -471,6 +471,190 @@ async def test_toolkit_list_is_read_only_and_reflects_live_tier1(admin_mcp_env):
     assert demo["credential"] is None
 
 
+async def test_toolkit_list_reports_run_as(admin_mcp_env):
+    """The bug this guards against: `run_as` existed on `Toolkit` (0.28.0)
+
+    and was writable via a toolkit_update proposal (0.29.0), but
+    `toolkit_list`'s reporting dict was never taught the field -- so an
+    approved proposal correctly wrote toolkits.yaml and correctly reloaded
+    the running process (both already covered elsewhere), and `toolkit_list`
+    *still* reported nothing, because it simply never looked. No restart
+    fixes that; the dict was missing the key regardless. Exactly the same
+    shape of bug `target`/`credential` needed fixing once already, per the
+    docstring on `toolkit_list` itself.
+    """
+    app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.toolkit_list", {})
+    payload = json.loads(result.content[0].text)
+    demo = next(t for t in payload["toolkits"] if t["name"] == "demo")
+    # Present and explicitly null, not merely absent -- the same
+    # "reported plainly, never omitted" rule target/credential follow.
+    assert "run_as" in demo
+    assert demo["run_as"] is None
+
+
+async def test_toolkit_list_reports_a_set_run_as(tmp_path):
+    """A `file` toolkit that already declares `run_as` at load time (the
+
+    ordinary deploy-time path, no proposal involved) must report the
+    value, not just the null default covered by the test above.
+    """
+    from gatekeeper.audit import AuditLog
+    from gatekeeper.catalog import load_catalog
+    from gatekeeper.identity import generate_token, hash_token, load_identities
+    from gatekeeper.pending import PendingStore
+    from gatekeeper.service import Service
+    from gatekeeper.store import ConfigStore
+    from gatekeeper.tier1 import load_tier1
+    from gatekeeper.toolkit_proposals import ToolkitProposalStore
+
+    toolkits_path = tmp_path / "toolkits.yaml"
+    toolkits_path.write_text(
+        yaml.safe_dump(
+            {
+                "toolkits": {
+                    "agentcfg": {
+                        "executor": "file",
+                        "binaries": [],
+                        "path_roots": [str(tmp_path)],
+                        "protected_resources": [],
+                        "max_timeout_seconds": 10,
+                        "max_output_bytes": 4096,
+                        "run_as": "3001:3001",
+                    }
+                },
+                "audit": {"dir": str(tmp_path / "logs")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    tier1 = load_tier1(str(toolkits_path))
+    tools_path = tmp_path / "tools.yaml"
+    tools_path.write_text(yaml.safe_dump({"tools": []}), encoding="utf-8")
+    identities_path = tmp_path / "identities.yaml"
+    identities_path.write_text(
+        yaml.safe_dump(
+            {
+                "identities": [
+                    {
+                        "id": "hermes", "role": "admin",
+                        "token_hash": hash_token(generate_token()),
+                        "tools": [], "scopes": [],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit = AuditLog(str(tmp_path / "logs"))
+    service = Service(tier1=tier1, catalog=load_catalog(str(tools_path), tier1), audit=audit)
+    identities = load_identities(str(identities_path))
+    store = ConfigStore(
+        service=service, identities=identities, audit=audit,
+        tools_path=str(tools_path), identities_path=str(identities_path),
+    )
+    pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "toolkit-proposals.yaml"), audit=audit, service=service,
+        toolkits_path=str(toolkits_path), tools_path=str(tools_path),
+        identities_path=str(identities_path),
+    )
+    from gatekeeper.admin_service import AdminService
+
+    admin = AdminService(store=store, pending=pending, toolkit_proposals=toolkit_proposals)
+    payload = admin.toolkit_list("hermes", {})
+    agentcfg = next(t for t in payload["toolkits"] if t["name"] == "agentcfg")
+    assert agentcfg["run_as"] == "3001:3001"
+
+
+async def test_toolkit_list_reports_run_as_immediately_after_deploy_no_restart(tmp_path):
+    """The exact reported scenario end to end: propose a `run_as` update,
+
+    deploy it, and read it back from `toolkit_list` on the *same*
+    `AdminService`/`Service` instance -- no restart, no new process. This
+    is what "reload_config already reassigns self.tier1 in-process"
+    actually buys, and what the missing dict key was silently throwing
+    away: the value was live the whole time, `toolkit_list` just never
+    said so.
+    """
+    from gatekeeper.admin_service import AdminService
+    from gatekeeper.audit import AuditLog
+    from gatekeeper.catalog import load_catalog
+    from gatekeeper.identity import generate_token, hash_token, load_identities
+    from gatekeeper.pending import PendingStore
+    from gatekeeper.service import Service
+    from gatekeeper.store import ConfigStore
+    from gatekeeper.tier1 import load_tier1
+    from gatekeeper.toolkit_proposals import ToolkitProposalStore
+
+    toolkits_path = tmp_path / "toolkits.yaml"
+    toolkits_path.write_text(
+        yaml.safe_dump(
+            {
+                "toolkits": {
+                    "agentcfg": {
+                        "executor": "file",
+                        "binaries": [],
+                        "path_roots": [str(tmp_path)],
+                        "protected_resources": [],
+                        "max_timeout_seconds": 10,
+                        "max_output_bytes": 4096,
+                    }
+                },
+                "audit": {"dir": str(tmp_path / "logs")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    tier1 = load_tier1(str(toolkits_path))
+    tools_path = tmp_path / "tools.yaml"
+    tools_path.write_text(yaml.safe_dump({"tools": []}), encoding="utf-8")
+    identities_path = tmp_path / "identities.yaml"
+    identities_path.write_text(
+        yaml.safe_dump(
+            {
+                "identities": [
+                    {
+                        "id": "hermes", "role": "admin",
+                        "token_hash": hash_token(generate_token()),
+                        "tools": [], "scopes": [],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit = AuditLog(str(tmp_path / "logs"))
+    service = Service(tier1=tier1, catalog=load_catalog(str(tools_path), tier1), audit=audit)
+    identities = load_identities(str(identities_path))
+    store = ConfigStore(
+        service=service, identities=identities, audit=audit,
+        tools_path=str(tools_path), identities_path=str(identities_path),
+    )
+    pending = PendingStore(path=str(tmp_path / "pending.yaml"), audit=audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "toolkit-proposals.yaml"), audit=audit, service=service,
+        toolkits_path=str(toolkits_path), tools_path=str(tools_path),
+        identities_path=str(identities_path),
+    )
+    admin = AdminService(store=store, pending=pending, toolkit_proposals=toolkit_proposals)
+
+    before = admin.toolkit_list("hermes", {})
+    agentcfg = next(t for t in before["toolkits"] if t["name"] == "agentcfg")
+    assert agentcfg["run_as"] is None
+
+    item = toolkit_proposals.propose(
+        name="agentcfg", spec={"run_as": "root"}, actor="hermes", kind="update"
+    )
+    toolkit_proposals.deploy(item.id, decided_by="root")
+
+    after = admin.toolkit_list("hermes", {})
+    agentcfg = next(t for t in after["toolkits"] if t["name"] == "agentcfg")
+    assert agentcfg["run_as"] == "root"
+
+
 async def test_toolkit_list_reports_target_and_credential_name(tmp_path):
     """The gap that caused a real misdiagnosis: this action used to omit
 
