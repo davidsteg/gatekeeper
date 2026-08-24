@@ -24,6 +24,7 @@ import os
 import pwd
 import subprocess
 import sys
+import textwrap
 
 import pytest
 import yaml
@@ -477,3 +478,231 @@ def test_an_unknown_run_as_user_fails_the_call_and_reads_nothing(tmp_path):
     assert result.outcome == "failed"
     assert "passwd" in result.stderr
     assert "data" not in result.stdout
+
+
+# -- 5. What the privilege actually is -------------------------------------
+#
+# The section that exists because of a real misdiagnosis. `become` used to
+# ask `geteuid() != 0` and answer with "add CAP_SETUID and CAP_SETGID",
+# which is wrong in both directions: root whose capabilities were dropped
+# passes that test and fails three lines later with a bare EPERM, and a
+# container still running as 568 is told to add capabilities it already
+# added -- because Docker grants `cap_add` in uid 0's permitted set only,
+# so `cap_add` without `user: "0:0"` grants nothing and the message repeats
+# itself unchanged after every redeploy. The privilege is a capability, so
+# these ask about the capability.
+
+IS_LINUX = sys.platform == "linux"
+
+needs_linux = pytest.mark.skipif(not IS_LINUX, reason="capabilities are a Linux concept")
+
+_SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+def _probe(*parts: str) -> subprocess.CompletedProcess:
+    """Runs the given source in a fresh interpreter that can import gatekeeper.
+
+    A subprocess rather than a fixture because every one of these tests
+    changes the process's own uid or capability set irreversibly -- doing
+    that in the pytest process would break every test after it. Each part
+    is dedented on its own, so a caller can concatenate a shared preamble
+    written at one indentation with a test body written at another.
+    """
+    source = f"import os, sys\nsys.path.insert(0, {_SRC!r})\n" + "".join(
+        textwrap.dedent(part) for part in parts
+    )
+    return subprocess.run(
+        [sys.executable, "-c", source], capture_output=True, text=True, timeout=30
+    )
+
+
+#: Raises CAP_SETUID/CAP_SETGID into the inheritable set, turns on
+#: `PR_SET_KEEPCAPS`, and drops to `uid` -- the shape a hardened deployment
+#: has when it runs unprivileged but ambiently capable. Without KEEPCAPS the
+#: kernel empties the permitted set on the way out of uid 0, which is the
+#: ordinary case the other tests cover.
+_KEEP_CAPS_AND_DROP_TO = """
+    import ctypes
+    from gatekeeper._runas import CAP_SETGID, CAP_SETUID, _CAP_VERSION_3
+
+    class _Header(ctypes.Structure):
+        _fields_ = [("version", ctypes.c_uint32), ("pid", ctypes.c_int)]
+
+    class _Data(ctypes.Structure):
+        _fields_ = [
+            ("effective", ctypes.c_uint32),
+            ("permitted", ctypes.c_uint32),
+            ("inheritable", ctypes.c_uint32),
+        ]
+
+    libc = ctypes.CDLL(None, use_errno=True)
+
+    def _set(effective, permitted, inheritable):
+        header = _Header(_CAP_VERSION_3, 0)
+        data = (_Data * 2)()
+        data[0].effective = effective & 0xFFFFFFFF
+        data[0].permitted = permitted & 0xFFFFFFFF
+        data[0].inheritable = inheritable & 0xFFFFFFFF
+        assert libc.capset(ctypes.byref(header), ctypes.byref(data)) == 0, \\
+            ctypes.get_errno()
+
+    _SETID = (1 << CAP_SETUID) | (1 << CAP_SETGID)
+"""
+
+
+@needs_linux
+def test_the_effective_capability_set_is_read_from_procfs():
+    """The one fact everything below rests on: the number in
+
+    `/proc/self/status` is what `effective_capabilities` returns.
+    """
+    from gatekeeper._runas import effective_capabilities
+
+    with open("/proc/self/status", encoding="ascii") as handle:
+        expected = next(
+            int(line.split(":", 1)[1].strip(), 16)
+            for line in handle
+            if line.startswith("CapEff:")
+        )
+    assert effective_capabilities() == expected
+
+
+@needs_root
+def test_a_capable_root_process_can_change_user():
+    from gatekeeper._runas import can_change_user
+
+    assert can_change_user() is True
+
+
+@needs_root
+def test_root_without_the_capabilities_cannot_change_user():
+    """The half the old `geteuid() != 0` test let through. A container that
+
+    is root but ran `cap_drop: ALL` with no matching `cap_add` has no more
+    ability to become another user than an unprivileged one -- and used to
+    discover that only when `setresuid` returned EPERM.
+    """
+    completed = _probe(
+        """
+        from gatekeeper._runas import _clear_capabilities, can_change_user
+
+        assert os.geteuid() == 0, "probe must start privileged"
+        assert can_change_user() is True
+        _clear_capabilities()
+        print(os.geteuid(), can_change_user())
+        """
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "0 False"
+
+
+@needs_root
+def test_the_message_for_a_capability_less_root_names_cap_drop():
+    """...and says which half is missing, rather than naming both and
+
+    leaving the operator to guess.
+    """
+    completed = _probe(
+        """
+        from gatekeeper._runas import RunAsError, _clear_capabilities, become
+
+        _clear_capabilities()
+        try:
+            become(3001, 3001, None)
+        except RunAsError as exc:
+            print(exc)
+        """
+    )
+    assert completed.returncode == 0, completed.stderr
+    message = completed.stdout
+    assert "no privilege to change user" in message
+    assert "cap_drop: ALL" in message
+    assert "runs as root" in message
+
+
+@needs_root
+def test_the_message_for_a_non_root_container_names_the_user_directive():
+    """The bug this section exists for, stated as an assertion: a container
+
+    still running as 568 must be told that `user: "0:0"` is what is
+    missing. Telling it to add capabilities is what made the failure
+    survive a redeploy that added them.
+    """
+    uid, gid = _nobody()
+    completed = _probe(
+        f"""
+        from gatekeeper._runas import RunAsError, become
+
+        os.setresgid({gid}, {gid}, {gid})
+        os.setresuid({uid}, {uid}, {uid})
+        try:
+            become(3001, 3001, None)
+        except RunAsError as exc:
+            print(exc)
+        """
+    )
+    assert completed.returncode == 0, completed.stderr
+    message = completed.stdout
+    assert "no privilege to change user" in message
+    assert 'user: "0:0"' in message
+    assert "not running as root" in message
+    # ...and says so about `cap_add` explicitly, because the operator has
+    # by this point already added it and needs to be told that doing it
+    # again is not the fix.
+    assert "not 'cap_add'" in message
+
+
+@needs_root
+def test_the_drop_leaves_no_capabilities_behind():
+    """Property 1 of the module, restated for the half `getresuid` cannot
+
+    see: dropping the ids while keeping CAP_SETUID would leave `setuid(0)`
+    one call away.
+    """
+    uid, gid = _nobody()
+    completed = _probe(
+        f"""
+        from gatekeeper._runas import become, effective_capabilities
+
+        become({uid}, {gid}, None)
+        print(effective_capabilities(), os.getresuid())
+        """
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.startswith("0 ")
+    assert f"({uid}, {uid}, {uid})" in completed.stdout
+
+
+@needs_root
+def test_ambient_capabilities_are_enough_without_being_root():
+    """The case the uid test refused outright: a process that is *not* root
+
+    but does hold CAP_SETUID/CAP_SETGID can assume another user, and this
+    is the configuration a deployment reaches by keeping the capabilities
+    across its own drop rather than staying uid 0.
+    """
+    uid, gid = _nobody()
+    completed = _probe(
+        _KEEP_CAPS_AND_DROP_TO,
+        f"""
+        from gatekeeper._runas import become, can_change_user, effective_capabilities
+
+        _set(_SETID, _SETID, _SETID)
+        assert ctypes.CDLL(None).prctl(8, 1, 0, 0, 0) == 0  # PR_SET_KEEPCAPS
+        os.setresgid(1, 1, 1)
+        os.setresuid(1, 1, 1)
+        _set(_SETID, _SETID, _SETID)  # re-raise: the drop clears *effective*
+
+        assert os.geteuid() != 0, "probe must be unprivileged"
+        assert can_change_user() is True, "ambient CAP_SETUID must count"
+
+        become({uid}, {gid}, None)
+        print(os.getresuid(), os.getresgid(), effective_capabilities())
+        """
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert f"({uid}, {uid}, {uid})" in completed.stdout
+    assert f"({gid}, {gid}, {gid})" in completed.stdout
+    # And the capabilities did not survive the drop -- a non-root-to-non-root
+    # uid change does not clear them, so `become` has to do it itself.
+    assert completed.stdout.rstrip().endswith(" 0")

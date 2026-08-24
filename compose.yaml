@@ -33,14 +33,22 @@ services:
       - ALL
     # Only if a `file` toolkit in toolkits.yaml declares `run_as` (FR-8.18):
     # becoming another user needs privilege this container deliberately does
-    # not have, so it would have to start as root (`user: "0:0"` above) and
-    # get exactly these two capabilities back. Everything else stays dropped,
-    # and no-new-privileges stays on -- it blocks privilege *gain* via setuid
-    # binaries on execve, not a privileged process dropping to a lesser user.
+    # not have, so it would have to start as root and get exactly these two
+    # capabilities back. Everything else stays dropped, and no-new-privileges
+    # stays on -- it blocks privilege *gain* via setuid binaries on execve,
+    # not a privileged process dropping to a lesser user.
+    #
+    # BOTH halves are required. Uncommenting cap_add on its own does nothing:
+    # Docker puts these capabilities in the permitted set of uid 0 ONLY, so
+    # while `user:` above still says "568:568" the container comes up with an
+    # empty CapEff and every run_as call fails. Change that line to "0:0" as
+    # well -- edit it, do not add a second `user:` key.
+    #
     # Do not do this speculatively: without `run_as` anywhere it buys
     # nothing, and with it, the owning uid is almost always the right target
     # rather than root (see docs/DEPLOYMENT.md).
     #
+    # user: "0:0"
     # cap_add:
     #   - SETUID
     #   - SETGID

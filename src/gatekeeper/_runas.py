@@ -40,14 +40,22 @@ Why this and not the alternatives:
 Three properties this file exists to guarantee:
 
 1. **The privilege drop is one-way.** Real and saved ids are set together
-   (`setresuid`/`setresgid`), supplementary groups are replaced, and the
-   result is verified -- including an explicit attempt to regain root that
-   must fail. A child that cannot prove it dropped does not run the
-   operation.
+   (`setresuid`/`setresgid`), supplementary groups are replaced, the
+   capability set is emptied, and all of it is verified -- including an
+   explicit attempt to regain root that must fail. A child that cannot
+   prove it dropped does not run the operation. The capability half is not
+   redundant with the id half: leaving uid 0 makes the kernel clear the
+   capability sets, but a change between two *non-root* uids does not, and
+   a child that kept `CAP_SETUID` is one call away from being root again.
 2. **It never silently falls back.** If the process is not privileged
    enough to become the requested user, the call fails with a message
    saying so. It does not quietly run as the container user, which would
-   make `run_as` a suggestion rather than a boundary.
+   make `run_as` a suggestion rather than a boundary. What "privileged
+   enough" means is `CAP_SETUID`/`CAP_SETGID` in the effective set, not
+   uid 0 -- root whose capabilities were dropped cannot change user
+   either, and a container told to add the capabilities while still
+   running as 568 never receives them, because Docker grants them in uid
+   0's permitted set alone.
 3. **Tier 1 is checked on the privileged side too.** `path_roots` and
    `protected_resources` are re-validated *inside* the child, after the
    drop -- the same `_validate_path` the parent already ran. The parent's
@@ -142,6 +150,138 @@ def resolve_run_as(value: str) -> tuple[int, int, str | None]:
     return entry.pw_uid, entry.pw_gid, name
 
 
+#: Capability bit numbers from `linux/capability.h`. Only the two this
+#: module's drop actually needs -- there is no reason for it to know about
+#: any other.
+CAP_SETGID = 6
+CAP_SETUID = 7
+
+#: `_LINUX_CAPABILITY_VERSION_3`, the 64-bit capability ABI. The header it
+#: comes from also fixes the shape of the two structs in
+#: `_clear_capabilities`: a version+pid header, and *two* 32-bit data words,
+#: because 64 capability bits do not fit in one.
+_CAP_VERSION_3 = 0x20080522
+
+
+def effective_capabilities() -> int | None:
+    """The process's effective capability set as a bitmask, or `None`.
+
+    Read out of `/proc/self/status` rather than through `capget`: it is the
+    same kernel-maintained set, needs no `ctypes`, and a machine without
+    procfs (a non-Linux dev box) answers "unknown" instead of raising --
+    which is a different thing from "holds nothing", and the callers below
+    treat it as such.
+    """
+    try:
+        with open("/proc/self/status", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("CapEff:"):
+                    return int(line.split(":", 1)[1].strip(), 16)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def can_change_user() -> bool:
+    """Whether this process can actually assume another uid/gid.
+
+    The question `run_as` turns on, and the one a `geteuid() != 0` test
+    gets wrong in both directions. On Linux the right to call
+    `setresuid`/`setresgid` for an arbitrary target is `CAP_SETUID` /
+    `CAP_SETGID` in the *effective* set, not uid 0: a root process whose
+    capabilities were dropped (`cap_drop: ALL` with no matching `cap_add`)
+    holds neither, and a non-root process granted them ambiently holds
+    both. Only where the capability set cannot be read at all does uid 0
+    remain the best available proxy.
+    """
+    caps = effective_capabilities()
+    if caps is None:
+        return os.geteuid() == 0
+    return bool(caps & (1 << CAP_SETUID)) and bool(caps & (1 << CAP_SETGID))
+
+
+def _clear_capabilities() -> None:
+    """Empties the effective, permitted and inheritable capability sets.
+
+    Needed only on the path where the process was *not* uid 0 to begin
+    with. Dropping from root to a lesser uid makes the kernel clear the
+    capability sets by itself; changing between two non-root uids does
+    not, so a process holding ambient `CAP_SETUID` would come out of the
+    drop still able to call `setuid(0)` -- the one thing `become` exists to
+    prevent.
+
+    Lowering one's own capabilities never requires a capability of its own,
+    so this cannot fail for lack of privilege. The ambient set needs no
+    separate call: the kernel keeps it a subset of the permitted set and
+    empties it along with this one.
+    """
+    import ctypes
+
+    class _Header(ctypes.Structure):
+        _fields_ = [("version", ctypes.c_uint32), ("pid", ctypes.c_int)]
+
+    class _Data(ctypes.Structure):
+        _fields_ = [
+            ("effective", ctypes.c_uint32),
+            ("permitted", ctypes.c_uint32),
+            ("inheritable", ctypes.c_uint32),
+        ]
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    header = _Header(_CAP_VERSION_3, 0)
+    data = (_Data * 2)()  # zeroed by construction: every set emptied
+    if libc.capset(ctypes.byref(header), ctypes.byref(data)) != 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno), "capset")
+
+
+def _privilege_diagnosis(uid: int, gid: int) -> str:
+    """The message for a process that cannot become `uid`/`gid`.
+
+    Worth this much prose because the failure it reports is one an operator
+    can hit *after* doing what a shorter version of it asked for. "Add
+    CAP_SETUID and CAP_SETGID" is the wrong instruction for a container
+    still running as 568: Docker puts `cap_add` entries in the permitted
+    set of uid 0 only, so the capabilities are granted and simultaneously
+    unusable, the message repeats itself unchanged after the redeploy, and
+    the one thing that would fix it -- `user: "0:0"` -- is the half it
+    never mentions. So: name which of the two is actually missing, and the
+    command that shows it.
+    """
+    caps = effective_capabilities()
+    where = f"gatekeeper runs as uid={os.geteuid()} gid={os.getegid()}" + (
+        "" if caps is None else f" with CapEff={caps:016x}"
+    )
+
+    if caps is None:
+        cause = (
+            "This process is not uid 0 and its capability set cannot be read "
+            "here, so it has no way to assume another user."
+        )
+    elif os.geteuid() != 0:
+        cause = (
+            "The container is not running as root, so the two capabilities "
+            "cannot take effect even when 'cap_add' lists them -- Docker "
+            "grants them in uid 0's permitted set only. The half missing "
+            "here is 'user: \"0:0\"', not 'cap_add'."
+        )
+    else:
+        cause = (
+            "The container runs as root but holds neither capability, so "
+            "'cap_drop: ALL' took effect and a matching "
+            "'cap_add: [SETUID, SETGID]' did not."
+        )
+
+    return (
+        f"cannot run this file operation as uid={uid} gid={gid}: {where} "
+        f"and holds no privilege to change user. {cause} Both halves are "
+        "needed together; check what the container actually got with:\n"
+        "  docker inspect -f '{{.Config.User}} {{.HostConfig.CapAdd}}' gatekeeper\n"
+        "  docker exec gatekeeper grep -E '^(Uid|CapEff):' /proc/self/status\n"
+        "See docs/DEPLOYMENT.md."
+    )
+
+
 def _can_regain_root() -> bool:
     """Whether root is still reachable after the drop.
 
@@ -162,19 +302,13 @@ def become(uid: int, gid: int, name: str | None) -> None:
     Never returns having assumed something *other* than what was asked
     for -- that is the whole point (property 2 in the module docstring).
     """
-    if os.geteuid() != 0:
-        # Unprivileged: the only user this process can be is the one it
-        # already is. Saying so plainly beats running the operation as the
-        # container user and letting a "Permission denied" three lines
-        # later imply the override was in effect.
+    if not can_change_user():
+        # No privilege to become anybody. The only user this process can be
+        # is the one it already is, and saying so plainly beats running the
+        # operation as the container user and letting a "Permission denied"
+        # three lines later imply the override was in effect.
         if (os.geteuid(), os.getegid()) != (uid, gid):
-            raise RunAsError(
-                f"cannot run this file operation as uid={uid} gid={gid}: "
-                f"gatekeeper runs as uid={os.geteuid()} gid={os.getegid()} "
-                "and holds no privilege to change user. A toolkit with "
-                "'run_as' needs the container to start as root with "
-                "CAP_SETUID and CAP_SETGID -- see docs/DEPLOYMENT.md."
-            )
+            raise RunAsError(_privilege_diagnosis(uid, gid))
         return
 
     try:
@@ -191,10 +325,14 @@ def become(uid: int, gid: int, name: str | None) -> None:
         os.setresgid(gid, gid, gid)
         os.setresuid(uid, uid, uid)
     except OSError as exc:
+        # Not a missing capability: `can_change_user` just confirmed both
+        # are held. What is left is the target itself -- a gid the kernel
+        # rejects, a name whose passwd entry moved between resolution and
+        # here -- so the message points at `run_as`, not at the container.
         raise RunAsError(
             f"cannot run this file operation as uid={uid} gid={gid}: {exc}. "
-            "The container needs CAP_SETUID and CAP_SETGID for a toolkit "
-            "with 'run_as' -- see docs/DEPLOYMENT.md."
+            "The process holds CAP_SETUID and CAP_SETGID, so check the "
+            "toolkit's 'run_as' value itself -- see docs/DEPLOYMENT.md."
         ) from None
 
     # Verify rather than assume. A partial drop is the failure mode worth
@@ -205,11 +343,34 @@ def become(uid: int, gid: int, name: str | None) -> None:
             f"privilege drop to uid={uid} gid={gid} did not take effect "
             f"(now uid={os.getresuid()} gid={os.getresgid()})"
         )
-    if uid != 0 and _can_regain_root():
-        raise RunAsError(
-            f"privilege drop to uid={uid} left root regainable -- refusing "
-            "to run the operation"
-        )
+    if uid != 0:
+        # The ids are right; the capabilities need not be. Leaving uid 0
+        # clears them, but a process that held them ambiently while already
+        # unprivileged keeps every one across a non-root-to-non-root change
+        # -- CAP_SETUID among them, which is `setuid(0)` and the boundary
+        # gone. Clear them outright rather than depending on which of the
+        # two paths arrived here.
+        try:
+            _clear_capabilities()
+        except (OSError, AttributeError, TypeError) as exc:
+            # Not fatal by itself: what decides is whether anything was
+            # actually left behind, which the check below asks directly.
+            if effective_capabilities():
+                raise RunAsError(
+                    f"privilege drop to uid={uid} could not clear the "
+                    f"capability set ({exc}) -- refusing to run the operation"
+                ) from None
+        remaining = effective_capabilities()
+        if remaining:
+            raise RunAsError(
+                f"privilege drop to uid={uid} left capabilities behind "
+                f"(CapEff={remaining:016x}) -- refusing to run the operation"
+            )
+        if _can_regain_root():
+            raise RunAsError(
+                f"privilege drop to uid={uid} left root regainable -- refusing "
+                "to run the operation"
+            )
 
 
 def _fail(message: str) -> dict[str, Any]:

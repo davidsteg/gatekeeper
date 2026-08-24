@@ -9,6 +9,7 @@ import sys
 
 import uvicorn
 
+from ._runas import can_change_user, effective_capabilities
 from .audit import AuditLog, Redactor
 from .catalog import load_catalog
 from .credentials import KEY_ENV, CredentialStore, generate_master_key
@@ -95,15 +96,45 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # build, on this host, is configured to write files as X" is recorded
     # without anyone having to go and read toolkits.yaml. A user name or a
     # uid:gid pair, never a secret.
-    for name, toolkit in sorted(tier1.toolkits.items()):
-        if toolkit.run_as:
-            logger.warning(
-                "Toolkit %r: file operations run as %r, not as this process "
-                "(%s). Requires CAP_SETUID/CAP_SETGID; calls fail rather "
-                "than fall back if the privilege is missing.",
-                name,
-                toolkit.run_as,
+    run_as_toolkits = sorted(n for n, t in tier1.toolkits.items() if t.run_as)
+    for name in run_as_toolkits:
+        logger.warning(
+            "Toolkit %r: file operations run as %r, not as this process (%s).",
+            name,
+            tier1.toolkits[name].run_as,
+            _whoami(),
+        )
+    if run_as_toolkits:
+        # And, separately, whether the container can actually do it. The
+        # line above alone is what made a misconfiguration look fine at
+        # startup and fail only on the first agent call -- "runs as 3001"
+        # reads like a confirmation whether or not the privilege is there.
+        # This one is checked, not declared.
+        caps = effective_capabilities()
+        state = "unreadable" if caps is None else f"CapEff={caps:016x}"
+        if can_change_user():
+            logger.info(
+                "run_as is usable: this process (%s, %s) holds CAP_SETUID and "
+                "CAP_SETGID.",
                 _whoami(),
+                state,
+            )
+        else:
+            logger.error(
+                "run_as is NOT usable: this process (%s, %s) holds no privilege "
+                "to change user, so every call on %s will fail rather than fall "
+                "back. Both halves are needed -- 'user: \"0:0\"' AND "
+                "'cap_add: [SETUID, SETGID]'; %s. See docs/DEPLOYMENT.md.",
+                _whoami(),
+                state,
+                ", ".join(repr(n) for n in run_as_toolkits),
+                (
+                    "the container is not running as root, so 'cap_add' alone "
+                    "grants nothing -- Docker puts those capabilities in uid 0's "
+                    "permitted set only"
+                    if os.geteuid() != 0
+                    else "the container is root but the capabilities were dropped"
+                ),
             )
 
     try:

@@ -198,7 +198,7 @@ Becoming another user requires privilege the shipped `user: "568:568"` +
 container starts as root and is given back exactly two capabilities:
 
 ```yaml
-    user: "0:0"
+    user: "0:0"          # replaces the shipped `user: "568:568"` line
     cap_drop:
       - ALL
     cap_add:
@@ -206,9 +206,90 @@ container starts as root and is given back exactly two capabilities:
       - SETGID
 ```
 
+**Both halves are required, and `cap_add` alone does nothing.** This is the
+one mistake worth naming outright, because it looks like it should work and
+the container starts perfectly happily either way: Docker puts `cap_add`
+entries in the permitted set of **uid 0 only**. A container that still says
+`user: "568:568"` and gains `cap_add: [SETUID, SETGID]` comes up with an
+empty `CapEff` — the capabilities were granted and are simultaneously
+unusable. Changing `user:` is what makes them real. Edit the existing
+`user:` line rather than adding a second one; a compose file with two
+`user:` keys keeps the last, which may not be the one you just wrote.
+
 `no-new-privileges: true` stays on — it blocks privilege *gain* through
 setuid binaries on `execve`, which is unrelated to a privileged process
 dropping to a lesser user.
+
+### Confirming the privilege is actually there
+
+"The container was recreated" is not the same fact as "the process holds the
+capabilities", and the two come apart exactly in the `cap_add`-without-`user`
+case above. Two ways to check, neither of which requires making an agent
+call:
+
+```bash
+# What the container was asked for:
+docker inspect -f '{{.Config.User}} {{.HostConfig.CapAdd}}' gatekeeper
+#   0:0 [SETUID SETGID]        <- correct
+#   568:568 [SETUID SETGID]    <- capabilities granted but unusable
+
+# What the process actually got:
+docker exec gatekeeper grep -E '^(Uid|CapEff):' /proc/self/status
+#   Uid:  0 0 0 0
+#   CapEff:  00000000000000c0        <- bits 6 (SETGID) and 7 (SETUID)
+#   CapEff:  0000000000000000        <- nothing; run_as calls will fail
+```
+
+Startup says the same thing in the log, and says it as a checked fact rather
+than as a restatement of the YAML. One `WARNING` per toolkit that declares
+`run_as`, then one line about whether the privilege exists:
+
+```
+WARNING  Toolkit 'agentcfg': file operations run as '3001:3001', not as this process (0:0).
+INFO     run_as is usable: this process (0:0, CapEff=00000000000000c0) holds CAP_SETUID and CAP_SETGID.
+```
+
+```
+ERROR    run_as is NOT usable: this process (568:568, CapEff=0000000000000000) holds no
+         privilege to change user, so every call on 'agentcfg' will fail rather than fall
+         back. Both halves are needed -- 'user: "0:0"' AND 'cap_add: [SETUID, SETGID]';
+         the container is not running as root, so 'cap_add' alone grants nothing --
+         Docker puts those capabilities in uid 0's permitted set only.
+```
+
+### If something else drops privileges first
+
+gatekeeper itself never changes its own uid — it runs as whatever the
+container started it as, and only the short-lived `run_as` helper child ever
+calls `setresuid`. But a deployment that wraps the entrypoint in its own
+`gosu`/`setpriv`/`su-exec` step, or a base image that drops to a service
+account before `exec`ing, hands gatekeeper a process that is no longer root.
+Leaving root clears the capability sets, so unless that wrapper deliberately
+keeps them, `run_as` stops working and the `CapEff=0000000000000000` line
+above is what you will see.
+
+Keeping them across such a drop is the wrapper's job, and takes two things:
+`prctl(PR_SET_KEEPCAPS, 1)` before the `setuid`, so the permitted set
+survives the uid change, and raising the two capabilities into the *ambient*
+set, so they survive the following `execve` as well. `setpriv` does both:
+
+```bash
+setpriv --reuid=568 --regid=568 --clear-groups \
+        --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid \
+        gatekeeper serve
+```
+
+gatekeeper accepts that configuration: what it checks is whether it holds
+`CAP_SETUID` and `CAP_SETGID`, not whether it is uid 0, so an unprivileged
+process that kept the two capabilities can still honour `run_as`. The helper
+child then clears its whole capability set explicitly after assuming the
+target user — a change between two non-root uids does not clear it the way
+leaving root does, and a `run_as` child that kept `CAP_SETUID` would be one
+call away from being root again.
+
+This is more moving parts than `user: "0:0"`, and it is not the
+recommended path. It is documented because the failure it produces is silent
+at startup and confusing at the first call.
 
 Three things worth being deliberate about before doing this:
 
@@ -237,10 +318,11 @@ Three things worth being deliberate about before doing this:
   `Permission denied` naming the file when the file itself is readable is
   almost always a parent directory.
 
-Startup logs a warning line per toolkit that declares `run_as`, naming the
-user and the process's own identity. If the container is not privileged
-enough to assume that user, calls on that toolkit **fail** with a message
-saying so — they never quietly run as the container user instead.
+If the container is not privileged enough to assume that user, calls on that
+toolkit **fail** with a message saying so — they never quietly run as the
+container user instead. The message names which of the two halves is
+missing, `user:` or `cap_add:`, and prints the process's `CapEff` so the
+answer does not depend on trusting the compose file.
 
 ## A known deployment (reference)
 
