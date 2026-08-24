@@ -60,6 +60,26 @@ cannot. It is in every release.
 
 ---
 
+## 0.30.2
+
+**Fix: the `tests (root)` job named one test file, so the privilege tests added in 0.30.1 never ran in CI.**
+
+0.30.0 added that job precisely because `needs_root` tests skip themselves
+on an ordinary runner, which meant the assertions carrying the privilege
+boundary were exercised nowhere. It ran `pytest tests/test_runas.py`. Then
+0.30.1 put its own `needs_root` tests -- that a `local` binary really does
+inherit ambient capabilities without the wrapper, that it holds none with
+it, that a failed drop stops the binary running -- in a second file, and
+the job kept naming only the first. The gap it was built to close reopened
+one release later, silently and in exactly the way the job existed to
+prevent.
+
+A list of files here is maintenance that gets forgotten, so there is no
+list: the job runs the whole suite as root. Any `needs_root` test, in any
+file, present or future, runs without anyone remembering to wire it up.
+The cost is a second full run of the suite, parallel to the ordinary one
+and so free in wall-clock time.
+
 ## 0.30.1
 
 **Fix: a `local` toolkit's binaries inherited gatekeeper's ambient capabilities. `docker`, `df`, `free` and `cat` ran holding `CAP_SETUID` — one call from being root — with no use for it.**

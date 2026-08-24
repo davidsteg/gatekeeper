@@ -138,12 +138,12 @@ jobs:
 
   test-privileged:
     name: tests (root)
-    # Die Privilegien-Tests in tests/test_runas.py ueberspringen sich selbst,
+    # Tests, die eine Privilegiengrenze zusichern, ueberspringen sich selbst,
     # wenn der Prozess nicht root ist -- auf dem normalen Runner also immer.
-    # Damit lief ausgerechnet das, was eine Privilegiengrenze zusichert, in
-    # keinem Lauf mit: dass der Drop wirklich Autoritaet abgibt, dass root
-    # danach nicht zurueckzuholen ist, dass keine Capability uebrig bleibt.
-    # Ein Container-Job laeuft als root und schliesst diese Luecke.
+    # Damit lief ausgerechnet das in keinem Lauf mit: dass der Drop wirklich
+    # Autoritaet abgibt, dass root danach nicht zurueckzuholen ist, dass keine
+    # Capability uebrig bleibt, dass ein 'local'-Binary keine ambient Caps
+    # erbt. Ein Container-Job laeuft als root und schliesst diese Luecke.
     runs-on: ubuntu-latest
     container:
       image: python:3.12-slim
@@ -168,8 +168,14 @@ jobs:
               sys.exit("::error::this job must run as root with CAP_SETUID/CAP_SETGID")
           PY
 
-      - name: Privilege boundary tests
-        run: pytest -q tests/test_runas.py
+      - name: Test suite, as root
+        # Die ganze Suite, nicht die eine Datei mit den Privilegien-Tests.
+        # Eine Dateiliste an dieser Stelle ist genau die Wartung, die beim
+        # naechsten needs_root-Test in einer neuen Datei vergessen wird --
+        # zwischen 0.30.0 und 0.30.1 ist das prompt passiert, tests/
+        # test_unpriv.py lief hier nicht mit. So gibt es nichts zu vergessen,
+        # und der Job kostet nur Laufzeit, die parallel zum normalen liegt.
+        run: pytest -q
 
   image:
     name: image
