@@ -183,8 +183,9 @@ See [toolkits example](config/examples/toolkits.yaml) for full reference.
 A `file` toolkit (`executor: file` — read/write/patch/list, no binary and no
 argv) performs its operations as the container user. If it has to reach files
 owned by somebody else, it can declare `run_as: "3001:3001"` (or an account
-name); operations then run as that user, and only for that toolkit. It needs a
-container started as root with `cap_add: [SETUID, SETGID]`, changing it over
+name); operations then run as that user, and only for that toolkit. It needs
+`CAP_SETUID` and `CAP_SETGID` — in practice `user: "0:0"` *and* `cap_add:
+[SETUID, SETGID]`, since Docker grants those to uid 0 alone. Changing it over
 `/admin/mcp` needs a human approval at `/ui/requests`, and where the privilege
 is missing the calls fail rather than quietly running as the container user — see
 [DEPLOYMENT.md](docs/DEPLOYMENT.md#running-file-operations-as-another-user-run_as).
