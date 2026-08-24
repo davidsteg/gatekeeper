@@ -287,19 +287,15 @@ target user — a change between two non-root uids does not clear it the way
 leaving root does, and a `run_as` child that kept `CAP_SETUID` would be one
 call away from being root again.
 
-One caveat that decides the choice in most cases: **ambient capabilities are
-inherited by every process gatekeeper spawns**, not only the `run_as` helper.
-A `local` toolkit's whitelisted binaries — `docker`, `df`, `free`, `cat` —
-would run holding `CAP_SETUID`/`CAP_SETGID` they have no use for. gatekeeper
-cannot narrow that from the inside: clearing the ambient set would disarm the
-helper too, and clearing it per-spawn would need a `preexec_fn`, which
-reintroduces the fork-in-a-threaded-process hazard the helper avoids by using
-`fork`+`exec`. It logs a `WARNING` naming the set instead.
-
-So: if the deployment runs `local` toolkits as well, `user: "0:0"` with
-`cap_add` is the better trade — the capabilities then sit on uid 0 and no
-spawned binary inherits them ambiently. The wrapper route is worth it when
-`file` toolkits are the whole story and not starting as root matters more.
+Ambient capabilities are inherited by every `execve`, so on its own this setup
+would hand `CAP_SETUID`/`CAP_SETGID` to every process gatekeeper spawns — a
+`local` toolkit's `docker`, `df`, `free` and `cat`, none of which has any use
+for them. gatekeeper does not leave that to the deployment: a `local` binary
+is exec'd through a wrapper that empties its own capability sets first,
+verifies they are empty, and **refuses to run the binary** if they are not.
+Only the `run_as` helper keeps them. The cost is one extra `exec` per `local`
+call, and it is paid only here — where there are no ambient capabilities to
+strip, binaries are spawned directly, exactly as before.
 
 This is more moving parts than `user: "0:0"`, and it is not the
 recommended path. It is documented because the failure it produces is silent

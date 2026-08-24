@@ -14,6 +14,8 @@ import signal
 import sys
 import time
 
+from ._runas import capability_sets
+from ._unpriv import EXIT_NOT_EXECUTABLE, EXIT_NOT_FOUND, MARKER
 from .errors import DenialReason, Denied
 
 #: Outcome states. `unknown` is the important one: on timeout it is
@@ -103,6 +105,21 @@ def _terminate(process: asyncio.subprocess.Process) -> None:
         pass
 
 
+def _ambient_capabilities() -> int:
+    """Capabilities this process would hand to anything it `execve`s.
+
+    Non-zero only where gatekeeper was started unprivileged but kept
+    CAP_SETUID/CAP_SETGID across that drop (docs/DEPLOYMENT.md) -- the
+    root + `cap_add` deployment holds them in uid 0's permitted set, which
+    is not inherited, and answers 0 here.
+
+    Read per call rather than cached at import. It is one small procfs
+    read against a process spawn, and a value cached at import time would
+    be a second source of truth for something the kernel already tracks.
+    """
+    return (capability_sets() or {}).get("CapAmb", 0)
+
+
 async def run(
     argv: list[str],
     *,
@@ -124,9 +141,16 @@ async def run(
     if sys.platform != "win32":
         popen_kwargs["start_new_session"] = True
 
+    # A whitelisted binary has no use for gatekeeper's own capabilities and
+    # must not inherit them; where there are none to inherit -- every
+    # deployment but one -- this is exactly the spawn it has always been,
+    # with no extra process in the way. See `_unpriv`.
+    wrapped = bool(_ambient_capabilities())
+    spawn_argv = [sys.executable, "-m", "gatekeeper._unpriv", *argv] if wrapped else argv
+
     try:
         process = await asyncio.create_subprocess_exec(
-            *argv,
+            *spawn_argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
@@ -174,12 +198,37 @@ async def run(
         )
 
     await process.wait()
+    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+
+    # The wrapper never got as far as the binary. Raise what an unwrapped
+    # spawn would have raised for the same cause, so whether a deployment
+    # inherits ambient capabilities stays invisible to every caller: the
+    # same two denials, with the same wording, naming the real binary
+    # rather than the interpreter that was asked to run it.
+    if wrapped and process.returncode in (EXIT_NOT_FOUND, EXIT_NOT_EXECUTABLE):
+        if stderr_text.startswith(MARKER):
+            detail = stderr_text[len(MARKER):].strip()
+            if detail == "not found":
+                raise Denied(
+                    DenialReason.EXECUTOR_UNAVAILABLE,
+                    f"Executable not found: {argv[0]}",
+                )
+            if detail == "no permission":
+                raise Denied(
+                    DenialReason.EXECUTOR_UNAVAILABLE,
+                    f"No permission to execute {argv[0]}",
+                )
+            raise Denied(
+                DenialReason.EXECUTOR_UNAVAILABLE,
+                f"Cannot run {argv[0]}: {detail}",
+            )
+
     duration = int((time.monotonic() - started) * 1000)
     return Result(
         outcome=OUTCOME_OK if process.returncode == 0 else OUTCOME_FAILED,
         exit_code=process.returncode,
         stdout=stdout_bytes.decode("utf-8", errors="replace"),
-        stderr=stderr_bytes.decode("utf-8", errors="replace"),
+        stderr=stderr_text,
         truncated=out_truncated or err_truncated,
         duration_ms=duration,
     )

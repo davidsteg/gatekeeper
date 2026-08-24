@@ -137,22 +137,20 @@ def cmd_serve(args: argparse.Namespace) -> int:
                 ),
             )
 
-    # Ambient capabilities are inherited by *every* process this one spawns,
-    # not only the run_as helper that needs them -- the whitelisted binaries
-    # of `local` toolkits among them, which need none. Nothing here can undo
-    # that: clearing the ambient set would take the capabilities away from
-    # the helper too, and clearing it per-spawn would mean a `preexec_fn`,
-    # which reintroduces exactly the fork-in-a-threaded-process hazard the
-    # helper uses fork+exec to avoid (see `_runas.py`). So it is reported.
+    # Ambient capabilities would otherwise be inherited by *every* process
+    # this one spawns, not only the run_as helper that needs them. They are
+    # stripped per spawn instead (`_unpriv.py`), which is worth one line at
+    # startup: it is the only deployment where a `local` call costs an extra
+    # exec, and "which of my binaries run capable" should not be a question
+    # anyone has to answer by reading source.
     ambient = (capability_sets() or {}).get("CapAmb", 0)
     if ambient:
-        logger.warning(
-            "This process holds ambient capabilities (CapAmb=%016x). Every "
-            "process it spawns inherits them, including the binaries of "
-            "'local' toolkits, which need none of them -- only the run_as "
-            "helper does. Unless the ambient setup is deliberate, the "
-            "root + 'cap_add' deployment keeps them off every other child. "
-            "See docs/DEPLOYMENT.md.",
+        logger.info(
+            "This process holds ambient capabilities (CapAmb=%016x), so it "
+            "was started unprivileged but kept them across its own drop. "
+            "'local' toolkit binaries are run through a wrapper that clears "
+            "them first, and refuses to run the binary if that fails -- only "
+            "the run_as helper keeps them. See docs/DEPLOYMENT.md.",
             ambient,
         )
 
