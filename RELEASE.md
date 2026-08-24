@@ -60,6 +60,59 @@ cannot. It is in every release.
 
 ---
 
+## 0.30.1
+
+**Fix: a `local` toolkit's binaries inherited gatekeeper's ambient capabilities. `docker`, `df`, `free` and `cat` ran holding `CAP_SETUID` — one call from being root — with no use for it.**
+
+Only reachable in the deployment 0.30.0 opened up: gatekeeper started
+unprivileged but keeping `CAP_SETUID`/`CAP_SETGID` across its own drop, a
+`setpriv`/`gosu` wrapper. Capabilities kept that way necessarily live in
+the *ambient* set, and the ambient set is inherited by every `execve`,
+not only the one that needs it. Where the container starts as root and
+gains the two through `cap_add`, they sit in uid 0's permitted set, no
+child inherits them, and none of this applies.
+
+0.30.0 reported this as a `WARNING` and left it standing, on the grounds
+that the obvious mechanism was unavailable: clearing the ambient set
+process-wide would disarm the `run_as` helper too, toggling it around
+each spawn is a race across concurrent calls (the same objection that
+rules out `seteuid` in the file executor), and a `preexec_fn` runs
+between `fork` and `exec` in a process with an asyncio loop and threads
+-- the exact window `_runas.py` uses `fork`+`exec` to stay out of. All
+three still hold. What none of them ruled out is doing the work in a
+process that is already past that window.
+
+So `local` binaries are now exec'd through `_unpriv.py`, the mirror image
+of `_runas.py`: where that module exists so one `file` operation can run
+with *more* authority than gatekeeper, this one exists so a binary runs
+with *less*. It empties its own capability sets, verifies they are empty,
+and then `execve`s the real binary over itself. If the drop does not
+take, it refuses to run the binary at all -- a `docker` that silently
+kept `CAP_SETUID` is indistinguishable from a correct call from the
+outside, which is the whole reason this is worth a process.
+
+Three properties keep it from being felt anywhere else:
+
+- **It is absent where there is nothing to strip.** The wrapper is
+  inserted only when the process actually holds ambient capabilities.
+  Every other deployment spawns binaries directly, with no extra exec and
+  no behaviour change.
+- **The pid does not move.** `execv` replaces the wrapper rather than
+  forking, so the pid `execute.run` holds is the binary's. The timeout,
+  the process-group kill on timeout and the output streaming are
+  untouched.
+- **Failures read the same.** A missing or non-executable binary raises
+  the same `EXECUTOR_UNAVAILABLE` denial with the same wording, naming
+  the binary rather than the interpreter asked to run it -- so whether a
+  deployment inherits capabilities stays invisible to every caller.
+
+Thirteen tests, in both directions: that a binary really does inherit the
+capabilities without the wrapper (so the test below cannot pass against a
+wrapper that does nothing), that `cat` reports all four of its capability
+sets empty with it, that the drop failing stops the binary running, that
+the pid survives, and that both denials are identical wrapped and
+unwrapped.
+
 ## 0.30.0
 
 **`run_as` now decides on the capability it actually needs instead of on uid 0 — a container told to add `cap_add: [SETUID, SETGID]` while still running as 568 was refused with a message asking for precisely what had just been added.**
