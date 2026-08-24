@@ -810,3 +810,99 @@ def test_the_drop_empties_every_capability_set_not_only_the_effective_one():
     after = dict(eval(completed.stdout))  # noqa: S307 -- our own repr, one line
     assert set(after) >= {"CapEff", "CapPrm", "CapInh", "CapAmb"}
     assert all(value == 0 for value in after.values()), after
+
+
+# -- 6. Refusing to start on a run_as that cannot work ----------------------
+#
+# A container that holds no privilege starts, passes its healthcheck, looks
+# entirely healthy, and fails every `run_as` call until somebody reads the
+# log. GATEKEEPER_REQUIRE_RUN_AS turns that into a container that does not
+# start. Opt-in: a toolkit may declare `run_as` for a call nobody makes, and
+# aborting on that would break a deployment that is merely over-declared.
+
+
+def _deployment(tmp_path, run_as: str = "3001:3001") -> str:
+    """A config directory with one `run_as` toolkit, ready for `serve`."""
+    config = os.path.join(str(tmp_path), "cfg")
+    logs = os.path.join(str(tmp_path), "logs")
+    os.makedirs(config)
+    os.makedirs(logs)
+    completed = subprocess.run(
+        [sys.executable, "-m", "gatekeeper", "init"],
+        capture_output=True, text=True, timeout=60,
+        env={**os.environ, "PYTHONPATH": _SRC, "GATEKEEPER_CONFIG_DIR": config},
+    )
+    assert completed.returncode == 0, completed.stderr
+    with open(os.path.join(config, "toolkits.yaml"), "w", encoding="utf-8") as handle:
+        handle.write(
+            f"audit:\n  dir: {logs}\ntoolkits:\n  agentcfg:\n"
+            f"    executor: file\n    path_roots: [{tmp_path}]\n"
+            f'    run_as: "{run_as}"\n'
+            "    max_timeout_seconds: 15\n    max_output_bytes: 4096\n"
+        )
+    _traversable(str(tmp_path))
+    for root, dirs, files in os.walk(str(tmp_path)):
+        for entry in dirs + files:
+            os.chmod(os.path.join(root, entry), 0o777)
+    return config
+
+
+def _serve_unprivileged(config: str, port: int, **env_extra) -> subprocess.CompletedProcess:
+    """Starts `gatekeeper serve` as a user that cannot change user.
+
+    Drops to `nobody` first when the suite runs as root, so the same test
+    asserts the same thing on a hosted runner and in the root container job
+    -- the point being what an *unprivileged* container does.
+    """
+    uid, gid = _nobody()
+    launcher = textwrap.dedent(
+        f"""
+        import os, sys
+        if os.geteuid() == 0:
+            os.setresgid({gid}, {gid}, {gid})
+            os.setresuid({uid}, {uid}, {uid})
+        os.execv(sys.executable, [sys.executable, "-m", "gatekeeper", "serve"])
+        """
+    )
+    return subprocess.run(
+        [sys.executable, "-c", launcher],
+        capture_output=True, text=True, timeout=25,
+        env={
+            **os.environ,
+            "PYTHONPATH": _SRC,
+            "GATEKEEPER_CONFIG_DIR": config,
+            "GATEKEEPER_PORT": str(port),
+            **env_extra,
+        },
+    )
+
+
+def test_require_run_as_refuses_to_start_without_the_privilege(tmp_path):
+    """The state this switch exists to remove: healthy-looking and broken."""
+    completed = _serve_unprivileged(
+        _deployment(tmp_path), 18131, GATEKEEPER_REQUIRE_RUN_AS="1"
+    )
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert "GATEKEEPER_REQUIRE_RUN_AS" in completed.stderr
+    assert "cannot assume another user" in completed.stderr
+
+
+def test_without_the_switch_an_unusable_run_as_still_starts(tmp_path):
+    """The default, unchanged: it logs and serves.
+
+    A deployment that declares `run_as` on a toolkit nobody calls must not
+    be turned into a container that will not boot by an upgrade.
+    """
+    with pytest.raises(subprocess.TimeoutExpired):
+        _serve_unprivileged(_deployment(tmp_path), 18132)
+
+
+@pytest.mark.parametrize(
+    "value, aborts",
+    [("1", True), ("true", True), ("yes", True), ("0", False), ("", False)],
+)
+def test_the_switch_reads_the_usual_truthy_values(monkeypatch, value, aborts):
+    from gatekeeper.__main__ import _require_run_as
+
+    monkeypatch.setenv("GATEKEEPER_REQUIRE_RUN_AS", value)
+    assert _require_run_as() is aborts

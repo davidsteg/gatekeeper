@@ -220,6 +220,62 @@ unusable. Changing `user:` is what makes them real. Edit the existing
 setuid binaries on `execve`, which is unrelated to a privileged process
 dropping to a lesser user.
 
+### If the container still comes up as 568
+
+The failure worth naming on its own, because it looks like a bug in
+gatekeeper and is not: `user: "0:0"` is set, `cap_add` is set, the container
+was recreated — and `docker exec` still reports `Uid: 568` with an empty
+`CapEff`.
+
+**gatekeeper never changes its own uid.** There is no entrypoint script, no
+`PUID`/`PGID` convention, no `gosu`/`su-exec`/`setpriv` wrapper, and no
+`setuid` anywhere in the startup path. The only identity change in the whole
+codebase happens inside the short-lived `run_as` helper *child*, after the
+server has already forked and exec'd it — a test (`test_no_internal_drop.py`)
+parses every module and fails the build if that ever stops being true. So
+looking for an internal privilege drop will not find one, and a process
+observed at 568 was **started** at 568.
+
+What starts it there is the image's own default, `USER 568:568` in the
+Dockerfile. A compose `user:` overrides that unconditionally — so if the
+process is 568, the `user:` never reached this container. In order of how
+often each one is the answer:
+
+1. **Two `user:` keys in the service.** The most likely, and the one that
+   hides best: a YAML mapping with a repeated key does not merge, compose
+   keeps one, and if it keeps `"568:568"` you get exactly this state. Search
+   the file rather than trusting a scroll: `grep -n 'user:' compose.yaml`
+   must return one uncommented line.
+2. **Restarted, not recreated.** `docker restart` reuses the existing
+   container with the settings it was *created* with. Only `docker compose
+   up -d` (or `--force-recreate`) applies a changed `user:`.
+3. **A different file than the one edited.** The deploy names an explicit
+   path — for the Dockhand invocation at the top of `compose.yaml`, that is
+   `/mnt/raid/gatekeeper/compose.yaml`, not a checkout elsewhere.
+
+`docker inspect -f '{{.Config.User}}' gatekeeper` settles all three: it
+reports what the container was actually created with. If that says `568:568`
+while the file says `0:0`, the problem is between the file and the daemon,
+and nothing inside the container will explain it.
+
+### Refusing to start when `run_as` cannot work
+
+An unprivileged container with a `run_as` toolkit starts, passes its
+healthcheck, and looks entirely fine — every `run_as` call fails, and
+nothing says so unless somebody reads the log. Set
+`GATEKEEPER_REQUIRE_RUN_AS=1` to make that state refuse to boot instead:
+
+```yaml
+    environment:
+      GATEKEEPER_REQUIRE_RUN_AS: "1"
+```
+
+Startup then exits `2` with the reason. It is deliberately opt-in: a toolkit
+may carry `run_as` for a call nobody makes today, and aborting on that would
+turn a merely over-declared deployment into one that will not start. Switch
+it on where `run_as` is load bearing — then a misconfigured redeploy fails
+loudly at the point it happens, rather than at the first agent call.
+
 ### Confirming the privilege is actually there
 
 "The container was recreated" is not the same fact as "the process holds the
