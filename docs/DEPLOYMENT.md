@@ -287,6 +287,20 @@ target user — a change between two non-root uids does not clear it the way
 leaving root does, and a `run_as` child that kept `CAP_SETUID` would be one
 call away from being root again.
 
+One caveat that decides the choice in most cases: **ambient capabilities are
+inherited by every process gatekeeper spawns**, not only the `run_as` helper.
+A `local` toolkit's whitelisted binaries — `docker`, `df`, `free`, `cat` —
+would run holding `CAP_SETUID`/`CAP_SETGID` they have no use for. gatekeeper
+cannot narrow that from the inside: clearing the ambient set would disarm the
+helper too, and clearing it per-spawn would need a `preexec_fn`, which
+reintroduces the fork-in-a-threaded-process hazard the helper avoids by using
+`fork`+`exec`. It logs a `WARNING` naming the set instead.
+
+So: if the deployment runs `local` toolkits as well, `user: "0:0"` with
+`cap_add` is the better trade — the capabilities then sit on uid 0 and no
+spawned binary inherits them ambiently. The wrapper route is worth it when
+`file` toolkits are the whole story and not starting as root matters more.
+
 This is more moving parts than `user: "0:0"`, and it is not the
 recommended path. It is documented because the failure it produces is silent
 at startup and confusing at the first call.

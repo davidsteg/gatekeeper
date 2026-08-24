@@ -9,7 +9,7 @@ import sys
 
 import uvicorn
 
-from ._runas import can_change_user, effective_capabilities
+from ._runas import can_change_user, capability_sets, effective_capabilities
 from .audit import AuditLog, Redactor
 from .catalog import load_catalog
 from .credentials import KEY_ENV, CredentialStore, generate_master_key
@@ -136,6 +136,25 @@ def cmd_serve(args: argparse.Namespace) -> int:
                     else "the container is root but the capabilities were dropped"
                 ),
             )
+
+    # Ambient capabilities are inherited by *every* process this one spawns,
+    # not only the run_as helper that needs them -- the whitelisted binaries
+    # of `local` toolkits among them, which need none. Nothing here can undo
+    # that: clearing the ambient set would take the capabilities away from
+    # the helper too, and clearing it per-spawn would mean a `preexec_fn`,
+    # which reintroduces exactly the fork-in-a-threaded-process hazard the
+    # helper uses fork+exec to avoid (see `_runas.py`). So it is reported.
+    ambient = (capability_sets() or {}).get("CapAmb", 0)
+    if ambient:
+        logger.warning(
+            "This process holds ambient capabilities (CapAmb=%016x). Every "
+            "process it spawns inherits them, including the binaries of "
+            "'local' toolkits, which need none of them -- only the run_as "
+            "helper does. Unless the ambient setup is deliberate, the "
+            "root + 'cap_add' deployment keeps them off every other child. "
+            "See docs/DEPLOYMENT.md.",
+            ambient,
+        )
 
     try:
         audit = AuditLog(

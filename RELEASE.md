@@ -60,6 +60,91 @@ cannot. It is in every release.
 
 ---
 
+## 0.30.0
+
+**`run_as` now decides on the capability it actually needs instead of on uid 0 — a container told to add `cap_add: [SETUID, SETGID]` while still running as 568 was refused with a message asking for precisely what had just been added.**
+
+Reported as: `run_as` on a `file` toolkit kept failing with *"gatekeeper
+runs as uid=568 gid=568 and holds no privilege to change user"* after the
+container had been recreated with `cap_add: [SETUID, SETGID]`, with
+startup confirming the new configuration. The suspicion was a privilege
+drop somewhere in startup that lost the capabilities for want of
+`PR_SET_KEEPCAPS` before the `setuid`.
+
+There is no such drop. gatekeeper never changes its own uid: outside the
+short-lived `run_as` helper child, no `setuid`/`setresuid`/`initgroups`
+call exists anywhere in the tree, and there is no entrypoint wrapper.
+`PR_SET_KEEPCAPS` would have had nothing to keep capabilities across.
+
+The real cause is one line in `become()`, which asked `geteuid() != 0`
+and, on failure, advised adding `CAP_SETUID` and `CAP_SETGID`. That is
+wrong in both directions. **Docker puts `cap_add` entries in the
+permitted set of uid 0 only**, so a container that gains the capabilities
+while its `user:` line still reads `568:568` comes up with an empty
+`CapEff` — granted and simultaneously unusable — and the call fails with
+the same message that asked for what was already there, redeploy after
+redeploy, while the half that would have fixed it (`user: "0:0"`) is the
+one thing the message never mentioned. In the other direction, a root
+process whose capabilities were dropped passed the uid test and failed
+three lines later at `setresuid` with a bare `EPERM`.
+
+`become()` now reads `CapEff` from `/proc/self/status` and gates on
+`CAP_SETUID`/`CAP_SETGID`, falling back to uid 0 only where the set
+cannot be read at all. The failure message names which of the two halves
+is missing and prints the capability set, and startup reports the same
+thing as a checked fact rather than a restatement of `toolkits.yaml`: one
+`INFO` line when `run_as` is usable, one `ERROR` naming the cause when it
+is not. `compose.yaml`, `README.md` and `docs/DEPLOYMENT.md` say
+throughout that both halves are required and that neither works alone.
+
+Gating on the capability rather than on uid 0 also admits a deployment
+that was previously refused outright: a process that is *not* root but
+holds the two capabilities ambiently, as a `setpriv`/`gosu` wrapper
+leaves it. That path needs one thing the root path gets for free —
+leaving uid 0 makes the kernel empty the capability sets, but a change
+between two non-root uids does not, so a child that kept `CAP_SETUID`
+would be one `setuid(0)` from root. `become()` therefore clears the sets
+explicitly with `capset` and verifies the result before running the
+operation.
+
+Two further gaps in that child, found while hardening the above:
+
+- **The bounding set stays full.** `capset` does not reach `CapBnd`, and
+  lowering it needs `CAP_SETPCAP`, which no deployment here grants and
+  which would be an odd capability to grant in order to *drop*
+  capabilities. While it is full, a setuid-root binary or a file carrying
+  capabilities remains a route back up for anything the child execs. The
+  child now sets `no_new_privs` as its first act, which closes that class
+  outright, needs no privilege, cannot be undone, and costs nothing — the
+  file operation runs in-process and never execs. It does not impede the
+  drop: `no_new_privs` restricts what `execve` may grant and nothing
+  about `setresuid`.
+- **The verification only asked about `CapEff`.** A capability in the
+  permitted set is one `capset` from being usable again and one in the
+  ambient set survives the next `execve`, so that check called a process
+  clean that was not. All four sets are read and any non-empty one is
+  named.
+
+Ambient capabilities are inherited by every process gatekeeper spawns,
+not only the helper that needs them — a `local` toolkit's binaries would
+hold `CAP_SETUID`/`CAP_SETGID` they have no use for. That cannot be
+narrowed from the inside (clearing the ambient set would disarm the
+helper too, and clearing it per-spawn would need a `preexec_fn`, which
+reintroduces the fork-in-a-threaded-process hazard the helper avoids by
+using `fork`+`exec`), so startup logs a `WARNING` naming the set, and
+`docs/DEPLOYMENT.md` recommends the root + `cap_add` deployment wherever
+`local` toolkits are also in play.
+
+Finally, the privilege tests no longer skip themselves in CI. Everything
+that asserts the boundary — that the drop really gives up authority, that
+root is not regainable, that no capability survives — runs only as root
+and was therefore skipped on every hosted runner. A `tests (root)`
+container job now runs `tests/test_runas.py` as root, verifies first that
+it is genuinely privileged (so a runner without the capabilities cannot
+skip its way to green), and gates the image build alongside the ordinary
+suite. Ten new tests cover the change, including both misdiagnoses and
+the ambient-capability path end to end.
+
 ## 0.29.1
 
 **Fix: `admin.toolkit_list` never reported `run_as` -- an approved toolkit_update proposal looked like it never took effect, with no restart able to fix that.**
