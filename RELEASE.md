@@ -60,6 +60,12 @@ cannot. It is in every release.
 
 ---
 
+## 0.36.1
+
+**Fix: the 0.36.0 tests failed in CI — ruff flagged an unsorted import in `catalog.py` (the new `_runas` import was placed after `errors` instead of before it alphabetically), and the new `test_runas.py` tests created tool parameters without the `pattern` field that FR-5.7 requires for string parameters.**
+
+Both are test-only fixes; no runtime behavior change. The import order is corrected (`._runas` before `.errors`), and all test helpers that create tool specs now include `"pattern": "^/"` on string parameters.
+
 ## 0.36.0
 
 **Fix: per-tool `run_as` was silently ignored — `service.py:360` always used `toolkit.run_as`, so a tool spec that declared `run_as: root` while its toolkit declared `run_as: 568:568` would silently run write/patch as uid 568. Read worked only by coincidence of the toolkit also setting root; write/patch on a toolkit with a different default failed with "The operation ran as uid=568" instead of as the tool's requested user.**

@@ -15,8 +15,8 @@ from typing import Any
 
 import yaml
 
-from .errors import ConfigError, Tier1Violation, read_config_file
 from ._runas import RunAsError, parse_run_as
+from .errors import ConfigError, Tier1Violation, read_config_file
 from .tier1 import Tier1, Toolkit
 
 #: Placeholders in argv, derived and scope templates.
