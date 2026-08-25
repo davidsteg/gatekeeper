@@ -196,6 +196,88 @@ def test_malformed_run_as_aborts_startup(tmp_path):
         _tier1(tmp_path, {"executor": "file", "path_roots": ["/mnt/raid"], "run_as": "3001"})
 
 
+# -- 2b. Per-tool run_as (catalog) -----------------------------------------
+#
+# Since 0.36.0 a tool spec can carry `run_as`, overriding the toolkit's.
+# This is the fix for the bug where a per-tool `run_as: root` was silently
+# ignored by write/patch (and only worked for read by coincidence of the
+# toolkit also setting root). The tool-level field wins; None inherits
+# the toolkit; "" explicitly clears it.
+
+from gatekeeper.catalog import parse_tool_spec  # noqa: E402
+
+
+def _file_tier1(tmp_path, run_as=None):
+    """A one-toolkit file tier1, with an optional toolkit-level run_as."""
+    spec = {"executor": "file", "path_roots": ["/mnt/raid"]}
+    if run_as is not None:
+        spec["run_as"] = run_as
+    return _tier1(tmp_path, spec)
+
+
+def test_tool_spec_without_run_as_inherits_none(tmp_path):
+    """No run_as on the tool spec -> ToolDef.run_as is None, meaning
+    'inherit the toolkit'. This is the default and what every tool
+    written before 0.36.0 gets."""
+    tier1 = _file_tier1(tmp_path)
+    tool = parse_tool_spec(
+        {"id": "files.read", "toolkit": "files", "category": "read",
+         "file_operation": "read", "parameters": {"path": {"type": "string", "required": True}}},
+        tier1,
+    )
+    assert tool.run_as is None
+
+
+def test_tool_spec_run_as_is_parsed_into_tooldef(tmp_path):
+    """A `run_as` on the tool spec lands in ToolDef.run_as, not lost."""
+    tier1 = _file_tier1(tmp_path)
+    tool = parse_tool_spec(
+        {"id": "files.read", "toolkit": "files", "category": "read",
+         "file_operation": "read", "run_as": "root",
+         "parameters": {"path": {"type": "string", "required": True}}},
+        tier1,
+    )
+    assert tool.run_as == "root"
+
+
+def test_tool_spec_run_as_empty_string_is_explicit_clear(tmp_path):
+    """An empty string is distinct from unset: it means 'run as the
+    container user, ignoring what the toolkit says'."""
+    tier1 = _file_tier1(tmp_path, run_as="root")
+    tool = parse_tool_spec(
+        {"id": "files.read", "toolkit": "files", "category": "read",
+         "file_operation": "read", "run_as": "",
+         "parameters": {"path": {"type": "string", "required": True}}},
+        tier1,
+    )
+    assert tool.run_as == ""
+
+
+def test_tool_spec_run_as_null_is_none(tmp_path):
+    """A null run_as on the tool spec is the same as not setting it."""
+    tier1 = _file_tier1(tmp_path, run_as="root")
+    tool = parse_tool_spec(
+        {"id": "files.read", "toolkit": "files", "category": "read",
+         "file_operation": "read", "run_as": None,
+         "parameters": {"path": {"type": "string", "required": True}}},
+        tier1,
+    )
+    assert tool.run_as is None
+
+
+def test_tool_spec_run_as_malformed_aborts_startup(tmp_path):
+    """The same validation as the toolkit level: a bad value fails at
+    parse time, not on the first call."""
+    tier1 = _file_tier1(tmp_path)
+    with pytest.raises(ConfigError, match="run_as"):
+        parse_tool_spec(
+            {"id": "files.read", "toolkit": "files", "category": "read",
+             "file_operation": "read", "run_as": "3001",
+             "parameters": {"path": {"type": "string", "required": True}}},
+            tier1,
+        )
+
+
 # -- 3. The executor path ---------------------------------------------------
 
 
@@ -1063,3 +1145,180 @@ def test_bypasses_file_permissions_reports_the_real_set():
         held & ((1 << CAP_DAC_OVERRIDE) | (1 << CAP_DAC_READ_SEARCH))
     )
     assert bypasses_file_permissions() is expected
+
+
+# -- 6. Per-tool run_as through the service path ----------------------------
+#
+# The bug this section guards against: service.py:360 used toolkit.run_as
+# unconditionally, ignoring a per-tool `run_as` in the tool spec. A tool
+# that set `run_as: root` while its toolkit set `run_as: 568:568` would
+# silently run write/patch as 568 -- read worked only by coincidence of
+# the toolkit also setting root. Fixed in 0.36.0: the tool's run_as wins.
+
+from gatekeeper.audit import AuditLog  # noqa: E402
+from gatekeeper.catalog import load_catalog  # noqa: E402
+from gatekeeper.identity import Identity, generate_token, hash_token  # noqa: E402
+from gatekeeper.service import Service  # noqa: E402
+
+
+def _service_env(tmp_path, toolkit_run_as=None):
+    """A Service with a single `file` toolkit and one read+one write tool.
+
+    The toolkit's run_as is `toolkit_run_as` (or None). Each tool has its
+    own `run_as` in the spec -- the field under test. Returns the Service
+    and the identity needed to call it.
+    """
+    toolkits_yaml = tmp_path / "toolkits.yaml"
+    tk_spec = {"executor": "file", "path_roots": [str(tmp_path)]}
+    if toolkit_run_as is not None:
+        tk_spec["run_as"] = toolkit_run_as
+    toolkits_yaml.write_text(
+        yaml.safe_dump({"toolkits": {"files": tk_spec}, "audit": {"dir": str(tmp_path / "l")}}),
+        encoding="utf-8",
+    )
+    tier1 = load_tier1(str(toolkits_yaml))
+
+    tools_yaml = tmp_path / "tools.yaml"
+    tools = []
+    for op, run_as in [("read", "root"), ("write", "root")]:
+        tool_spec = {
+            "id": f"files.{op}", "toolkit": "files", "category": "read" if op == "read" else "write",
+            "file_operation": op, "enabled": True,
+            "parameters": {"path": {"type": "string", "required": True}},
+        }
+        if run_as is not None:
+            tool_spec["run_as"] = run_as
+        tools.append(tool_spec)
+    tools_yaml.write_text(yaml.safe_dump({"tools": tools}), encoding="utf-8")
+    catalog = load_catalog(str(tools_yaml), tier1)
+
+    audit = AuditLog(str(tmp_path / "logs"))
+    service = Service(tier1=tier1, catalog=catalog, audit=audit)
+
+    token = generate_token()
+    identity = Identity(
+        id="agent", role="agent",
+        token_hash=hash_token(token), token_lookup=hash_token(token)[:16],
+        password_hash="", tools=["files.read", "files.write"], scopes=[],
+    )
+    return service, identity
+
+
+def test_tool_run_as_wins_over_toolkit_run_as(tmp_path, monkeypatch):
+    """The fix: service.py routes the tool's run_as to the executor, not
+    the toolkit's. Asserted by intercepting the `run_as` argument that
+    `execute_file.run` receives -- it must be the tool-level value, not
+    the toolkit's.
+
+    This test does not need root: it checks the wiring, not the privilege.
+    The tool says `run_as: root`, the toolkit says `run_as: 568:568`. If
+    the bug were still present, `run_as` would arrive as `568:568`; after
+    the fix it arrives as `root`.
+    """
+    service, identity = _service_env(tmp_path, toolkit_run_as="568:568")
+
+    captured: dict[str, str | None] = {}
+    from gatekeeper import execute_file as _ef
+
+    real_run = _ef.run
+
+    async def spy_run(**kwargs):
+        captured["run_as"] = kwargs.get("run_as")
+        # Don't actually spawn the helper -- we only care about the
+        # argument. Return a synthetic ok result.
+        from gatekeeper.execute import Result, OUTCOME_OK
+        return Result(
+            outcome=OUTCOME_OK, exit_code=0, stdout="", stderr="",
+            truncated=False, duration_ms=0,
+        )
+
+    monkeypatch.setattr(_ef, "run", spy_run)
+
+    path = os.path.join(str(tmp_path), "x.txt")
+    asyncio.run(service.call(identity, "files.read", {"path": path}))
+    assert captured["run_as"] == "root", (
+        f"tool-level run_as 'root' was not forwarded; got {captured['run_as']!r} "
+        f"(this is the bug: service.py used toolkit.run_as instead of tool.run_as)"
+    )
+
+    asyncio.run(service.call(identity, "files.write", {"path": path, "content": "x"}))
+    assert captured["run_as"] == "root", (
+        f"write path dropped the per-tool run_as; got {captured['run_as']!r}"
+    )
+
+
+def test_tool_without_run_as_inherits_toolkit_run_as(tmp_path, monkeypatch):
+    """A tool that does not set run_as inherits the toolkit's. This is
+    the 'None means inherit' rule -- the default for every tool written
+    before 0.36.0."""
+    service, identity = _service_env(tmp_path, toolkit_run_as="3001:3001")
+
+    # Override the tools to have no per-tool run_as.
+    tier1 = service.tier1
+    tools_yaml = tmp_path / "tools_no_runas.yaml"
+    tools_yaml.write_text(
+        yaml.safe_dump({"tools": [
+            {"id": "files.read", "toolkit": "files", "category": "read",
+             "file_operation": "read", "enabled": True,
+             "parameters": {"path": {"type": "string", "required": True}}},
+        ]}),
+        encoding="utf-8",
+    )
+    catalog = load_catalog(str(tools_yaml), tier1)
+    service.catalog = catalog
+
+    captured: dict[str, str | None] = {}
+    from gatekeeper import execute_file as _ef
+
+    async def spy_run(**kwargs):
+        captured["run_as"] = kwargs.get("run_as")
+        from gatekeeper.execute import Result, OUTCOME_OK
+        return Result(outcome=OUTCOME_OK, exit_code=0, stdout="", stderr="",
+                       truncated=False, duration_ms=0)
+
+    monkeypatch.setattr(_ef, "run", spy_run)
+
+    path = os.path.join(str(tmp_path), "x.txt")
+    asyncio.run(service.call(identity, "files.read", {"path": path}))
+    assert captured["run_as"] == "3001:3001", (
+        f"expected toolkit-level run_as '3001:3001'; got {captured['run_as']!r}"
+    )
+
+
+def test_tool_run_as_empty_string_clears_toolkit_run_as(tmp_path, monkeypatch):
+    """An empty string run_as on the tool explicitly clears the toolkit's.
+
+    The use case: a toolkit with `run_as: root` for write tools, and a
+    read tool that does not need the privilege and should run as the
+    container user instead."""
+    service, identity = _service_env(tmp_path, toolkit_run_as="root")
+
+    tier1 = service.tier1
+    tools_yaml = tmp_path / "tools_clear_runas.yaml"
+    tools_yaml.write_text(
+        yaml.safe_dump({"tools": [
+            {"id": "files.read", "toolkit": "files", "category": "read",
+             "file_operation": "read", "enabled": True, "run_as": "",
+             "parameters": {"path": {"type": "string", "required": True}}},
+        ]}),
+        encoding="utf-8",
+    )
+    catalog = load_catalog(str(tools_yaml), tier1)
+    service.catalog = catalog
+
+    captured: dict[str, str | None] = {}
+    from gatekeeper import execute_file as _ef
+
+    async def spy_run(**kwargs):
+        captured["run_as"] = kwargs.get("run_as")
+        from gatekeeper.execute import Result, OUTCOME_OK
+        return Result(outcome=OUTCOME_OK, exit_code=0, stdout="", stderr="",
+                       truncated=False, duration_ms=0)
+
+    monkeypatch.setattr(_ef, "run", spy_run)
+
+    path = os.path.join(str(tmp_path), "x.txt")
+    asyncio.run(service.call(identity, "files.read", {"path": path}))
+    assert captured["run_as"] is None, (
+        f"empty-string run_as should clear to None; got {captured['run_as']!r}"
+    )
