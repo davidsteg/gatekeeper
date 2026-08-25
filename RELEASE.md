@@ -60,6 +60,10 @@ cannot. It is in every release.
 
 ---
 
+## 0.36.4
+
+**Fix: the `files.write` test tool in `test_runas.py` was missing its `content` parameter — the service-call test passed `{"path": ..., "content": "x"}` but the tool spec only declared `path`, so `service.call` raised `param_unknown: Unknown parameter 'content'`. Added the `content` parameter with `pattern: "[\\s\\S]*"` and `allow_control_characters: true`, matching the real `file-tools.yaml` example.**
+
 ## 0.36.3
 
 **Fix: one test helper in `test_runas.py` still had `"pattern": "^/"` (line 1187) — the `replaceAll` edit missed it because of a slightly different formatting. `re.fullmatch('^/', '/tmp/x.txt')` returns `None`, causing the service-call test to fail with `param_invalid`. Changed to `^/.*`.**
