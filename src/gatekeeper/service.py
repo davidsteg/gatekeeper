@@ -343,6 +343,20 @@ class Service:
             elif toolkit.executor == "file":
                 from .execute_file import run as _file_run
                 assert tool.file_operation is not None
+                # Per-tool `run_as` wins over the toolkit's. The tool-level
+                # field (catalog.ToolDef.run_as) is None when unset, "" when
+                # explicitly cleared, or a user name/uid:gid when set. None
+                # means "inherit the toolkit"; anything else overrides it.
+                # This is the fix for the bug where write/patch ignored a
+                # per-tool `run_as: root` and fell back to the toolkit's
+                # `run_as: 568:568` -- read worked only by coincidence of
+                # the toolkit also happening to set root, and write/patch
+                # on a toolkit with a different default failed silently.
+                effective_run_as = tool.run_as
+                if effective_run_as is None:
+                    effective_run_as = toolkit.run_as
+                elif effective_run_as == "":
+                    effective_run_as = None
                 result = await _file_run(
                     operation=tool.file_operation,
                     path=values.get("path", ""),
@@ -357,7 +371,9 @@ class Service:
                     # Tier 1, never a parameter: which user the operation
                     # runs as is fixed on the toolkit at deploy time, the
                     # same way FR-8.3i fixes a destination in the tool id.
-                    run_as=toolkit.run_as,
+                    # A per-tool override is also Tier 1 (tools.yaml, not
+                    # agent-supplied), and narrows the toolkit's authority.
+                    run_as=effective_run_as,
                 )
             else:
                 assert toolkit.executor == "truenas" and rpc_call is not None
