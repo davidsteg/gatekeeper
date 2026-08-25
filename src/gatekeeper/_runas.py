@@ -226,20 +226,17 @@ def can_change_user() -> bool:
     return bool(caps & (1 << CAP_SETUID)) and bool(caps & (1 << CAP_SETGID))
 
 
-def _clear_capabilities() -> None:
-    """Empties the effective, permitted and inheritable capability sets.
+def capset(effective: int, permitted: int, inheritable: int) -> None:
+    """Writes this process's three capability sets, as bitmasks.
 
-    Needed only on the path where the process was *not* uid 0 to begin
-    with. Dropping from root to a lesser uid makes the kernel clear the
-    capability sets by itself; changing between two non-root uids does
-    not, so a process holding ambient `CAP_SETUID` would come out of the
-    drop still able to call `setuid(0)` -- the one thing `become` exists to
-    prevent.
+    The one place in the codebase that speaks the `capset` ABI, because
+    two callers need it in opposite directions: `_clear_capabilities`
+    below empties every set for a child that has just dropped, and
+    `_selfdrop` keeps exactly two across the server's own drop.
 
-    Lowering one's own capabilities never requires a capability of its own,
-    so this cannot fail for lack of privilege. The ambient set needs no
-    separate call: the kernel keeps it a subset of the permitted set and
-    empties it along with this one.
+    Lowering one's own capabilities never needs a capability of its own.
+    *Raising* effective from what is already permitted needs none either.
+    Only widening the permitted set would, and nothing here does that.
     """
     import ctypes
 
@@ -255,10 +252,32 @@ def _clear_capabilities() -> None:
 
     libc = ctypes.CDLL(None, use_errno=True)
     header = _Header(_CAP_VERSION_3, 0)
-    data = (_Data * 2)()  # zeroed by construction: every set emptied
+    data = (_Data * 2)()
+    # The low 32 bits only: every capability this codebase names lives
+    # there, and the second word stays zero, which is what clears the
+    # high half rather than leaving it as it was.
+    data[0].effective = effective & 0xFFFFFFFF
+    data[0].permitted = permitted & 0xFFFFFFFF
+    data[0].inheritable = inheritable & 0xFFFFFFFF
     if libc.capset(ctypes.byref(header), ctypes.byref(data)) != 0:
         errno = ctypes.get_errno()
         raise OSError(errno, os.strerror(errno), "capset")
+
+
+def _clear_capabilities() -> None:
+    """Empties the effective, permitted and inheritable capability sets.
+
+    Needed only on the path where the process was *not* uid 0 to begin
+    with. Dropping from root to a lesser uid makes the kernel clear the
+    capability sets by itself; changing between two non-root uids does
+    not, so a process holding ambient `CAP_SETUID` would come out of the
+    drop still able to call `setuid(0)` -- the one thing `become` exists to
+    prevent.
+
+    The ambient set needs no separate call: the kernel keeps it a subset
+    of the permitted set and empties it along with this one.
+    """
+    capset(0, 0, 0)
 
 
 #: `PR_SET_NO_NEW_PRIVS` (`linux/prctl.h`).
