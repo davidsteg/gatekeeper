@@ -60,7 +60,7 @@ cannot. It is in every release.
 
 ---
 
-## 0.34.2
+## 0.36.5
 
 **Reported: new tools reach `admin.tool_list` but never the agent's `/mcp` catalog until the container is restarted. The running process is not the stale half — it serves the new tool on the very next request, and it is callable on the same connection. What is missing is anything telling a connected client to ask again.**
 
@@ -92,6 +92,57 @@ change for every connected agent — session ids, `Mcp-Session-Id` handling,
 and reconnect semantics — not something to switch on as a side effect of a
 bug report. It is the one open decision, and it belongs to whoever runs the
 agents.
+## 0.36.4
+
+**Fix: the `files.write` test tool in `test_runas.py` was missing its `content` parameter — the service-call test passed `{"path": ..., "content": "x"}` but the tool spec only declared `path`, so `service.call` raised `param_unknown: Unknown parameter 'content'`. Added the `content` parameter with `pattern: "[\\s\\S]*"` and `allow_control_characters: true`, matching the real `file-tools.yaml` example.**
+
+## 0.36.3
+
+**Fix: one test helper in `test_runas.py` still had `"pattern": "^/"` (line 1187) — the `replaceAll` edit missed it because of a slightly different formatting. `re.fullmatch('^/', '/tmp/x.txt')` returns `None`, causing the service-call test to fail with `param_invalid`. Changed to `^/.*`.**
+
+## 0.36.2
+
+**Fix: the 0.36.1 test pattern `^/` failed `fullmatch` validation — `re.fullmatch('^/', '/tmp/x.txt')` returns `None` because `fullmatch` requires the entire string to match, not just a prefix. Changed to `^/.*` which matches any absolute path fully.**
+
+## 0.36.1
+
+**Fix: the 0.36.0 tests failed in CI — ruff flagged an unsorted import in `catalog.py` (the new `_runas` import was placed after `errors` instead of before it alphabetically), and the new `test_runas.py` tests created tool parameters without the `pattern` field that FR-5.7 requires for string parameters.**
+
+Both are test-only fixes; no runtime behavior change. The import order is corrected (`._runas` before `.errors`), and all test helpers that create tool specs now include `"pattern": "^/"` on string parameters.
+
+## 0.36.0
+
+**Fix: per-tool `run_as` was silently ignored — `service.py:360` always used `toolkit.run_as`, so a tool spec that declared `run_as: root` while its toolkit declared `run_as: 568:568` would silently run write/patch as uid 568. Read worked only by coincidence of the toolkit also setting root; write/patch on a toolkit with a different default failed with "The operation ran as uid=568" instead of as the tool's requested user.**
+
+The root cause: `ToolDef` (catalog.py) had no `run_as` field. A `run_as` in the tool spec YAML was parsed by neither `parse_tool_spec` nor validated — it sat in the raw YAML, visible in `admin.tool_get`, but never reached the executor. `service.py` hardcoded `run_as=toolkit.run_as` at the call site, so the tool-level value was invisible to every operation.
+
+`ToolDef.run_as` now exists (file executor only). `parse_tool_spec` parses and validates it with the same `parse_run_as` the toolkit level uses — a bad value fails at startup, not on the first call. `None` (or unset) inherits the toolkit's `run_as`; an empty string explicitly clears it (run as the container user, regardless of what the toolkit says). `service.py` resolves the effective `run_as` as `tool.run_as if tool.run_as is not None else toolkit.run_as`, with the empty string mapped to `None` (no run_as — in-process).
+
+The common case this enables: a `file` toolkit with `run_as: root` for write tools, and a read tool on the same toolkit that sets `run_as: ""` to run as the container user — the read tool does not need the privilege, and this avoids spawning the helper child for it. The field is `tools.yaml` (Tier 1, console-writable), not agent-supplied — it narrows the toolkit's authority, never widens it.
+
+Tests: `test_runas.py` gains a catalog-parsing section (per-tool run_as parsed, empty string is explicit clear, null is none, malformed aborts) and a service-path section (tool run_as wins over toolkit, tool without run_as inherits toolkit, empty string clears toolkit). The service-path tests intercept `execute_file.run` to assert the `run_as` argument — they do not need root, because the bug is in the wiring, not the privilege.
+
+## 0.35.1
+
+**Fix: the `GATEKEEPER_KEEP_CAPS` tests from 0.35.0 failed in the CI root job because the test container lacked `CAP_DAC_OVERRIDE`/`CAP_DAC_READ_SEARCH` in its bounding set, and the "without KEEP_CAPS" test created a file owned by root (which `run_as: root` could read as the owner).**
+
+The CI `tests (root)` job runs in a `python:3.12-slim` container that only had `CAP_SETUID`/`CAP_SETGID`. The `GATEKEEPER_KEEP_CAPS` tests call `capset` to put `DAC_OVERRIDE`/`DAC_READ_SEARCH` into the permitted set — but `capset` can only add capabilities that are in the bounding set, so it failed with EPERM. The workflow now adds `--cap-add CAP_DAC_OVERRIDE --cap-add CAP_DAC_READ_SEARCH` to the container options, matching what a real deployment would grant.
+
+The end-to-end test `test_without_keep_caps_run_as_root_cannot_read_foreign_file` created a 0600 file owned by root and expected `run_as: root` to fail — but root IS the owner, so it read fine. The file is now `chown`ed to uid 568 so root is genuinely foreign to it, making the "without KEEP_CAPS → Permission denied" assertion meaningful.
+
+## 0.35.0
+
+**Fix: explicitly `cap_add`-ed DAC capabilities (`CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`) were silently discarded by the startup privilege drop, so `run_as: root` could not read files owned by other users even when the container had been granted those capabilities.**
+
+The startup drop (`_selfdrop.py`) hardcoded `_KEPT = CAP_SETUID | CAP_SETGID` and called `capset(_KEPT, _KEPT, _KEPT)`, discarding everything else in step 3 of the drop. A deployment that added `DAC_OVERRIDE` and `DAC_READ_SEARCH` to `cap_add` — the standard way to let `run_as: root` read foreign 0600 files — would see `docker inspect` report the caps in `CapAdd` but `/proc/1/status` show `CapEff=00000000000000c0` (only SETUID+SETGID), and every `run_as: root` read of a file it did not own would fail with `Permission denied`.
+
+`GATEKEEPER_KEEP_CAPS` now names the extra capabilities to carry through the drop, in Docker `cap_add` notation (`DAC_OVERRIDE,DAC_READ_SEARCH`; a `CAP_` prefix is accepted too). The extras are kept in the **permitted**, **inheritable** and **ambient** sets but **not the effective set** — the server process itself cannot use them, only the `run_as` child can after inheriting them from the ambient set on `execve`. This is the narrowest split that lets a privileged child read foreign files without the server itself being able to. The base two (`SETUID`+`SETGID`) remain hardcoded and always kept; extras are opt-in.
+
+An unknown capability name is a startup error, not a silent skip — the operator typed it for a reason, and carrying on without it would produce the exact "looks like a bug" failure this module exists to make legible. When no toolkit declares `run_as`, startup discards the extras along with the base two (`discard_capabilities`), so the common case still ends up holding nothing.
+
+The startup warning for `run_as: root` in a container without DAC caps now checks both the server's effective set *and* the child's ambient set (via `child_bypasses_file_permissions`), so a deployment with `GATEKEEPER_KEEP_CAPS` no longer gets a false alarm. The warning message names the new env var as the fix.
+
+Tests: `_selfdrop.py` gains a section for `GATEKEEPER_KEEP_CAPS` — off by default, empty string is zero, unknown name is refused, `CAP_` prefix accepted, extras in CapPrm/CapInh/CapAmb but not CapEff, extras survive exec into the child, and end-to-end `run_as: root` reads a 0600 foreign file with `KEEP_CAPS` and fails without it. The root-requiring tests run in the `tests (root)` CI job.
 
 ## 0.34.1
 

@@ -17,7 +17,7 @@ import textwrap
 
 import pytest
 
-from gatekeeper._runas import CAP_SETGID, CAP_SETUID
+from gatekeeper._runas import CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH, CAP_SETGID, CAP_SETUID
 
 IS_ROOT = os.geteuid() == 0
 _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -388,3 +388,224 @@ def test_root_own_group_is_not_carried_across():
     )
     assert completed.returncode == 0, completed.stderr
     assert eval(completed.stdout.strip()) == []  # noqa: S307
+
+
+# -- 6. GATEKEEPER_KEEP_CAPS ----------------------------------------------
+#
+# The base two (SETUID+SETGID) are always kept. GATEKEEPER_KEEP_CAPS names
+# extras to carry through the drop into the run_as child's ambient set.
+# The split: extras are in permitted/inheritable/ambient but NOT effective
+# -- the server itself cannot use them, only the child can after execve.
+
+_DAC_CAPS = (1 << CAP_DAC_OVERRIDE) | (1 << CAP_DAC_READ_SEARCH)
+
+
+def test_keep_caps_off_by_default():
+    """No env var, no extras -- the base two only, as before."""
+    completed = _probe(
+        """
+        from gatekeeper._selfdrop import configured_extra_caps
+        assert configured_extra_caps() == 0
+        print("zero")
+        """,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "zero"
+
+
+def test_keep_caps_empty_string_is_zero():
+    """An empty GATEKEEPER_KEEP_CAPS is the same as unset."""
+    completed = _probe(
+        """
+        from gatekeeper._selfdrop import configured_extra_caps
+        assert configured_extra_caps() == 0
+        print("zero")
+        """,
+        GATEKEEPER_KEEP_CAPS="",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "zero"
+
+
+def test_keep_caps_unknown_name_is_refused():
+    """An unknown capability name is a config error, not a silent skip."""
+    completed = _probe(
+        """
+        from gatekeeper._selfdrop import SelfDropError, configured_extra_caps
+        try:
+            configured_extra_caps()
+        except SelfDropError as exc:
+            print("refused:", exc)
+        """,
+        GATEKEEPER_KEEP_CAPS="NONSENSE",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "refused:" in completed.stdout
+    assert "NONSENSE" in completed.stdout
+
+
+def test_keep_caps_accepts_cap_prefix():
+    """Both ``DAC_OVERRIDE`` and ``CAP_DAC_OVERRIDE`` are valid."""
+    completed = _probe(
+        """
+        from gatekeeper._selfdrop import configured_extra_caps
+        bits = configured_extra_caps()
+        print(f"{bits:x}")
+        """,
+        GATEKEEPER_KEEP_CAPS="CAP_DAC_OVERRIDE,DAC_READ_SEARCH",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert int(completed.stdout.strip(), 16) == _DAC_CAPS
+
+
+@needs_root
+def test_keep_caps_preserves_extras_in_permitted_inheritable_ambient():
+    """The extras survive the drop in CapPrm, CapInh, CapAmb -- but not CapEff.
+
+    This is the split: the server process cannot use DAC_OVERRIDE directly,
+    only the run_as child can after inheriting it from the ambient set on
+    execve. CapEff stays at the base two (SETUID+SETGID).
+    """
+    completed = _probe(
+        _UNDER_NNP,
+        f"""
+        from gatekeeper._runas import capability_sets
+        from gatekeeper._selfdrop import drop_privileges
+
+        uid, gid = drop_privileges("{DROP_UID}:{DROP_UID}")
+        print(os.getresuid(), os.getresgid(), sorted(capability_sets().items()))
+        """,
+        GATEKEEPER_KEEP_CAPS="DAC_OVERRIDE,DAC_READ_SEARCH",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert f"({DROP_UID}, {DROP_UID}, {DROP_UID})" in completed.stdout
+    held = dict(eval(completed.stdout[completed.stdout.index("["):]))  # noqa: S307
+    kept = KEPT | _DAC_CAPS
+    # Effective: base two only -- the server itself cannot use the extras.
+    assert held["CapEff"] == KEPT, f"CapEff={held['CapEff']:016x}, want {KEPT:016x}"
+    # Permitted, inheritable, ambient: the full kept set including extras.
+    for field in ("CapPrm", "CapInh", "CapAmb"):
+        assert held[field] == kept, f"{field}={held[field]:016x}, want {kept:016x}"
+
+
+@needs_root
+def test_keep_caps_extras_survive_exec_into_child():
+    """The extras reach the run_as child through the ambient set.
+
+    The child (here simulated by exec'ing /bin/cat) inherits the extras
+    from ambient on execve, so its CapEff includes DAC_OVERRIDE. This is
+    the mechanism that lets ``run_as: root`` read files owned by other
+    users when GATEKEEPER_KEEP_CAPS is configured.
+    """
+    completed = _probe(
+        _UNDER_NNP,
+        f"""
+        from gatekeeper._selfdrop import drop_privileges
+
+        drop_privileges("{DROP_UID}:{DROP_UID}")
+        os.execv("/bin/cat", ["/bin/cat", "/proc/self/status"])
+        """,
+        GATEKEEPER_KEEP_CAPS="DAC_OVERRIDE,DAC_READ_SEARCH",
+    )
+    assert completed.returncode == 0, completed.stderr
+    status = {
+        line.split(":", 1)[0]: line.split(":", 1)[1].strip()
+        for line in completed.stdout.splitlines()
+        if ":" in line
+    }
+    assert status["NoNewPrivs"] == "1"
+    kept = KEPT | _DAC_CAPS
+    # The child's CapEff includes the extras -- inherited from ambient.
+    assert int(status["CapEff"], 16) == kept, (
+        f"CapEff={status['CapEff']}, want {kept:016x}"
+    )
+    assert int(status["CapPrm"], 16) == kept
+
+
+@needs_root
+def test_keep_caps_run_as_root_reads_foreign_file(tmp_path):
+    """End-to-end: run_as: root reads a 0600 file owned by another uid.
+
+    Without GATEKEEPER_KEEP_CAPS, this would fail with Permission denied
+    because root in the container has no DAC_OVERRIDE. With it, the child
+    inherits DAC_OVERRIDE from ambient and reads the file.
+    """
+    root = _traversable(str(tmp_path))
+    os.chmod(root, 0o777)
+
+    # Create a file owned by a non-root uid (568), mode 0600 -- unreadable
+    # to uid 0 without DAC_OVERRIDE. The test process is root, so it can
+    # chown to 568; the dropped-to uid is also 568, but the child becomes
+    # uid 0 via run_as="0:0", so it is NOT the owner and cannot read it
+    # without the DAC capability.
+    foreign = os.path.join(root, "foreign-0600.txt")
+    with open(foreign, "w") as f:
+        f.write("secret")
+    os.chown(foreign, DROP_UID, DROP_UID)
+    os.chmod(foreign, 0o600)
+
+    completed = _probe(
+        _UNDER_NNP,
+        f"""
+        import asyncio
+        from gatekeeper._selfdrop import drop_privileges
+        from gatekeeper.execute_file import run as file_run
+
+        drop_privileges("{DROP_UID}:{DROP_UID}")
+        assert os.geteuid() == {DROP_UID}
+
+        result = asyncio.run(file_run(
+            operation="read", path={foreign!r},
+            path_roots=[{root!r}], protected=[],
+            timeout_seconds=30, max_output_bytes=65536, idempotent=True,
+            run_as="0:0",
+        ))
+        print("outcome", result.outcome, repr(result.stdout[:20]))
+        """,
+        GATEKEEPER_KEEP_CAPS="DAC_OVERRIDE,DAC_READ_SEARCH",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "outcome ok" in completed.stdout, completed.stdout
+    assert "secret" in completed.stdout
+
+
+@needs_root
+def test_without_keep_caps_run_as_root_cannot_read_foreign_file(tmp_path):
+    """The flip side: without GATEKEEPER_KEEP_CAPS, run_as: root is checked
+    against file modes like any other user and cannot read a 0600 file it
+    does not own. This is the documented, expected behavior.
+    """
+    root = _traversable(str(tmp_path))
+    os.chmod(root, 0o777)
+
+    # Owned by 568, mode 0600: root (uid 0) is not the owner and without
+    # DAC_OVERRIDE cannot read it.
+    foreign = os.path.join(root, "foreign-0600.txt")
+    with open(foreign, "w") as f:
+        f.write("secret")
+    os.chown(foreign, DROP_UID, DROP_UID)
+    os.chmod(foreign, 0o600)
+
+    completed = _probe(
+        _UNDER_NNP,
+        f"""
+        import asyncio
+        from gatekeeper._selfdrop import drop_privileges
+        from gatekeeper.execute_file import run as file_run
+
+        drop_privileges("{DROP_UID}:{DROP_UID}")
+        assert os.geteuid() == {DROP_UID}
+
+        result = asyncio.run(file_run(
+            operation="read", path={foreign!r},
+            path_roots=[{root!r}], protected=[],
+            timeout_seconds=30, max_output_bytes=65536, idempotent=True,
+            run_as="0:0",
+        ))
+        print("outcome", result.outcome, repr(result.stderr[:60]))
+        """,
+        # No GATEKEEPER_KEEP_CAPS -- the default behavior.
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "outcome failed" in completed.stdout, completed.stdout
+    assert "Permission denied" in completed.stdout

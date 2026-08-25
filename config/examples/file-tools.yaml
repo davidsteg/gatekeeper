@@ -7,6 +7,11 @@
 # with allow_control_characters: true -- they are written verbatim, never interpreted
 # as argv/URL/RPC structure, so real file content (newlines, tabs) must pass FR-6.3.
 #
+# Per-tool run_as (since 0.36.0): a tool can carry its own `run_as`, which
+# wins over the toolkit's. None/unset inherits the toolkit; "" explicitly
+# clears it (run as the container user). Use this when a read tool does not
+# need the privilege a write tool on the same toolkit does.
+#
 # To install: admin.tool_create for each tool, then enable + grant to homelab.
 
 tools:

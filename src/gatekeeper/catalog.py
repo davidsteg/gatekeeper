@@ -15,6 +15,7 @@ from typing import Any
 
 import yaml
 
+from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, Tier1Violation, read_config_file
 from .tier1 import Tier1, Toolkit
 
@@ -114,6 +115,16 @@ class ToolDef:
     #: One of ``read``/``write``/``patch``/``list``. The path comes from
     #: a parameter (validated against ``path_roots`` at call time).
     file_operation: str | None = None
+
+    #: Per-tool override of the toolkit's ``run_as`` (file executor only).
+    #: ``None`` -- the default -- means "use the toolkit's ``run_as``", so a
+    #: toolkit-level value still applies unless a tool explicitly names a
+    #: different user. An empty string explicitly clears it: the tool runs
+    #: as the container user regardless of what the toolkit says. This is
+    #: the one place a tool can narrow the toolkit's authority without a
+    #: redeploy -- the common case is a read-only tool that does not need
+    #: the privilege a write tool on the same toolkit does.
+    run_as: str | None = None
 
     # -- Multi-destination (FR-8.3h) ------------------------------------
     #: Set only on the destination-qualified copies produced by
@@ -341,6 +352,10 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     rpc_method: str | None = None
     params_template: dict[str, str] | None = None
     file_operation: str | None = None
+    #: Per-tool run_as override -- only the `file` branch sets this; the
+    #: other executors leave it at None, and a `run_as` on a non-file tool
+    #: is rejected by tier1.py at load time.
+    tool_run_as: str | None = None
     #: Every template string that may contain a `{param}` placeholder --
     #: collected here so the typo guard below covers all executor shapes
     #: uniformly, the same way it already covers argv/scopes/derived.
@@ -386,6 +401,31 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
             )
         file_operation = op
 
+        # Per-tool `run_as` override (file executor only). The toolkit's
+        # own `run_as` is parsed in tier1.py; this is the tool-level field
+        # that can narrow it. An empty string is distinct from unset: it
+        # means "run as the container user, not what the toolkit says".
+        # The same parse/validate as tier1.py applies, so a bad value
+        # fails at startup rather than on the first call.
+        tool_run_as: str | None = None
+        if "run_as" in spec:
+            raw_run_as = spec["run_as"]
+            if raw_run_as is None:
+                tool_run_as = None
+            else:
+                tool_run_as = str(raw_run_as).strip()
+                if tool_run_as:
+                    try:
+                        parse_run_as(tool_run_as)
+                    except RunAsError as exc:
+                        raise ConfigError(f"{where}: {exc}") from None
+                # An empty string after strip: explicit "no run_as" for
+                # this tool, overriding a toolkit-level value. Stored as
+                # an empty sentinel so service.py can tell "not set" (None,
+                # inherit toolkit) from "set to empty" (clear it).
+                if not tool_run_as:
+                    tool_run_as = ""
+
     # Every placeholder must point to a declared parameter. A typo
     # in the template would otherwise only surface at runtime -- and
     # then land as an unresolvable placeholder in the request.
@@ -420,6 +460,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         rpc_method=rpc_method,
         params_template=params_template,
         file_operation=file_operation,
+        run_as=tool_run_as,
     )
     _validate_against_tier1(tool, toolkit)
     return tool

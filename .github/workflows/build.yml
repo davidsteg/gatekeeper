@@ -138,15 +138,23 @@ jobs:
 
   test-privileged:
     name: tests (root)
-    # Tests, die eine Privilegiengrenze zusichern, ueberspringen sich selbst,
+    # Tests, die eine Privilegiengrenze zusichern, überspringen sich selbst,
     # wenn der Prozess nicht root ist -- auf dem normalen Runner also immer.
     # Damit lief ausgerechnet das in keinem Lauf mit: dass der Drop wirklich
-    # Autoritaet abgibt, dass root danach nicht zurueckzuholen ist, dass keine
-    # Capability uebrig bleibt, dass ein 'local'-Binary keine ambient Caps
-    # erbt. Ein Container-Job laeuft als root und schliesst diese Luecke.
+    # Autorität abgibt, dass root danach nicht zurückzuholen ist, dass keine
+    # Capability übrig bleibt, dass ein 'local'-Binary keine ambient Caps
+    # erbt. Ein Container-Job läuft als root und schließt diese Lücke.
+    #
+    # `options` gibt dem Container die Capabilities, die die GATEKEEPER_KEEP_CAPS
+    # Tests brauchen: DAC_OVERRIDE und DAC_READ_SEARCH müssen im Bounding Set
+    # sein, damit `capset` sie in den permitted/inheritable/ambient Set legen
+    # kann. Ohne sie schlägt der Drop mit EPERM fehl -- exakt der Mechanik, die
+    # der Bug reproduziert, nur hier im Test-Container statt im deployten
+    # Gatekeeper.
     runs-on: ubuntu-latest
     container:
       image: python:3.12-slim
+      options: --cap-add CAP_DAC_OVERRIDE --cap-add CAP_DAC_READ_SEARCH --cap-add CAP_SETUID --cap-add CAP_SETGID
     steps:
       - uses: actions/checkout@v4
 
