@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import time
 from typing import Any
 
@@ -50,12 +51,14 @@ def _build_argv(toolkit: Toolkit, google_action: str, args: list[str]) -> list[s
 
     `google_action` is a fixed string like ``"gmail search"`` (not
     agent-suppliable); `args` is the per-call tail built by
-    `validate.build_google_call`. The binary that runs is `python` --
-    fixed by this executor, not by the toolkit config, the same way
-    `http` fixes the transport. `google_script` is the script path;
-    `google_container` (optional) switches the call to
-    ``docker exec <container> python <script> ...`` for a deployment
-    that keeps google_api.py in another container on the same host.
+    `validate.build_google_call`. The binary that runs is the same
+    interpreter that is running gatekeeper (`sys.executable`, the same
+    idiom `conftest.py`'s `PYTHON` uses) -- never a bare `python`, which
+    some environments resolve to `python3` and some don't resolve at all.
+    `google_script` is the script path; `google_container` (optional)
+    switches the call to ``docker exec <container> python <script> ...``
+    for a deployment that keeps google_api.py in another container on the
+    same host.
     """
     assert toolkit.google_script is not None
     action_parts = google_action.split()
@@ -64,7 +67,7 @@ def _build_argv(toolkit: Toolkit, google_action: str, args: list[str]) -> list[s
             "docker", "exec", toolkit.google_container,
             "python", toolkit.google_script, *action_parts, *args,
         ]
-    return ["python", toolkit.google_script, *action_parts, *args]
+    return [sys.executable, toolkit.google_script, *action_parts, *args]
 
 
 def _interpret_exit(
