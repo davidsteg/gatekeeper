@@ -431,6 +431,10 @@ _DASHBOARD_ICON_CDN = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/s
 
 #: Toolkit names that need a slug different from the name itself.
 #: Most toolkits match directly (jellyfin → jellyfin.svg); these don't.
+#: Every slug here is verified to exist on the CDN — a 404 would leave
+#: a broken `<img>` with no `onerror` fallback (CSP forbids scripts),
+#: so a toolkit whose only match would be a non-existent icon is
+#: deliberately omitted and falls through to `_toolkit_badge`'s monogram.
 _DASHBOARD_ICON_SLUGS: dict[str, str] = {
     "hass": "home-assistant",
     "homeassistant": "home-assistant",
@@ -439,13 +443,8 @@ _DASHBOARD_ICON_SLUGS: dict[str, str] = {
     "sabnzbd": "sabnzbd",
     "paperless": "paperless-ngx",
     "jellyseerr": "jellyseerr",
-    "tdarr": "tdarr",
-    "diag": "stethoscope",
     "docker": "docker",
-    "file": "folder",
     "zfs": "truenas",
-    "http": "web",
-    "webui": "web",
 }
 
 
