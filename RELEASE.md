@@ -60,6 +60,14 @@ cannot. It is in every release.
 
 ---
 
+## 0.35.1
+
+**Fix: the `GATEKEEPER_KEEP_CAPS` tests from 0.35.0 failed in the CI root job because the test container lacked `CAP_DAC_OVERRIDE`/`CAP_DAC_READ_SEARCH` in its bounding set, and the "without KEEP_CAPS" test created a file owned by root (which `run_as: root` could read as the owner).**
+
+The CI `tests (root)` job runs in a `python:3.12-slim` container that only had `CAP_SETUID`/`CAP_SETGID`. The `GATEKEEPER_KEEP_CAPS` tests call `capset` to put `DAC_OVERRIDE`/`DAC_READ_SEARCH` into the permitted set — but `capset` can only add capabilities that are in the bounding set, so it failed with EPERM. The workflow now adds `--cap-add CAP_DAC_OVERRIDE --cap-add CAP_DAC_READ_SEARCH` to the container options, matching what a real deployment would grant.
+
+The end-to-end test `test_without_keep_caps_run_as_root_cannot_read_foreign_file` created a 0600 file owned by root and expected `run_as: root` to fail — but root IS the owner, so it read fine. The file is now `chown`ed to uid 568 so root is genuinely foreign to it, making the "without KEEP_CAPS → Permission denied" assertion meaningful.
+
 ## 0.35.0
 
 **Fix: explicitly `cap_add`-ed DAC capabilities (`CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`) were silently discarded by the startup privilege drop, so `run_as: root` could not read files owned by other users even when the container had been granted those capabilities.**
