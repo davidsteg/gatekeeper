@@ -60,6 +60,18 @@ cannot. It is in every release.
 
 ---
 
+## 0.38.2
+
+**The container's `TZ` env var now actually works: `tzdata` is installed in the image, so `TZ=America/New_York` (or any IANA zone) shifts the console's local-time display and the process logs away from UTC.**
+
+0.37.0 made every displayed timestamp local (activity chart, audit log table, recent activity, `datefmt="%Y-%m-%dT%H:%M:%S%z"` in the process logs), but `python:3.12-slim` has no timezone database — `TZ` was silently ignored and local == UTC everywhere. The fix:
+
+- **Dockerfile**: `tzdata` added to the runtime `apt-get install` (with `DEBIAN_FRONTEND=noninteractive` for the debconf prompt).
+- **compose.yaml**: documented `TZ` in the `environment:` block (commented, like the other optional settings — e.g. `TZ: "Europe/Berlin"`), plus the verification command `docker exec gatekeeper date '+%Y-%m-%dT%H:%M:%S%z (%Z)'`.
+- **CI smoke test**: the published-image smoke test now runs the image with `TZ=America/New_York` and fails the build if the clock does not shift (`-0400` in August / `-0500` in January — a `+0000` result means tzdata is missing again).
+
+No Python changes: `datetime.now().astimezone()`, `time.strftime("%z")` and `logging` all honor `TZ` once the database is present.
+
 ## 0.38.1
 
 **Fix: a `credential:` binding naming a credential the store does not have was never checked and never reported — startup went green, the console said "No credentials yet.", and the first agent call hours later reported "is not configured yet", which reads like a runtime fault instead of the deploy-time mistake it is.**

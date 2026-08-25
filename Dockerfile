@@ -57,8 +57,12 @@ FROM python:3.12-slim
 # procps provides /usr/bin/free, coreutils provides /usr/bin/df and /bin/cat.
 # Binaries must be at the exact paths listed in toolkits.yaml --
 # gatekeeper does not rely on PATH resolution (FR-4.1).
+# tzdata makes the container's 'TZ' env var actually work (see compose.yaml):
+# without it, python:3.12-slim has no timezone database and TZ=America/New_York
+# is silently ignored -- which would leave the 0.37.x local-time display
+# reporting UTC.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends procps \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends procps tzdata \
  && rm -rf /var/lib/apt/lists/* \
  && test -x /usr/bin/uptime && test -x /usr/bin/free \
  && test -x /usr/bin/df && test -x /bin/cat
