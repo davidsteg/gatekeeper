@@ -392,9 +392,10 @@ workflow, testing, and known pitfalls.
 ## What's not here (yet)
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full list with rationale.
-Short version: no OAuth2 (static credentials only), no `destinations:` on an
-`ssh` toolkit (one toolkit per host), no TrueNAS SCRAM mutual auth, and no
-nested `params_template` values for the `truenas` executor.
+Short version: OAuth2 is supported for Google Workspace via the `google`
+executor (0.38.0); no `destinations:` on an `ssh` toolkit (one toolkit per
+host), no TrueNAS SCRAM mutual auth, and no nested `params_template` values
+for the `truenas` executor.
 
 ---
 

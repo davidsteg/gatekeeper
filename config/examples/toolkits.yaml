@@ -195,6 +195,68 @@ toolkits:
     #
     # run_as: "3001:3001"
 
+  # FR-8.3a-f counterpart: the `google` executor runs `google_api.py` as a
+  # local subprocess (shell=False, argv list -- FR-5.3/5.4/6.1), the same
+  # model as `local`/`docker`, but the whitelist acts on *action strings*
+  # ("gmail search", "drive create-folder") instead of binaries, exactly
+  # like `allowed_rpc_methods` for truenas. OAuth2 is the one thing the
+  # `http` executor cannot do (FR-8.11) -- it only supports static
+  # credentials.
+  #
+  # OAuth2 credentials live in the credential store as a JSON bundle
+  # (kind=oauth2), created via /ui/credentials -- never in this file
+  # (FR-10.1). One credential named 'google' serves all three toolkits,
+  # and the refresh token's consent must cover every scope the tools need.
+  #
+  # `google_script` is the absolute path to google_api.py inside the
+  # container. If it lives in another container on the same Docker host,
+  # set `google_container` to that container's name instead -- the
+  # executor then runs `docker exec <container> python <script> ...`.
+  gmail:
+    executor: google
+    google_script: /opt/data/skills/productivity/google-workspace/scripts/google_api.py
+    allowed_google_actions:
+      - gmail search
+      - gmail get
+      - gmail send
+      - gmail reply
+      - gmail labels
+      - gmail modify
+    credential: google
+    max_timeout_seconds: 30
+    max_output_bytes: 131072
+
+  calendar:
+    executor: google
+    google_script: /opt/data/skills/productivity/google-workspace/scripts/google_api.py
+    allowed_google_actions:
+      - calendar list
+      - calendar create
+      - calendar delete
+    credential: google
+    max_timeout_seconds: 30
+    max_output_bytes: 131072
+
+  drive:
+    executor: google
+    google_script: /opt/data/skills/productivity/google-workspace/scripts/google_api.py
+    allowed_google_actions:
+      - drive search
+      - drive get
+      - drive upload
+      - drive download
+      - drive create-folder
+      - drive share
+      - drive delete
+    credential: google
+    # drive.upload / drive.download paths are sandboxed here -- an agent
+    # can only move files between Drive and this directory, never
+    # exfiltrate arbitrary gatekeeper files to Drive.
+    path_roots:
+      - /mnt/raid/gatekeeper/google-transfer
+    max_timeout_seconds: 60
+    max_output_bytes: 131072
+
 # FR-6.8
 rate_limits:
   read:

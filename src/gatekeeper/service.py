@@ -17,7 +17,7 @@ import tempfile
 from collections import Counter
 from typing import Any
 
-from . import execute, execute_http, execute_ssh, execute_truenas, validate
+from . import execute, execute_google, execute_http, execute_ssh, execute_truenas, validate
 from .audit import AuditLog
 from .catalog import Catalog, ToolDef, load_catalog
 from .credentials import CredentialStore
@@ -73,6 +73,10 @@ class Service:
         #: `invalidate_docker_tls_cache` (wired to CredentialStore.on_change
         #: by __main__.py, alongside the audit Redactor refresh).
         self._docker_tls_dirs: dict[str, str] = {}
+        #: credential name -> private temp HOME dir holding
+        #: .hermes/google_token.json, for the `google` executor. Cleared
+        #: on credential rotation via `invalidate_google_token_cache`.
+        self._google_token_dirs: dict[str, str] = {}
 
     # -- Registry ---------------------------------------------------------
 
@@ -174,6 +178,95 @@ class Service:
         """
         stale = list(self._docker_tls_dirs.values())
         self._docker_tls_dirs.clear()
+        for tmp_dir in stale:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def _google_token_env(self, cred_name: str | None) -> dict[str, str]:
+        """Materializes an `oauth2` credential to a per-call temp dir and
+        returns the env the `google` executor needs to point google_api.py
+        at it.
+
+        google_api.py reads ``~/.hermes/google_token.json`` from HOME -- so
+        we build a temp HOME containing ``.hermes/google_token.json`` with
+        the refresh-token bundle, and pass that HOME to the subprocess.
+        The token file is written chmod 600 (FR-10.2: the decrypted secret
+        never sits world-readable, even transiently) and the temp dir is
+        cleaned up by `invalidate_google_token_cache` on credential
+        rotation, mirroring `_docker_tls_env`'s cert materialization.
+
+        A fourth caller of `CredentialStore._resolve` alongside
+        `execute_http.py`/`execute_truenas.py`/`service.py`'s own
+        docker TLS path -- the google executor has no per-call request
+        object to thread a resolved credential through either, so the
+        materialization lives here, immediately before the subprocess
+        env is built.
+        """
+        if cred_name is None:
+            raise Denied(
+                DenialReason.CREDENTIAL_UNAVAILABLE,
+                "This google toolkit needs a credential configured.",
+            )
+        cached = self._google_token_dirs.get(cred_name)
+        if cached is not None:
+            return {"HOME": cached}
+        if self.credentials is None:
+            raise Denied(
+                DenialReason.CREDENTIAL_UNAVAILABLE,
+                "No credential store is configured, but this google toolkit needs one.",
+            )
+        resolved = self.credentials._resolve(cred_name)
+        if resolved is None:
+            raise Denied(
+                DenialReason.CREDENTIAL_UNAVAILABLE,
+                f"Credential {cred_name!r} is not configured yet.",
+            )
+        if resolved.kind != "oauth2":
+            raise Denied(
+                DenialReason.CREDENTIAL_UNAVAILABLE,
+                f"Credential {cred_name!r} is not an oauth2 credential.",
+            )
+        try:
+            bundle = json.loads(resolved.value)
+        except (json.JSONDecodeError, TypeError):
+            raise Denied(
+                DenialReason.CREDENTIAL_UNAVAILABLE,
+                f"Credential {cred_name!r} is not a valid oauth2 JSON bundle.",
+            ) from None
+        client_id = bundle.get("client_id")
+        client_secret = bundle.get("client_secret")
+        refresh_token = bundle.get("refresh_token")
+        if not (client_id and client_secret and refresh_token):
+            raise Denied(
+                DenialReason.CREDENTIAL_UNAVAILABLE,
+                f"Credential {cred_name!r} is missing client_id/client_secret/refresh_token.",
+            )
+        tmp_home = tempfile.mkdtemp(prefix="gatekeeper-google-")
+        os.chmod(tmp_home, 0o700)
+        hermes_dir = os.path.join(tmp_home, ".hermes")
+        os.makedirs(hermes_dir, exist_ok=True)
+        # google_api.py reads its token from ~/.hermes/google_token.json.
+        # The bundle is written verbatim -- google_api.py's own format,
+        # not one gatekeeper invented.
+        token = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        }
+        _write_private_file(
+            os.path.join(hermes_dir, "google_token.json"),
+            json.dumps(token),
+        )
+        self._google_token_dirs[cred_name] = tmp_home
+        return {"HOME": tmp_home}
+
+    def invalidate_google_token_cache(self) -> None:
+        """Wired to `CredentialStore.on_change` alongside the docker TLS
+        cache invalidation -- a rotated oauth2 credential is re-materialized
+        on next use instead of a stale refresh token being served from the
+        temp-dir cache indefinitely.
+        """
+        stale = list(self._google_token_dirs.values())
+        self._google_token_dirs.clear()
         for tmp_dir in stale:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -282,6 +375,8 @@ class Service:
             env: dict[str, str] | None = None
             http_request: tuple[str, str, dict[str, str], dict[str, str] | None] | None = None
             rpc_call: tuple[str, dict[str, str]] | None = None
+            google_call: tuple[str, list[str]] | None = None
+            google_env: dict[str, str] | None = None
             if toolkit.executor in ("docker", "local", "ssh"):
                 argv = validate.build_argv(tool, values, toolkit)
                 # Resolved here, inside the same try/except as everything
@@ -295,6 +390,14 @@ class Service:
                 http_request = validate.build_http_request(tool, values, toolkit)
             elif toolkit.executor == "truenas":
                 rpc_call = validate.build_rpc_call(tool, values, toolkit)
+            elif toolkit.executor == "google":
+                google_args = validate.build_google_call(tool, values, toolkit)
+                google_call = (tool.google_action or "", google_args)
+                # Resolved here, inside the same try/except as everything
+                # else: a missing/invalid OAuth credential is a Denied,
+                # audited like any other denial, not an exception escaping
+                # call() (FR-10.2). Analogous to `_environment` for docker.
+                google_env = self._google_token_env(toolkit.credential)
             elif toolkit.executor == "file":
                 pass  # parameters resolved directly into the call below
         except Denied as denial:
@@ -374,6 +477,24 @@ class Service:
                     # A per-tool override is also Tier 1 (tools.yaml, not
                     # agent-supplied), and narrows the toolkit's authority.
                     run_as=effective_run_as,
+                )
+            elif toolkit.executor == "google":
+                assert google_call is not None
+                google_action, google_args = google_call
+                # The OAuth token env was materialized in the try/except
+                # block above (google_env) -- a rotated credential between
+                # materialization and subprocess is not a concern here: the
+                # lock serializes calls per scope, and on_change clears the
+                # cache on the next call.
+                result = await execute_google.run(
+                    google_action=google_action,
+                    args=google_args,
+                    toolkit=toolkit,
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent,
+                    env=google_env,
+                    redact=self.audit.redact,
                 )
             else:
                 assert toolkit.executor == "truenas" and rpc_call is not None
@@ -475,6 +596,8 @@ class Service:
             return await execute_truenas.probe(toolkit)
         if toolkit.executor == "ssh":
             return await execute_ssh.probe(toolkit)
+        if toolkit.executor == "google":
+            return await execute_google.probe(toolkit)
         return False
 
     def render_metrics(self) -> str:

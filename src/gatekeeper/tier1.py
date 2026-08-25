@@ -21,7 +21,7 @@ from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, read_config_file
 
 #: Executor types implemented.
-KNOWN_EXECUTORS = frozenset({"docker", "local", "http", "truenas", "ssh", "file"})
+KNOWN_EXECUTORS = frozenset({"docker", "local", "http", "truenas", "ssh", "file", "google"})
 
 #: FR-8.6: methods an `http` toolkit may allow at all. A toolkit may
 #: narrow this further; it may never widen it.
@@ -132,6 +132,34 @@ class Toolkit:
     #: `ssh` are unaffected by this field existing -- accepting it there
     #: silently would promise something none of them implements.
     run_as: str | None = None
+
+    # -- `google` executor only ----------------------------------------
+    #
+    # The `google` executor runs `google_api.py` as a local subprocess
+    # (shell=False, argv list -- FR-5.3/5.4/6.1, same model as `local`/
+    # `docker`/`ssh`) and parses its JSON output. What differs from those
+    # is the whitelist acts on *action strings* ("gmail search",
+    # "calendar list") instead of binaries or path prefixes, and the
+    # OAuth credential is materialized to a per-call tempfile rather than
+    # passed as a header -- reuses the `allowed_rpc_methods` pattern from
+    # the truenas executor, the same way that one reuses `allowed_methods`'s
+    # field name.
+    #: Absolute path to google_api.py inside the container. Required for a
+    #: `google` toolkit; the binary that actually runs (python) is fixed by
+    #: the executor, not configured here -- the same way `http` fixes the
+    #: transport and only the toolkit chooses the target.
+    google_script: str | None = None
+    #: Optional: if set, the executor runs `docker exec <container> python
+    #: <google_script> ...` instead of a local `python <google_script> ...`.
+    #: A fallback for a deployment that keeps google_api.py and its deps in
+    #: another container on the same Docker host -- not the primary path,
+    #: but kept so the toolkit config can switch without a code change.
+    google_container: str | None = None
+    #: Whitelist of action strings this toolkit may ever call (FR-8.3c's
+    #: google counterpart). "gmail.send" simply never appears in a
+    #: read-only gmail toolkit's list -- there is no separate permission
+    #: to deny it, it structurally does not exist.
+    allowed_google_actions: tuple[str, ...] = ()
 
     def check_binary(self, binary: str) -> None:
         """FR-4.1: the executable must be exactly in the allowlist."""
@@ -245,6 +273,19 @@ class Toolkit:
         no separate 'permission' to deny it, it structurally does not exist.
         """
         return method in self.allowed_rpc_methods
+
+    # -- `google` executor ----------------------------------------------
+
+    def allows_google_action(self, action: str) -> bool:
+        """The whitelist acts on google_api.py action strings.
+
+        `gmail send` simply never appears in a read-only gmail toolkit's
+        list -- there is no separate permission to deny it, it structurally
+        does not exist. Mirrors `allows_rpc_method` for the same reason:
+        both are "the finite set of operations this toolkit may ever
+        perform", named differently by their respective protocols.
+        """
+        return action in self.allowed_google_actions
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -530,6 +571,9 @@ def load_tier1(path: str) -> Tier1:
         ssh_port = 22
         ssh_user: str | None = None
         ssh_known_hosts: str | None = None
+        google_script: str | None = None
+        google_container: str | None = None
+        allowed_google_actions: tuple[str, ...] = ()
 
         # `run_as` (file executor only). Parsed for every executor rather
         # than only inside the `file` branch below, so a `run_as` on an
@@ -637,6 +681,23 @@ def load_tier1(path: str) -> Tier1:
             )
             if not allowed_rpc_methods:
                 raise ConfigError(f"{where}: 'allowed_rpc_methods' must not be empty")
+        elif executor == "google":
+            google_script = str(_require(spec, "google_script", where))
+            if not _is_absolute(google_script):
+                raise ConfigError(
+                    f"{where}: 'google_script' must be an absolute path -- "
+                    "otherwise PATH decides what gets executed"
+                )
+            raw_container = spec.get("google_container")
+            if raw_container is not None:
+                google_container = str(raw_container)
+                if not google_container:
+                    raise ConfigError(f"{where}: 'google_container' must not be empty")
+            allowed_google_actions = _str_tuple(
+                _require(spec, "allowed_google_actions", where), where
+            )
+            if not allowed_google_actions:
+                raise ConfigError(f"{where}: 'allowed_google_actions' must not be empty")
 
         toolkits[name] = Toolkit(
             name=name,
@@ -662,6 +723,9 @@ def load_tier1(path: str) -> Tier1:
             ssh_user=ssh_user,
             ssh_known_hosts=ssh_known_hosts,
             run_as=run_as,
+            google_script=google_script,
+            google_container=google_container,
+            allowed_google_actions=allowed_google_actions,
         )
 
     limits = raw.get("rate_limits") or {}

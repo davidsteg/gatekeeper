@@ -49,10 +49,17 @@ from .errors import ConfigError
 #: header-auth option at all (SABnzbd's classic API), injected as a query
 #: parameter (named by `header`) directly by execute_http.py, never
 #: through a tool's own query_template.
+#: oauth2's value is a JSON bundle {"client_id", "client_secret",
+#: "refresh_token"} for the `google` executor -- materialized to a
+#: private tempfile (chmod 600) per call by Service, pointed at via HOME
+#: so google_api.py finds its token file, and removed afterwards. Never
+#: passed through argv (FR-10.2: a secret never sits in a process
+#: argument list that a `ps` on the host would reveal) or written back
+#: through ui.py.
 KINDS = frozenset(
     {
         "api_key_header", "bearer", "basic", "ws_api_key", "url_path",
-        "url_query", "docker_tls", "ssh_private_key",
+        "url_query", "docker_tls", "ssh_private_key", "oauth2",
     }
 )
 

@@ -116,6 +116,21 @@ class ToolDef:
     #: a parameter (validated against ``path_roots`` at call time).
     file_operation: str | None = None
 
+    # -- `google` executor (FR-8.3a-f counterpart) ---------------------
+    #: The google_api.py action string, fixed per tool (e.g. "gmail
+    #: search", "drive create-folder") -- not agent-suppliable, exactly
+    #: like `binary` for the argv executors and `rpc_method` for truenas.
+    #: Carries the real hyphen names ("create-folder"), not the
+    #: underscored tool-id suffix ("create_folder").
+    google_action: str | None = None
+    #: Ordered argument map: name -> {flag, positional}. `flag` is the
+    #: ``--name`` to emit (None for positional args); `positional` is
+    #: True when the value goes as a bare argv element, False when it
+    #: goes as a ``--flag value`` pair. Each entry resolves to exactly
+    #: one argv element's worth of value (FR-5.4: a parameter cannot
+    #: structurally produce an additional argument).
+    google_args: dict[str, dict[str, Any]] | None = None
+
     #: Per-tool override of the toolkit's ``run_as`` (file executor only).
     #: ``None`` -- the default -- means "use the toolkit's ``run_as``", so a
     #: toolkit-level value still applies unless a tool explicitly names a
@@ -298,6 +313,25 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
                 f"{toolkit.name!r}"
             )
 
+    elif toolkit.executor == "google":
+        if not toolkit.allows_google_action(tool.google_action or ""):
+            raise Tier1Violation(
+                f"{where}: google action {tool.google_action!r} is not in the "
+                f"allowlist {list(toolkit.allowed_google_actions)} of toolkit "
+                f"{toolkit.name!r}"
+            )
+        # A google tool may carry a `path` parameter (e.g. drive.upload's
+        # sandboxed file_path). FR-4.10 applies the same as for the argv
+        # executors: a tool may tighten the toolkit's path_roots, never
+        # widen them -- otherwise a google action could read arbitrary
+        # gatekeeper files and push them to Google Drive.
+        for param in tool.parameters.values():
+            if param.must_resolve_under:
+                try:
+                    toolkit.check_path_root(param.must_resolve_under)
+                except ConfigError as exc:
+                    raise Tier1Violation(f"{where}: {exc}") from exc
+
     _validate_ceilings(tool, toolkit, where)
 
 
@@ -352,6 +386,8 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     rpc_method: str | None = None
     params_template: dict[str, str] | None = None
     file_operation: str | None = None
+    google_action: str | None = None
+    google_args_val: dict[str, dict[str, Any]] | None = None
     #: Per-tool run_as override -- only the `file` branch sets this; the
     #: other executors leave it at None, and a `run_as` on a non-file tool
     #: is rejected by tier1.py at load time.
@@ -426,6 +462,49 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
                 if not tool_run_as:
                     tool_run_as = ""
 
+    elif toolkit.executor == "google":
+        google_action = spec.get("google_action")
+        if not isinstance(google_action, str) or not google_action:
+            raise ConfigError(f"{where}: field 'google_action' is missing")
+        raw_gargs = spec.get("google_args") or {}
+        if not isinstance(raw_gargs, dict):
+            raise ConfigError(f"{where}: 'google_args' must be a mapping")
+        google_args: dict[str, dict[str, Any]] = {}
+        for arg_name, arg_spec in raw_gargs.items():
+            if not isinstance(arg_name, str) or not arg_name:
+                raise ConfigError(f"{where}: google_args key must be a non-empty string")
+            if not isinstance(arg_spec, dict):
+                raise ConfigError(
+                    f"{where}: google_args.{arg_name!r} must be a mapping"
+                )
+            flag = arg_spec.get("flag")
+            positional = bool(arg_spec.get("positional", False))
+            if positional and flag is not None:
+                raise ConfigError(
+                    f"{where}: google_args.{arg_name!r} is positional and "
+                    "also sets 'flag' -- pick one"
+                )
+            if not positional and not flag:
+                raise ConfigError(
+                    f"{where}: google_args.{arg_name!r} is not positional "
+                    "and has no 'flag' -- a non-positional arg needs a flag name"
+                )
+            google_args[arg_name] = {
+                "flag": flag,
+                "positional": positional,
+            }
+            # The flag template is collected for the placeholder-typo guard
+            # below: a `{param}` in a flag name would be a configuration
+            # error (flags are fixed per action, not parameterised), but
+            # the value side is covered by `google_action`'s param refs.
+            all_templates.append(flag or "")
+        google_args_val = google_args
+        # google_action may itself contain no placeholders -- it is a
+        # fixed action string, not a template. But every google_args
+        # entry's value is a parameter name resolved at call time, so
+        # the typo guard below covers them via the `flag` collection
+        # above and the parameter existence check in build_google_call.
+
     # Every placeholder must point to a declared parameter. A typo
     # in the template would otherwise only surface at runtime -- and
     # then land as an unresolvable placeholder in the request.
@@ -460,6 +539,8 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         rpc_method=rpc_method,
         params_template=params_template,
         file_operation=file_operation,
+        google_action=google_action,
+        google_args=google_args_val,
         run_as=tool_run_as,
     )
     _validate_against_tier1(tool, toolkit)

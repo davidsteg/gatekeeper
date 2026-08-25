@@ -360,6 +360,51 @@ def build_rpc_call(
     return tool.rpc_method, params
 
 
+def build_google_call(
+    tool: ToolDef, values: dict[str, str], toolkit: Toolkit
+) -> list[str]:
+    """Builds the argv tail for the `google` executor and re-checks the
+    action against Tier 1.
+
+    `method` is fixed per tool (not agent-suppliable), so the Tier 1
+    re-check is an invariant assertion -- kept for the same reason as
+    `build_argv`'s `check_binary` re-check: consistency, and a defense
+    against a future bug.
+
+    Each google_args entry emits exactly one argv element's worth of
+    value (FR-5.4): a positional arg is the bare value; a flag arg is
+    the pair ``--flag value`` (two list elements, but only the value is
+    agent-controlled -- the flag name is fixed in the tool definition).
+    A parameter value therefore cannot structurally produce an
+    additional argument, regardless of its content.
+    """
+    assert tool.google_action is not None
+
+    if not toolkit.allows_google_action(tool.google_action):
+        raise Denied(
+            DenialReason.TIER1_VIOLATION,
+            f"Google action {tool.google_action!r} is not allowed for this toolkit.",
+        )
+
+    args: list[str] = []
+    for arg_name, arg_spec in (tool.google_args or {}).items():
+        if arg_name not in values:
+            raise Denied(
+                DenialReason.PARAM_MISSING,
+                f"google_args.{arg_name!r} needs a value.",
+            )
+        value = values[arg_name]
+        if arg_spec.get("positional"):
+            args.append(value)
+        else:
+            flag = arg_spec.get("flag")
+            assert flag is not None  # validated at parse time
+            args.append(flag)
+            args.append(value)
+
+    return args
+
+
 def resolve_scopes(tool: ToolDef, values: dict[str, str]) -> list[str]:
     """Resolves `required_scopes` with the validated parameter values."""
     scopes = []

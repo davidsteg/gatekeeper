@@ -192,6 +192,31 @@ def _tool_argv(
     }
 
 
+def _google_tool(
+    tool_id: str, *, toolkit: str, title: str, description: str,
+    google_action: str, google_args: dict[str, dict[str, Any]],
+    category: str = "read", idempotent: bool = True,
+    parameters: dict[str, Any] | None = None,
+    required_scopes: list[str] | None = None,
+    timeout_seconds: int = 30, max_output_bytes: int = 65536,
+) -> dict[str, Any]:
+    """The `google`-executor-shaped counterpart to `_tool()`/`_tool_argv()`.
+
+    `google_action` is the fixed action string (e.g. "gmail search",
+    "drive create-folder"); `google_args` maps each parameter name to
+    its argv shape -- ``{"positional": True}`` for a bare value,
+    ``{"flag": "--name"}`` for a ``--flag value`` pair. Each entry
+    resolves to exactly one argv element's worth of value (FR-5.4).
+    """
+    return {
+        "id": tool_id, "toolkit": toolkit, "version": 1, "title": title,
+        "description": description, "category": category, "idempotent": idempotent,
+        "enabled": False, "google_action": google_action, "google_args": google_args,
+        "parameters": parameters or {}, "required_scopes": required_scopes or [],
+        "timeout_seconds": timeout_seconds, "max_output_bytes": max_output_bytes,
+    }
+
+
 #: The *-arr apps and Jellyfin share one auth shape: an API key in a
 #: fixed header name, key query param also accepted by the target but
 #: never used by gatekeeper (FR-8.14).
@@ -1047,6 +1072,254 @@ _INTEGRATIONS_LIST: list[Integration] = [
                 description="Filesystem usage of the remote host.",
                 binary="/usr/bin/df", argv=["-h"],
                 timeout_seconds=10, max_output_bytes=8192,
+            ),
+        ),
+    ),
+    # -- Google (OAuth2 via the `google` executor) -------------------------
+    #
+    # Unlike the http-based integrations above, these use the `google`
+    # executor: google_api.py as a local subprocess (shell=False, argv
+    # list -- FR-5.3/5.4/6.1), OAuth2 credential materialized to a
+    # per-call tempfile (FR-10.2), JSON output capped and marked
+    # external_untrusted. One integration per Google API, each its own
+    # toolkit -- the same 1:1 toolkit-per-service model as sonarr/radarr.
+    Integration(
+        key="gmail",
+        display_name="Gmail",
+        logo_svg=_brand_logo("google_api"),
+        toolkit_yaml=(
+            "  gmail:\n"
+            "    executor: google\n"
+            '    google_script: "/opt/data/skills/productivity/google-workspace/scripts/google_api.py"\n'
+            "    # Optional: if google_api.py lives in another container on the\n"
+            "    # same Docker host, set google_container to its name instead of\n"
+            "    # mounting the script here. The executor runs\n"
+            "    # `docker exec <container> python <google_script> ...` then.\n"
+            "    # google_container: hermes-personal\n"
+            "    allowed_google_actions:\n"
+            "      - gmail search\n"
+            "      - gmail get\n"
+            "      - gmail send\n"
+            "      - gmail reply\n"
+            "      - gmail labels\n"
+            "      - gmail modify\n"
+            "    credential: google\n"
+            "    # An oauth2 credential: a JSON bundle\n"
+            "    # {\"client_id\": ..., \"client_secret\": ..., \"refresh_token\": ...}\n"
+            "    # created via /ui/credentials (kind=oauth2). Never in this file.\n"
+            "    max_timeout_seconds: 30\n"
+            "    max_output_bytes: 131072\n"
+        ),
+        credential_kind="oauth2",
+        notes=(
+            "OAuth2: create a credential named 'google' (kind=oauth2) in "
+            "/ui/credentials with a JSON bundle of client_id, client_secret, "
+            "and refresh_token. The refresh token's consent must cover all "
+            "scopes the tools need (gmail.readonly for reads, gmail.send for "
+            "sending, gmail.modify for label changes) -- otherwise the "
+            "write tools fail with 403 insufficient_scope. Google invalidates "
+            "unused refresh tokens after ~6 months; re-authorize if that happens."
+        ),
+        tool_specs=(
+            _google_tool(
+                "gmail.search", toolkit="gmail", title="Search mail",
+                description="Searches Gmail by query string.",
+                google_action="gmail search",
+                google_args={"query": {"positional": True}, "max_results": {"flag": "--max"}},
+                parameters={
+                    "query": {"type": "string", "required": True, "pattern": "^.{1,500}$",
+                               "description": "Gmail search query (e.g. is:unread from:david)."},
+                    "max_results": {"type": "integer", "required": False, "minimum": 1,
+                                     "maximum": 500, "description": "Max results (default 10)."},
+                },
+                required_scopes=["gmail.readonly"],
+            ),
+            _google_tool(
+                "gmail.get", toolkit="gmail", title="Get message",
+                description="Reads a full Gmail message by ID.",
+                google_action="gmail get",
+                google_args={"message_id": {"positional": True}},
+                parameters={
+                    "message_id": {"type": "string", "required": True,
+                                    "pattern": "^[a-zA-Z0-9]+$",
+                                    "description": "Gmail message ID."},
+                },
+                required_scopes=["gmail.readonly"],
+            ),
+            _google_tool(
+                "gmail.send", toolkit="gmail", title="Send mail",
+                description="Sends an email. Externally visible and not undoable.",
+                google_action="gmail send",
+                google_args={
+                    "to": {"flag": "--to"},
+                    "subject": {"flag": "--subject"},
+                    "body": {"flag": "--body"},
+                },
+                parameters={
+                    "to": {"type": "string", "required": True,
+                            "pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+                            "description": "Recipient email address."},
+                    "subject": {"type": "string", "required": True, "pattern": "^.{1,200}$",
+                                 "description": "Subject line."},
+                    "body": {"type": "string", "required": True, "pattern": "^.{1,30000}$",
+                              "description": "Plain-text body."},
+                },
+                category="write_external", idempotent=False,
+                required_scopes=["gmail.send"],
+            ),
+            _google_tool(
+                "gmail.labels", toolkit="gmail", title="List labels",
+                description="Lists all Gmail labels.",
+                google_action="gmail labels",
+                google_args={},
+                parameters={},
+                required_scopes=["gmail.readonly"],
+            ),
+        ),
+    ),
+    Integration(
+        key="calendar",
+        display_name="Google Calendar",
+        logo_svg=_brand_logo("google_api"),
+        toolkit_yaml=(
+            "  calendar:\n"
+            "    executor: google\n"
+            '    google_script: "/opt/data/skills/productivity/google-workspace/scripts/google_api.py"\n'
+            "    allowed_google_actions:\n"
+            "      - calendar list\n"
+            "      - calendar create\n"
+            "      - calendar delete\n"
+            "    credential: google\n"
+            "    max_timeout_seconds: 30\n"
+            "    max_output_bytes: 131072\n"
+        ),
+        credential_kind="oauth2",
+        notes=(
+            "Shares the 'google' oauth2 credential with the gmail toolkit. "
+            "Consent must cover calendar.events.readonly (reads) and "
+            "calendar.events (create/delete)."
+        ),
+        tool_specs=(
+            _google_tool(
+                "calendar.list", toolkit="calendar", title="List events",
+                description="Lists calendar events in a time window.",
+                google_action="calendar list",
+                google_args={"start": {"flag": "--start"}, "end": {"flag": "--end"}},
+                parameters={
+                    "start": {"type": "string", "required": True,
+                               "pattern": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}",
+                               "description": "Start time (ISO 8601, e.g. 2026-01-01T00:00:00Z)."},
+                    "end": {"type": "string", "required": True,
+                             "pattern": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}",
+                             "description": "End time (ISO 8601)."},
+                },
+                required_scopes=["calendar.events.readonly"],
+            ),
+            _google_tool(
+                "calendar.create", toolkit="calendar", title="Create event",
+                description="Creates a calendar event. Externally visible.",
+                google_action="calendar create",
+                google_args={
+                    "summary": {"flag": "--summary"},
+                    "start": {"flag": "--start"},
+                    "end": {"flag": "--end"},
+                },
+                parameters={
+                    "summary": {"type": "string", "required": True, "pattern": "^.{1,500}$",
+                                 "description": "Event title."},
+                    "start": {"type": "string", "required": True,
+                               "pattern": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}",
+                               "description": "Start time (ISO 8601)."},
+                    "end": {"type": "string", "required": True,
+                             "pattern": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}",
+                             "description": "End time (ISO 8601)."},
+                },
+                category="write_external", idempotent=False,
+                required_scopes=["calendar.events"],
+            ),
+            _google_tool(
+                "calendar.delete", toolkit="calendar", title="Delete event",
+                description="Deletes a calendar event. Externally visible and not undoable.",
+                google_action="calendar delete",
+                google_args={"event_id": {"positional": True}},
+                parameters={
+                    "event_id": {"type": "string", "required": True,
+                                  "pattern": "^[a-zA-Z0-9_]+$",
+                                  "description": "Google Calendar event ID."},
+                },
+                category="write_external", idempotent=False,
+                required_scopes=["calendar.events"],
+            ),
+        ),
+    ),
+    Integration(
+        key="drive",
+        display_name="Google Drive",
+        logo_svg=_brand_logo("google_api"),
+        toolkit_yaml=(
+            "  drive:\n"
+            "    executor: google\n"
+            '    google_script: "/opt/data/skills/productivity/google-workspace/scripts/google_api.py"\n'
+            "    allowed_google_actions:\n"
+            "      - drive search\n"
+            "      - drive get\n"
+            "      - drive upload\n"
+            "      - drive download\n"
+            "      - drive create-folder\n"
+            "      - drive share\n"
+            "      - drive delete\n"
+            "    credential: google\n"
+            "    path_roots:\n"
+            "      - /mnt/raid/gatekeeper/google-transfer\n"
+            "    max_timeout_seconds: 60\n"
+            "    max_output_bytes: 131072\n"
+        ),
+        credential_kind="oauth2",
+        notes=(
+            "Shares the 'google' oauth2 credential. drive.upload/download "
+            "paths are sandboxed to /mnt/raid/gatekeeper/google-transfer/ "
+            "(configure path_roots to match your mount). Consent must cover "
+            "drive.metadata.readonly (reads), drive.file (upload/folder/"
+            "delete), and drive (share)."
+        ),
+        tool_specs=(
+            _google_tool(
+                "drive.search", toolkit="drive", title="Search files",
+                description="Searches Google Drive by query.",
+                google_action="drive search",
+                google_args={"query": {"positional": True}},
+                parameters={
+                    "query": {"type": "string", "required": True, "pattern": "^.{1,500}$",
+                               "description": "Drive search query."},
+                },
+                required_scopes=["drive.metadata.readonly"],
+            ),
+            _google_tool(
+                "drive.get", toolkit="drive", title="Get file metadata",
+                description="Reads metadata for a Drive file by ID.",
+                google_action="drive get",
+                google_args={"file_id": {"positional": True}},
+                parameters={
+                    "file_id": {"type": "string", "required": True,
+                                 "pattern": "^[a-zA-Z0-9_-]+$",
+                                 "description": "Drive file ID."},
+                },
+                required_scopes=["drive.metadata.readonly"],
+            ),
+            _google_tool(
+                "drive.create_folder", toolkit="drive", title="Create folder",
+                description="Creates a folder in Google Drive.",
+                google_action="drive create-folder",
+                google_args={"name": {"positional": True}, "parent_id": {"flag": "--parent"}},
+                parameters={
+                    "name": {"type": "string", "required": True, "pattern": "^.{1,200}$",
+                              "description": "Folder name."},
+                    "parent_id": {"type": "string", "required": False,
+                                   "pattern": "^[a-zA-Z0-9_-]+$",
+                                   "description": "Parent folder ID (optional)."},
+                },
+                category="write", idempotent=False,
+                required_scopes=["drive.file"],
             ),
         ),
     ),

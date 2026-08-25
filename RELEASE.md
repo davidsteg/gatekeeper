@@ -60,6 +60,40 @@ cannot. It is in every release.
 
 ---
 
+## 0.38.0
+
+**New `google` executor: Gmail, Google Calendar, and Google Drive via OAuth2, isolated per grant.**
+
+The `http` executor supports static credentials only (FR-8.11) — bearer, API-key header, basic. Google Workspace APIs (Gmail, Calendar, Drive) require OAuth2, which is a separate subsystem (REQUIREMENTS.md §17, ROADMAP.md: the trigger was "a concrete service enforces OAuth"). This release adds that subsystem as a new executor type, not a special-case toolkit: `google` sits alongside `http`, `truenas`, `ssh`, `local`, `docker`, and `file`, and `gmail`/`calendar`/`drive` are toolkits on it — the same 1:1 toolkit-per-service model as `sonarr`/`radarr` on `http`.
+
+### How it works
+
+- **Executor** (`src/gatekeeper/execute_google.py`): runs `google_api.py` as a local subprocess with an argv list (`shell=False`, FR-5.3/5.4/6.1 — no shell interpreter, one parameter = one argv element). Parses JSON output, caps list length via the existing `_cap_json` (FR-8.12), and marks every response `external_untrusted=True` — mail bodies and event descriptions are external, potentially prompt-injection-bearing data, the same way an HTTP response is.
+- **Credential** (`oauth2` kind): a JSON bundle `{"client_id", "client_secret", "refresh_token"}` stored in the existing credential store (FR-10.2/10.3), encrypted at rest. Materialized to a per-call tempfile (chmod 600) at `$HOME/.hermes/google_token.json` — the path `google_api.py` reads — and cleaned up on credential rotation. Never passed through argv (FR-10.2: a secret never sits in a process argument list that `ps` would reveal). This mirrors the `docker_tls` JSON-bundle pattern (`service.py:_docker_tls_env`).
+- **Toolkits**: `gmail`, `calendar`, `drive` — each its own toolkit with its own `allowed_google_actions` whitelist (FR-8.3c's google counterpart: `gmail send` simply never appears in a read-only gmail toolkit's list). One `oauth2` credential named `google` is shared across all three.
+- **Tools**: per-command, not a generic "call API" tool — `gmail.search`, `gmail.get`, `gmail.send`, `calendar.list`, `calendar.create`, `drive.search`, `drive.upload`, etc. Each carries `required_scopes` (e.g. `gmail.readonly`, `gmail.send`, `calendar.events`, `drive.file`) as a per-tool check gate: the identity must hold the scope, and the refresh token's OAuth consent must cover it. No blanket full-access scopes.
+- **Sandbox**: `drive.upload`/`drive.download` paths are restricted to a sandbox directory (`path_roots` on the toolkit, `must_resolve_under` on the parameter) — an agent cannot exfiltrate arbitrary gatekeeper files to Drive.
+
+### Files
+
+- `src/gatekeeper/execute_google.py` — new executor.
+- `src/gatekeeper/credentials.py` — `oauth2` added to `KINDS`.
+- `src/gatekeeper/tier1.py` — `google` in `KNOWN_EXECUTORS`; new toolkit fields `google_script`, `google_container` (optional docker-exec fallback), `allowed_google_actions`; `allows_google_action` method.
+- `src/gatekeeper/catalog.py` — `ToolDef.google_action` and `ToolDef.google_args` (positional vs. flag per arg, FR-5.4); parsing and Tier 1 validation.
+- `src/gatekeeper/validate.py` — `build_google_call`: builds the argv tail, re-checks the action against the toolkit whitelist.
+- `src/gatekeeper/service.py` — dispatch branch + `_google_token_env` (tempfile materialization) + `invalidate_google_token_cache` (wired to `CredentialStore.on_change`).
+- `src/gatekeeper/integrations.py` — `gmail`, `calendar`, `drive` integration entries with starter tool specs and toolkit YAML.
+- `src/gatekeeper/ui.py` — `oauth2` in the credential kind dropdown and value hint.
+- `tests/test_execute_google.py` — 27 tests covering execution, JSON capping, token tempfile, expired/scope-denied error messages, timeout semantics, FR-5.4 positional/flag, Tier 1 loading, and audit-record-does-not-leak-value.
+
+### Deploy notes
+
+- **OAuth consent**: the refresh token's consent must cover all scopes the tools need (`gmail.readonly`, `gmail.send`, `gmail.modify`, `calendar.events.readonly`, `calendar.events`, `drive.metadata.readonly`, `drive.file`, `drive`) — otherwise write tools fail with 403 `insufficient_scope`, reported as a clear message, not a generic denial.
+- **Credential slot**: create a credential named `google` (kind `oauth2`) in `/ui/credentials` with the JSON bundle. One credential serves all three toolkits.
+- **google_api.py**: must be available in the container at the path configured in `google_script`. The integration YAML shows `/opt/data/skills/productivity/google-workspace/scripts/google_api.py` — mount it, or set `google_container` to run it via `docker exec` in another container on the same Docker host.
+- **Refresh token lifetime**: Google invalidates unused refresh tokens after ~6 months. Re-authorize if that happens; rotate the credential in `/ui/credentials`.
+- **No auto-approve**: write/write_external tools go through the pending queue as before — a human approves each one at `/ui/requests`.
+
 ## 0.37.1
 
 **Fix: ruff flagged `UTC` as unused in `ui.py` after 0.37.0 replaced all `datetime.now(UTC)` calls with `_local_now()`. Removed the import.**
