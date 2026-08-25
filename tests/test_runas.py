@@ -1184,7 +1184,7 @@ def _service_env(tmp_path, toolkit_run_as=None):
         tool_spec = {
             "id": f"files.{op}", "toolkit": "files", "category": "read" if op == "read" else "write",
             "file_operation": op, "enabled": True,
-            "parameters": {"path": {"type": "string", "required": True, "pattern": "^/"}},
+            "parameters": {"path": {"type": "string", "required": True, "pattern": "^/.*"}},
         }
         if run_as is not None:
             tool_spec["run_as"] = run_as
