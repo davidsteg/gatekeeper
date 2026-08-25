@@ -102,6 +102,31 @@ def configured_target() -> str | None:
     return os.environ.get(DROP_TO_ENV, "").strip() or None
 
 
+def _kept_groups() -> list[int]:
+    """The supplementary groups to carry across the drop.
+
+    Whatever the container was started with, minus root's own group. This
+    is where `_selfdrop` deliberately parts company with `_runas.become`,
+    which empties the set outright: there the drop *is* a privilege
+    boundary for one operation, and carrying the server's groups into it
+    would widen exactly what the boundary narrows. Here the drop means
+    "become the unprivileged version of myself", and the groups came from
+    `group_add:` in the deployment -- deliberate configuration, not
+    privilege that happens to be lying around.
+
+    Emptying it silently breaks the obvious case: `group_add: "999"` is how
+    the container reaches `/var/run/docker.sock`, so a drop that discarded
+    it would leave every `docker` toolkit failing with EACCES, and nothing
+    would say why.
+
+    Group 0 is filtered out. It is there because the container started as
+    `user: "0:0"`, not because anyone asked for it, and a process that has
+    just given up root has no business keeping read access to every
+    root-group file on the way out.
+    """
+    return sorted({group for group in os.getgroups() if group != 0})
+
+
 def _prctl(*args: int) -> None:
     import ctypes
 
@@ -119,7 +144,10 @@ def drop_privileges(value: str) -> tuple[int, int]:
     requests as though it had. The caller aborts.
     """
     try:
-        uid, gid, name = resolve_run_as(value)
+        # The name, if there was one, is not needed: the supplementary
+        # groups come from what the container was started with rather than
+        # from the account's own entry -- see `_kept_groups`.
+        uid, gid, _ = resolve_run_as(value)
     except RunAsError as exc:
         raise SelfDropError(f"{DROP_TO_ENV}: {exc}") from None
 
@@ -148,11 +176,8 @@ def drop_privileges(value: str) -> tuple[int, int]:
         # 1. Without this the capabilities are gone the instant euid != 0.
         _prctl(_PR_SET_KEEPCAPS, 1, 0, 0, 0)
 
-        # 2. Groups before ids: both calls need what setresuid gives away.
-        if name is not None:
-            os.initgroups(name, gid)
-        else:
-            os.setgroups([])
+        # 2. Groups before ids: setting them needs what setresuid gives away.
+        os.setgroups(_kept_groups())
         os.setresgid(gid, gid, gid)
         os.setresuid(uid, uid, uid)
 

@@ -60,6 +60,69 @@ cannot. It is in every release.
 
 ---
 
+## 0.34.0
+
+**Two things, both about `run_as` telling the truth: the startup drop no longer discards `group_add` (which silently cost the container its Docker socket), and `run_as: root` failing with a bare "Permission denied" now says which uid ran the operation and why uid 0 was not enough.**
+
+**The group bug.** `_selfdrop` copied `_runas.become`'s `os.setgroups([])`,
+where emptying the set is correct: there the drop *is* a privilege boundary
+for one operation, and carrying the server's groups into it would widen
+exactly what the boundary narrows. In the startup drop it is wrong. Those
+groups came from `group_add:` in the deployment — deliberate configuration,
+and specifically how the container reaches `/var/run/docker.sock`. Measured
+before and after: `[0, 999]` went to `[]`, so switching `GATEKEEPER_DROP_TO`
+on would have left every `docker` toolkit failing with EACCES and nothing
+saying why. It is invisible until then, because with `user: "0:0"` root
+never needed the group. The drop now keeps what it was given, minus group 0
+— that one is present because the container started as `user: "0:0"`, not
+because anyone asked for it, and a process that has just given up root
+keeps no read access to root-group files on the way out.
+
+**The denial.** Reported as `run_as: root` not working: container correct
+(`Config.User=0:0`, `CapEff=00000000000000c0`), toolkit correct
+(`run_as: root` live in `admin.toolkit_list`), and `file.read` answering
+`Permission denied` on a file owned by 568 — which looked like the
+operation running as some third user, or `run_as` being ignored.
+
+It was neither. The operation ran as uid 0, exactly as configured, and the
+kernel refused it correctly. "Root can read any file" is not a property of
+uid 0; it is `CAP_DAC_OVERRIDE` and `CAP_DAC_READ_SEARCH`, two ordinary
+capabilities that `cap_drop: ALL` removes from root along with everything
+else, and that `cap_add: [SETUID, SETGID]` does not give back. In the
+recommended container uid 0 is therefore checked against file modes like
+anybody else, so against `-rw------- 568 568 compose.yaml` it gets EACCES —
+while `run_as: "568:568"` reads the same file holding no capability at all.
+`run_as: root` reaches *less* than the owning uid, which is the opposite of
+what the name suggests.
+
+Reproducing it took one correction worth recording: restricting the
+parent's permitted set is not enough, because on `execve` the kernel
+re-derives a root child's permitted set from the **bounding** set, so the
+helper got `CAP_DAC_OVERRIDE` straight back and the first attempt passed.
+`cap_drop: ALL` is a bounding-set restriction; the test drops the bounding
+set, and then the failure reproduces exactly.
+
+So the message says it now. A denial from a `run_as` call reports the uid
+and gid the operation actually ran as and the `run_as` value that asked for
+them; for uid 0 without those capabilities it adds that root is not above
+file permissions here, whether the capability is even reachable in this
+container's bounding set, and that naming the owning uid is the answer. For
+a non-root target it stays an ordinary permission problem and says to check
+the mode and the traversability of the parent directories instead — no
+capability lecture where none applies. Startup warns about the same thing
+at deploy time rather than at first call, for any toolkit whose `run_as`
+resolves to uid 0 in a container without those capabilities.
+
+Nothing about the `run_as` mechanism changed: it was applying correctly the
+whole time. What changed is that a correct refusal no longer reads like a
+broken feature.
+
+Seven tests: that `group_add` survives the drop and group 0 does not; the
+reported failure reproduced end to end, including that the owning uid
+succeeds where root fails; that the denial names the uid, the `run_as`
+value and the missing capability; that a non-root denial stays plain; and
+that `bypasses_file_permissions` matches the process's real effective set.
+
 ## 0.33.0
 
 **A fresh install put its audit log in `/etc/gatekeeper/logs` — inside the configuration directory, which is what stops that mount from ever being `:ro`. The image now declares `/var/log/gatekeeper`, and `compose.yaml` stops mapping a host path onto itself.**

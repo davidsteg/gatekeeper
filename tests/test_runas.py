@@ -906,3 +906,160 @@ def test_the_switch_reads_the_usual_truthy_values(monkeypatch, value, aborts):
 
     monkeypatch.setenv("GATEKEEPER_REQUIRE_RUN_AS", value)
     assert _require_run_as() is aborts
+
+
+# -- 7. When root is not above file permissions ----------------------------
+#
+# The recommended container is `cap_drop: ALL` plus `cap_add: [SETUID,
+# SETGID]`, which leaves uid 0 without CAP_DAC_OVERRIDE and
+# CAP_DAC_READ_SEARCH. `run_as: root` is then checked against file modes
+# like any other user -- so against a 0600 file owned by 568 it reaches
+# *less* than 568 does. That reads as a bug in run_as and is not one, so
+# the denial has to say it.
+
+#: Drops everything but SETUID/SETGID from the bounding set, which is what
+#: `cap_drop: ALL` + `cap_add` actually does. Restricting only the parent's
+#: permitted set is not enough: on `execve` the kernel re-derives a root
+#: child's permitted set from the bounding set, so the helper would get
+#: CAP_DAC_OVERRIDE straight back.
+_CAP_DROP_ALL = """
+    import ctypes
+    from gatekeeper._runas import CAP_SETGID, CAP_SETUID, capset
+
+    _libc = ctypes.CDLL(None, use_errno=True)
+    for _cap in range(0, 41):
+        if _cap not in (CAP_SETGID, CAP_SETUID):
+            _libc.prctl(24, _cap, 0, 0, 0)          # PR_CAPBSET_DROP
+    _SETID = (1 << CAP_SETUID) | (1 << CAP_SETGID)
+    capset(_SETID, _SETID, 0)
+"""
+
+
+@needs_root
+def test_run_as_root_cannot_read_another_users_private_file(tmp_path):
+    """The reported failure, reproduced: root, correct capabilities, and a
+
+    plain "Permission denied" on a file owned by somebody else.
+    """
+    uid, gid = _nobody()
+    root = _traversable(str(tmp_path))
+    os.chmod(root, 0o755)
+    secret = os.path.join(root, "compose.yaml")
+    with open(secret, "w", encoding="utf-8") as handle:
+        handle.write("services: {}\n")
+    os.chown(secret, uid, gid)
+    os.chmod(secret, 0o600)
+
+    completed = _probe(
+        _CAP_DROP_ALL,
+        f"""
+        import asyncio
+        from gatekeeper.execute_file import run as file_run
+
+        for target in ("root", "{uid}:{gid}"):
+            result = asyncio.run(file_run(
+                operation="read", path={secret!r}, path_roots=[{root!r}],
+                protected=[], timeout_seconds=30, max_output_bytes=4096,
+                idempotent=True, run_as=target,
+            ))
+            print(target, result.outcome, result.stderr.replace("\\n", " "))
+        """,
+    )
+    assert completed.returncode == 0, completed.stderr
+    as_root, as_owner = completed.stdout.splitlines()[:2]
+    assert as_root.startswith("root failed"), as_root
+    assert "Permission denied" in as_root
+    # ...and the owning uid, which holds no capabilities at all, succeeds
+    # where root did not. That inversion is the whole point.
+    assert as_owner.startswith(f"{uid}:{gid} ok"), as_owner
+
+
+@needs_root
+def test_the_denial_names_the_uid_and_the_missing_capability(tmp_path):
+    """What the bare message left out, and what sent the search in the
+
+    wrong direction: which user actually performed the operation, and that
+    uid 0 here is not above file permissions.
+    """
+    uid, gid = _nobody()
+    root = _traversable(str(tmp_path))
+    os.chmod(root, 0o755)
+    secret = os.path.join(root, "compose.yaml")
+    with open(secret, "w", encoding="utf-8") as handle:
+        handle.write("services: {}\n")
+    os.chown(secret, uid, gid)
+    os.chmod(secret, 0o600)
+
+    completed = _probe(
+        _CAP_DROP_ALL,
+        f"""
+        import asyncio
+        from gatekeeper.execute_file import run as file_run
+
+        result = asyncio.run(file_run(
+            operation="read", path={secret!r}, path_roots=[{root!r}],
+            protected=[], timeout_seconds=30, max_output_bytes=4096,
+            idempotent=True, run_as="root",
+        ))
+        print(result.stderr.replace("\\n", " "))
+        """,
+    )
+    assert completed.returncode == 0, completed.stderr
+    message = completed.stdout
+    assert "ran as uid=0 gid=0" in message
+    assert "run_as: 'root'" in message
+    assert "NOT above file permissions" in message
+    assert "CAP_DAC_OVERRIDE" in message
+
+
+@needs_root
+def test_a_denial_for_a_non_root_target_stays_an_ordinary_one(tmp_path):
+    """No capability lecture where none applies: for a normal uid the
+
+    answer is the file's mode or a directory above it, and the message
+    should say that instead.
+    """
+    uid, gid = _nobody()
+    root = _traversable(str(tmp_path))
+    os.chmod(root, 0o755)
+    locked = os.path.join(root, "root-only")
+    os.makedirs(locked)
+    os.chmod(locked, 0o700)
+    target = os.path.join(locked, "x.txt")
+    with open(target, "w", encoding="utf-8") as handle:
+        handle.write("data")
+
+    completed = _probe(
+        f"""
+        import asyncio
+        from gatekeeper.execute_file import run as file_run
+
+        result = asyncio.run(file_run(
+            operation="read", path={target!r}, path_roots=[{root!r}],
+            protected=[], timeout_seconds=30, max_output_bytes=4096,
+            idempotent=True, run_as="{uid}:{gid}",
+        ))
+        print(result.stderr.replace("\\n", " "))
+        """,
+    )
+    assert completed.returncode == 0, completed.stderr
+    message = completed.stdout
+    assert f"ran as uid={uid} gid={gid}" in message
+    assert "traversable" in message
+    assert "NOT above file permissions" not in message
+
+
+@needs_linux
+def test_bypasses_file_permissions_reports_the_real_set():
+    from gatekeeper._runas import (
+        CAP_DAC_OVERRIDE,
+        CAP_DAC_READ_SEARCH,
+        bypasses_file_permissions,
+        effective_capabilities,
+    )
+
+    held = effective_capabilities()
+    expected = bool(
+        held & ((1 << CAP_DAC_OVERRIDE) | (1 << CAP_DAC_READ_SEARCH))
+    )
+    assert bypasses_file_permissions() is expected

@@ -339,3 +339,52 @@ def test_a_failed_drop_aborts_startup_rather_than_serving_as_root(tmp_path):
     )
     assert completed.returncode == 2, completed.stdout + completed.stderr
     assert "Configuration error" in completed.stderr
+
+
+# -- 5. Supplementary groups ------------------------------------------------
+#
+# The drop parts company with `_runas.become` here. There, emptying the
+# group set is the boundary; here the groups came from `group_add:` in the
+# deployment and are the only way the container reaches the Docker socket.
+
+
+@needs_root
+def test_group_add_survives_the_drop():
+    """`group_add: "999"` is how the container reaches /var/run/docker.sock.
+
+    A drop that discarded it would leave every `docker` toolkit failing
+    with EACCES, and nothing would say why -- with `user: "0:0"` the
+    breakage only appears once the drop is switched on, because root did
+    not need the group in the first place.
+    """
+    completed = _probe(
+        f"""
+        from gatekeeper._selfdrop import drop_privileges
+
+        os.setgroups([0, 999])          # what Docker hands a 0:0 + group_add
+        drop_privileges("{DROP_UID}:{DROP_UID}")
+        print(sorted(os.getgroups()))
+        """
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert eval(completed.stdout.strip()) == [999]  # noqa: S307
+
+
+@needs_root
+def test_root_own_group_is_not_carried_across():
+    """Group 0 is there because the container started as `user: "0:0"`, not
+
+    because anyone asked for it. A process that has just given up root
+    keeps no read access to root-group files on the way out.
+    """
+    completed = _probe(
+        f"""
+        from gatekeeper._selfdrop import drop_privileges
+
+        os.setgroups([0])
+        drop_privileges("{DROP_UID}:{DROP_UID}")
+        print(sorted(os.getgroups()))
+        """
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert eval(completed.stdout.strip()) == []  # noqa: S307
