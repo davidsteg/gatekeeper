@@ -80,6 +80,41 @@ names the credential it used (`"credentials": ["jellyfin"]`) and contains the
 value nowhere. A `credential_unavailable` denial means step 2 and step 3
 disagree about the name.
 
+## A new tool does not appear in an agent session
+
+Reported as an admin/agent split: `admin.tool_create` + `admin.tool_enable`
++ `grant_set` all succeed, `admin.tool_list` and `admin.grant_list` show the
+new tools, and the agent's `/mcp` session does not — until the container is
+restarted.
+
+**The server is not the stale half.** Every Tier 2 write reloads the state
+it just wrote, synchronously, in the same process: `ConfigStore._write_tools`
+reassigns `service.catalog` from the file, and `_write_identities` swaps the
+identity contents in place. `tools/list` is answered from those objects on
+every request, so the first request after the write already contains the new
+tool — and it is callable on the same connection. Two tests in
+`test_mcp_live_catalog.py` assert exactly that against a live MCP session, so
+"the catalog is a startup snapshot" can be ruled out without re-checking.
+
+What is missing is the other half of the handshake: **nothing tells a
+connected client to ask again.** Most MCP clients fetch `tools/list` once
+when the session is established and keep that list for the session's
+lifetime. MCP's mechanism for invalidating it is a
+`notifications/tools/list_changed`, which gatekeeper does not send — and
+cannot today, because `/mcp` runs `stateless_http=True`: each request gets
+its own short-lived transport, so there is no retained session to push a
+notification into. Restarting the container "fixes" it only because it forces
+every client to reconnect and re-fetch.
+
+So the remedy is a **client reconnect, not a container restart** — cheaper,
+and it does not interrupt anything else the container is doing. In practice
+that means restarting the agent's MCP connection (in most hosts, reloading
+the MCP server entry or the session), not `docker restart gatekeeper`.
+
+Making this automatic requires `/mcp` to hold sessions so the notification
+has somewhere to go. That is a wire-protocol change for every connected
+agent, not a bug fix, and is deliberately not made silently.
+
 ## Config reload without a restart
 
 ```bash
