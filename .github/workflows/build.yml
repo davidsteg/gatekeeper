@@ -264,6 +264,13 @@ jobs:
           mkdir -p /tmp/gk && chmod 777 /tmp/gk
           docker run --rm --user 568:568 -v /tmp/gk:/etc/gatekeeper "$tag" init
           docker run --rm --user 568:568 -v /tmp/gk:/etc/gatekeeper:ro "$tag" check
+          # TZ support: tzdata is in the image, so TZ must actually shift the
+          # clock. America/New_York is -0400 in August, -0500 in January --
+          # either counts. A +0000 result means tzdata is missing and every
+          # "local time" in the console is silently UTC again.
+          docker run --rm -e TZ=America/New_York --entrypoint python "$tag" \
+            -c "import time,sys; sys.exit(0 if time.strftime('%z') in ('-0400','-0500') else 1)" \
+            || { echo "TZ=America/New_York did not shift the clock (got +0000?) -- tzdata missing?"; exit 1; }
 
   release:
     name: release

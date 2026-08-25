@@ -134,6 +134,19 @@ services:
       GATEKEEPER_PORT: "8080"
       GATEKEEPER_LOG_LEVEL: INFO
 
+      # The container's timezone, and therefore what the console (activity
+      # chart, audit log table, recent activity) and the process logs
+      # report as local time. Since 0.37.0 every displayed timestamp is
+      # made local; but 'python:3.12-slim' defaults to UTC with no
+      # timezone data, so without this line local == UTC. IANA name, one
+      # of /usr/share/zoneinfo; the image ships tzdata so any of them
+      # works. How to find the offset actually used (should show your
+      # local zone, e.g. +/-0200, never +0000):
+      #
+      #   docker exec gatekeeper date '+%Y-%m-%dT%H:%M:%S%z (%Z)'
+      #
+      #   TZ: "Europe/Berlin"
+
       # Only with the run_as profile above (user: "0:0" + cap_add). Start
       # as root, then immediately become this uid:gid, keeping CAP_SETUID
       # and CAP_SETGID so `run_as` still works. Deliberately not baked into
