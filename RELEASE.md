@@ -60,6 +60,20 @@ cannot. It is in every release.
 
 ---
 
+## 0.38.1
+
+**Fix: a `credential:` binding naming a credential the store does not have was never checked and never reported — startup went green, the console said "No credentials yet.", and the first agent call hours later reported "is not configured yet", which reads like a runtime fault instead of the deploy-time mistake it is.**
+
+Reported from a dev stack where seven toolkits (bazarr, jellyfin, jellyseerr, prowlarr, radarr, sabnzbd-movie, sonarr) each carried a `credential:` line while `credentials.yaml` held nothing at all. Everything about the deployment looked healthy: container up, healthcheck passing, `/ui` reachable, no warning in the log. The investigation went looking for a deploy that had overwritten the file, and there is no such code path — `credentials.yaml` has exactly one writer (`CredentialStore._write`, reachable only from `create`/`rotate`/`delete`), and bootstrap does not know the file exists. Nothing had been lost. The values had simply never been entered.
+
+The binding is Tier 1 (`toolkits.yaml`, deploy-time, FR-10.4) and the value is Tier 2 (`credentials.yaml`, typed into the console) — deliberately separate, and `cred_propose` widens the gap on purpose by creating a named slot whose value a human fills in later at approval time. Nothing compared the two halves. Worse, each layer swallowed the evidence independently: `_raw()` returns `{}` for an absent file without complaint, and `plaintext_values_for_masking()` returns early on an empty section *before* it checks the master key — so the one startup gate that exists for credentials never fired. The same reasoning already written into that method's docstring (a store that cannot be read must not boot quietly) applies to a reference that points at nothing, and had simply never been drawn.
+
+`cmd_serve` now compares them after loading both and logs the difference: how many bindings dangle, which credentials they name, which toolkits and destinations refer to them, and where the value is entered. A warning, not an abort, for the same reason the console's writability check beside it is one — a stack whose credentials are still being filled in should keep serving everything else, and turning that into a crash loop would cost more than the misconfiguration does.
+
+The console gained the matching note. A dangling binding has no card on `/ui/credentials`, because there is nothing to draw one from — so the page that an admin opens *precisely when* wondering why a toolkit is refusing calls was the one place the problem stayed invisible.
+
+The walk over toolkits and destinations is now `Tier1.credential_references()`, used by both the startup check and the console's "Used by" row rather than written out twice. `ui.py` already carried a comment warning that a copy of this walk tends to forget destination-level `credential:` overrides (FR-8.3g); a second hand-rolled copy in the startup path would have been exactly that bug, so there is only one. Tests cover toolkit-level and destination-level references, the empty case, the set difference clearing when the credential is created, and the console naming a dangling binding.
+
 ## 0.38.0
 
 **New `google` executor: Gmail, Google Calendar, and Google Drive via OAuth2, isolated per grant.**

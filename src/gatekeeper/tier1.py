@@ -348,6 +348,28 @@ class Tier1:
         except KeyError:
             raise ConfigError(f"Unknown destination {name!r}") from None
 
+    def credential_references(self) -> dict[str, tuple[str, ...]]:
+        """Credential name -> the labels of everything that refers to it.
+
+        One source for two readers: the console's "Used by" row, and the
+        startup check for a binding that names a credential the store does
+        not have. Two hand-rolled copies of this walk would eventually
+        disagree about destinations -- and a destination's own
+        `credential:` overrides the toolkit's (FR-8.3g), so it is exactly
+        the half that a second copy tends to forget.
+
+        Names only. A reference is a name, never a value -- this stays as
+        true here as everywhere else (FR-10.2).
+        """
+        refs: dict[str, list[str]] = {}
+        for toolkit in self.toolkits.values():
+            if toolkit.credential:
+                refs.setdefault(toolkit.credential, []).append(toolkit.name)
+        for dest in self.destinations.values():
+            if dest.credential:
+                refs.setdefault(dest.credential, []).append(f"{dest.name} (destination)")
+        return {name: tuple(labels) for name, labels in refs.items()}
+
 
 def _is_absolute(path: str) -> bool:
     """Absolute by POSIX OR by host convention.

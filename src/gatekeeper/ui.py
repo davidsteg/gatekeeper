@@ -3122,24 +3122,13 @@ def _view_credentials(
             "restart to enable it.",
             tone="bad",
         )
-    used_by: dict[str, tuple[str, ...]] = {}
-
-    def _add_user(credential_name: str, label: str) -> None:
-        used_by.setdefault(credential_name, ())
-        used_by[credential_name] = (*used_by[credential_name], label)
-
-    for tk in service.tier1.toolkits.values():
-        if tk.credential:
-            _add_user(tk.credential, tk.name)
-    # A destination's own `credential:` overrides the toolkit's (FR-8.3g) --
-    # missing it here would let an admin delete/rotate a credential that a
-    # destination still depends on with no warning (the toolkit-level loop
-    # above only ever sees a toolkit-wide credential, never a per-destination one).
-    for dest in service.tier1.destinations.values():
-        if dest.credential:
-            _add_user(dest.credential, f"{dest.name} (destination)")
+    # Shared with the startup dangling-reference check in `__main__.py`
+    # -- see `Tier1.credential_references` for why this walk lives there
+    # rather than being written out twice.
+    used_by = service.tier1.credential_references()
+    metas = credentials.names(used_by=used_by)
     parts = []
-    for meta in credentials.names(used_by=used_by):
+    for meta in metas:
         ops = ""
         if session.can_write and store is not None:
             ops = (
@@ -3183,12 +3172,33 @@ def _view_credentials(
             )
             + "</div></div>"
         )
+    # A binding whose credential does not exist is invisible in the list
+    # above -- it has no card, because there is nothing to draw one from.
+    # Naming it here is the whole point: this is the page the admin is on
+    # when they wonder why a toolkit answers "is not configured yet".
+    dangling = sorted(set(used_by) - {meta.name for meta in metas})
+    missing = (
+        _note(
+            f"<strong>{len(dangling)} credential(s) referenced by a toolkit do "
+            "not exist yet:</strong> "
+            + ", ".join(
+                f"<code>{_e(name)}</code> (used by "
+                f"{_e(', '.join(sorted(used_by[name])))})"
+                for name in dangling
+            )
+            + ". Calls through them are refused until a value is entered.",
+            tone="bad",
+        )
+        if dangling
+        else ""
+    )
     return (
         _note(
             "The value is never shown here or anywhere else once saved "
             "(FR-10.2). Create, rotate, and delete -- there is no 'view'.",
             icon="lock",
         )
+        + missing
         + ("".join(parts) or '<p class="muted">No credentials yet.</p>')
     )
 

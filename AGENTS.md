@@ -91,6 +91,14 @@ network access outside localhost is needed.
   resolving a credential) needs `GATEKEEPER_CREDENTIAL_KEY` set — generate
   one with `gatekeeper credential-key`. Tests set this via `monkeypatch`
   per-test; a manual smoke-test script needs to set the env var itself.
+- **A toolkit's `credential:` and the credential store are separate tiers,
+  and can disagree.** The binding is Tier 1 (`toolkits.yaml`), the value is
+  Tier 2 (`credentials.yaml`) — so a toolkit can name a credential that does
+  not exist. `Tier1.credential_references()` is the single walk over toolkits
+  *and* destinations that both the startup check and the console's "Used by"
+  row use; do not hand-roll a second one, it will forget the
+  destination-level `credential:` override (FR-8.3g). A dangling reference is
+  a startup warning, not an abort, and shows as a note on `/ui/credentials`.
 - **`document.querySelector('form')` on an authenticated `/ui` page grabs
   the sidebar's logout form, not the page's content form** — the sidebar
   renders before `<main>` in the DOM. When scripting the console (browser
