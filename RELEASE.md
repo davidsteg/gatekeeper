@@ -60,6 +60,10 @@ cannot. It is in every release.
 
 ---
 
+## 0.37.1
+
+**Fix: ruff flagged `UTC` as unused in `ui.py` after 0.37.0 replaced all `datetime.now(UTC)` calls with `_local_now()`. Removed the import.**
+
 ## 0.37.0
 
 **All timestamps in the UI and container logs now use the container's local timezone instead of UTC.**

@@ -55,7 +55,7 @@ import re
 import secrets
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import yaml
