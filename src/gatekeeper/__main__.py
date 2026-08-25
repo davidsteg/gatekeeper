@@ -82,6 +82,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     logging.basicConfig(
         level=os.environ.get("GATEKEEPER_LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
     # First start: a mounted, empty directory suffices. Only when none
     # of the three files exist -- see `_bootstrap_on_first_start`.
