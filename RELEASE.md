@@ -60,6 +60,10 @@ cannot. It is in every release.
 
 ---
 
+## 0.36.3
+
+**Fix: one test helper in `test_runas.py` still had `"pattern": "^/"` (line 1187) — the `replaceAll` edit missed it because of a slightly different formatting. `re.fullmatch('^/', '/tmp/x.txt')` returns `None`, causing the service-call test to fail with `param_invalid`. Changed to `^/.*`.**
+
 ## 0.36.2
 
 **Fix: the 0.36.1 test pattern `^/` failed `fullmatch` validation — `re.fullmatch('^/', '/tmp/x.txt')` returns `None` because `fullmatch` requires the entire string to match, not just a prefix. Changed to `^/.*` which matches any absolute path fully.**
