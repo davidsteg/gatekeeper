@@ -292,6 +292,23 @@ def _parse_ts(value: Any) -> datetime | None:
         return None
 
 
+def _local_now() -> datetime:
+    """Current time in the container's local timezone.
+
+    The audit log stores timestamps with a timezone offset (via
+    `time.strftime("%Y-%m-%dT%H:%M:%S%z")`), so `_parse_ts` can convert
+    them back. The UI displays them in local time -- the operator reads
+    their own wall clock, not UTC. All chart bucketing and axis labels
+    use this instead of `datetime.now(UTC)`.
+    """
+    return datetime.now().astimezone()
+
+
+def _to_local(stamp: datetime) -> datetime:
+    """Converts a parsed timestamp to local time for display."""
+    return stamp.astimezone()
+
+
 def _bucket_calls(
     records: list[dict[str, Any]], hours: int = 12, *, now: datetime | None = None
 ) -> list[tuple[int, int]]:
@@ -303,7 +320,7 @@ def _bucket_calls(
     negative age, and fall out of every slot -- the chart would
     stay empty even though calls just took place.
     """
-    current = (now or datetime.now(UTC)).replace(
+    current = (now or _local_now()).replace(
         minute=0, second=0, microsecond=0
     )
     buckets = [(0, 0) for _ in range(hours)]
@@ -313,7 +330,7 @@ def _bucket_calls(
         stamp = _parse_ts(record.get("ts"))
         if stamp is None:
             continue
-        hour = stamp.astimezone(UTC).replace(
+        hour = _to_local(stamp).replace(
             minute=0, second=0, microsecond=0
         )
         age = int((current - hour).total_seconds() // 3600)
@@ -1884,7 +1901,7 @@ def _bucket_calls_by_day(
     Same shape and rounding-down-before-diffing approach as ``_bucket_calls``,
     but day-granularity for the 7d/30d chart on the Stats page.
     """
-    current = (now or datetime.now(UTC)).replace(
+    current = (now or _local_now()).replace(
         hour=0, minute=0, second=0, microsecond=0,
     )
     buckets = [(0, 0) for _ in range(days)]
@@ -1894,7 +1911,7 @@ def _bucket_calls_by_day(
         stamp = _parse_ts(record.get("ts"))
         if stamp is None:
             continue
-        day = stamp.astimezone(UTC).replace(
+        day = _to_local(stamp).replace(
             hour=0, minute=0, second=0, microsecond=0,
         )
         age = int((current - day).total_seconds() // 86400)
@@ -2281,7 +2298,7 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
     meet. A `<title>` per bar gives exact counts on hover -- no JS, no
     tooltip library, just what SVG already does natively.
     """
-    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    now = _local_now().replace(minute=0, second=0, microsecond=0)
     buckets = _bucket_calls(records, hours, now=now)
     peak = max((o + d for o, d in buckets), default=0)
 
@@ -2378,7 +2395,7 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
             f'text-anchor="middle">No tool calls in the last {hours} hours</text>'
             f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
             f'<text class="c-ax c-ax-now" x="{width:.0f}" y="{height - 3:.0f}" '
-            f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
+            f'text-anchor="end">{_e(now.strftime("%H:%M"))}</text>'
             "</svg>"
         )
     svg = (
@@ -2386,7 +2403,7 @@ def _activity_chart(records: list[dict[str, Any]], hours: int = 12) -> str:
         f'aria-label="Calls per hour">{defs}{grid}{"".join(bars)}'
         f'<text class="c-ax" x="0" y="{height - 3:.0f}">{_e(first)}</text>'
         f'<text class="c-ax c-ax-now" x="{width:.0f}" y="{height - 3:.0f}" '
-        f'text-anchor="end">{_e(now.strftime("%H:%M"))} UTC</text>'
+        f'text-anchor="end">{_e(now.strftime("%H:%M"))}</text>'
         "</svg>"
     )
     # A themed, always-fast CSS :hover tooltip -- the <title> on each <g>
@@ -2444,7 +2461,12 @@ def _feed(records: list[dict[str, Any]], limit: int = 7) -> str:
     for record in records:
         kind = record.get("kind", "")
         outcome = record.get("outcome") or ""
-        clock = str(record.get("ts") or "").partition("T")[2][:5]
+        clock = ""
+        stamp = _parse_ts(record.get("ts"))
+        if stamp is not None:
+            clock = _to_local(stamp).strftime("%H:%M")
+        else:
+            clock = str(record.get("ts") or "").partition("T")[2][:5]
         if kind == "call":
             what = (
                 f'<b class="mono">{_e(record.get("identity"))}</b> '
@@ -3887,7 +3909,13 @@ def _view_audit(service: Service, request: Request) -> str:
         exit_code = record.get("exit_code")
         duration = record.get("duration_ms")
         ts = str(record.get("ts") or "")
-        date, _, clock = ts.partition("T")
+        stamp = _parse_ts(ts)
+        if stamp is not None:
+            local = _to_local(stamp)
+            date = local.strftime("%Y-%m-%d")
+            clock = local.strftime("%H:%M:%S")
+        else:
+            date, _, clock = ts.partition("T")
         who = record.get("identity") or record.get("actor") or record.get("reason") or "-"
         rows.append(
             f'<tr class="{_TONE.get(outcome, "")}">'
@@ -4708,7 +4736,7 @@ def _activity_chart_by_day(
     records: list[dict[str, Any]], days: int = 7, *, now: datetime | None = None,
 ) -> str:
     """Day-bucketed stacked bar chart, same SVG style as ``_activity_chart``."""
-    current = (now or datetime.now(UTC)).replace(
+    current = (now or _local_now()).replace(
         hour=0, minute=0, second=0, microsecond=0,
     )
     buckets = _bucket_calls_by_day(records, days, now=current)

@@ -60,6 +60,21 @@ cannot. It is in every release.
 
 ---
 
+## 0.37.0
+
+**All timestamps in the UI and container logs now use the container's local timezone instead of UTC.**
+
+The audit log already stored timestamps with a local offset (`time.strftime("%Y-%m-%dT%H:%M:%S%z")`), but the UI displayed them in raw UTC — the activity chart axis said "14:32 UTC", the recent-activity feed showed UTC clock times, and the audit log table showed the raw `T`-partitioned string. The container log (`logging.basicConfig`) used the default `asctime` format without a timezone indicator.
+
+Changed:
+- **Activity chart** (`_activity_chart`, `_activity_chart_by_day`): `now` uses `datetime.now().astimezone()` (local) instead of `datetime.now(UTC)`; the "UTC" suffix on the axis label is removed. Bucketing (`_bucket_calls`, `_bucket_calls_by_day`) converts parsed timestamps to local before computing hour/day offsets.
+- **Recent activity feed** (`_recent_activity`): the clock column now converts the parsed timestamp to local time via `_to_local(stamp).strftime("%H:%M")` instead of raw-string-partitioning the UTC `ts`.
+- **Audit log table** (`_view_audit`): the date and clock columns now display local time via `_to_local(stamp).strftime(...)`.
+- **Container logs** (`cmd_serve`): `logging.basicConfig` now uses `datefmt="%Y-%m-%dT%H:%M:%S%z"` so log lines carry the local timezone offset, making them consistent with the audit log format.
+- Added `_local_now()` and `_to_local()` helpers to `ui.py`.
+
+Stored timestamps (`catalog.now_iso`, `credentials._now`) remain UTC by design — they are compared lexicographically for credential overlap windows and tool version ordering, and a DST transition would break that monotonicity. Only the **display** layer converts to local.
+
 ## 0.36.6
 
 **Fix: the access map showed broken image icons for toolkits whose CDN slug doesn't exist — `tdarr`, `diag` (→ `stethoscope`), `file` (→ `folder`), `http`/`webui` (→ `web`) all returned 404 from the dashboard-icons CDN, leaving a broken `<img>` with no `onerror` fallback (CSP forbids scripts).**
