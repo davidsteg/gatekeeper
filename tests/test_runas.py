@@ -1181,10 +1181,16 @@ def _service_env(tmp_path, toolkit_run_as=None):
     tools_yaml = tmp_path / "tools.yaml"
     tools = []
     for op, run_as in [("read", "root"), ("write", "root")]:
+        params = {"path": {"type": "string", "required": True, "pattern": "^/.*"}}
+        if op == "write":
+            params["content"] = {
+                "type": "string", "required": True, "pattern": "[\\s\\S]*",
+                "allow_control_characters": True,
+            }
         tool_spec = {
             "id": f"files.{op}", "toolkit": "files", "category": "read" if op == "read" else "write",
             "file_operation": op, "enabled": True,
-            "parameters": {"path": {"type": "string", "required": True, "pattern": "^/.*"}},
+            "parameters": params,
         }
         if run_as is not None:
             tool_spec["run_as"] = run_as
