@@ -60,6 +60,10 @@ cannot. It is in every release.
 
 ---
 
+## 0.36.2
+
+**Fix: the 0.36.1 test pattern `^/` failed `fullmatch` validation — `re.fullmatch('^/', '/tmp/x.txt')` returns `None` because `fullmatch` requires the entire string to match, not just a prefix. Changed to `^/.*` which matches any absolute path fully.**
+
 ## 0.36.1
 
 **Fix: the 0.36.0 tests failed in CI — ruff flagged an unsorted import in `catalog.py` (the new `_runas` import was placed after `errors` instead of before it alphabetically), and the new `test_runas.py` tests created tool parameters without the `pattern` field that FR-5.7 requires for string parameters.**

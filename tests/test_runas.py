@@ -222,7 +222,7 @@ def test_tool_spec_without_run_as_inherits_none(tmp_path):
     tier1 = _file_tier1(tmp_path)
     tool = parse_tool_spec(
         {"id": "files.read", "toolkit": "files", "category": "read",
-         "file_operation": "read", "parameters": {"path": {"type": "string", "required": True, "pattern": "^/"}}},
+         "file_operation": "read", "parameters": {"path": {"type": "string", "required": True, "pattern": "^/.*"}}},
         tier1,
     )
     assert tool.run_as is None
@@ -234,7 +234,7 @@ def test_tool_spec_run_as_is_parsed_into_tooldef(tmp_path):
     tool = parse_tool_spec(
         {"id": "files.read", "toolkit": "files", "category": "read",
          "file_operation": "read", "run_as": "root",
-         "parameters": {"path": {"type": "string", "required": True, "pattern": "^/"}}},
+         "parameters": {"path": {"type": "string", "required": True, "pattern": "^/.*"}}},
         tier1,
     )
     assert tool.run_as == "root"
@@ -247,7 +247,7 @@ def test_tool_spec_run_as_empty_string_is_explicit_clear(tmp_path):
     tool = parse_tool_spec(
         {"id": "files.read", "toolkit": "files", "category": "read",
          "file_operation": "read", "run_as": "",
-         "parameters": {"path": {"type": "string", "required": True, "pattern": "^/"}}},
+         "parameters": {"path": {"type": "string", "required": True, "pattern": "^/.*"}}},
         tier1,
     )
     assert tool.run_as == ""
@@ -259,7 +259,7 @@ def test_tool_spec_run_as_null_is_none(tmp_path):
     tool = parse_tool_spec(
         {"id": "files.read", "toolkit": "files", "category": "read",
          "file_operation": "read", "run_as": None,
-         "parameters": {"path": {"type": "string", "required": True, "pattern": "^/"}}},
+         "parameters": {"path": {"type": "string", "required": True, "pattern": "^/.*"}}},
         tier1,
     )
     assert tool.run_as is None
@@ -273,7 +273,7 @@ def test_tool_spec_run_as_malformed_aborts_startup(tmp_path):
         parse_tool_spec(
             {"id": "files.read", "toolkit": "files", "category": "read",
              "file_operation": "read", "run_as": "3001",
-             "parameters": {"path": {"type": "string", "required": True, "pattern": "^/"}}},
+             "parameters": {"path": {"type": "string", "required": True, "pattern": "^/.*"}}},
             tier1,
         )
 
@@ -1260,7 +1260,7 @@ def test_tool_without_run_as_inherits_toolkit_run_as(tmp_path, monkeypatch):
         yaml.safe_dump({"tools": [
             {"id": "files.read", "toolkit": "files", "category": "read",
              "file_operation": "read", "enabled": True,
-             "parameters": {"path": {"type": "string", "required": True, "pattern": "^/"}}},
+             "parameters": {"path": {"type": "string", "required": True, "pattern": "^/.*"}}},
         ]}),
         encoding="utf-8",
     )
@@ -1299,7 +1299,7 @@ def test_tool_run_as_empty_string_clears_toolkit_run_as(tmp_path, monkeypatch):
         yaml.safe_dump({"tools": [
             {"id": "files.read", "toolkit": "files", "category": "read",
              "file_operation": "read", "enabled": True, "run_as": "",
-             "parameters": {"path": {"type": "string", "required": True, "pattern": "^/"}}},
+             "parameters": {"path": {"type": "string", "required": True, "pattern": "^/.*"}}},
         ]}),
         encoding="utf-8",
     )
