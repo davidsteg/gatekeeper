@@ -192,9 +192,11 @@ integration: the console's CSP (`style-src 'nonce-...'`) silently drops any
 on one page at once, so an unnamespaced id or class in one service's SVG
 can collide with another's.
 
-No OAuth2 — the `http` executor supports static credentials only (bearer,
-API-key header, basic). Services that require an authorization-code flow are
-out of scope for their integration (documented per-integration in `Integration.notes`).
+No OAuth2 in the `http` executor — it supports static credentials only
+(bearer, API-key header, basic). Services that require an authorization-code
+flow use the `google` executor instead (added 0.38.0), which runs
+`google_api.py` as a local subprocess and materializes an `oauth2`
+credential bundle to a per-call tempfile — see `execute_google.py`.
 
 ## Project structure
 

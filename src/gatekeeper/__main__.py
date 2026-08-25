@@ -293,6 +293,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # A rotated docker_tls credential must not keep serving a stale
         # cert/key from service.py's temp-dir cache (FR-8.3g).
         service.invalidate_docker_tls_cache()
+        # A rotated oauth2 credential must not keep serving a stale
+        # refresh token from the google executor's temp-HOME cache.
+        service.invalidate_google_token_cache()
 
     credentials.on_change = _on_credentials_change
 

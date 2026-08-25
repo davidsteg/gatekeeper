@@ -4338,7 +4338,10 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         "no header option, e.g. SABnzbd -- FR-8.14 prefers a header wherever "
         "one exists); ws_api_key is used by the truenas executor's auth call; "
         "ssh_private_key is a PEM private key for the ssh executor; docker_tls "
-        "is for a TLS-secured remote Docker destination (FR-8.3g).</div></span>"
+        "is for a TLS-secured remote Docker destination (FR-8.3g); oauth2 is "
+        "a JSON bundle {&quot;client_id&quot;, &quot;client_secret&quot;, "
+        "&quot;refresh_token&quot;} for the google executor, materialized to "
+        "a per-call tempfile at runtime.</div></span>"
         f'<select name="kind">{kind_options}</select></div>'
         '<div class="field"><span>Header/param name'
         '<div class="hint">Required for kind=api_key_header (the header name, '
@@ -4349,7 +4352,10 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         '<div class="hint">Encrypted at rest, never shown again after this '
         "form (FR-10.2). For kind=docker_tls, a JSON object: "
         "<code>{&quot;cert&quot;: ..., &quot;key&quot;: ..., "
-        "&quot;ca&quot;: ...}</code> (PEM text, ca optional).</div></span>"
+        "&quot;ca&quot;: ...}</code> (PEM text, ca optional). For kind=oauth2, "
+        "a JSON object: <code>{&quot;client_id&quot;: ..., "
+        "&quot;client_secret&quot;: ..., &quot;refresh_token&quot;: ...}</code>."
+        "</div></span>"
         '<input type="password" name="value" autocomplete="new-password" required></div>'
         f'<button type="submit">{_icon("save", 14)}Create</button> '
         f'<a class="btn" href="{UI_PREFIX}/credentials">{_icon("back", 14)}Cancel</a>'
@@ -4421,7 +4427,10 @@ def _credential_fill_confirm(
         '<div class="hint">Encrypted at rest, never shown again after this '
         "form (FR-10.2). For kind=docker_tls, a JSON object: "
         "<code>{&quot;cert&quot;: ..., &quot;key&quot;: ..., "
-        "&quot;ca&quot;: ...}</code> (PEM text, ca optional).</div></span>"
+        "&quot;ca&quot;: ...}</code> (PEM text, ca optional). For kind=oauth2, "
+        "a JSON object: <code>{&quot;client_id&quot;: ..., "
+        "&quot;client_secret&quot;: ..., &quot;refresh_token&quot;: ...}</code>."
+        "</div></span>"
         '<input type="password" name="value" autocomplete="new-password" required></div>'
         f'<button type="submit">{_icon("check", 14)}Approve &amp; create</button> '
         f'<a class="btn" href="{UI_PREFIX}/requests?tab=change">{_icon("back", 14)}Cancel</a>'

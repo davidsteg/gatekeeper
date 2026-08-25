@@ -108,7 +108,7 @@ def test_toolkit_yaml_is_a_mapping_under_the_integration_key(key):
     integration = INTEGRATIONS[key]
     parsed = yaml.safe_load(integration.toolkit_yaml)
     assert key in parsed
-    assert parsed[key]["executor"] in ("http", "truenas", "docker", "ssh")
+    assert parsed[key]["executor"] in ("http", "truenas", "docker", "ssh", "google")
 
 
 def test_credential_kind_is_known():

@@ -52,12 +52,12 @@ item.
   Extending `params_template` to accept nested dict values, substituting
   their leaves the same way, would close this — not done here to avoid
   changing shared validation code alongside an integrations-only change.
-- **OAuth2** — the `http` executor supports static credentials only
-  (bearer / API-key header / basic — FR-8.11). Services that require an
-  authorization-code flow (most Google Workspace APIs: Calendar, Gmail,
-  Drive, …) are out of scope for the `google_api` integration. Would need a
-  separate subsystem (callback handling, token refresh/storage) — not
-  justified until a concrete service requires it.
+- **OAuth2 — done for Google Workspace (0.38.0).** The `google` executor
+  runs `google_api.py` as a local subprocess, materializes an `oauth2`
+  credential bundle (client_id/client_secret/refresh_token) to a per-call
+  tempfile, and parses JSON output. Covers Gmail, Calendar, Drive. Other
+  OAuth2 providers (Microsoft, etc.) would follow the same pattern — a
+  new toolkit on the `google` executor, not a new executor.
 - **`ssh` destinations** — a `docker`/`http`/`truenas` toolkit can declare
   several named destinations (see below); `ssh` toolkits can't yet
   (`tier1.py` rejects a `destinations:` list on an `ssh` toolkit) — one

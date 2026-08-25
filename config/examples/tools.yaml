@@ -459,3 +459,210 @@ tools:
     required_scopes: []
     timeout_seconds: 10
     max_output_bytes: 8192
+
+  # -- google executor (REQUIREMENTS.md §17, OAuth2) ------------------------
+  # No 'binary'/'argv' and no 'method'/'path' -- 'google_action' is the
+  # fixed action string passed to google_api.py, and 'google_args' maps
+  # each parameter to its argv shape: {"positional": true} for a bare
+  # value (one argv element), {"flag": "--name"} for a --flag value pair
+  # (FR-5.4: one parameter = one element's worth of value, never more).
+  # The toolkit's executor runs google_api.py as a local subprocess
+  # (shell=False) and parses its JSON output.
+
+  - id: gmail.search
+    toolkit: gmail
+    version: 1
+    title: Search mail
+    description: >-
+      Searches Gmail by query string (e.g. 'is:unread from:david k8s').
+      Returns a capped list of matching messages.
+    category: read
+    idempotent: true
+    enabled: false
+    google_action: gmail search
+    google_args:
+      query:
+        positional: true
+      max_results:
+        flag: --max
+    parameters:
+      query:
+        type: string
+        required: true
+        pattern: "^.{1,500}$"
+        description: Gmail search query.
+      max_results:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 500
+        description: Max results (default 10).
+    required_scopes: ["gmail.readonly"]
+    timeout_seconds: 30
+    max_output_bytes: 131072
+
+  - id: gmail.get
+    toolkit: gmail
+    version: 1
+    title: Get message
+    description: Reads a full Gmail message by ID.
+    category: read
+    idempotent: true
+    enabled: false
+    google_action: gmail get
+    google_args:
+      message_id:
+        positional: true
+    parameters:
+      message_id:
+        type: string
+        required: true
+        pattern: "^[a-zA-Z0-9]+$"
+        description: Gmail message ID.
+    required_scopes: ["gmail.readonly"]
+    timeout_seconds: 30
+    max_output_bytes: 131072
+
+  - id: gmail.send
+    toolkit: gmail
+    version: 1
+    title: Send mail
+    description: >-
+      Sends an email. Externally visible and not undoable -- there is no
+      'unsend' tool.
+    category: write_external
+    idempotent: false
+    enabled: false
+    google_action: gmail send
+    google_args:
+      to:
+        flag: --to
+      subject:
+        flag: --subject
+      body:
+        flag: --body
+    parameters:
+      to:
+        type: string
+        required: true
+        pattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+        description: Recipient email address.
+      subject:
+        type: string
+        required: true
+        pattern: "^.{1,200}$"
+        description: Subject line.
+      body:
+        type: string
+        required: true
+        pattern: "^.{1,30000}$"
+        description: Plain-text body.
+    required_scopes: ["gmail.send"]
+    timeout_seconds: 30
+    max_output_bytes: 8192
+
+  - id: calendar.list
+    toolkit: calendar
+    version: 1
+    title: List events
+    description: Lists calendar events in a time window.
+    category: read
+    idempotent: true
+    enabled: false
+    google_action: calendar list
+    google_args:
+      start:
+        flag: --start
+      end:
+        flag: --end
+    parameters:
+      start:
+        type: string
+        required: true
+        pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+        description: Start time (ISO 8601).
+      end:
+        type: string
+        required: true
+        pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+        description: End time (ISO 8601).
+    required_scopes: ["calendar.events.readonly"]
+    timeout_seconds: 30
+    max_output_bytes: 131072
+
+  - id: calendar.create
+    toolkit: calendar
+    version: 1
+    title: Create event
+    description: Creates a calendar event. Externally visible.
+    category: write_external
+    idempotent: false
+    enabled: false
+    google_action: calendar create
+    google_args:
+      summary:
+        flag: --summary
+      start:
+        flag: --start
+      end:
+        flag: --end
+    parameters:
+      summary:
+        type: string
+        required: true
+        pattern: "^.{1,500}$"
+        description: Event title.
+      start:
+        type: string
+        required: true
+        pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+        description: Start time (ISO 8601).
+      end:
+        type: string
+        required: true
+        pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+        description: End time (ISO 8601).
+    required_scopes: ["calendar.events"]
+    timeout_seconds: 30
+    max_output_bytes: 8192
+
+  - id: drive.upload
+    toolkit: drive
+    version: 1
+    title: Upload file
+    description: Uploads a file from the sandbox directory to Google Drive.
+    category: write_external
+    idempotent: false
+    enabled: false
+    google_action: drive upload
+    google_args:
+      file_path:
+        positional: true
+      name:
+        flag: --name
+      parent_id:
+        flag: --parent
+    parameters:
+      file:
+        type: string
+        required: true
+        pattern: "^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,200}$"
+        description: File name in the sandbox directory.
+      file_path:
+        type: path
+        derived: "/mnt/raid/gatekeeper/google-transfer/{file}"
+        must_resolve_under: /mnt/raid/gatekeeper/google-transfer
+        description: Built by the server from the file name.
+      name:
+        type: string
+        required: false
+        pattern: "^.{1,200}$"
+        description: Name in Drive (optional).
+      parent_id:
+        type: string
+        required: false
+        pattern: "^[a-zA-Z0-9_-]+$"
+        description: Parent folder ID (optional).
+    required_scopes: ["drive.file"]
+    timeout_seconds: 60
+    max_output_bytes: 8192
