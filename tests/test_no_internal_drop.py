@@ -1,23 +1,31 @@
-"""That gatekeeper never changes its own process identity.
+"""Where gatekeeper is allowed to change a process's identity, and nowhere else.
 
-This file exists because the question keeps being asked, and answering it
-by reading the source is both slow and unconvincing -- "I grepped and
-found nothing" is not a guarantee, it is a report about one afternoon.
+Until 0.31.0 this file asserted something stronger and simpler: that
+gatekeeper *never* changed its own uid, so a process found at 568 must
+have been started at 568. 0.32.0 deliberately gave that up -- `_selfdrop`
+exists precisely so the server can start as root and become 568 itself,
+keeping the two capabilities `run_as` needs. The guarantee is therefore
+narrower now, and this file pins the narrower one rather than being
+deleted along with the old claim.
 
-The question arrives in a recognisable shape: a container is configured
-with `user: "0:0"` and `cap_add: [SETUID, SETGID]`, the process turns out
-to be uid 568 with an empty `CapEff` anyway, and the natural conclusion is
-that something inside gatekeeper dropped it -- an entrypoint, a PUID/PGID
-convention, a `setuid` in the startup path that forgot `PR_SET_KEEPCAPS`.
+What still holds, and what these tests check:
 
-There is no such thing, and these tests are what makes that a fact rather
-than a claim. gatekeeper is started as some uid and stays that uid; the
-only identity change in the whole tree happens in the short-lived `run_as`
-helper *child*, after the parent has already forked and exec'd it. So a
-process observed at 568 was started at 568, and the thing that starts it
-there is the image's own `USER 568:568` -- which means the compose
-`user:` never reached the container, and no amount of reading Python will
-show why.
+- Two modules may change identity, and only two. `_runas.py` does it in
+  the short-lived helper *child*, one file operation per process, one-way.
+  `_selfdrop.py` does it once at startup, downward, keeping exactly
+  `CAP_SETUID` and `CAP_SETGID`. No executor, no service, no server
+  module.
+- The startup drop cannot happen by accident. `drop_privileges` is
+  reachable from `main()` alone, and only when `GATEKEEPER_DROP_TO` is
+  set -- so an unconfigured deployment behaves exactly as it always did.
+- The image still declares `USER 568:568` and still `exec`s the console
+  script directly, with no shell wrapper in between.
+- `compose.yaml` still declares exactly one `user:` key, so the run_as
+  profile cannot be enabled by uncommenting a second one.
+
+The diagnostic value survives the change: if the process is at 568 with an
+empty `CapEff` and `GATEKEEPER_DROP_TO` is *unset*, gatekeeper did not put
+it there and looking for an internal drop is still a dead end.
 """
 
 from __future__ import annotations
@@ -49,10 +57,12 @@ _IDENTITY_CALLS = frozenset(
     }
 )
 
-#: The one module allowed to contain them, and the reason it is allowed:
-#: every call there runs in a child process that exists for exactly one
-#: file operation and exits. See `_runas.py`'s own docstring.
-_ALLOWED = "_runas.py"
+#: The only two modules allowed to contain them, and why each is allowed.
+#: `_runas.py`: every call runs in a child process that exists for one file
+#: operation and exits. `_selfdrop.py`: one call at startup, downward,
+#: gated on `GATEKEEPER_DROP_TO`. Both have docstrings that argue the case;
+#: a third entry here would need one too.
+_ALLOWED = frozenset({"_runas.py", "_selfdrop.py"})
 
 
 def _identity_calls(path: pathlib.Path) -> list[tuple[str, int]]:
@@ -83,37 +93,65 @@ def _modules() -> list[pathlib.Path]:
 
 
 def test_there_are_modules_to_check():
-    """Guards the two tests below against passing on an empty scan."""
+    """Guards the tests below against passing on an empty scan."""
     names = {p.name for p in _modules()}
     assert len(names) > 10
-    assert {"__main__.py", "service.py", "execute.py", _ALLOWED} <= names
+    assert {"__main__.py", "service.py", "execute.py"} | _ALLOWED <= names
 
 
 @pytest.mark.parametrize("module", _modules(), ids=lambda p: p.name)
-def test_only_the_run_as_helper_changes_process_identity(module):
-    """No startup path, no executor, no entrypoint drops privileges.
+def test_only_the_two_sanctioned_modules_change_process_identity(module):
+    """No executor, no service, no server module drops privileges.
 
     If this fails, the failure message is the answer to the question this
     file exists for: here is the drop, in this file, on this line.
     """
     calls = _identity_calls(module)
-    if module.name == _ALLOWED:
+    if module.name in _ALLOWED:
         return
     assert not calls, (
         f"{module.name} changes the process identity: "
         + ", ".join(f"{name}() at line {line}" for name, line in calls)
-        + f" -- only {_ALLOWED} may, and only inside its helper child."
+        + f" -- only {sorted(_ALLOWED)} may."
     )
 
 
-def test_the_helper_is_the_place_that_does_it():
-    """The other direction: the allowance is not vacuous.
+@pytest.mark.parametrize("allowed", sorted(_ALLOWED))
+def test_each_allowance_is_actually_used(allowed):
+    """The other direction: neither allowance is vacuous.
 
-    A refactor that moved the drop somewhere else would otherwise leave
-    the test above passing while the guarantee quietly changed shape.
+    A refactor that moved a drop somewhere else would otherwise leave the
+    test above passing while the guarantee quietly changed shape.
     """
-    calls = _identity_calls(_SRC / _ALLOWED)
+    calls = _identity_calls(_SRC / allowed)
     assert {name for name, _ in calls} >= {"setresuid", "setresgid"}
+
+
+def test_the_startup_drop_cannot_happen_by_accident():
+    """`drop_privileges` is called from `main()` and nowhere else, and only
+
+    behind the `GATEKEEPER_DROP_TO` check. An unconfigured deployment must
+    behave exactly as it did before the setting existed -- which is what
+    lets the diagnostic in this file's docstring still hold.
+    """
+    callers = []
+    for module in _modules():
+        tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "drop_privileges"
+            ):
+                callers.append((module.name, node.lineno))
+    assert [name for name, _ in callers] == ["__main__.py"], callers
+
+    # ...and guarded, not unconditional: the call sits inside a branch that
+    # tests the configured target for None.
+    source = (_SRC / "__main__.py").read_text(encoding="utf-8")
+    guard = source.index("configured_target()")
+    call = source.index("drop_privileges(")
+    assert guard < call, "drop_privileges runs before the setting is consulted"
 
 
 def test_the_helper_only_drops_from_its_own_entry_point():
@@ -132,7 +170,7 @@ def test_the_helper_only_drops_from_its_own_entry_point():
                 and node.func.id == "become"
             ):
                 callers.append((module.name, node.lineno))
-    assert [name for name, _ in callers] == [_ALLOWED], callers
+    assert [name for name, _ in callers] == ["_runas.py"], callers
 
 
 def test_the_image_declares_the_unprivileged_default():

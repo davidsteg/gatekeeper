@@ -60,6 +60,88 @@ cannot. It is in every release.
 
 ---
 
+## 0.32.0
+
+**`run_as` no longer costs the container its unprivileged life. `GATEKEEPER_DROP_TO` starts gatekeeper as root, has it become 568 immediately, and keeps exactly `CAP_SETUID`/`CAP_SETGID` across the drop — so a `file` toolkit can still switch to another user per operation while the server itself spends its whole life unprivileged.**
+
+Until now `run_as` left two deployments, both unattractive. `user:
+"568:568"` is unprivileged and `run_as` cannot work at all, because Docker
+grants capabilities to uid 0 alone. `user: "0:0"` with `cap_add` makes
+`run_as` work and puts the process at uid 0 for its entire life: every file
+it writes is root-owned, and the container that mediates root-equivalent
+access to the host is itself root while doing it.
+
+The third option does both. The container starts privileged; `_selfdrop.py`
+runs before argparse and before any file is touched, and becomes the
+configured uid while keeping the two capabilities. Startup then reports
+`568:568` with `CapEff=00000000000000c0`, files land owned by 568 exactly as
+in the unprivileged profile, and `run_as` still works — `_runas.py` has
+asked the kernel for `CAP_SETUID` rather than for uid 0 since 0.30.0, so
+nothing downstream needed changing.
+
+The order matters and every step earns its place. `PR_SET_KEEPCAPS(1)`
+first, or the kernel empties the permitted set the moment euid leaves 0.
+Supplementary groups, then `setresgid`, then `setresuid` — groups first
+because both need what `setresuid` gives away. Then `capset` back to exactly
+`{CAP_SETUID, CAP_SETGID}`: the uid change preserves *permitted* under
+KEEPCAPS but still clears *effective*, so without it the process holds the
+capabilities and cannot use them. Then `PR_CAP_AMBIENT_RAISE` for both —
+the step an implementation gets wrong silently. The `run_as` helper is a
+separate process reached by `fork`+`exec`, and on `execve` of an ordinary
+file the kernel derives the new permitted set from the file's own
+capabilities, which are none. The ambient set is the only one that survives
+an `execve`, and therefore the only way the helper ever sees the capability
+its existence depends on.
+
+`no-new-privileges: true` stays on and does not conflict: it governs what
+`execve` may grant *from a file*, and the ambient set is not that. Asserted
+rather than argued — a test sets `no_new_privs`, performs the drop, `exec`s
+`/bin/cat` and reads the capabilities back out of the child's
+`/proc/self/status`.
+
+Three things keep the change from reaching anyone who did not ask for it:
+
+- **Off unless configured.** Without `GATEKEEPER_DROP_TO` the module does
+  nothing, which is also what stops `gatekeeper serve` on a bare host from
+  trying to become a uid that does not exist there. Deliberately not baked
+  into the image either: a container started as `user: "0:0"` with no
+  `cap_add` would then refuse to boot, and that is somebody's working
+  deployment today.
+- **The capabilities are handed back when unused.** The drop has to precede
+  reading the configuration, so the two are kept on the chance a toolkit
+  wants them; if none declares `run_as`, startup discards them and logs it.
+  The common case ends up holding nothing.
+- **A failed drop aborts startup** with exit 2. A server told to give up
+  root that could not must not go on to serve requests while its log says
+  568.
+
+Stated plainly, because the profile is easy to over-read: a process holding
+`CAP_SETUID` can call `setuid(0)` at will, so this is **not** a boundary
+against a compromised gatekeeper. Against an attacker with code execution
+inside the process it is worth about what `user: "0:0"` is worth. What it
+buys is narrower and real: file ownership, a smaller blast radius for the
+ordinary bugs that are not code execution, and a capability set of two
+entries rather than root's full complement. `docs/DEPLOYMENT.md` says so at
+the point of choosing.
+
+This reverses an invariant 0.31.0 had just finished pinning. That release
+added `test_no_internal_drop.py` to settle, after three reports, that
+gatekeeper never changes its own uid — and this one gives that up on
+purpose. The test file is rewritten rather than deleted: it now pins the
+narrower guarantee (only two modules may change identity, the startup one
+only behind its setting, `drop_privileges` called from `main()` alone) and
+keeps the diagnostic that made it worth having. With `GATEKEEPER_DROP_TO`
+unset, a process at 568 was still started at 568, and hunting for an
+internal drop is still a dead end.
+
+Ten tests in `test_selfdrop.py`, all of the real ones needing root and so
+running in the `tests (root)` job: that the drop keeps exactly the two
+capabilities in all four sets, that they survive an `execve` under
+`no_new_privs`, that `run_as: root` really writes a root-owned file from a
+568 server, that a toolkit *without* `run_as` still writes as 568, that root
+without `cap_add` is refused with the reason, that dropping to uid 0 is
+refused outright, and that a failed drop exits 2 instead of serving.
+
 ## 0.31.0
 
 **Reported again: `user: "0:0"` and `cap_add` both set, container recreated, and the process is still `uid=568` with an empty `CapEff` — so something inside gatekeeper must be dropping privileges. Nothing is. This release makes that checkable instead of arguable, and removes the `compose.yaml` trap that most likely caused it.**

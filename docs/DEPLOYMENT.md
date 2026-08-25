@@ -220,6 +220,63 @@ unusable. Changing `user:` is what makes them real. Edit the existing
 setuid binaries on `execve`, which is unrelated to a privileged process
 dropping to a lesser user.
 
+### Recommended profile: start as root, give it up immediately
+
+The block above leaves the process at uid 0 for its entire life to serve
+calls that need the privilege for milliseconds. Everything it writes — the
+audit log, `tools.yaml`, every `file` toolkit without `run_as` — comes out
+root-owned, and the container that mediates root-equivalent access to the
+host is itself root the whole time.
+
+`GATEKEEPER_DROP_TO` closes that gap. The container still starts as root
+with the two capabilities; gatekeeper then becomes the unprivileged user
+*itself*, before argparse and before any file is touched, keeping exactly
+`CAP_SETUID` and `CAP_SETGID`:
+
+```yaml
+    user: "0:0"                       # start privileged...
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    environment:
+      GATEKEEPER_DROP_TO: "568:568"   # ...and stop being, right away
+```
+
+Startup then reports `568:568` with `CapEff=00000000000000c0`, files land
+owned by 568 exactly as in the unprivileged profile, and `run_as` works —
+because `_runas.py` asks the kernel for `CAP_SETUID`, not for uid 0.
+
+`no-new-privileges: true` stays on and does not conflict. It governs what
+`execve` may *grant from a file*; the capabilities travel in the process's
+ambient set, which is not a grant from a file. That is asserted rather than
+argued: a test sets `no_new_privs`, performs the drop, `exec`s a plain
+binary and reads the capabilities back out of the child's
+`/proc/self/status`.
+
+Two properties worth knowing before choosing it:
+
+- **It is not a boundary against a compromised gatekeeper.** A process
+  holding `CAP_SETUID` can call `setuid(0)` whenever it likes. Against an
+  attacker with code execution *inside* this process, 568-with-CAP_SETUID
+  is worth about what `user: "0:0"` is worth. What it does buy is real but
+  narrower: file ownership, a smaller blast radius for the ordinary bugs
+  that are not code execution, and a capability set of exactly two entries
+  instead of root's full complement. Choose it for those reasons.
+- **The capabilities are handed back when nothing needs them.** The drop
+  runs before the configuration is read, so the two are kept on the chance
+  a toolkit wants them. If no toolkit declares `run_as`, startup discards
+  them and logs that it did — the common case ends up holding nothing.
+
+If the drop cannot be performed — root without `cap_add`, or a container
+that is not root at all — startup **fails** with exit 2 rather than serving
+as root while the log claims otherwise.
+
+The setting is deliberately not baked into the image. A container started
+with `user: "0:0"` and no `cap_add` would then refuse to boot, and that is
+somebody's working deployment today.
+
 ### If the container still comes up as 568
 
 The failure worth naming on its own, because it looks like a bug in
@@ -227,14 +284,20 @@ gatekeeper and is not: `user: "0:0"` is set, `cap_add` is set, the container
 was recreated — and `docker exec` still reports `Uid: 568` with an empty
 `CapEff`.
 
-**gatekeeper never changes its own uid.** There is no entrypoint script, no
-`PUID`/`PGID` convention, no `gosu`/`su-exec`/`setpriv` wrapper, and no
-`setuid` anywhere in the startup path. The only identity change in the whole
-codebase happens inside the short-lived `run_as` helper *child*, after the
-server has already forked and exec'd it — a test (`test_no_internal_drop.py`)
-parses every module and fails the build if that ever stops being true. So
-looking for an internal privilege drop will not find one, and a process
-observed at 568 was **started** at 568.
+First check whether `GATEKEEPER_DROP_TO` is set. If it is, gatekeeper did
+this on purpose and it worked — see the profile above; `CapEff` should then
+read `00000000000000c0` rather than zero, and an empty one means the drop
+failed, which aborts startup rather than reaching this state.
+
+With that setting **unset**, gatekeeper does not change its own uid. There
+is no entrypoint script, no `PUID`/`PGID` convention, no
+`gosu`/`su-exec`/`setpriv` wrapper, and no `setuid` in the startup path.
+Only two modules in the tree change identity at all — `_selfdrop.py`, which
+runs solely when that variable is set, and the short-lived `run_as` helper
+*child*, after the server has already forked and exec'd it. A test
+(`test_no_internal_drop.py`) parses every module and fails the build if a
+third one ever appears. So an unconfigured process observed at 568 was
+**started** at 568, and looking for an internal drop will not find one.
 
 What starts it there is the image's own default, `USER 568:568` in the
 Dockerfile. A compose `user:` overrides that unconditionally — so if the

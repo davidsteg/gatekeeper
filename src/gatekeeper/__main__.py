@@ -10,6 +10,12 @@ import sys
 import uvicorn
 
 from ._runas import can_change_user, capability_sets, effective_capabilities
+from ._selfdrop import (
+    SelfDropError,
+    configured_target,
+    discard_capabilities,
+    drop_privileges,
+)
 from .audit import AuditLog, Redactor
 from .catalog import load_catalog
 from .credentials import KEY_ENV, CredentialStore, generate_master_key
@@ -97,6 +103,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # without anyone having to go and read toolkits.yaml. A user name or a
     # uid:gid pair, never a secret.
     run_as_toolkits = sorted(n for n, t in tier1.toolkits.items() if t.run_as)
+    if configured_target() is not None and not run_as_toolkits:
+        # The drop runs before the configuration is read, so the two
+        # capabilities are kept on the chance a toolkit wants them. None
+        # does, so hand them back rather than spend the process's whole
+        # life holding a privilege with no caller.
+        discard_capabilities()
+        logger.info(
+            "No toolkit declares 'run_as', so the capabilities kept across "
+            "the startup drop were handed back. This process (%s) now holds "
+            "none.",
+            _whoami(),
+        )
     for name in run_as_toolkits:
         logger.warning(
             "Toolkit %r: file operations run as %r, not as this process (%s).",
@@ -783,6 +801,20 @@ def cmd_integration(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    # Before argparse, before logging, before any file is touched. A
+    # `gatekeeper init` that ran as root would leave root-owned config
+    # behind that the dropped-to user then cannot rewrite, so the drop
+    # belongs ahead of every subcommand rather than inside one.
+    target = configured_target()
+    if target is not None:
+        try:
+            drop_privileges(target)
+        except SelfDropError as exc:
+            # Never continue as root having been told to give it up: the
+            # log would say 568 while the process served requests as 0.
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            return 2
+
     parser = argparse.ArgumentParser(prog="gatekeeper")
     parser.add_argument("--toolkits")
     parser.add_argument("--tools")
