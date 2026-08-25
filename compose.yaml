@@ -118,8 +118,16 @@ services:
       # must match this.
       - /mnt/raid:/mnt/raid
 
-      # Audit log, writable.
-      - /mnt/raid/gatekeeper/logs:/mnt/raid/gatekeeper/logs
+      # Audit log, writable. Host path left of the colon, container path
+      # right of it, and they are deliberately different: where the log
+      # lands on your storage is your layout, but inside the container it
+      # belongs at the standard place for logs. Mapping the host path onto
+      # itself (as this line used to) makes the in-container path an
+      # artefact of somebody else's NAS.
+      #
+      # Must match 'audit.dir' in toolkits.yaml -- that is the value
+      # gatekeeper actually writes to; this mount only makes it persist.
+      - /mnt/raid/gatekeeper/logs:/var/log/gatekeeper
 
     environment:
       GATEKEEPER_CONFIG_DIR: /etc/gatekeeper
