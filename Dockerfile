@@ -86,8 +86,14 @@ RUN docker compose version
 # NFR-1: unprivileged user. 568 is the homelab convention (apps).
 RUN groupadd -g 568 apps && useradd -u 568 -g 568 -M -s /usr/sbin/nologin apps
 
+# /var/log is where logs go (FHS), and keeping the audit log out of
+# /etc/gatekeeper is what lets that mount be :ro -- a configuration
+# directory somebody writes to every few seconds cannot be read-only, and
+# then Tier 1 cannot be made immutable at runtime. Only the default for a
+# fresh 'init'; an existing toolkits.yaml keeps whatever it already says.
 ENV PATH="/opt/venv/bin:${PATH}" \
     GATEKEEPER_CONFIG_DIR=/etc/gatekeeper \
+    GATEKEEPER_AUDIT_DIR=/var/log/gatekeeper \
     GATEKEEPER_PORT=8080 \
     GATEKEEPER_RELEASE_NOTES=/usr/share/gatekeeper/RELEASE.md \
     PYTHONUNBUFFERED=1

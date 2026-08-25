@@ -10,6 +10,7 @@ workflow, see [AGENTS.md](../AGENTS.md).
 |---|---|
 | `GATEKEEPER_CONFIG_DIR` | Where `toolkits.yaml` lives (Tier 1, may be read-only) |
 | `GATEKEEPER_STATE_DIR` | Where `tools.yaml`, `identities.yaml`, `credentials.yaml` live (Tier 2, must be writable if `--ui` writes are enabled) |
+| `GATEKEEPER_AUDIT_DIR` | Audit-log directory a **fresh** `init` writes into `toolkits.yaml`. `/var/log/gatekeeper` in the container image; unset elsewhere, which falls back to `<state-dir>/logs`. Never rewrites an existing `audit.dir` — that value is Tier 1 and authoritative. See [Where the audit log goes](#where-the-audit-log-goes) |
 | `GATEKEEPER_CREDENTIAL_KEY` | Fernet master key for the credential store (generate with `gatekeeper credential-key`) |
 | `GATEKEEPER_CREDENTIAL_KEY_FILE` | Path to a file holding that same key, for a separately mounted secret instead of a plain env var |
 | `GATEKEEPER_RELEASE_NOTES` | Path to `RELEASE.md`, for the console's release-notes popup. Defaults to `/usr/share/gatekeeper/RELEASE.md` in the container image; a dev checkout finds the file next to `pyproject.toml` on its own and never needs this set |
@@ -155,13 +156,40 @@ docker run -d \
   -v /var/run/docker.sock:/var/run/docker.sock:rw \
   -v /path/to/config:/etc/gatekeeper:rw \
   -v /path/to/data:/path/to/data:rw \
-  -v /path/to/logs:/path/to/logs:rw \
+  -v /path/to/logs:/var/log/gatekeeper:rw \
   -e GATEKEEPER_LOG_LEVEL=INFO \
   davidsteg/gatekeeper:latest serve --ui
 ```
 
 Adjust mounts/UID/GID/ports to your host. `--user`/`--group-add` should match
 an unprivileged user plus the Docker socket's group, not root.
+
+### Where the audit log goes
+
+Two different paths, and conflating them is the usual confusion: the left
+side of a `-v` is *your storage layout* and can be anything; the right side
+is the path **inside the container**, and that one should be standard.
+Since 0.33.0 the image declares `GATEKEEPER_AUDIT_DIR=/var/log/gatekeeper`,
+so a fresh `init` writes that into `toolkits.yaml` and the mount above puts
+your storage behind it.
+
+Precedence, highest first: `gatekeeper init --audit-dir`, then
+`$GATEKEEPER_AUDIT_DIR`, then `<state-dir>/logs`. The last is what a bare
+`pip install` gets — self-contained, so a checkout stays runnable from any
+directory without needing write access to `/var/log`.
+
+Note what this is *not*: the value only seeds a **new** `toolkits.yaml`.
+`audit.dir` in an existing one is Tier 1 and authoritative — nothing
+rewrites it, so an upgrade never moves your log. To move it deliberately,
+edit that line and repoint the mount to match.
+
+**Not `/etc/gatekeeper`.** The audit log rotates (`max_bytes`,
+`keep_files`), and a configuration directory written to every few seconds
+cannot be mounted `:ro` — which would rule out the hardening below, where
+Tier 1 is made immutable at runtime. Keeping the two apart is also what
+lets them have different retention and different backups: the config is
+small and rarely changes, the log grows and is the record of every
+root-equivalent operation this service brokered.
 
 `latest` always points at the newest build. For **production**, pin a fixed
 version and its image digest — `latest` moving underneath a running
@@ -461,7 +489,7 @@ One running instance, for agents that operate against it directly:
 |---|---|
 | **Local clone** | `/opt/example/gatekeeper` |
 | **Container** | `gatekeeper`, port `30221→8080`, image `davidsteg/gatekeeper:latest` |
-| **Deploy mounts** | `<data-root>/gatekeeper/config → /etc/gatekeeper`, `<data-root>/gatekeeper/logs`, `/var/run/docker.sock` |
+| **Deploy mounts** | `<data-root>/gatekeeper/config → /etc/gatekeeper`, `<data-root>/gatekeeper/logs → /var/log/gatekeeper`, `/var/run/docker.sock` |
 | **Host** | `10.0.0.10` (example), console at `http://10.0.0.10:30221/ui/` |
 | **Container user** | `568:568` (unprivileged), `group_add: 999` (docker.sock GID) |
 

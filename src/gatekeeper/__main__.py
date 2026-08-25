@@ -477,6 +477,15 @@ def _paths(config_dir: str, state_dir: str) -> dict[str, str]:
     }
 
 
+#: Where a freshly bootstrapped `toolkits.yaml` points its audit log, when
+#: neither `--audit-dir` nor this says otherwise. Exists so the *image* can
+#: name its own filesystem layout (`/var/log/gatekeeper`, and a mount there)
+#: without the library hardcoding a path that only makes sense in a
+#: container. A bare `pip install` sets nothing, keeps the self-contained
+#: `<state-dir>/logs`, and stays runnable from any directory.
+AUDIT_DIR_ENV = "GATEKEEPER_AUDIT_DIR"
+
+
 def bootstrap(
     config_dir: str, state_dir: str, audit_dir: str | None = None
 ) -> tuple[str, str]:
@@ -496,7 +505,11 @@ def bootstrap(
     paths = _paths(config_dir, state_dir)
     token = generate_token()
     password = generate_password()
-    audit = audit_dir or os.path.join(state_dir, "logs")
+    audit = (
+        audit_dir
+        or os.environ.get(AUDIT_DIR_ENV, "").strip()
+        or os.path.join(state_dir, "logs")
+    )
     files = {
         paths["toolkits"]: _INIT_TOOLKITS.format(audit_dir=audit),
         paths["tools"]: _INIT_TOOLS,
@@ -881,7 +894,13 @@ def main() -> int:
         help="Where tools.yaml and identities.yaml go, must be writable "
         "(default: GATEKEEPER_STATE_DIR, else the config directory)",
     )
-    init.add_argument("--audit-dir", help="Where the audit log goes (default: <state-dir>/logs)")
+    init.add_argument(
+        "--audit-dir",
+        help=(
+            "Where the audit log goes "
+            f"(default: ${AUDIT_DIR_ENV}, else <state-dir>/logs)"
+        ),
+    )
     init.add_argument(
         "--force", action="store_true", help="Overwrite existing files"
     )

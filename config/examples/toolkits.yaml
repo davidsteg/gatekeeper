@@ -211,6 +211,9 @@ max_concurrent: 4
 
 # FR-9.4/9.5 - append-only with rotation. Without rotation the log fills the dataset.
 audit:
-  dir: /mnt/raid/gatekeeper/logs
+  # A path inside the container, not on the host -- compose maps your
+  # storage onto it. /var/log/gatekeeper is the standard place; keeping it
+  # out of /etc/gatekeeper is what lets that mount be :ro.
+  dir: /var/log/gatekeeper
   max_bytes: 33554432
   keep_files: 10

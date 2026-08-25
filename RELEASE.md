@@ -60,6 +60,55 @@ cannot. It is in every release.
 
 ---
 
+## 0.33.0
+
+**A fresh install put its audit log in `/etc/gatekeeper/logs` — inside the configuration directory, which is what stops that mount from ever being `:ro`. The image now declares `/var/log/gatekeeper`, and `compose.yaml` stops mapping a host path onto itself.**
+
+Three answers to "where does the audit log go" coexisted in the tree, which
+is two too many. `gatekeeper init` wrote `<state-dir>/logs`, and since the
+image sets no separate state dir that resolved to `/etc/gatekeeper/logs`.
+The example config and the Tier 1 fallback said
+`/mnt/raid/gatekeeper/logs`. The compose mount said the same — mapped onto
+*itself*, `/mnt/raid/gatekeeper/logs:/mnt/raid/gatekeeper/logs`, so the
+path inside the container was an artefact of one particular NAS layout.
+
+The `init` default was the one that mattered, because it is what a real
+first start produces, and it was the wrong one twice over. `/etc` is for
+configuration; a file that rotates every few seconds by `max_bytes` and
+`keep_files` is not configuration. And a configuration directory being
+written to continuously cannot be mounted read-only — which rules out the
+hardening `compose.yaml` documents two sections further down, where Tier 1
+is made immutable at runtime. Keeping the log out of there is what makes
+`- /path/config:/etc/gatekeeper:ro` possible at all.
+
+`GATEKEEPER_AUDIT_DIR` fixes it without hardcoding a container path into a
+library. The image declares `/var/log/gatekeeper`; a bare `pip install`
+sets nothing and keeps the self-contained `<state-dir>/logs`, so a checkout
+stays runnable from any directory without write access to `/var/log`; and
+`gatekeeper init --audit-dir` still beats both. The compose mount now reads
+`- /mnt/raid/gatekeeper/logs:/var/log/gatekeeper`: host layout on the left,
+standard path on the right, which is the distinction that got lost.
+
+**Nothing moves for an existing deployment.** The variable only seeds a
+*new* `toolkits.yaml`. `audit.dir` in an existing one is Tier 1 and
+authoritative — no upgrade rewrites it, so an installed instance keeps
+writing exactly where it already does. Moving it stays a deliberate edit of
+that line plus a repointed mount, and `docs/DEPLOYMENT.md` gains a section
+saying so, along with the precedence order and why `/etc/gatekeeper` is the
+wrong home.
+
+One inconsistency is deliberately left standing: the Tier 1 fallback in
+`tier1.py`, used only by a hand-written `toolkits.yaml` with no `audit:`
+block at all, still reads `/mnt/raid/gatekeeper/logs`. Changing it would
+move the audit log of any deployment in that shape, and a deployment that
+does not start without adjustment is a MAJOR by this project's own rule —
+worth doing on purpose, not as a side effect of tidying a default.
+
+Eight tests: the three precedence levels, that the resulting path is not
+inside the configuration directory, that the image, the example config and
+the compose mount all agree on `/var/log/gatekeeper`, and that the compose
+log mount does not map the host path onto itself.
+
 ## 0.32.0
 
 **`run_as` no longer costs the container its unprivileged life. `GATEKEEPER_DROP_TO` starts gatekeeper as root, has it become 568 immediately, and keeps exactly `CAP_SETUID`/`CAP_SETGID` across the drop — so a `file` toolkit can still switch to another user per operation while the server itself spends its whole life unprivileged.**
