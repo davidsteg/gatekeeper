@@ -64,7 +64,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from . import __version__
+from . import __version__, release_notes
 from .admin_service import apply_pending
 from .audit import AuditLog
 from .catalog import ToolDef
@@ -1476,33 +1476,9 @@ def _e(value: Any) -> str:
 _release_notes_cache: list[tuple[str, str]] | None = None
 
 
-def _release_notes_path() -> str | None:
-    """Where RELEASE.md lives, checked in order:
-
-    1. `GATEKEEPER_RELEASE_NOTES` -- what the container image sets
-       (`/usr/share/gatekeeper/RELEASE.md`, baked in at build time, since
-       RELEASE.md is not part of the installed Python package).
-    2. Walking up from this file -- a dev checkout or an editable install
-       has the real `RELEASE.md` sitting next to `pyproject.toml`, the same
-       trick `__init__.py`'s version lookup uses and for the same reason:
-       always current, nothing to keep in sync by hand.
-
-    Returns `None` if neither exists -- the popup then says so plainly
-    instead of failing to render the page it's embedded in.
-    """
-    override = os.environ.get("GATEKEEPER_RELEASE_NOTES")
-    if override and os.path.isfile(override):
-        return override
-    here = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(6):
-        candidate = os.path.join(here, "RELEASE.md")
-        if os.path.isfile(candidate):
-            return candidate
-        parent = os.path.dirname(here)
-        if parent == here:
-            break
-        here = parent
-    return None
+#: `release_notes.notes_path` under the console's own name -- the lookup is
+#: shared with `/release`, the name is what this file's tests know it by.
+_release_notes_path = release_notes.notes_path
 
 
 def _inline_md(text: str) -> str:
@@ -1554,34 +1530,27 @@ def _render_release_body(text: str) -> str:
     return "".join(parts)
 
 
-#: Only headings that look like a version (`## 0.4.0`, optionally with a
-#: build/pre-release suffix) start a new entry -- RELEASE.md's own
-#: explanatory prose has `## Procedure` and `## Versioning` headings above
-#: the version list, and those must stay preamble, not become fake
-#: "releases" with no notes.
-_RELEASE_HEADING_RE = r"(?m)^## (\d+\.\d+\.\d+\S*)[ \t]*\n"
-
-
 def _parse_release_notes(text: str) -> list[tuple[str, str]]:
-    """Splits on `## <version>` headings -- the exact format RELEASE.md's
+    """`release_notes.parse_sections` with every body rendered to HTML.
 
-    own procedure section mandates, and what the release workflow's CI
-    check parses too (see RELEASE.md). One format, read by both.
+    The split itself lives in `release_notes.py`, because `/release` and
+    `admin.release_notes` read the same file with the same format
+    contract; only the rendering below belongs to the console.
     """
-    pieces = re.split(_RELEASE_HEADING_RE, text)
-    sections = []
-    # pieces[0] is the preamble before the first version heading; after
-    # that, version/body pairs alternate. A duplicate version heading
-    # (has happened once in this file's history) is kept as its own
-    # entry rather than silently merged -- the list is never deduplicated.
-    for i in range(1, len(pieces), 2):
-        version = pieces[i]
-        body = pieces[i + 1] if i + 1 < len(pieces) else ""
-        sections.append((version, _render_release_body(body)))
-    return sections
+    return [
+        (version, _render_release_body(body))
+        for version, body in release_notes.parse_sections(text)
+    ]
 
 
 def _load_release_notes() -> list[tuple[str, str]]:
+    """The rendered sections, cached per worker process.
+
+    Reads through `_release_notes_path` rather than `release_notes.load`
+    so the console keeps its own cache and its own "file is missing"
+    fallback -- `/release` answers that case with a status code, this one
+    with a note inside a popup that must still render.
+    """
     global _release_notes_cache
     if _release_notes_cache is not None:
         return _release_notes_cache

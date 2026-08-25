@@ -60,6 +60,31 @@ cannot. It is in every release.
 
 ---
 
+## 0.39.0
+
+**The release notes are now readable over the API: `admin.release_notes` on `/admin/mcp` and `GET /release`. And `/admin/mcp`'s `serverInfo` finally reports the real version instead of a hardcoded `0.1.0`.**
+
+RELEASE.md was reachable from exactly one place: the console popup, which needs a browser and a session. Everyone else — the agent that manages this deployment, a deploy script, `curl` in a terminal — was told the build's version by `/mcp` and nothing about what that version changed. This is the file that answers "did a release touch credential storage", and 0.38.1 was written after an investigation that had to read it in the repository, on a machine that was not the one running the deployment.
+
+The one place that answer got worse the harder you looked: `/admin/mcp` reported `serverInfo.version = "0.1.0"`, hardcoded since the mount existed, while `/mcp` beside it reported `__version__` from `pyproject.toml`. Same process, two answers, and the wrong one looks authoritative. It now reports `__version__` too.
+
+`admin.release_notes` is read-only and the one admin action with no store behind it. Version-by-version by default (newest first, `limit` 10 — RELEASE.md is past 150 KB and an unbounded default would spend an agent's context on a narrow question), narrowable by `version` (exact) and `search` (case-insensitive, over heading and body). `full: true` returns the file verbatim *including the preamble* — the release rule, the procedure, the versioning scheme belong to no version's notes, and they are precisely what an agent asked to propose a release here has to follow. `total` always reports the pre-limit match count, so a truncated answer says it is truncated.
+
+`GET /release` serves the same selection over plain HTTP with `?version=`, `?search=`, `?limit=`, `?format=markdown` and `?full=1`. Deliberately **not** in `PUBLIC_PATHS`: the notes are a version inventory of the build answering the request, including which release fixed what, and that is exactly what an unauthenticated scan would like to have. A bearer token is cheap for the audiences this exists for. A build without RELEASE.md (a bare `pip install` rather than the image, which bakes it in at `/usr/share/gatekeeper`) answers 503 with the reason, not 404 — the route exists, the file does not.
+
+The file lookup and the `## <version>` split moved to a new `release_notes.py` and are now written once, not three times. `ui.py` keeps its own rendering and its own cache — the console turns a section into HTML, the API must never ship that HTML, and the popup's "not available" fallback has to render inside a page that must still load. This is the same reason 0.38.1 gave for `Tier1.credential_references()`: a second hand-rolled copy of a walk is the bug, not the duplication.
+
+**No behavior change to credentials, and none was found.** The question that prompted this — whether a re-deploy can empty the credential store — is answered by 0.38.1: `credentials.yaml` has exactly one writer, reachable only from `create`/`rotate`/`delete`. Between 0.24.0 and 0.38.2 nothing changed about credential storage, encryption or persistence except 0.38.0's additive `oauth2` kind and 0.38.1's dangling-binding warning.
+
+### Files
+
+- `src/gatekeeper/release_notes.py` — new: `notes_path`, `parse_sections`, `load`, `read_full`, `query`.
+- `src/gatekeeper/server.py` — `GET /release` + `_no_release_notes`.
+- `src/gatekeeper/admin_service.py` — `release_notes` action, added to `_EXPOSED`.
+- `src/gatekeeper/admin_server.py` — the `admin.release_notes` tool; `version=__version__`.
+- `src/gatekeeper/ui.py` — reads the shared lookup/split instead of its own.
+- `tests/test_release_api.py`, `tests/test_admin_mcp.py` — auth, selection, markdown, `full`, the 503, and that `serverInfo` reports the real version.
+
 ## 0.38.2
 
 **The container's `TZ` env var now actually works: `tzdata` is installed in the image, so `TZ=America/New_York` (or any IANA zone) shifts the console's local-time display and the process logs away from UTC.**
