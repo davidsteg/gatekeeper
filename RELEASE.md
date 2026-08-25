@@ -60,6 +60,39 @@ cannot. It is in every release.
 
 ---
 
+## 0.34.2
+
+**Reported: new tools reach `admin.tool_list` but never the agent's `/mcp` catalog until the container is restarted. The running process is not the stale half — it serves the new tool on the very next request, and it is callable on the same connection. What is missing is anything telling a connected client to ask again.**
+
+The suspicion was a startup snapshot with no reload hook in
+`tool_create`/`tool_enable`/`grant_set`. There is one, and it has been there
+all along: `ConfigStore._write_tools` reassigns `service.catalog` from the
+file it just wrote, `_write_identities` swaps the identity contents in
+place, and `tools/list` reads both on every request. Two tests now hold a
+live MCP session open, perform the reported admin sequence against the same
+process, and assert that the session sees the new tool on a re-fetch and can
+call it — so this hypothesis does not need investigating a third time.
+
+The real gap is the other half of the handshake. Most MCP clients fetch
+`tools/list` once at session setup and keep it; MCP's way to invalidate that
+is `notifications/tools/list_changed`, and gatekeeper sends none. It also
+cannot today: `/mcp` runs with `stateless_http=True`, so every request gets
+its own short-lived transport and there is no retained session to push a
+notification into. Restarting the container works only because it forces
+every client to reconnect.
+
+Which makes the practical remedy a **client reconnect rather than a
+container restart** — cheaper, and it leaves everything else the container
+is doing alone. `docs/DEPLOYMENT.md` gains a section saying so, with the
+evidence for why the server side can be ruled out.
+
+**No behaviour changed in this release, deliberately.** Sending the
+notification means holding sessions on `/mcp`, which is a wire-protocol
+change for every connected agent — session ids, `Mcp-Session-Id` handling,
+and reconnect semantics — not something to switch on as a side effect of a
+bug report. It is the one open decision, and it belongs to whoever runs the
+agents.
+
 ## 0.34.1
 
 **Fix: the "cannot be read" startup error stated `568:568` as a fixed string instead of reading the process's actual uid — the one message where being told the wrong uid costs the most, because the reader chowns to it and the failure does not move.**
