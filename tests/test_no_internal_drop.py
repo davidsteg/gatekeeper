@@ -231,3 +231,46 @@ def test_the_compose_service_declares_exactly_one_user_key():
         "a commented-out `user:` key in compose.yaml is a second one waiting "
         f"to be uncommented: {commented}"
     )
+
+
+def test_no_runtime_message_hardcodes_a_uid():
+    """A permission error is the worst moment to state a uid you did not read.
+
+    `read_config_file` used to say "the container runs as 568:568" as a
+    fixed string -- the shipped image's convention, not necessarily this
+    process's identity. Since 0.32.0 the process can be told to become
+    something else at startup, so the two come apart, and the reader
+    chowns to the wrong uid while the failure stays exactly where it was.
+
+    Scoped to message text: docstrings and comments may name 568 all they
+    like, since they describe the image rather than the running process.
+    """
+    offenders = []
+    for module in _modules():
+        tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+        # Docstrings by node identity: `ast.get_docstring` cleans the text,
+        # so comparing it against the raw constant never matches.
+        docstrings = set()
+        for holder in ast.walk(tree):
+            if not isinstance(
+                holder, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+            ):
+                continue
+            body = getattr(holder, "body", None)
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                docstrings.add(id(body[0].value))
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if id(node) in docstrings:
+                continue
+            if "568" in node.value and "runs as" in node.value:
+                offenders.append((module.name, node.lineno, node.value[:60]))
+    assert not offenders, offenders

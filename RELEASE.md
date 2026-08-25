@@ -60,6 +60,31 @@ cannot. It is in every release.
 
 ---
 
+## 0.34.1
+
+**Fix: the "cannot be read" startup error stated `568:568` as a fixed string instead of reading the process's actual uid — the one message where being told the wrong uid costs the most, because the reader chowns to it and the failure does not move.**
+
+Reported from a crash loop: `Configuration error:
+/etc/gatekeeper/toolkits.yaml cannot be read. Check the owner -- the
+container runs as 568:568.` The cause was ordinary and expected — files
+created while the container ran as root stay root-owned, so the first start
+after switching a deployment to a lesser user cannot read its own config —
+but the message was asserting an identity it had never looked up.
+`errors.py` had `"568:568."` written out literally, the shipped image's
+convention rather than this process's identity. Correct here by luck; wrong
+for any deployment that names a different uid, and wrong on purpose since
+0.32.0, where `GATEKEEPER_DROP_TO` makes the running uid a deploy-time
+decision.
+
+It now reads `os.geteuid()`/`os.getegid()`, and says what to do about it:
+check the file *and every directory above it* (a denial naming the file is
+often a parent without `+x`), that this is the usual first failure after
+switching to a lesser user, and the `chown -R <uid>:<gid>` against the
+mounted directory. A test scans every module for a runtime message that
+names a uid it did not read; docstrings and comments may still say 568,
+since they describe the image rather than the process. Counter-checked
+against the previous wording, which it fails.
+
 ## 0.34.0
 
 **Two things, both about `run_as` telling the truth: the startup drop no longer discards `group_add` (which silently cost the container its Docker socket), and `run_as: root` failing with a bare "Permission denied" now says which uid ran the operation and why uid 0 was not enough.**
