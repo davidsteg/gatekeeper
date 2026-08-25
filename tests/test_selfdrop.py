@@ -533,12 +533,16 @@ def test_keep_caps_run_as_root_reads_foreign_file(tmp_path):
     root = _traversable(str(tmp_path))
     os.chmod(root, 0o777)
 
-    # Create a file owned by root, mode 0600 -- unreadable to uid 568.
+    # Create a file owned by a non-root uid (568), mode 0600 -- unreadable
+    # to uid 0 without DAC_OVERRIDE. The test process is root, so it can
+    # chown to 568; the dropped-to uid is also 568, but the child becomes
+    # uid 0 via run_as="0:0", so it is NOT the owner and cannot read it
+    # without the DAC capability.
     foreign = os.path.join(root, "foreign-0600.txt")
     with open(foreign, "w") as f:
         f.write("secret")
+    os.chown(foreign, DROP_UID, DROP_UID)
     os.chmod(foreign, 0o600)
-    # Root owns it already (the test process is root).
 
     completed = _probe(
         _UNDER_NNP,
@@ -574,9 +578,12 @@ def test_without_keep_caps_run_as_root_cannot_read_foreign_file(tmp_path):
     root = _traversable(str(tmp_path))
     os.chmod(root, 0o777)
 
+    # Owned by 568, mode 0600: root (uid 0) is not the owner and without
+    # DAC_OVERRIDE cannot read it.
     foreign = os.path.join(root, "foreign-0600.txt")
     with open(foreign, "w") as f:
         f.write("secret")
+    os.chown(foreign, DROP_UID, DROP_UID)
     os.chmod(foreign, 0o600)
 
     completed = _probe(
