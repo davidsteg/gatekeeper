@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
+import yaml
 
 from gatekeeper.audit import AuditLog, Redactor
 from gatekeeper.credentials import (
@@ -19,6 +21,7 @@ from gatekeeper.credentials import (
     generate_master_key,
 )
 from gatekeeper.errors import ConfigError
+from gatekeeper.tier1 import load_tier1
 
 
 @pytest.fixture
@@ -227,3 +230,96 @@ def test_credential_create_audited_without_value(tmp_path, master_key):
         lines = [json.loads(line) for line in handle]
     assert any(line.get("action") == "credential_create" for line in lines)
     assert all("super-secret-key-xyz" not in json.dumps(line) for line in lines)
+
+
+# -- Dangling references: a binding whose credential does not exist ----------
+#
+# The binding lives in toolkits.yaml (Tier 1, deploy-time) and the value in
+# credentials.yaml (Tier 2, typed into the console). Nothing used to compare
+# the two, so a `credential:` naming a credential nobody had created yet was
+# silent until the first call refused it with "is not configured yet".
+
+
+def _tier1_with(tmp_path, spec: dict):
+    path = tmp_path / "toolkits.yaml"
+    spec = {**spec, "audit": {"dir": str(tmp_path / "logs")}}
+    path.write_text(yaml.safe_dump(spec), encoding="utf-8")
+    return load_tier1(str(path))
+
+
+def _local(**extra):
+    return {"executor": "local", "binaries": [sys.executable], **extra}
+
+
+def test_credential_references_maps_toolkit_bindings(tmp_path):
+    tier1 = _tier1_with(
+        tmp_path,
+        {
+            "toolkits": {
+                "sonarr": _local(credential="sonarr-key"),
+                "radarr": _local(credential="radarr-key"),
+            }
+        },
+    )
+    assert tier1.credential_references() == {
+        "sonarr-key": ("sonarr",),
+        "radarr-key": ("radarr",),
+    }
+
+
+def test_credential_references_includes_destination_level_bindings(tmp_path):
+    """The half that a second, hand-rolled copy of this walk always forgets.
+
+    A destination's own `credential:` overrides the toolkit's (FR-8.3g), so
+    a check that only walked toolkits would call a live reference dangling.
+    """
+    tier1 = _tier1_with(
+        tmp_path,
+        {
+            "destinations": {
+                "nas2": {
+                    "docker_host": "tcp://nas2.lan:2376",
+                    "docker_tls": True,
+                    "credential": "docker-nas2-tls",
+                }
+            },
+            "toolkits": {
+                "docker": {
+                    "executor": "docker",
+                    "destinations": ["nas2"],
+                    "binaries": [sys.executable],
+                }
+            },
+        },
+    )
+    assert tier1.credential_references() == {
+        "docker-nas2-tls": ("nas2 (destination)",)
+    }
+
+
+def test_credential_references_empty_without_bindings(tmp_path):
+    tier1 = _tier1_with(tmp_path, {"toolkits": {"sonarr": _local()}})
+    assert tier1.credential_references() == {}
+
+
+def test_dangling_reference_detected_and_cleared_by_create(tmp_path, store):
+    """The set difference that the startup check and the console both compute."""
+    tier1 = _tier1_with(
+        tmp_path, {"toolkits": {"sonarr": _local(credential="sonarr-key")}}
+    )
+
+    def dangling():
+        return sorted(
+            set(tier1.credential_references()) - {meta.name for meta in store.names()}
+        )
+
+    # An empty store loads as `{}` without complaint -- which is exactly why
+    # this needed a check of its own rather than falling out of loading.
+    assert store.names() == []
+    assert dangling() == ["sonarr-key"]
+
+    store.create(
+        "sonarr-key", kind="api_key_header", header="X-Api-Key",
+        value="filled-in-later", actor="admin", rev="",
+    )
+    assert dangling() == []

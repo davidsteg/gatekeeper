@@ -280,6 +280,35 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 2
     audit.set_secrets(credentials.plaintext_values_for_masking())
 
+    # A `credential:` line naming a credential the store does not have is
+    # the one configuration error that used to stay completely silent: the
+    # binding lives in toolkits.yaml (Tier 1), the value in credentials.yaml
+    # (Tier 2, typed into the console), and nothing compared the two. An
+    # empty or absent store loads as `{}` without complaint, so startup went
+    # green, the console said "No credentials yet.", and the first agent
+    # call hours later reported "is not configured yet" -- which reads like
+    # a runtime fault instead of the deploy-time mistake it is.
+    #
+    # A warning, not an abort, for the same reason the console's writability
+    # check further down is one: a stack whose credentials are still being
+    # filled in should keep serving everything else, and turning that into a
+    # crash loop would cost more than the misconfiguration does.
+    references = tier1.credential_references()
+    dangling = sorted(set(references) - {meta.name for meta in credentials.names()})
+    if dangling:
+        logger.warning(
+            "%d credential(s) referenced by toolkits.yaml are missing from %s: "
+            "%s. Calls through them will be refused with 'is not configured "
+            "yet' until a value is entered -- in the console at /ui/credentials, "
+            "or by approving the matching request in /ui/requests.",
+            len(dangling),
+            credentials_path,
+            "; ".join(
+                f"{name} (used by {', '.join(sorted(references[name]))})"
+                for name in dangling
+            ),
+        )
+
     service = Service(
         tier1=tier1,
         catalog=catalog,

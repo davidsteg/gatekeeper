@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import httpx2
 import pytest
+import yaml
 
 from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
@@ -20,7 +21,6 @@ from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore
 from gatekeeper.toolkit_proposals import ToolkitProposalStore
 from gatekeeper.ui import UI_PREFIX
-import yaml
 
 BASE = "http://gatekeeper.test"
 PASSWORDS = {"root": "admin-console-password", "eye": "viewer-console-password"}
@@ -339,11 +339,14 @@ async def test_approve_all_excludes_credential_proposals(credentials_env):
         assert redirect.status_code in (302, 303)
 
 
-async def test_used_by_toolkit_shown(tmp_path, tool_specs, tier1, monkeypatch):
-    """A toolkit's `credential:` field cross-references into the list."""
+def _app_with_binding(tmp_path, tier1, monkeypatch, *, create_credential: bool):
+    """A console wired to one toolkit carrying `credential: sonarr`.
+
+    Shared by the two halves of the same question -- the credential exists,
+    or it does not -- so the wiring cannot drift between them.
+    """
     monkeypatch.setenv(KEY_ENV, generate_master_key())
     from gatekeeper.tier1 import load_tier1
-    import os
 
     toolkits_path = tmp_path / "toolkits-cred.yaml"
     toolkits_path.write_text(
@@ -366,7 +369,6 @@ async def test_used_by_toolkit_shown(tmp_path, tool_specs, tier1, monkeypatch):
     tools_path = tmp_path / "tools-rw2.yaml"
     tools_path.write_text(yaml.safe_dump({"tools": []}), encoding="utf-8")
 
-    tokens = {"root": generate_token()}
     identities_path = tmp_path / "identities-rw2.yaml"
     identities_path.write_text(
         yaml.safe_dump(
@@ -374,7 +376,7 @@ async def test_used_by_toolkit_shown(tmp_path, tool_specs, tier1, monkeypatch):
                 "identities": [
                     {
                         "id": "root", "role": "admin",
-                        "token_hash": hash_token(tokens["root"]),
+                        "token_hash": hash_token(generate_token()),
                         "password_hash": hash_token(PASSWORDS["root"]),
                         "tools": [], "scopes": [],
                     }
@@ -391,10 +393,11 @@ async def test_used_by_toolkit_shown(tmp_path, tool_specs, tier1, monkeypatch):
         tools_path=str(tools_path), identities_path=str(identities_path),
     )
     credentials = CredentialStore(path=str(tmp_path / "credentials2.yaml"), audit=audit)
-    credentials.create(
-        "sonarr", kind="api_key_header", header="X-Api-Key", value=SECRET_VALUE,
-        actor="test", rev="",
-    )
+    if create_credential:
+        credentials.create(
+            "sonarr", kind="api_key_header", header="X-Api-Key", value=SECRET_VALUE,
+            actor="test", rev="",
+        )
     pending = PendingStore(path=str(tmp_path / "pending2.yaml"), audit=audit)
     toolkit_proposals = ToolkitProposalStore(
         path=str(tmp_path / "toolkit-proposals2.yaml"),
@@ -404,12 +407,37 @@ async def test_used_by_toolkit_shown(tmp_path, tool_specs, tier1, monkeypatch):
         tools_path=str(tools_path),
         identities_path=str(identities_path),
     )
-    app = build_app(
+    return build_app(
         service=service, identities=identities, audit=audit, ui=True, store=store,
         credentials=credentials, pending=pending, toolkit_proposals=toolkit_proposals,
     )
+
+
+async def test_used_by_toolkit_shown(tmp_path, tool_specs, tier1, monkeypatch):
+    """A toolkit's `credential:` field cross-references into the list."""
+    app = _app_with_binding(tmp_path, tier1, monkeypatch, create_credential=True)
     async with _client(app) as client:
         await _login(client)
         page = await client.get(f"{UI_PREFIX}/credentials")
         assert "demo" in page.text
         assert SECRET_VALUE not in page.text
+        assert "do not exist yet" not in page.text
+
+
+async def test_dangling_binding_named_on_the_page(tmp_path, tool_specs, tier1, monkeypatch):
+    """A binding with no credential behind it has no card to appear in.
+
+    Without a note of its own it is invisible here -- which is what made
+    "No credentials yet." look like the whole story while every call
+    through the toolkit was being refused.
+    """
+    app = _app_with_binding(tmp_path, tier1, monkeypatch, create_credential=False)
+    async with _client(app) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/credentials")
+        assert "do not exist yet" in page.text
+        # Names the credential and what refers to it, so the reader knows
+        # both what to create and why it matters.
+        assert "sonarr" in page.text
+        assert "demo" in page.text
+        assert "No credentials yet." in page.text
