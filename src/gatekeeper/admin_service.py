@@ -44,14 +44,26 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from . import __version__
 from .catalog import normalize_tool_entry, parse_tool_spec
 from .credentials import KINDS as CREDENTIAL_KINDS
 from .credentials import CredentialStore
 from .errors import ConfigError
 from .identity import ROLES, UI_ROLES
 from .pending import PendingAction, PendingStore
+from .release_notes import query as _release_query
+from .release_notes import read_full as _release_full
 from .store import ConfigStore, WriteRefused
 from .toolkit_proposals import ToolkitProposalStore
+
+#: Same cause as the console popup's fallback, phrased for a caller with no
+#: browser: a build that shipped without RELEASE.md (a bare `pip install`
+#: rather than the image, which bakes it in at /usr/share/gatekeeper).
+_NO_RELEASE_NOTES = (
+    "Release notes are not available in this build -- RELEASE.md was not "
+    "found. Set GATEKEEPER_RELEASE_NOTES to its path, or use the container "
+    "image, which ships it at /usr/share/gatekeeper/RELEASE.md."
+)
 
 #: Server-side mirror of `_credential_editor`'s HTML `pattern` attribute
 #: (ui.py) -- that one is client-side only, so a raw MCP call bypasses it
@@ -177,6 +189,53 @@ class AdminService:
             outcome=str(args.get("outcome") or ""),
         )
         return {"entries": records, "truncated": truncated}
+
+    def release_notes(self, _actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """The deployment's own RELEASE.md, for the agent that manages it.
+
+        An agent asked to propose a change here has to follow the same
+        release rule a human does ("what lands on main is published":
+        bump `pyproject.toml`, add a `## <version>` section), and until now
+        that rule lived only in a file it could not read -- the console
+        popup renders it for a browser, and `serverInfo` reports a version
+        with no notes attached to it. Read-only, and the one admin action
+        that touches no store at all.
+
+        `full: true` returns the file verbatim, preamble included -- the
+        procedure and versioning sections are not part of any version's
+        notes and are exactly what "how do I release this" needs. Without
+        it the answer is version-by-version, newest first, optionally
+        narrowed by `version` (exact), `search` (case-insensitive, over
+        heading and body -- "credential" across a hundred releases is the
+        question this exists for) and `limit`.
+
+        `limit` defaults to 10 rather than everything: RELEASE.md is well
+        past 150 KB, and an unbounded default would spend an agent's whole
+        context on the answer to a narrow question. `total` always reports
+        the pre-limit match count, so a truncated answer says so.
+        """
+        if bool(args.get("full", False)):
+            text = _release_full()
+            if not text:
+                raise AdminActionError(_NO_RELEASE_NOTES)
+            return {"current_version": __version__, "markdown": text}
+        limit = args.get("limit")
+        limit = 10 if limit is None else max(1, int(limit))
+        version = str(args.get("version") or "") or None
+        releases, total = _release_query(
+            version=version, search=str(args.get("search") or "") or None, limit=limit
+        )
+        if not releases and not _release_query()[1]:
+            raise AdminActionError(_NO_RELEASE_NOTES)
+        if version and not releases:
+            raise AdminActionError(f"No release notes for version {version!r}.")
+        return {
+            "current_version": __version__,
+            "releases": releases,
+            "count": len(releases),
+            "total": total,
+            "truncated": total > len(releases),
+        }
 
     def pending_list(self, _actor: str, args: dict[str, Any]) -> dict[str, Any]:
         status = args.get("status") or None
@@ -514,6 +573,7 @@ _EXPOSED: tuple[str, ...] = (
     "role_set",
     "audit_query",
     "pending_list",
+    "release_notes",
     "toolkit_list",
     "toolkit_propose",
     "toolkit_update",

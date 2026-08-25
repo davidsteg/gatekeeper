@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from gatekeeper import __version__
+from gatekeeper import __version__, release_notes
 
 from ._authctx import SCOPE_IDENTITY
 from ._authctx import identity_from as _identity_from
@@ -216,6 +216,23 @@ def _render(result: Any) -> str:
     return f"{header}\n{body}".strip() if header else body or "(no output)"
 
 
+def _no_release_notes(wants_markdown: bool) -> Response:
+    """503, not 404: the route exists and the build simply shipped without
+
+    RELEASE.md (a bare `pip install` rather than the image, which bakes it
+    in). A 404 would read as "no such endpoint" and send the caller
+    looking for a version of the API that does have one.
+    """
+    message = (
+        "Release notes are not available in this build -- RELEASE.md was not "
+        "found. Set GATEKEEPER_RELEASE_NOTES to its path, or use the "
+        "container image, which ships it at /usr/share/gatekeeper/RELEASE.md."
+    )
+    if wants_markdown:
+        return PlainTextResponse(message, status_code=503)
+    return JSONResponse({"error": message}, status_code=503)
+
+
 def build_app(
     *,
     service: Service,
@@ -275,11 +292,67 @@ def build_app(
             service.render_metrics(), media_type="text/plain; version=0.0.4"
         )
 
+    async def release(request: Request) -> Response:
+        """The release notes, for readers who cannot open the console popup.
+
+        Deliberately *not* in `PUBLIC_PATHS`: the notes name versions,
+        deploy steps and fixed vulnerabilities of the build answering the
+        request, which is exactly the inventory an unauthenticated scan
+        would like to have. A token is cheap for the audiences this
+        exists for (an agent, a deploy script, `curl` in a terminal).
+
+        `?version=` selects one section, `?search=` filters (the term is
+        matched against heading and body), `?limit=` caps the list;
+        `?format=markdown` returns the same selection as text, and
+        `?full=1` the whole file verbatim, preamble included.
+        """
+        params = request.query_params
+        wants_markdown = params.get("format", "").lower() in ("markdown", "md", "text")
+        if params.get("full") in ("1", "true", "yes"):
+            text = release_notes.read_full()
+            if not text:
+                return _no_release_notes(wants_markdown)
+            if wants_markdown:
+                return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+            return JSONResponse({"version": __version__, "markdown": text})
+
+        limit_raw = params.get("limit")
+        try:
+            # A caller who asks for "limit=abc" gets told so, rather than
+            # silently receiving the default and drawing conclusions from a
+            # list that answers a different question than the one asked.
+            limit = int(limit_raw) if limit_raw is not None else None
+        except ValueError:
+            return JSONResponse({"error": f"limit must be an integer, not {limit_raw!r}"}, 400)
+        if limit is not None and limit < 1:
+            return JSONResponse({"error": "limit must be at least 1"}, 400)
+
+        version = params.get("version") or None
+        releases, total = release_notes.query(
+            version=version, search=params.get("search") or None, limit=limit
+        )
+        if not releases and not release_notes.load():
+            return _no_release_notes(wants_markdown)
+        if version and not releases:
+            return JSONResponse({"error": f"No release notes for version {version!r}."}, 404)
+        if wants_markdown:
+            body = "\n\n".join(f"## {r['version']}\n\n{r['notes']}" for r in releases)
+            return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
+        return JSONResponse(
+            {
+                "version": __version__,
+                "releases": releases,
+                "count": len(releases),
+                "total": total,
+            }
+        )
+
     routes = [
         Route("/health/live", health_live, methods=["GET"]),
         Route("/health/ready", health_ready, methods=["GET"]),
         Route("/health/startup", health_startup, methods=["GET"]),
         Route("/metrics", metrics, methods=["GET"]),
+        Route("/release", release, methods=["GET"]),
     ]
     if ui:
         routes.extend(

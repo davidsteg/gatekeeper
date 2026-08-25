@@ -206,7 +206,11 @@ src/gatekeeper/
                       time -- never a second hardcoded string to drift
   __main__.py        Entry point: CLI (serve/check/init/token/password/
                       credential-key/integration), bootstrap, SIGHUP handler
-  server.py           MCP protocol, ASGI middleware, health/metrics routes;
+  release_notes.py    Where RELEASE.md is and how it splits into versions
+                       -- one copy, read by the console popup, /release and
+                       admin.release_notes alike
+  server.py           MCP protocol, ASGI middleware, health/metrics/release
+                       routes;
                        composes /mcp and /admin/mcp into one Starlette app
                        with a combined lifespan (two independent
                        StreamableHTTPSessionManagers, one per Server)

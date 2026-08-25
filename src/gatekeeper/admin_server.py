@@ -21,6 +21,8 @@ from typing import Any
 import mcp.types as types
 from mcp.server.lowlevel import Server
 
+from gatekeeper import __version__
+
 from ._authctx import identity_from as _identity_from
 from .admin_service import EXPOSED_ACTIONS, AdminActionError, AdminService
 from .credentials import KINDS as CREDENTIAL_KINDS
@@ -216,6 +218,30 @@ _TOOLS: list[types.Tool] = [
         },
     ),
     types.Tool(
+        name="admin.release_notes",
+        title="Read this deployment's release notes",
+        description=(
+            "Returns RELEASE.md -- the notes for every version of the "
+            "gatekeeper you are managing, newest first. `full: true` gives "
+            "the whole file verbatim including the release rule, the "
+            "procedure and the versioning scheme; otherwise it is "
+            "version-by-version, narrowable with `version` (exact), "
+            "`search` (case-insensitive, matched against heading and body) "
+            "and `limit` (default 10). Read-only. Check here what a version "
+            "actually changed before blaming a deployment for it."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "version": {"type": "string"},
+                "search": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                "full": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
         name="admin.toolkit_list",
         title="List live toolkits",
         description=(
@@ -402,7 +428,13 @@ def build_admin_mcp_server(admin_service: AdminService) -> Server[None]:
 
     return Server(
         "gatekeeper-admin",
-        version="0.1.0",
+        # The real version, not a hand-set constant: an admin client asking
+        # `serverInfo` which build it is talking to was told "0.1.0" by
+        # every release since this endpoint existed, which is worse than no
+        # answer -- it is a wrong one that looks authoritative. The
+        # agent-facing server in `server.py` has always reported
+        # `__version__`; these two describe the same process.
+        version=__version__,
         instructions=(
             "Self-service catalog and grant management for gatekeeper. "
             "Read-only queries and low-risk changes (creating a disabled "

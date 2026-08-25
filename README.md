@@ -327,6 +327,16 @@ every routine change.
   reloads it into the running process immediately — no redeploy, no
   restart, and still no path from `/admin/mcp` to make it happen on its own.
 
+- **The deployment's own release notes are readable from here.**
+  `admin.release_notes` returns RELEASE.md — every version's notes, newest
+  first, narrowable by `version`/`search`/`limit`, or `full: true` for the
+  whole file including the release rule and the procedure. An agent that
+  proposes changes to this gatekeeper has to follow the same release rule a
+  human does, and that rule used to live in a file it could not read. The
+  same text is available over plain HTTP at `GET /release` (bearer token
+  required, like every non-health route): `?version=`, `?search=`,
+  `?limit=`, `?format=markdown`, `?full=1`.
+
 See [`admin_service.py`](src/gatekeeper/admin_service.py) for the exact
 per-action rules and [REQUIREMENTS.md §3](REQUIREMENTS.md) (FR-2.8–FR-3.7)
 for the full spec.

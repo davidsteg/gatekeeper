@@ -18,6 +18,7 @@ import pytest
 import yaml
 from mcp.client.client import Client, streamable_http_client
 
+import gatekeeper
 from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
 from gatekeeper.credentials import KEY_ENV, CredentialStore, generate_master_key
@@ -994,6 +995,89 @@ async def test_cred_propose_rejects_an_unexpected_value_argument(
     assert result.is_error
     assert "sneaked-in-secret" not in result.content[0].text
     assert pending.list() == []
+
+
+# -- admin.release_notes ---------------------------------------------------
+
+
+async def test_release_notes_are_reachable_over_admin_mcp(admin_mcp_env):
+    """The agent that manages this deployment must be able to read what a
+
+    version changed. Until this tool existed the notes were browser-only.
+    """
+    app, _store, _pending, _proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.release_notes", {})
+    payload = json.loads(result.content[0].text)
+    assert payload["current_version"] == gatekeeper.__version__
+    assert payload["releases"][0]["version"] == gatekeeper.__version__
+    # The default is a slice, not the whole 150 KB file -- and it says so.
+    assert payload["count"] == 10
+    assert payload["truncated"] is True
+
+
+async def test_release_notes_full_returns_the_procedure_too(admin_mcp_env):
+    """`full` exists for the agent asked to *make* a release: the rule and
+
+    the procedure are preamble, part of no version's notes.
+    """
+    app, _store, _pending, _proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.release_notes", {"full": True})
+    payload = json.loads(result.content[0].text)
+    assert "## Procedure" in payload["markdown"]
+    assert "The rule: every change is a release" in payload["markdown"]
+
+
+async def test_release_notes_search_and_version_select(admin_mcp_env):
+    app, _store, _pending, _proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        found = await client.call_tool(
+            "admin.release_notes", {"search": "credential", "limit": 3}
+        )
+        one = await client.call_tool(
+            "admin.release_notes", {"version": gatekeeper.__version__}
+        )
+        missing = await client.call_tool("admin.release_notes", {"version": "99.99.99"})
+    hits = json.loads(found.content[0].text)
+    assert hits["count"] == 3 and hits["total"] > 3
+    assert [r["version"] for r in json.loads(one.content[0].text)["releases"]] == [
+        gatekeeper.__version__
+    ]
+    assert missing.is_error
+    assert "99.99.99" in missing.content[0].text
+
+
+async def test_release_notes_is_read_only_and_touches_no_store(admin_mcp_env, tmp_path):
+    """No pending item, no file write -- the one admin action with no store
+
+    behind it at all.
+    """
+    app, _store, pending, _proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    before = admin_mcp_env["tools_path"].read_text(encoding="utf-8")
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        await client.call_tool("admin.release_notes", {"limit": 1})
+    assert pending.list() == []
+    assert admin_mcp_env["tools_path"].read_text(encoding="utf-8") == before
+
+
+async def test_admin_server_reports_the_real_version(admin_mcp_env):
+    """It answered a hardcoded "0.1.0" for every release since this mount
+
+    existed -- a wrong answer that looks authoritative, which is worse than
+    none. `/mcp` has always reported `__version__`; same process, same
+    build.
+    """
+    app, _store, _pending, _proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        info = client.server_info
+    assert info.version == gatekeeper.__version__
+    assert info.name == "gatekeeper-admin"
 
 
 def _python() -> str:
