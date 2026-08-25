@@ -60,6 +60,20 @@ cannot. It is in every release.
 
 ---
 
+## 0.35.0
+
+**Fix: explicitly `cap_add`-ed DAC capabilities (`CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`) were silently discarded by the startup privilege drop, so `run_as: root` could not read files owned by other users even when the container had been granted those capabilities.**
+
+The startup drop (`_selfdrop.py`) hardcoded `_KEPT = CAP_SETUID | CAP_SETGID` and called `capset(_KEPT, _KEPT, _KEPT)`, discarding everything else in step 3 of the drop. A deployment that added `DAC_OVERRIDE` and `DAC_READ_SEARCH` to `cap_add` — the standard way to let `run_as: root` read foreign 0600 files — would see `docker inspect` report the caps in `CapAdd` but `/proc/1/status` show `CapEff=00000000000000c0` (only SETUID+SETGID), and every `run_as: root` read of a file it did not own would fail with `Permission denied`.
+
+`GATEKEEPER_KEEP_CAPS` now names the extra capabilities to carry through the drop, in Docker `cap_add` notation (`DAC_OVERRIDE,DAC_READ_SEARCH`; a `CAP_` prefix is accepted too). The extras are kept in the **permitted**, **inheritable** and **ambient** sets but **not the effective set** — the server process itself cannot use them, only the `run_as` child can after inheriting them from the ambient set on `execve`. This is the narrowest split that lets a privileged child read foreign files without the server itself being able to. The base two (`SETUID`+`SETGID`) remain hardcoded and always kept; extras are opt-in.
+
+An unknown capability name is a startup error, not a silent skip — the operator typed it for a reason, and carrying on without it would produce the exact "looks like a bug" failure this module exists to make legible. When no toolkit declares `run_as`, startup discards the extras along with the base two (`discard_capabilities`), so the common case still ends up holding nothing.
+
+The startup warning for `run_as: root` in a container without DAC caps now checks both the server's effective set *and* the child's ambient set (via `child_bypasses_file_permissions`), so a deployment with `GATEKEEPER_KEEP_CAPS` no longer gets a false alarm. The warning message names the new env var as the fix.
+
+Tests: `_selfdrop.py` gains a section for `GATEKEEPER_KEEP_CAPS` — off by default, empty string is zero, unknown name is refused, `CAP_` prefix accepted, extras in CapPrm/CapInh/CapAmb but not CapEff, extras survive exec into the child, and end-to-end `run_as: root` reads a 0600 foreign file with `KEEP_CAPS` and fails without it. The root-requiring tests run in the `tests (root)` CI job.
+
 ## 0.34.1
 
 **Fix: the "cannot be read" startup error stated `568:568` as a fixed string instead of reading the process's actual uid — the one message where being told the wrong uid costs the most, because the reader chowns to it and the failure does not move.**

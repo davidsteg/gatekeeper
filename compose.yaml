@@ -142,6 +142,18 @@ services:
       #
       #   GATEKEEPER_DROP_TO: "568:568"
 
+      # Extra capabilities to keep across the startup drop, beyond the
+      # mandatory SETUID+SETGID. Comma-separated, in Docker cap_add
+      # notation. The extras go into the run_as child's ambient set (via
+      # permitted+inheritable+ambient), but NOT the server's effective set
+      # -- so the server itself cannot use them, only a run_as child can
+      # after execve. The common case is DAC_OVERRIDE+DAC_READ_SEARCH, so
+      # run_as: root can read files owned by other users (mode 0600 etc).
+      # Requires the same capabilities in cap_add above. See
+      # docs/DEPLOYMENT.md.
+      #
+      #   GATEKEEPER_KEEP_CAPS: "DAC_OVERRIDE,DAC_READ_SEARCH"
+
       # Required as soon as any toolkit carries a `credential:` line.
       # Generate once with 'gatekeeper credential-key'; losing it means
       # re-entering every stored credential. A credentials.yaml with

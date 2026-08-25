@@ -307,6 +307,47 @@ The setting is deliberately not baked into the image. A container started
 with `user: "0:0"` and no `cap_add` would then refuse to boot, and that is
 somebody's working deployment today.
 
+#### Keeping extra capabilities for `run_as: root` (`GATEKEEPER_KEEP_CAPS`)
+
+The drop above keeps exactly `CAP_SETUID` and `CAP_SETGID`. A deployment
+that also grants `CAP_DAC_OVERRIDE` and `CAP_DAC_READ_SEARCH` through
+`cap_add` — so a `run_as: root` child can read files owned by other users
+— would otherwise see those extras silently discarded by the drop. The
+base two are hardcoded; anything beyond them has to be named explicitly:
+
+```yaml
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE           # let the run_as child bypass file perms
+      - DAC_READ_SEARCH        # (read + traverse)
+    environment:
+      GATEKEEPER_DROP_TO: "568:568"
+      GATEKEEPER_KEEP_CAPS: "DAC_OVERRIDE,DAC_READ_SEARCH"
+```
+
+`GATEKEEPER_KEEP_CAPS` takes a comma-separated list of capability names in
+Docker `cap_add` notation (`DAC_OVERRIDE`, with or without the `CAP_`
+prefix). The named extras are kept in the **permitted**, **inheritable**
+and **ambient** sets but **not the effective set**: the server process
+itself cannot use them — only the `run_as` child can, after inheriting them
+from the ambient set on `execve`. This is the narrowest split that lets a
+privileged child read files owned by other users without the server itself
+being able to.
+
+An unknown capability name is a startup error, not a silent skip — the
+operator typed it for a reason, and carrying on without the capability they
+asked for would produce the exact "looks like a bug" failure this section
+exists to make legible.
+
+When no toolkit declares `run_as`, startup discards the extras along with
+the base two (see `discard_capabilities`). A future toolkit that adds
+`run_as` would re-add the base two on the next start; the extras would
+need `GATEKEEPER_KEEP_CAPS` again, which is the deploy-time gate.
+
 ### If the container still comes up as 568
 
 The failure worth naming on its own, because it looks like a bug in
@@ -467,6 +508,14 @@ Three things worth being deliberate about before doing this:
   uid fixes it properly. Startup warns when a toolkit says `run_as: root`
   in a container without those capabilities, and a denial from such a call
   says which uid it ran as and why root was not enough.
+
+  When the owning uid is genuinely unknown at deploy time and `run_as:
+  root` must reach foreign files, `GATEKEEPER_KEEP_CAPS` (see above) lets
+  the extras survive the startup drop into the child's ambient set. It is
+  the explicit, audited alternative to granting the whole container
+  `CAP_DAC_OVERRIDE` in the effective set — the server itself still
+  cannot use it, only the `run_as` child can. Use it when naming the
+  owning uid is not possible; prefer the owning uid when it is.
 - **Only the toolkits that declare it are affected.** A `file` toolkit
   without `run_as` still runs in-process as the container user, and
   `http`/`docker`/`local`/`truenas`/`ssh` toolkits are untouched — `run_as`

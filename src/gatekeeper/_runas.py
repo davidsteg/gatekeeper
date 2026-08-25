@@ -157,11 +157,32 @@ def resolve_run_as(value: str) -> tuple[int, int, str | None]:
 #: Capability bit numbers from `linux/capability.h`. The two the drop needs,
 #: plus the two that decide whether root is actually above file permissions
 #: -- without them uid 0 is checked like anybody else, which is the one
-#: thing about `run_as: root` that surprises people.
+#: thing about `run_as: root` that surprises people. The rest (CHOWN,
+#: FOWNER, FSETID, KILL) are included for `GATEKEEPER_KEEP_CAPS` -- a
+#: deployment that grants them through `cap_add` can name them to carry
+#: them through the startup drop into the `run_as` child's ambient set.
+CAP_CHOWN = 0
 CAP_DAC_OVERRIDE = 1
 CAP_DAC_READ_SEARCH = 2
+CAP_FOWNER = 3
+CAP_FSETID = 4
+CAP_KILL = 5
 CAP_SETGID = 6
 CAP_SETUID = 7
+
+#: Names for `GATEKEEPER_KEEP_CAPS`, matching Docker's `cap_add` notation
+#: (without the `CAP_` prefix). Used by `_selfdrop.configured_extra_caps`
+#: to parse the environment variable. A `CAP_` prefix is accepted there too.
+CAPABILITY_NAMES = {
+    "CHOWN": CAP_CHOWN,
+    "DAC_OVERRIDE": CAP_DAC_OVERRIDE,
+    "DAC_READ_SEARCH": CAP_DAC_READ_SEARCH,
+    "FOWNER": CAP_FOWNER,
+    "FSETID": CAP_FSETID,
+    "KILL": CAP_KILL,
+    "SETGID": CAP_SETGID,
+    "SETUID": CAP_SETUID,
+}
 
 #: `_LINUX_CAPABILITY_VERSION_3`, the 64-bit capability ABI. The header it
 #: comes from also fixes the shape of the two structs in
@@ -503,6 +524,30 @@ def bypasses_file_permissions() -> bool | None:
     if caps is None:
         return None
     return bool(caps & ((1 << CAP_DAC_OVERRIDE) | (1 << CAP_DAC_READ_SEARCH)))
+
+
+def child_bypasses_file_permissions() -> bool | None:
+    """Whether a `run_as` child would inherit DAC-bypass capabilities.
+
+    The companion to `bypasses_file_permissions`: that one checks the
+    *effective* set (what this process can do right now), this one checks
+    the *ambient* set (what survives an `execve` and reaches the child).
+
+    `run_as: root` reads files the server itself cannot: the child
+    process starts at uid 0, and if the deployment granted
+    `CAP_DAC_OVERRIDE`/`CAP_DAC_READ_SEARCH` through `cap_add` *and*
+    asked gatekeeper to keep them via `GATEKEEPER_KEEP_CAPS`, they travel
+    in the ambient set. The child's effective set is built from ambient
+    on `execve`, so this is the mask that says whether the child is above
+    ordinary DAC checks.
+
+    Returns `None` when capability sets cannot be read (no procfs).
+    """
+    sets = capability_sets()
+    if sets is None:
+        return None
+    amb = sets.get("CapAmb", 0)
+    return bool(amb & ((1 << CAP_DAC_OVERRIDE) | (1 << CAP_DAC_READ_SEARCH)))
 
 
 def explain_permission_denied(uid: int, gid: int, run_as: str) -> str:
