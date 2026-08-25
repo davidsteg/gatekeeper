@@ -64,6 +64,21 @@ class ConfigError(GatekeeperError):
     """Configuration is invalid - causes startup to abort."""
 
 
+def _whoami() -> str:
+    """uid:gid of this process, for a chown recommendation that is correct.
+
+    Read rather than assumed. This message used to state "568:568" as a
+    fixed string, which is the shipped image's convention and not
+    necessarily this process's identity -- and a permission error is
+    exactly the moment when being told the wrong uid costs the most,
+    because the reader chowns to it and the failure does not move.
+    """
+    try:
+        return f"{os.geteuid()}:{os.getegid()}"  # type: ignore[attr-defined]
+    except AttributeError:  # pragma: no cover -- Windows has no euid
+        return "this user"
+
+
 def read_config_file(path: str, hint: str = "") -> str:
     """Reads a configuration file and translates OS errors into plain text.
 
@@ -89,8 +104,15 @@ def read_config_file(path: str, hint: str = "") -> str:
             return handle.read()
     except PermissionError:
         raise ConfigError(
-            f"{path} cannot be read. Check the owner -- the container runs as "
-            "568:568." + (f" {hint}" if hint else "")
+            f"{path} cannot be read by this process ({_whoami()}). "
+            "Check the owner and mode of the file and of every directory "
+            "above it -- a denial naming the file is often a parent "
+            "directory without +x for that uid. Files created while the "
+            "container ran as root stay root-owned, so this is the usual "
+            "first failure after switching a deployment to a lesser user "
+            f"(GATEKEEPER_DROP_TO, or 'user:'). On the host:\n"
+            f"  chown -R {_whoami()} <the directory mounted at "
+            f"{os.path.dirname(path) or path}>" + (f"\n{hint}" if hint else "")
         ) from None
     except OSError as exc:
         raise ConfigError(f"{path} cannot be read: {exc}") from None
