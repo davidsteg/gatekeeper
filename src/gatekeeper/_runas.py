@@ -154,9 +154,12 @@ def resolve_run_as(value: str) -> tuple[int, int, str | None]:
     return entry.pw_uid, entry.pw_gid, name
 
 
-#: Capability bit numbers from `linux/capability.h`. Only the two this
-#: module's drop actually needs -- there is no reason for it to know about
-#: any other.
+#: Capability bit numbers from `linux/capability.h`. The two the drop needs,
+#: plus the two that decide whether root is actually above file permissions
+#: -- without them uid 0 is checked like anybody else, which is the one
+#: thing about `run_as: root` that surprises people.
+CAP_DAC_OVERRIDE = 1
+CAP_DAC_READ_SEARCH = 2
 CAP_SETGID = 6
 CAP_SETUID = 7
 
@@ -206,6 +209,30 @@ def effective_capabilities() -> int | None:
     """Just the effective set -- what a process can use *right now*."""
     sets = capability_sets()
     return None if sets is None else sets.get("CapEff")
+
+
+def bounding_capabilities() -> int | None:
+    """The bounding set -- the ceiling on what any `execve` from here can hold.
+
+    Deliberately not part of `capability_sets`: callers there check that
+    every set they get back is empty after a drop, and the bounding set
+    never is (lowering it needs `CAP_SETPCAP`, which no deployment grants).
+    Folding it in would turn a correct drop into a reported failure.
+
+    It answers a question the other sets cannot: whether a capability is
+    reachable *at all* in this container. `cap_drop: ALL` is a bounding-set
+    restriction, so this is what says whether `CAP_DAC_OVERRIDE` was
+    dropped -- and therefore whether `run_as: root` is bound by ordinary
+    file permissions like anyone else.
+    """
+    try:
+        with open("/proc/self/status", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("CapBnd:"):
+                    return int(line.split(":", 1)[1].strip(), 16)
+    except (OSError, ValueError):
+        return None
+    return None
 
 
 def can_change_user() -> bool:
@@ -463,6 +490,71 @@ def become(uid: int, gid: int, name: str | None) -> None:
             )
 
 
+def bypasses_file_permissions() -> bool | None:
+    """Whether this process is above ordinary DAC checks, or `None` if unknown.
+
+    `CAP_DAC_OVERRIDE` (write and read anything) and `CAP_DAC_READ_SEARCH`
+    (read and traverse anything) are what people mean when they say "root
+    can read any file". Neither is implied by uid 0 -- they are ordinary
+    capabilities, and `cap_drop: ALL` takes them away from root along with
+    everything else.
+    """
+    caps = effective_capabilities()
+    if caps is None:
+        return None
+    return bool(caps & ((1 << CAP_DAC_OVERRIDE) | (1 << CAP_DAC_READ_SEARCH)))
+
+
+def explain_permission_denied(uid: int, gid: int, run_as: str) -> str:
+    """The context a bare "Permission denied" leaves out.
+
+    Worth appending because the bare message sends the reader looking in
+    the wrong place. `run_as` *did* apply; the operation really did run as
+    the requested user; and the kernel really did refuse. What is missing
+    is that a container built the recommended way -- `cap_drop: ALL` plus
+    `cap_add: [SETUID, SETGID]` -- gives root neither `CAP_DAC_OVERRIDE`
+    nor `CAP_DAC_READ_SEARCH`, so `run_as: root` is checked against file
+    modes like any other user. Against a file owned by 568 with mode 0600,
+    root is then *less* able to read it than 568 is, which reads as a bug
+    in `run_as` and is not one.
+    """
+    where = f"The operation ran as uid={uid} gid={gid} (run_as: {run_as!r})."
+    if uid != 0:
+        return (
+            f" {where} That is the user the toolkit asked for, so this is an "
+            "ordinary permission problem: check the file's mode and owner, "
+            "and that every parent directory is traversable (+x) by that "
+            "uid -- a denial naming the file is often a directory above it."
+        )
+
+    if bypasses_file_permissions():
+        return (
+            f" {where} It holds CAP_DAC_OVERRIDE, so this is not a file-mode "
+            "problem -- check for a read-only mount, or a path that is not "
+            "mounted into the container at all."
+        )
+
+    bounding = bounding_capabilities()
+    reachable = bounding is not None and bounding & (1 << CAP_DAC_OVERRIDE)
+    return (
+        f" {where} Note that uid 0 here is NOT above file permissions: this "
+        "container holds neither CAP_DAC_OVERRIDE nor CAP_DAC_READ_SEARCH, "
+        "so root is checked against the file's mode like any other user, and "
+        "a file owned by somebody else with mode 0600 is unreadable to it. "
+        + (
+            "The capability is in the bounding set, so 'cap_add: DAC_OVERRIDE' "
+            "would grant it -- but it reads every file on every mount, and "
+            "the better answer is almost always to name the owning uid: "
+            if reachable
+            else "'cap_drop: ALL' removed it from the bounding set, so it "
+            "cannot be granted back without changing that. Name the owning "
+            "uid instead: "
+        )
+        + "run_as: \"<uid>:<gid>\" of whoever owns the file. See "
+        "docs/DEPLOYMENT.md."
+    )
+
+
 def _fail(message: str) -> dict[str, Any]:
     return {
         "outcome": "failed",
@@ -530,6 +622,13 @@ def _main() -> int:
     except Exception as exc:  # noqa: BLE001 -- reported, never swallowed
         sys.stdout.write(json.dumps(_fail(str(exc))))
         return 0
+
+    # A denial is the one result where "which user was this?" decides what
+    # to do next, and it is exactly what the message does not say. Answer
+    # it here, where the uid is known for certain, rather than leaving the
+    # reader to deduce it from the toolkit's configuration.
+    if stderr.startswith("Permission denied"):
+        stderr += explain_permission_denied(uid, gid, str(request["run_as"]))
 
     sys.stdout.write(
         json.dumps(

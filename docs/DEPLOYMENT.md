@@ -259,7 +259,9 @@ host is itself root the whole time.
 `GATEKEEPER_DROP_TO` closes that gap. The container still starts as root
 with the two capabilities; gatekeeper then becomes the unprivileged user
 *itself*, before argparse and before any file is touched, keeping exactly
-`CAP_SETUID` and `CAP_SETGID`:
+`CAP_SETUID` and `CAP_SETGID`, and keeping the supplementary groups the
+container was started with — `group_add: "999"` for the Docker socket
+survives the drop, minus root's own group 0:
 
 ```yaml
     user: "0:0"                       # start privileged...
@@ -450,12 +452,21 @@ at startup and confusing at the first call.
 
 Three things worth being deliberate about before doing this:
 
-- **Prefer the owner over root.** `run_as: "3001:3001"` (the uid that owns
-  the files) is bounded by that user's own permissions. `run_as: root` is
-  not, and additionally needs `CAP_DAC_OVERRIDE` to read a directory it does
-  not own — a capability that reads every file on every mount. If the goal is
-  "reach this one agent's config directory", the owning uid is the answer and
-  root is not.
+- **Prefer the owner over root — `run_as: root` usually reaches *less*.**
+  This is the one that surprises people, so it is worth stating as
+  mechanics rather than advice. "Root can read any file" is not a property
+  of uid 0; it is `CAP_DAC_OVERRIDE` and `CAP_DAC_READ_SEARCH`, two
+  ordinary capabilities. `cap_drop: ALL` takes them away from root along
+  with everything else, and `cap_add: [SETUID, SETGID]` does not give them
+  back. In the recommended container, uid 0 is therefore checked against
+  file modes exactly like anybody else — so against
+  `-rw------- 568 568 compose.yaml` it gets `Permission denied`, while
+  `run_as: "568:568"` reads the file without holding any capability at
+  all. Granting `cap_add: DAC_OVERRIDE` would "fix" it by handing the
+  container read access to every file on every mount; naming the owning
+  uid fixes it properly. Startup warns when a toolkit says `run_as: root`
+  in a container without those capabilities, and a denial from such a call
+  says which uid it ran as and why root was not enough.
 - **Only the toolkits that declare it are affected.** A `file` toolkit
   without `run_as` still runs in-process as the container user, and
   `http`/`docker`/`local`/`truenas`/`ssh` toolkits are untouched — `run_as`

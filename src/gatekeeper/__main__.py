@@ -9,7 +9,14 @@ import sys
 
 import uvicorn
 
-from ._runas import can_change_user, capability_sets, effective_capabilities
+from ._runas import (
+    RunAsError,
+    bypasses_file_permissions,
+    can_change_user,
+    capability_sets,
+    effective_capabilities,
+    resolve_run_as,
+)
 from ._selfdrop import (
     SelfDropError,
     configured_target,
@@ -137,6 +144,31 @@ def cmd_serve(args: argparse.Namespace) -> int:
                 _whoami(),
                 state,
             )
+            # Usable is not the same as useful. A toolkit aimed at uid 0 in
+            # a container without CAP_DAC_OVERRIDE gets a root that is
+            # checked against file modes like anyone else -- so it reaches
+            # *less* than the owning uid would, and the first call fails
+            # with a bare "Permission denied" that reads like a run_as bug.
+            # Cheaper to say at deploy time than to debug at call time.
+            if bypasses_file_permissions() is False:
+                for name in run_as_toolkits:
+                    try:
+                        target, _, _ = resolve_run_as(str(tier1.toolkits[name].run_as))
+                    except RunAsError:
+                        continue
+                    if target != 0:
+                        continue
+                    logger.warning(
+                        "Toolkit %r uses 'run_as: %s', but this container holds "
+                        "neither CAP_DAC_OVERRIDE nor CAP_DAC_READ_SEARCH -- so "
+                        "uid 0 is checked against file permissions like any "
+                        "other user and cannot read a file owned by somebody "
+                        "else with mode 0600. For reaching another user's "
+                        "files, name that user: 'run_as: \"<uid>:<gid>\"'. "
+                        "See docs/DEPLOYMENT.md.",
+                        name,
+                        tier1.toolkits[name].run_as,
+                    )
         else:
             logger.error(
                 "run_as is NOT usable: this process (%s, %s) holds no privilege "
