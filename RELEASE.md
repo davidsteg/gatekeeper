@@ -60,6 +60,12 @@ cannot. It is in every release.
 
 ---
 
+## 0.36.6
+
+**Fix: the access map showed broken image icons for toolkits whose CDN slug doesn't exist — `tdarr`, `diag` (→ `stethoscope`), `file` (→ `folder`), `http`/`webui` (→ `web`) all returned 404 from the dashboard-icons CDN, leaving a broken `<img>` with no `onerror` fallback (CSP forbids scripts).**
+
+The `_DASHBOARD_ICON_SLUGS` map in `ui.py` had four entries pointing at CDN paths that don't exist: `tdarr`, `stethoscope`, `folder`, and `web`. Removed them — those toolkits now fall back to `_toolkit_badge`'s colored monogram (the same circle-plus-initials badge already used for unknown toolkits), which always renders. All remaining slugs verified with HTTP 200 against the CDN.
+
 ## 0.36.5
 
 **Reported: new tools reach `admin.tool_list` but never the agent's `/mcp` catalog until the container is restarted. The running process is not the stale half — it serves the new tool on the very next request, and it is callable on the same connection. What is missing is anything telling a connected client to ask again.**
