@@ -14,6 +14,7 @@ from ._runas import (
     bypasses_file_permissions,
     can_change_user,
     capability_sets,
+    child_bypasses_file_permissions,
     effective_capabilities,
     resolve_run_as,
 )
@@ -150,7 +151,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
             # *less* than the owning uid would, and the first call fails
             # with a bare "Permission denied" that reads like a run_as bug.
             # Cheaper to say at deploy time than to debug at call time.
-            if bypasses_file_permissions() is False:
+            server_bypasses = bypasses_file_permissions()
+            child_bypasses = child_bypasses_file_permissions()
+            if server_bypasses is False and child_bypasses is False:
                 for name in run_as_toolkits:
                     try:
                         target, _, _ = resolve_run_as(str(tier1.toolkits[name].run_as))
@@ -159,12 +162,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
                     if target != 0:
                         continue
                     logger.warning(
-                        "Toolkit %r uses 'run_as: %s', but this container holds "
-                        "neither CAP_DAC_OVERRIDE nor CAP_DAC_READ_SEARCH -- so "
-                        "uid 0 is checked against file permissions like any "
-                        "other user and cannot read a file owned by somebody "
-                        "else with mode 0600. For reaching another user's "
-                        "files, name that user: 'run_as: \"<uid>:<gid>\"'. "
+                        "Toolkit %r uses 'run_as: %s', but neither this "
+                        "process nor a run_as child holds CAP_DAC_OVERRIDE "
+                        "or CAP_DAC_READ_SEARCH -- so uid 0 is checked "
+                        "against file permissions like any other user and "
+                        "cannot read a file owned by somebody else with "
+                        "mode 0600. To let the child read such files, add "
+                        "'DAC_OVERRIDE,DAC_READ_SEARCH' to cap_add AND to "
+                        "GATEKEEPER_KEEP_CAPS (so they survive the startup "
+                        "drop into the child's ambient set). Alternatively, "
+                        "name the owning uid: 'run_as: \"<uid>:<gid>\"'. "
                         "See docs/DEPLOYMENT.md.",
                         name,
                         tier1.toolkits[name].run_as,

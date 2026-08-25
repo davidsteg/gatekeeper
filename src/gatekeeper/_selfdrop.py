@@ -1,4 +1,4 @@
-"""Giving up root at startup while keeping the two capabilities `run_as` needs.
+"""Giving up root at startup while keeping the capabilities `run_as` needs.
 
 The third shape of the same trade, and the only one that is process-wide.
 `_runas.py` raises a child's authority for one file operation; `_unpriv.py`
@@ -28,18 +28,19 @@ How, in order, and why each step is not optional:
    the moment euid leaves 0, and there is nothing left to keep.
 2. Supplementary groups, then `setresgid`, then `setresuid` — groups first
    because both need the privilege `setresuid` gives away.
-3. `capset` back to exactly `{CAP_SETUID, CAP_SETGID}` — the uid change
-   preserves *permitted* under KEEPCAPS but still clears *effective*, so
-   without this the process holds the capabilities and cannot use them.
-   Setting inheritable at the same time is what makes step 4 legal.
-4. `PR_CAP_AMBIENT_RAISE` for both — the step that actually matters, and
-   the one an implementation gets wrong silently. The `run_as` helper is a
-   *separate process*, reached by `fork`+`exec`. On `execve` of an ordinary
-   file the kernel computes the new permitted set from the file's own
-   capabilities, which are none — so a child of a non-root parent inherits
-   nothing from permitted or inheritable. The ambient set is the only set
-   that survives an `execve`, and therefore the only way the helper ever
-   sees the capability its whole existence depends on.
+3. `capset` back to the kept set — the uid change preserves *permitted*
+   under KEEPCAPS but still clears *effective*, so without this the
+   process holds the capabilities and cannot use them. Setting
+   inheritable at the same time is what makes step 4 legal.
+4. `PR_CAP_AMBIENT_RAISE` for each kept capability — the step that
+   actually matters, and the one an implementation gets wrong silently. The
+   `run_as` helper is a *separate process*, reached by `fork`+`exec`. On
+   `execve` of an ordinary file the kernel computes the new permitted set
+   from the file's own capabilities, which are none — so a child of a
+   non-root parent inherits nothing from permitted or inheritable. The
+   ambient set is the only set that survives an `execve`, and therefore the
+   only way the helper ever sees the capability its whole existence depends
+   on.
 
 `no-new-privileges: true` stays on and does not conflict: it governs what
 `execve` may *grant* from a file, and the ambient set is not a grant from a
@@ -57,6 +58,21 @@ radius for the ordinary bugs that are not code execution, and a capability
 set of exactly two entries instead of root's full complement. Deploy it for
 those reasons, not in the belief that it contains a hostile process.
 
+**Keeping extra capabilities (`GATEKEEPER_KEEP_CAPS`).** The default keeps
+exactly `CAP_SETUID` and `CAP_SETGID` -- the minimum for `run_as` to work.
+A deployment that grants more through `cap_add` (commonly
+`CAP_DAC_OVERRIDE` and `CAP_DAC_READ_SEARCH`, so a `run_as: root` child
+can read files owned by other users) would otherwise see those capabilities
+silently discarded by step 3. `GATEKEEPER_KEEP_CAPS` names the extra
+capabilities to carry through the drop, in the same notation Docker's
+`cap_add` uses (``DAC_OVERRIDE,DAC_READ_SEARCH``; a ``CAP_`` prefix is
+accepted too). The extras are kept in the *permitted*, *inheritable* and
+*ambient* sets but not the *effective* set: the server process itself
+cannot use them, but the `run_as` child inherits them via the ambient set
+on `execve`. This is the narrowest split that lets a privileged child read
+files without the server itself being able to -- which is the point, since
+the server runs the whole time and the child lives for one operation.
+
 Off unless configured. `GATEKEEPER_DROP_TO` names the target; without it
 this module does nothing at all, which is what keeps `gatekeeper serve` on
 a bare host from suddenly trying to become a uid that does not exist there.
@@ -69,6 +85,7 @@ import os
 from ._runas import (
     CAP_SETGID,
     CAP_SETUID,
+    CAPABILITY_NAMES,
     RunAsError,
     capability_sets,
     capset,
@@ -82,15 +99,19 @@ from ._runas import (
 #: too many.
 DROP_TO_ENV = "GATEKEEPER_DROP_TO"
 
+#: Extra capabilities to keep across the drop, beyond the mandatory two.
+#: Comma-separated, in Docker `cap_add` notation (``DAC_OVERRIDE``) with or
+#: without the ``CAP_`` prefix. Empty/unset = keep only SETUID+SETGID.
+KEEP_CAPS_ENV = "GATEKEEPER_KEEP_CAPS"
+
 #: `linux/prctl.h`.
 _PR_SET_KEEPCAPS = 8
 _PR_CAP_AMBIENT = 47
 _PR_CAP_AMBIENT_RAISE = 2
 
-#: Exactly what is kept. Not "whatever the container happened to be given":
-#: a deployment that granted more would otherwise carry the extra straight
-#: through the drop, and the point of dropping is to end up with less.
-_KEPT = (1 << CAP_SETUID) | (1 << CAP_SETGID)
+#: The two capabilities the drop always keeps -- `run_as` cannot work
+#: without them. Everything in `_KEPT_EXTRA` is *in addition to* these.
+_BASE_KEPT = (1 << CAP_SETUID) | (1 << CAP_SETGID)
 
 
 class SelfDropError(RuntimeError):
@@ -100,6 +121,46 @@ class SelfDropError(RuntimeError):
 def configured_target() -> str | None:
     """The `GATEKEEPER_DROP_TO` value, or `None` when unset."""
     return os.environ.get(DROP_TO_ENV, "").strip() or None
+
+
+def _parse_capability_name(token: str) -> int:
+    """One token from `GATEKEEPER_KEEP_CAPS` -> capability bit number.
+
+    Accepts both ``DAC_OVERRIDE`` (Docker notation) and ``CAP_DAC_OVERRIDE``
+    (kernel notation). The capability must be one this codebase knows
+    about -- an unknown name is a configuration error, not a silent skip,
+    because the operator typed it for a reason and carrying on without the
+    capability they asked for would produce the exact "looks like a bug"
+    failure this module exists to make legible.
+    """
+    name = token.strip().upper()
+    if name.startswith("CAP_"):
+        name = name[4:]
+    if name not in CAPABILITY_NAMES:
+        raise SelfDropError(
+            f"{KEEP_CAPS_ENV}={token!r}: unknown capability {name!r}. "
+            f"Known: {', '.join(sorted(CAPABILITY_NAMES))} (with or without "
+            "the 'CAP_' prefix)."
+        )
+    return CAPABILITY_NAMES[name]
+
+
+def configured_extra_caps() -> int:
+    """The extra capability bitmask from `GATEKEEPER_KEEP_CAPS`, or 0.
+
+    Raises `SelfDropError` on an unknown capability name -- see
+    `_parse_capability_name` for why an unknown is not silently ignored.
+    """
+    raw = os.environ.get(KEEP_CAPS_ENV, "").strip()
+    if not raw:
+        return 0
+    bits = 0
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        bits |= 1 << _parse_capability_name(token)
+    return bits
 
 
 def _kept_groups() -> list[int]:
@@ -137,11 +198,16 @@ def _prctl(*args: int) -> None:
 
 
 def drop_privileges(value: str) -> tuple[int, int]:
-    """Becomes `value`, keeping `CAP_SETUID`/`CAP_SETGID`. Returns `(uid, gid)`.
+    """Becomes `value`, keeping `CAP_SETUID`/`CAP_SETGID` plus any extras.
 
-    Raises rather than returning a process that is still root: a startup
-    that was told to give up privilege and did not must not go on to serve
-    requests as though it had. The caller aborts.
+    Returns `(uid, gid)`. Raises rather than returning a process that is
+    still root: a startup that was told to give up privilege and did not
+    must not go on to serve requests as though it had. The caller aborts.
+
+    Extra capabilities (from `GATEKEEPER_KEEP_CAPS`) are kept in the
+    permitted, inheritable and ambient sets but *not* the effective set.
+    The server process itself cannot use them -- only the `run_as` child
+    can, after inheriting them via the ambient set on `execve`.
     """
     try:
         # The name, if there was one, is not needed: the supplementary
@@ -156,6 +222,8 @@ def drop_privileges(value: str) -> tuple[int, int]:
             f"{DROP_TO_ENV}={value!r} resolves to uid 0. This setting exists to "
             "give up root, so root is the one value it cannot take."
         )
+
+    extra = configured_extra_caps()
 
     if os.geteuid() != 0:
         # Already unprivileged: nothing to give up, and nothing to keep --
@@ -172,6 +240,14 @@ def drop_privileges(value: str) -> tuple[int, int]:
             )
         return uid, gid
 
+    # What the drop keeps: the base two (always) plus any extras (if
+    # configured). The extras are in all three sets the kernel checks for
+    # the ambient raise, but only effective is the one that lets the
+    # *server* use the capability -- and that one stays at the base two.
+    # A `run_as` child inherits the extras from ambient on execve and gets
+    # them in its effective set for free, which is the whole point.
+    kept = _BASE_KEPT | extra
+
     try:
         # 1. Without this the capabilities are gone the instant euid != 0.
         _prctl(_PR_SET_KEEPCAPS, 1, 0, 0, 0)
@@ -184,11 +260,18 @@ def drop_privileges(value: str) -> tuple[int, int]:
         # 3. KEEPCAPS preserved *permitted*; effective was cleared anyway.
         #    Inheritable is set here because the ambient raise below is only
         #    legal for a capability that is in both permitted and inheritable.
-        capset(_KEPT, _KEPT, _KEPT)
+        #    Effective is the *base* two only: the server itself can change
+        #    user (the point of run_as) but cannot use DAC_OVERRIDE etc.
+        #    directly. The child gets the extras from ambient on execve.
+        capset(_BASE_KEPT, kept, kept)
 
-        # 4. The only set that survives the helper's execve.
-        for capability in (CAP_SETUID, CAP_SETGID):
-            _prctl(_PR_CAP_AMBIENT, _PR_CAP_AMBIENT_RAISE, capability, 0, 0)
+        # 4. The only set that survives the helper's execve. Every kept
+        #    capability goes into ambient, not only the base two: the
+        #    extras are what `run_as: root` needs to read files owned by
+        #    other users, and they only reach the child through this set.
+        for bit in range(64):
+            if kept & (1 << bit):
+                _prctl(_PR_CAP_AMBIENT, _PR_CAP_AMBIENT_RAISE, bit, 0, 0)
 
         # Tidy: the flag has done its work, and leaving it on would keep
         # capabilities across any *further* uid change, which nothing here
@@ -204,11 +287,11 @@ def drop_privileges(value: str) -> tuple[int, int]:
             "docs/DEPLOYMENT.md."
         ) from None
 
-    _verify(uid, gid)
+    _verify(uid, gid, extra)
     return uid, gid
 
 
-def _verify(uid: int, gid: int) -> None:
+def _verify(uid: int, gid: int, extra: int) -> None:
     """Confirms the drop landed, in both directions.
 
     A partial result here is the failure worth catching: ids changed but
@@ -229,25 +312,49 @@ def _verify(uid: int, gid: int) -> None:
         # failing a startup that is probably fine.
         return
 
-    for field in ("CapEff", "CapPrm", "CapAmb"):
+    kept = _BASE_KEPT | extra
+
+    # Effective: the base two only. The server process itself must not hold
+    # the extras here -- that is the split that keeps DAC_OVERRIDE out of
+    # the server and in the child.
+    cap_eff = held.get("CapEff")
+    if cap_eff != _BASE_KEPT:
+        raise SelfDropError(
+            f"drop to uid={uid} kept the wrong effective capabilities: "
+            f"CapEff={cap_eff if cap_eff is None else format(cap_eff, '016x')}, "
+            f"expected {_BASE_KEPT:016x} (CAP_SETUID + CAP_SETGID only). "
+            "The server itself must not hold extra capabilities -- only the "
+            "run_as child should, via the ambient set. See "
+            "docs/DEPLOYMENT.md."
+        )
+
+    # Permitted, inheritable and ambient: the full kept set, extras
+    # included. This is what the child inherits.
+    for field in ("CapPrm", "CapInh", "CapAmb"):
         value = held.get(field)
-        if value != _KEPT:
+        if value != kept:
             raise SelfDropError(
                 f"drop to uid={uid} kept the wrong capabilities: "
                 f"{field}={value if value is None else format(value, '016x')}, "
-                f"expected {_KEPT:016x} (CAP_SETUID + CAP_SETGID). "
-                "'run_as' would not work, and the process is no longer root "
-                "either -- refusing to start in that state."
+                f"expected {kept:016x} (CAP_SETUID + CAP_SETGID"
+                + (f" + {KEEP_CAPS_ENV}" if extra else "")
+                + "). 'run_as' would not work, and the process is no longer "
+                "root either -- refusing to start in that state."
             )
 
 
 def discard_capabilities() -> None:
-    """Gives up the two capabilities after all, for a config that needs none.
+    """Gives up all capabilities after all, for a config that needs none.
 
     Called once Tier 1 is loaded and turns out to declare no `run_as`
     anywhere. The drop has to happen before any file is written, which is
     before the configuration is read, so the capabilities are kept on the
     chance they are needed and handed back the moment it is clear they are
     not. Cheap, and it leaves the common case holding nothing.
+
+    Discards extras too: if `GATEKEEPER_KEEP_CAPS` was set but no toolkit
+    uses `run_as`, the extras were never needed. A future toolkit that
+    adds `run_as` would re-add the base two on the next start; the extras
+    would need `GATEKEEPER_KEEP_CAPS` again, which is the deploy-time gate.
     """
     capset(0, 0, 0)
