@@ -534,6 +534,13 @@ Three things worth being deliberate about before doing this:
   `/mnt/raid/agent` for uid 3001, not only on the last directory. A
   `Permission denied` naming the file when the file itself is readable is
   almost always a parent directory.
+- **Per-tool `run_as` overrides the toolkit's (since 0.36.0).** A tool
+  spec can carry its own `run_as`, which wins over the toolkit's. The
+  common case: a toolkit with `run_as: root` for write tools, and a read
+  tool on the same toolkit that sets `run_as: ""` to run as the container
+  user instead. `None` (or unset) inherits the toolkit's value; an empty
+  string explicitly clears it. The field is `tools.yaml` (Tier 1), not
+  agent-supplied — it narrows the toolkit's authority, never widens it.
 
 If the container is not privileged enough to assume that user, calls on that
 toolkit **fail** with a message saying so — they never quietly run as the

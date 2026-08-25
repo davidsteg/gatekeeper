@@ -60,6 +60,18 @@ cannot. It is in every release.
 
 ---
 
+## 0.36.0
+
+**Fix: per-tool `run_as` was silently ignored — `service.py:360` always used `toolkit.run_as`, so a tool spec that declared `run_as: root` while its toolkit declared `run_as: 568:568` would silently run write/patch as uid 568. Read worked only by coincidence of the toolkit also setting root; write/patch on a toolkit with a different default failed with "The operation ran as uid=568" instead of as the tool's requested user.**
+
+The root cause: `ToolDef` (catalog.py) had no `run_as` field. A `run_as` in the tool spec YAML was parsed by neither `parse_tool_spec` nor validated — it sat in the raw YAML, visible in `admin.tool_get`, but never reached the executor. `service.py` hardcoded `run_as=toolkit.run_as` at the call site, so the tool-level value was invisible to every operation.
+
+`ToolDef.run_as` now exists (file executor only). `parse_tool_spec` parses and validates it with the same `parse_run_as` the toolkit level uses — a bad value fails at startup, not on the first call. `None` (or unset) inherits the toolkit's `run_as`; an empty string explicitly clears it (run as the container user, regardless of what the toolkit says). `service.py` resolves the effective `run_as` as `tool.run_as if tool.run_as is not None else toolkit.run_as`, with the empty string mapped to `None` (no run_as — in-process).
+
+The common case this enables: a `file` toolkit with `run_as: root` for write tools, and a read tool on the same toolkit that sets `run_as: ""` to run as the container user — the read tool does not need the privilege, and this avoids spawning the helper child for it. The field is `tools.yaml` (Tier 1, console-writable), not agent-supplied — it narrows the toolkit's authority, never widens it.
+
+Tests: `test_runas.py` gains a catalog-parsing section (per-tool run_as parsed, empty string is explicit clear, null is none, malformed aborts) and a service-path section (tool run_as wins over toolkit, tool without run_as inherits toolkit, empty string clears toolkit). The service-path tests intercept `execute_file.run` to assert the `run_as` argument — they do not need root, because the bug is in the wiring, not the privilege.
+
 ## 0.35.1
 
 **Fix: the `GATEKEEPER_KEEP_CAPS` tests from 0.35.0 failed in the CI root job because the test container lacked `CAP_DAC_OVERRIDE`/`CAP_DAC_READ_SEARCH` in its bounding set, and the "without KEEP_CAPS" test created a file owned by root (which `run_as: root` could read as the owner).**
