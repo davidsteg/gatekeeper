@@ -650,8 +650,8 @@ tools:
         description: File name in the sandbox directory.
       file_path:
         type: path
-        derived: "/mnt/raid/gatekeeper/google-transfer/{file}"
-        must_resolve_under: /mnt/raid/gatekeeper/google-transfer
+        derived: "/etc/gatekeeper/google-transfer/{file}"
+        must_resolve_under: /etc/gatekeeper/google-transfer
         description: Built by the server from the file name.
       name:
         type: string
