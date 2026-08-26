@@ -129,20 +129,15 @@ services:
       # gatekeeper actually writes to; this mount only makes it persist.
       - /mnt/raid/gatekeeper/logs:/var/log/gatekeeper
 
-      # google-workspace skill + Drive sandbox, for the `google` executor
-      # (0.39.0). NO additional mount is required -- both live under
-      # /etc/gatekeeper, which the existing
-      # `- /mnt/raid/gatekeeper/config:/etc/gatekeeper` volume already
-      # exposes (and which is writable, so the Drive sandbox works).
-      # On the host, place the skill at
-      #   /mnt/raid/gatekeeper/config/google/google_api.py
-      # and create the sandbox directory
-      #   /mnt/raid/gatekeeper/config/google-transfer/
-      # then point the toolkit's `google_script` at the in-container path
-      # /etc/gatekeeper/google/google_api.py (see config/examples/toolkits.yaml).
-      # Alternative: bake google_api.py into the image (Dockerfile COPY),
-      # or set google_container to run it via `docker exec` in the
-      # personal container.
+      # google executor (0.40.0): the google_api.py script is baked into
+      # the image at /opt/gatekeeper/google/google_api.py (Dockerfile COPY)
+      # -- no host mount required for the skill. The only host-side
+      # prerequisite is the Drive sandbox directory, which lives under
+      # /etc/gatekeeper (the existing config mount, writable):
+      #   /mnt/raid/gatekeeper/config/google-transfer
+      # Create it on the host to match the `drive` toolkit's `path_roots`.
+      # Alternative: set `google_container` on the toolkit to run
+      # google_api.py via `docker exec` in the personal container instead.
 
     environment:
       GATEKEEPER_CONFIG_DIR: /etc/gatekeeper

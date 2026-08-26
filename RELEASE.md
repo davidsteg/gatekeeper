@@ -60,21 +60,38 @@ cannot. It is in every release.
 
 ---
 
+## 0.40.1
+
+**`google_api.py` is now baked into the image — the host no longer needs to place the skill script manually.**
+
+0.40.0 added the Google client libraries to the image but still required the operator to place `google_api.py` on the host under `/etc/gatekeeper/google/`. This release vendors the skill scripts into the gatekeeper repo and copies them into the image at build time, eliminating that host-side step.
+
+- **`src/gatekeeper/_google_api/`** — new: `google_api.py` and its sibling `_hermes_home.py`, vendored from the google-workspace skill. Excluded from ruff linting (they are standalone scripts run as a subprocess, not importable gatekeeper code — their `sys.path` manipulation before import is intentional).
+- **Dockerfile**: `COPY src/gatekeeper/_google_api/ /opt/gatekeeper/google/` — the scripts land at `/opt/gatekeeper/google/google_api.py` in the image.
+- **config/examples + integrations**: `google_script` → `/opt/gatekeeper/google/google_api.py` (the in-image path).
+
+### What remains as host-side steps (unchanged from 0.40.0)
+
+1. Create the Drive sandbox directory on the host: `mkdir -p /mnt/raid/gatekeeper/config/google-transfer`.
+2. In `/ui/credentials`, create an `oauth2` credential named `google` with `{"client_id", "client_secret", "refresh_token"}`.
+3. Ensure the OAuth consent covers every scope the tools use.
+
 ## 0.40.0
 
-**The `google` executor now needs no extra host mount — and its Google dependencies live in the image.**
+**The `google` executor's skill is baked into the image, and its Google dependencies are installed — only the Drive sandbox and the OAuth credential remain as host-side steps.**
 
-0.38.0 added the `google` executor but left two deployment prerequisites implicit: `google_api.py` must be reachable in the container, and its Google client libraries must be importable there. This release makes both explicit and eliminates the extra mount.
+0.38.0 added the `google` executor but left deployment prerequisites implicit: `google_api.py` had to be reachable in the container, and its Google client libraries importable. This release bakes the skill into the image and adds the libraries, so only two host-side steps remain (sandbox + credential).
 
-- **compose.yaml**: documents that a `google` toolkit needs **no additional volume**. Both the google-workspace skill and the Drive sandbox live under `/etc/gatekeeper`, which the existing `- /mnt/raid/gatekeeper/config:/etc/gatekeeper` volume already exposes (and which is writable, so the sandbox works). On the host, place the skill at `/mnt/raid/gatekeeper/config/google/google_api.py` and create `/mnt/raid/gatekeeper/config/google-transfer/`. The toolkit's `google_script` points at `/etc/gatekeeper/google/google_api.py` (see `config/examples/toolkits.yaml`). If you would rather bake `google_api.py` into the image (a `COPY` in the Dockerfile, no host dependency), set `google_script` to that in-image path; or set `google_container` to run it via `docker exec` in the personal container.
+- **Dockerfile**: `COPY src/gatekeeper/_google_api/ /opt/gatekeeper/google/` — `google_api.py` and its sibling `_hermes_home.py` are vendored into the image. The toolkit's `google_script` points at `/opt/gatekeeper/google/google_api.py`. No host mount for the skill.
 - **pyproject.toml**: adds `google-api-python-client` and `google-auth-oauthlib` so `google_api.py`'s imports resolve when the executor runs it with `sys.executable` inside the gatekeeper container.
+- **compose.yaml**: documents that a `google` toolkit needs **no additional volume** for the skill. The only host-side prerequisite is the Drive sandbox directory under `/etc/gatekeeper` (the existing config mount, writable).
+- **config/examples + integrations**: `google_script` → `/opt/gatekeeper/google/google_api.py`.
 
 ### What you must do at deploy time
 
-1. Place the google-workspace skill at `/mnt/raid/gatekeeper/config/google/google_api.py` (host side), so the existing config mount exposes it at `/etc/gatekeeper/google/google_api.py`; or set `google_container` / bake it into the image instead.
-2. Create the Drive sandbox directory on the host: `/mnt/raid/gatekeeper/config/google-transfer`.
-3. In `/ui/credentials`, create an `oauth2` credential named `google` with `{"client_id", "client_secret", "refresh_token"}`.
-4. Ensure the OAuth consent covers every scope the tools use (else write tools return 403 `insufficient_scope`).
+1. Create the Drive sandbox directory on the host: `mkdir -p /mnt/raid/gatekeeper/config/google-transfer` (matches the `drive` toolkit's `path_roots: /etc/gatekeeper/google-transfer`).
+2. In `/ui/credentials`, create an `oauth2` credential named `google` with `{"client_id", "client_secret", "refresh_token"}` — the authorized-user format `google_api.py` reads from `$HOME/.hermes/google_token.json`, materialized per call by `service.py`.
+3. Ensure the OAuth consent covers every scope the tools use (else write tools return 403 `insufficient_scope`).
 
 Re-running `pip install -e ".[dev]"` (or `uv sync`) is required after this pull, since `pyproject.toml`'s `dependencies` changed.
 

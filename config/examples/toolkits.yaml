@@ -209,14 +209,14 @@ toolkits:
   # and the refresh token's consent must cover every scope the tools need.
   #
   # `google_script` is the absolute path to google_api.py inside the
-  # container. It needs no extra mount -- the skill lives under
-  # /etc/gatekeeper (the existing config mount), so point it there. If it
-  # lives in another container on the same Docker host instead, set
-  # `google_container` to that container's name -- the executor then runs
-  # `docker exec <container> python <script> ...`.
+  # container. The script is baked into the image at
+  # /opt/gatekeeper/google/google_api.py (Dockerfile COPY) -- no host
+  # mount required. If it lives in another container on the same Docker
+  # host instead, set `google_container` to that container's name -- the
+  # executor then runs `docker exec <container> python <script> ...`.
   gmail:
     executor: google
-    google_script: /etc/gatekeeper/google/google_api.py
+    google_script: /opt/gatekeeper/google/google_api.py
     allowed_google_actions:
       - gmail search
       - gmail get
@@ -230,7 +230,7 @@ toolkits:
 
   calendar:
     executor: google
-    google_script: /etc/gatekeeper/google/google_api.py
+    google_script: /opt/gatekeeper/google/google_api.py
     allowed_google_actions:
       - calendar list
       - calendar create
@@ -241,7 +241,7 @@ toolkits:
 
   drive:
     executor: google
-    google_script: /etc/gatekeeper/google/google_api.py
+    google_script: /opt/gatekeeper/google/google_api.py
     allowed_google_actions:
       - drive search
       - drive get

@@ -1,6 +1,6 @@
 [project]
 name = "gatekeeper"
-version = "0.40.0"
+version = "0.40.1"
 description = "Controlled MCP server for host operations"
 requires-python = ">=3.12"
 dependencies = [
@@ -42,6 +42,12 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Vendored google-workspace skill scripts (execute_google.py runs them as
+# a subprocess, they are not importable gatekeeper code) -- excluded from
+# linting: they have their own style (E402 sys.path manipulation before
+# import is intentional) and live in this repo only to be baked into the
+# image via Dockerfile COPY.
+exclude = ["src/gatekeeper/_google_api"]
 
 [tool.ruff.lint]
 # E/F: pycodestyle errors + pyflakes -- real bugs and dead code, not style

@@ -83,6 +83,15 @@ COPY RELEASE.md /usr/share/gatekeeper/RELEASE.md
 COPY README.md REQUIREMENTS.md AGENTS.md /opt/gatekeeper-docs/
 COPY RELEASE.md /opt/gatekeeper-docs/RELEASE.md
 
+# google-workspace skill scripts, baked into the image for the `google`
+# executor (0.40.0). The toolkit's `google_script` points at
+# /opt/gatekeeper/google/google_api.py. The sibling _hermes_home.py is
+# imported by google_api.py (it adds its own directory to sys.path), so
+# both must live in the same directory. The OAuth token is materialized
+# to $HOME/.hermes/google_token.json per call by service.py -- no secret
+# is baked into the image, only the script.
+COPY src/gatekeeper/_google_api/ /opt/gatekeeper/google/
+
 # Verify at build time that 'docker compose' actually resolves. Without this
 # check, a missing plugin would only surface on the first agent call.
 RUN docker compose version
