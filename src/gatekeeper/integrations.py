@@ -1090,7 +1090,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
         toolkit_yaml=(
             "  gmail:\n"
             "    executor: google\n"
-            '    google_script: "/etc/gatekeeper/google/google_api.py"\n'
+            '    google_script: "/opt/gatekeeper/google/google_api.py"\n'
             "    # Optional: if google_api.py lives in another container on the\n"
             "    # same Docker host, set google_container to its name instead of\n"
             "    # mounting the script here. The executor runs\n"
@@ -1184,7 +1184,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
         toolkit_yaml=(
             "  calendar:\n"
             "    executor: google\n"
-            '    google_script: "/etc/gatekeeper/google/google_api.py"\n'
+            '    google_script: "/opt/gatekeeper/google/google_api.py"\n'
             "    allowed_google_actions:\n"
             "      - calendar list\n"
             "      - calendar create\n"
@@ -1259,7 +1259,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
         toolkit_yaml=(
             "  drive:\n"
             "    executor: google\n"
-            '    google_script: "/etc/gatekeeper/google/google_api.py"\n'
+            '    google_script: "/opt/gatekeeper/google/google_api.py"\n'
             "    allowed_google_actions:\n"
             "      - drive search\n"
             "      - drive get\n"
