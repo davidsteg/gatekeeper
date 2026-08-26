@@ -1090,7 +1090,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
         toolkit_yaml=(
             "  gmail:\n"
             "    executor: google\n"
-            '    google_script: "/opt/data/skills/productivity/google-workspace/scripts/google_api.py"\n'
+            '    google_script: "/etc/gatekeeper/google/google_api.py"\n'
             "    # Optional: if google_api.py lives in another container on the\n"
             "    # same Docker host, set google_container to its name instead of\n"
             "    # mounting the script here. The executor runs\n"
@@ -1184,7 +1184,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
         toolkit_yaml=(
             "  calendar:\n"
             "    executor: google\n"
-            '    google_script: "/opt/data/skills/productivity/google-workspace/scripts/google_api.py"\n'
+            '    google_script: "/etc/gatekeeper/google/google_api.py"\n'
             "    allowed_google_actions:\n"
             "      - calendar list\n"
             "      - calendar create\n"
@@ -1259,7 +1259,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
         toolkit_yaml=(
             "  drive:\n"
             "    executor: google\n"
-            '    google_script: "/opt/data/skills/productivity/google-workspace/scripts/google_api.py"\n'
+            '    google_script: "/etc/gatekeeper/google/google_api.py"\n'
             "    allowed_google_actions:\n"
             "      - drive search\n"
             "      - drive get\n"
@@ -1270,15 +1270,15 @@ _INTEGRATIONS_LIST: list[Integration] = [
             "      - drive delete\n"
             "    credential: google\n"
             "    path_roots:\n"
-            "      - /mnt/raid/gatekeeper/google-transfer\n"
+            "      - /etc/gatekeeper/google-transfer\n"
             "    max_timeout_seconds: 60\n"
             "    max_output_bytes: 131072\n"
         ),
         credential_kind="oauth2",
         notes=(
             "Shares the 'google' oauth2 credential. drive.upload/download "
-            "paths are sandboxed to /mnt/raid/gatekeeper/google-transfer/ "
-            "(configure path_roots to match your mount). Consent must cover "
+            "paths are sandboxed to /etc/gatekeeper/google-transfer/ (the "
+            "existing config mount, writable). Consent must cover "
             "drive.metadata.readonly (reads), drive.file (upload/folder/"
             "delete), and drive (share)."
         ),

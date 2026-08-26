@@ -60,6 +60,24 @@ cannot. It is in every release.
 
 ---
 
+## 0.40.0
+
+**The `google` executor now needs no extra host mount — and its Google dependencies live in the image.**
+
+0.38.0 added the `google` executor but left two deployment prerequisites implicit: `google_api.py` must be reachable in the container, and its Google client libraries must be importable there. This release makes both explicit and eliminates the extra mount.
+
+- **compose.yaml**: documents that a `google` toolkit needs **no additional volume**. Both the google-workspace skill and the Drive sandbox live under `/etc/gatekeeper`, which the existing `- /mnt/raid/gatekeeper/config:/etc/gatekeeper` volume already exposes (and which is writable, so the sandbox works). On the host, place the skill at `/mnt/raid/gatekeeper/config/google/google_api.py` and create `/mnt/raid/gatekeeper/config/google-transfer/`. The toolkit's `google_script` points at `/etc/gatekeeper/google/google_api.py` (see `config/examples/toolkits.yaml`). If you would rather bake `google_api.py` into the image (a `COPY` in the Dockerfile, no host dependency), set `google_script` to that in-image path; or set `google_container` to run it via `docker exec` in the personal container.
+- **pyproject.toml**: adds `google-api-python-client` and `google-auth-oauthlib` so `google_api.py`'s imports resolve when the executor runs it with `sys.executable` inside the gatekeeper container.
+
+### What you must do at deploy time
+
+1. Place the google-workspace skill at `/mnt/raid/gatekeeper/config/google/google_api.py` (host side), so the existing config mount exposes it at `/etc/gatekeeper/google/google_api.py`; or set `google_container` / bake it into the image instead.
+2. Create the Drive sandbox directory on the host: `/mnt/raid/gatekeeper/config/google-transfer`.
+3. In `/ui/credentials`, create an `oauth2` credential named `google` with `{"client_id", "client_secret", "refresh_token"}`.
+4. Ensure the OAuth consent covers every scope the tools use (else write tools return 403 `insufficient_scope`).
+
+Re-running `pip install -e ".[dev]"` (or `uv sync`) is required after this pull, since `pyproject.toml`'s `dependencies` changed.
+
 ## 0.39.0
 
 **The release notes are now readable over the API: `admin.release_notes` on `/admin/mcp` and `GET /release`. And `/admin/mcp`'s `serverInfo` finally reports the real version instead of a hardcoded `0.1.0`.**
