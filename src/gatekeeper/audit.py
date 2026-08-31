@@ -137,12 +137,30 @@ class AuditLog:
         denial_reason: str | None = None,
         detail: str | None = None,
         credential_names: list[str] | None = None,
+        argv: list[str] | None = None,
     ) -> None:
         """A call -- successful, denied, or with unclear outcome.
 
         `denial_reason` records the *true* reason, even if the agent
         received only a non-descriptive response per FR-7.7. This
         asymmetry is what makes the log analyzable.
+
+        `argv` is the **resolved** command the argv executors
+        (`docker`/`local`/`ssh`) actually ran -- binary first, one element
+        per template element, exactly what was handed to `execve`. The
+        parameters alone do not determine it: between them and the process
+        sit the tool's `argv` template, derived values (FR-5.5) and Tier
+        1. A definition whose template is wrong produces a perfectly valid
+        parameter set and a command that fails, and without this field the
+        log cannot tell that apart from a parameter the agent got wrong.
+        `None` for the executors that build no argv (`http`, `truenas`,
+        `google`, `file`) and for a denial raised before the argv existed.
+
+        This adds no new class of exposure: the argv is built from the
+        template plus already-logged `parameters`, credentials reach the
+        executors through the environment and headers rather than the
+        command line (FR-10.7), and `write` runs the whole record through
+        the redactor regardless.
         """
         self.write(
             {
@@ -160,6 +178,9 @@ class AuditLog:
                 "detail": detail,
                 # FR-10.7: names of used credentials, never their values.
                 "credentials": credential_names or [],
+                # The command as executed -- see the docstring for why the
+                # parameters above are not a substitute for it.
+                "argv": list(argv) if argv else None,
             }
         )
 

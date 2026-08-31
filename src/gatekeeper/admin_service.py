@@ -169,6 +169,15 @@ class AdminService:
             raise AdminActionError(f"No tool with ID {tool_id!r}.")
         entry = normalize_tool_entry(raw)
         entry["grantable_ids"] = self._grantable_ids(tool_id)
+        # The one version that actually runs, resolved the same way the
+        # loader resolves it. `versions` above is the full history, and a
+        # reader scanning it for a field cannot tell which entry the
+        # executor will use -- `current_version` says so, but only if you
+        # cross-reference it. That ambiguity has already cost a
+        # misdiagnosis: a correct `argv` in a superseded version reads
+        # exactly like a correct definition. `None` when the entry is
+        # deleted or its `current_version` matches no stored version.
+        entry["effective"] = self.store.service.catalog.flat_spec_of(tool_id)
         return entry
 
     def tool_validate(self, _actor: str, args: dict[str, Any]) -> dict[str, Any]:

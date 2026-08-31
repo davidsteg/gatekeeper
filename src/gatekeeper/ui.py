@@ -3885,6 +3885,18 @@ def _view_audit(service: Service, request: Request) -> str:
             bits.append(
                 f"<code>{_e(json.dumps(record['parameters'], ensure_ascii=False))}</code>"
             )
+        if record.get("argv"):
+            # The command as executed, next to the parameters that went
+            # into it -- the two together are what makes a failing call
+            # readable, because a wrong template and a wrong parameter
+            # produce the same `parameters` and different commands. Same
+            # escaping discipline as above, and for the same reason: the
+            # elements are partly agent-supplied.
+            bits.append(
+                "<code>"
+                + _e(" ".join(str(part) for part in record["argv"]))
+                + "</code>"
+            )
         exit_code = record.get("exit_code")
         duration = record.get("duration_ms")
         ts = str(record.get("ts") or "")

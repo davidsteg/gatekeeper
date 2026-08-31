@@ -65,7 +65,13 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="admin.tool_get",
         title="Get one tool definition",
-        description="Returns one tool's full record, including its version history. Read-only.",
+        description=(
+            "Returns one tool's full record: 'versions' is the complete "
+            "history, and 'effective' is the single version that actually "
+            "runs, resolved from 'current_version'. Read 'effective' when "
+            "asking what a tool does today -- a field can be correct in a "
+            "superseded version and wrong in the live one. Read-only."
+        ),
         inputSchema=_ID_ONLY,
     ),
     types.Tool(

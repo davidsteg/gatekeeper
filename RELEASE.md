@@ -62,7 +62,21 @@ cannot. It is in every release.
 
 ## 0.41.0
 
-**`admin.tool_exec` — an admin can now run a catalog tool, if Tier 1 allows it. Off by default.**
+**An admin can now see what a tool actually runs, and — where Tier 1 allows it — run one.**
+
+Three changes with one origin. A `docker.compose_ps` call was failing with `unknown shorthand flag: 'p' in -p` — the docker CLI's way of reporting that it never saw the `compose` subcommand — and the command builder was blamed for three rounds before the definition was. Nothing in the system could settle the question, and that was the real defect: the audit log recorded parameters but not the command, `admin.tool_get` showed every version without saying which one runs, and an admin could not execute the tool to find out. Each of those is closed below.
+
+### The command is now in the audit log
+
+`argv` joins the call record for the argv executors (`docker`, `local`, `ssh`): the command as executed, binary first, one element per template element. `{"stack": "jellyfin"}` is identical whether the template is right or wrong — the parameters could never have shown which it was, and now the record does. `null` for `http`/`truenas`/`google`/`file`, which build no argv, and for a rejection raised before one existed.
+
+No new exposure: the argv is derived from the template plus the parameters that were already logged, credentials reach the executors through environment and headers rather than the command line (FR-10.7), and FR-10.6's masking runs over the whole record — pinned by a test that puts a known secret in an argv element. New as **FR-9.1a**. The console's audit view shows it beside the parameters.
+
+### `admin.tool_get` names the version that runs
+
+The response gains `effective`: the single version resolved from `current_version`, the same resolution the loader performs. `versions` remains the full history. A correct field in a superseded version reads exactly like a correct definition, and that ambiguity is what carried the misdiagnosis — `effective` removes the cross-referencing step rather than asking readers to remember it.
+
+### Running a tool from `/admin/mcp`
 
 An admin identity could define a tool but never call one: `/mcp` rejects the `admin` role, and `grant_set` refuses to grant tools to anything but an `agent`. So after changing an `argv` the admin had to ask an agent whether it worked, which is a poor way to verify a definition and a worse way to diagnose one. `admin.tool_exec` closes that on `/admin/mcp` — it returns the real outcome, exit code, stdout and stderr, and is audited under the admin's own identity like any agent call.
 

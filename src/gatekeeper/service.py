@@ -371,6 +371,10 @@ class Service:
         # denial that happens before that still audits an empty list rather
         # than claiming a credential was involved.
         credential_names: list[str] = []
+        # Alongside the other audit inputs rather than further down where
+        # it is filled: `_authorize` can deny before an argv exists at all,
+        # and the handler audits whatever has been established by then.
+        argv: list[str] = []
         try:
             tool = self._authorize(identity, tool_id)
             toolkit = self._resolve_toolkit(self.tier1.toolkit(tool.toolkit), tool.destination)
@@ -410,7 +414,6 @@ class Service:
             # a normal "denied" audit entry regardless of which executor
             # the toolkit uses (FR-8.7 is the HTTP counterpart of FR-5.4,
             # checked at the same point in the pipeline).
-            argv: list[str] = []
             env: dict[str, str] | None = None
             http_request: tuple[str, str, dict[str, str], dict[str, str] | None] | None = None
             rpc_call: tuple[str, dict[str, str]] | None = None
@@ -451,6 +454,11 @@ class Service:
                 denial_reason=denial.reason.value,
                 detail=denial.detail,
                 credential_names=credential_names,
+                # Empty unless the denial came *after* the argv was built
+                # (a credential that would not resolve, say). A denial from
+                # `build_argv` itself never gets here with one, and does
+                # not need to: it names the offending element in `detail`.
+                argv=argv,
             )
             raise
 
@@ -557,6 +565,11 @@ class Service:
             duration_ms=result.duration_ms,
             truncated=result.truncated,
             credential_names=credential_names,
+            # The command as run. For an argv executor this is the only
+            # record of what the definition actually resolved to -- a
+            # wrong template and a wrong parameter look identical from
+            # `parameters` alone.
+            argv=argv,
         )
         return result
 
