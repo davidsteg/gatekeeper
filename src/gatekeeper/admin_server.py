@@ -24,7 +24,12 @@ from mcp.server.lowlevel import Server
 from gatekeeper import __version__
 
 from ._authctx import identity_from as _identity_from
-from .admin_service import EXPOSED_ACTIONS, AdminActionError, AdminService
+from .admin_service import (
+    EXPOSED_ACTIONS,
+    EXPOSED_ASYNC_ACTIONS,
+    AdminActionError,
+    AdminService,
+)
 from .credentials import KINDS as CREDENTIAL_KINDS
 from .errors import ConfigError
 from .identity import ROLES
@@ -40,8 +45,9 @@ _ID_ONLY: dict[str, Any] = {
 
 #: The fixed `admin.*` tool list (FR-2.8/2.9, REQUIREMENTS.md §17's
 #: middle-ground resolution). Every entry's bare name must appear in
-#: `admin_service.EXPOSED_ACTIONS` -- checked once at import time below --
-#: and nothing else does: `approve`/`reject` are absent from both.
+#: `admin_service.EXPOSED_ACTIONS` or its awaited counterpart
+#: `EXPOSED_ASYNC_ACTIONS` -- checked once at import time below -- and
+#: nothing else does: `approve`/`reject` are absent from all three.
 _TOOLS: list[types.Tool] = [
     types.Tool(
         name="admin.tool_list",
@@ -132,6 +138,46 @@ _TOOLS: list[types.Tool] = [
             "type": "object",
             "properties": {"spec": _OPEN_OBJECT},
             "required": ["spec"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.tool_exec",
+        title="Run a tool",
+        description=(
+            "Runs a catalog tool and returns its real outcome, exit code, "
+            "stdout and stderr -- the same execution path an agent's call "
+            "takes on /mcp, audited the same way under the admin's own "
+            "identity. Intended for verifying a definition you just "
+            "changed, without having to ask an agent whether it works. "
+            "Grants and scopes do not apply (an admin identity can hold "
+            "neither); everything else does -- the tool must be enabled, "
+            "protected resources stay blocked, and Tier 1 is re-checked "
+            "against the resolved argv. Disabled unless Tier 1 declares "
+            "'admin_exec: true', which takes a redeploy."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": (
+                        "Catalog tool ID, e.g. 'docker.compose_ps'. Where a "
+                        "toolkit declares destinations, use the expanded ID "
+                        "('docker.compose_ps@nas1') -- admin.tool_get "
+                        "reports them as 'grantable_ids'."
+                    ),
+                },
+                "arguments": {
+                    **_OPEN_OBJECT,
+                    "description": (
+                        "The tool's own parameters, e.g. {\"stack\": "
+                        "\"jellyfin\"}. Derived parameters are computed by "
+                        "the server and rejected here, exactly as on /mcp."
+                    ),
+                },
+            },
+            "required": ["id"],
             "additionalProperties": False,
         },
     ),
@@ -392,10 +438,11 @@ _TOOLS: list[types.Tool] = [
 # ever drift apart, building the admin server fails loudly instead of
 # quietly exposing (or hiding) a tool.
 _names = {t.name.removeprefix("admin.") for t in _TOOLS}
-if _names != set(EXPOSED_ACTIONS):
+_reachable = set(EXPOSED_ACTIONS) | set(EXPOSED_ASYNC_ACTIONS)
+if _names != _reachable:
     raise AssertionError(
-        f"admin_server._TOOLS and admin_service.EXPOSED_ACTIONS have drifted "
-        f"apart: {_names!r} != {set(EXPOSED_ACTIONS)!r}"
+        f"admin_server._TOOLS and admin_service's exposed actions have "
+        f"drifted apart: {_names!r} != {_reachable!r}"
     )
 
 
@@ -415,7 +462,16 @@ def build_admin_mcp_server(admin_service: AdminService) -> Server[None]:
         identity = _identity_from(ctx)
         name = params.name.removeprefix("admin.")
         try:
-            result = admin_service.call(identity.id, name, params.arguments or {})
+            # Two dispatch paths because the executors are async and the
+            # catalog writes are not -- see `AdminService.call_async`. The
+            # name decides, and each table is an explicit allowlist, so an
+            # action can never take the wrong one.
+            if name in EXPOSED_ASYNC_ACTIONS:
+                result = await admin_service.call_async(
+                    identity.id, name, params.arguments or {}
+                )
+            else:
+                result = admin_service.call(identity.id, name, params.arguments or {})
         except (AdminActionError, WriteRefused, ConfigError) as exc:
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=str(exc))],

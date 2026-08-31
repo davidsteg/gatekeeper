@@ -60,6 +60,28 @@ cannot. It is in every release.
 
 ---
 
+## 0.41.0
+
+**`admin.tool_exec` — an admin can now run a catalog tool, if Tier 1 allows it. Off by default.**
+
+An admin identity could define a tool but never call one: `/mcp` rejects the `admin` role, and `grant_set` refuses to grant tools to anything but an `agent`. So after changing an `argv` the admin had to ask an agent whether it worked, which is a poor way to verify a definition and a worse way to diagnose one. `admin.tool_exec` closes that on `/admin/mcp` — it returns the real outcome, exit code, stdout and stderr, and is audited under the admin's own identity like any agent call.
+
+- **`admin.tool_exec`** — parameters `id` (catalog tool ID; use the expanded `…@destination` form where a toolkit declares destinations) and `arguments` (the tool's own parameters). Returns `ok`, `outcome`, `exit_code`, `duration_ms`, `truncated`, `stdout`, `stderr`; a denial comes back as `denial_reason` plus the *true* `detail`, not the deliberately vague message FR-7.7 gives an agent.
+- **`admin_exec` in `toolkits.yaml`** — the switch, Tier 1, absent means off. Documented at the top of `config/examples/toolkits.yaml`.
+- **`AdminService.call_async` / `_EXPOSED_ASYNC`** — a second explicit allowlist for the actions that must be awaited. Sync dispatch of a coroutine would return an un-awaited object that serialises as a success nobody ran, so the two tables are disjoint and `admin_server.py` picks by name.
+
+### The security decision, stated rather than buried
+
+Execution skips the grant table and the scope profile. It has to: an admin identity can hold neither, so checking them would deny every call rather than decide anything. That is a genuine widening — with this on, `tool_create` (auto-applies) plus `tool_enable` (auto-applies for a `read` category) plus `tool_exec` is a path from an admin token to a running command that no human reviewed. Off, that path still ends at `grant_set` and its pending queue.
+
+What it does **not** relax, all still enforced: the tool must be enabled, FR-4.12's protected resources stay blocked, Tier 1's binaries/denied arguments/path roots are re-checked against the resolved argv, the rate limit counts, and the call is audited. The switch widens *who* may call, never *what* may be called.
+
+The compensation is placement, not a permission check. `admin_exec` lives in Tier 1, so turning it on takes a redeploy (FR-4.11) — a stolen admin token cannot enable its own execution. Categories are deliberately not gated: a grant-holding agent runs a `write` tool directly today, and a second rule here would make `admin.tool_exec` and `/mcp` disagree about what one definition means.
+
+New in `REQUIREMENTS.md` as **FR-2.11**.
+
+---
+
 ## 0.40.2
 
 **A regression test pins the docker `compose` argv contract — no behaviour changes.**

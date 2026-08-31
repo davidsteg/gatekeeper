@@ -335,6 +335,20 @@ class Tier1:
     audit_dir: str
     audit_max_bytes: int
     audit_keep_files: int
+    #: FR-2.8 exception, declared at deploy time and therefore not
+    #: reachable from the admin API (FR-4). When true, an `admin`-role
+    #: identity may execute catalog tools through `admin.tool_exec`
+    #: without holding a grant -- see `Service._admin_may_execute` for
+    #: what that does and does not relax.
+    #:
+    #: Off by default, and deliberately so. With it on, `tool_create`
+    #: (auto-applies) plus `tool_enable` (auto-applies for a `read`
+    #: category) plus `tool_exec` is a path from an admin token to a
+    #: running command that no human reviewed. Off, that path still ends
+    #: at `grant_set`, which goes through the pending queue and
+    #: `/ui/requests`. Turning it on is a decision about that trade,
+    #: which is why it takes a redeploy rather than an API call.
+    admin_exec: bool = False
 
     def toolkit(self, name: str) -> Toolkit:
         try:
@@ -770,4 +784,5 @@ def load_tier1(path: str) -> Tier1:
         audit_dir=str(audit.get("dir", "/mnt/raid/gatekeeper/logs")),
         audit_max_bytes=int(audit.get("max_bytes", 32 * 1024 * 1024)),
         audit_keep_files=int(audit.get("keep_files", 10)),
+        admin_exec=bool(raw.get("admin_exec", False)),
     )

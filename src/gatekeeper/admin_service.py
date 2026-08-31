@@ -26,6 +26,16 @@ whether a change applies immediately or is written to the pending queue:
 * `cred_propose` always goes to the pending queue too, but is never applied
   through `apply_pending`/`_APPLIERS` below -- see its own docstring. It
   proposes a credential's name/kind/header only, never a value.
+* `tool_exec` changes nothing and is queued nowhere: it *runs* a catalog
+  tool. It is the one action here that is not catalog management, and it
+  is off unless Tier 1 declared `admin_exec: true` at deploy time. See
+  its own docstring and `Service._admin_may_execute`.
+
+`tool_exec` is async because the executors are; it therefore dispatches
+through `call_async`/`_EXPOSED_ASYNC` rather than `call`/`_EXPOSED`. Two
+tables rather than one keep the allowlist property intact: a coroutine
+method reached through the sync `call` would return an un-awaited
+coroutine object, which serialises as a success no one ran.
 
 `approve`/`reject` are deliberately **not** methods on this class and are
 not in `_EXPOSED`. The only place a pending item is ever turned into a live
@@ -48,7 +58,7 @@ from . import __version__
 from .catalog import normalize_tool_entry, parse_tool_spec
 from .credentials import KINDS as CREDENTIAL_KINDS
 from .credentials import CredentialStore
-from .errors import ConfigError
+from .errors import ConfigError, Denied
 from .identity import ROLES, UI_ROLES
 from .pending import PendingAction, PendingStore
 from .release_notes import query as _release_query
@@ -114,6 +124,20 @@ class AdminService:
         method = getattr(self, name)
         return method(actor, arguments)
 
+    async def call_async(
+        self, actor: str, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The same dispatch for the actions that have to be awaited.
+
+        Separate allowlist, same discipline as `call`: only a name in
+        `_EXPOSED_ASYNC` is reachable, so a coroutine helper added to this
+        class later cannot become callable from `/admin/mcp` by accident.
+        """
+        if name not in _EXPOSED_ASYNC:
+            raise AdminActionError(f"Unknown admin tool {name!r}.")
+        method = getattr(self, name)
+        return await method(actor, arguments)
+
     # -- Read-only ---------------------------------------------------------
 
     def _grantable_ids(self, tool_id: str) -> list[str]:
@@ -154,6 +178,94 @@ class AdminService:
         except ConfigError as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "id": tool.id, "category": tool.category}
+
+    # -- Execution ---------------------------------------------------------
+
+    async def tool_exec(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Runs a catalog tool through the ordinary execution path.
+
+        The gap this closes: an admin identity can configure a tool but
+        never call one. `/mcp` rejects the `admin` role outright, and
+        `grant_set` refuses to grant tools to anything but an `agent`, so
+        an admin could set an `argv` and then had to ask an agent whether
+        it worked. This runs it directly and reports the real exit code.
+
+        **Security decision (FR-2.8).** Execution here does *not* consult
+        the grant table or the scope profile -- an admin identity can hold
+        neither, so checking them would deny every call rather than decide
+        anything. That is a genuine widening: with this on, `tool_create`
+        (auto-applies) plus `tool_enable` (auto-applies for a `read`
+        category) plus this action is a path from an admin token to a
+        running command with no human in it, where previously that path
+        ended at `grant_set` and its pending queue. The compensation is
+        that the exception is Tier 1: `admin_exec` is declared in
+        `toolkits.yaml` at deploy time, is off unless someone set it, and
+        cannot be turned on through this API (FR-4.11) -- so a stolen
+        admin token cannot grant itself execution, it can only use it
+        where an operator already decided to allow it.
+
+        Everything below the permission layer is unchanged and still
+        applies: the tool must exist and be enabled, FR-4.12's protected
+        resources stay blocked, Tier 1's binaries/denied arguments/path
+        roots are re-checked against the resolved argv, the rate limit
+        counts, and the call is audited exactly like an agent's --
+        `identity` is the admin's own id, so the log distinguishes it.
+
+        Categories are not gated. A grant-holding agent runs a `write`
+        tool directly today; the pending queue governs catalog and
+        permission *changes*, not executions, and inventing a second rule
+        here would make `admin.tool_exec` and `/mcp` disagree about what
+        one definition means.
+        """
+        service = self.store.service
+        if not service.tier1.admin_exec:
+            raise AdminActionError(
+                "Admin execution is disabled. Tier 1 must declare "
+                "'admin_exec: true' in toolkits.yaml -- a deploy-time "
+                "decision that cannot be made through this API (FR-4.11)."
+            )
+
+        tool_id = _require_str(args, "id")
+        arguments = args.get("arguments", {})
+        if not isinstance(arguments, dict):
+            raise AdminActionError("'arguments' must be an object.")
+        if any(not isinstance(key, str) for key in arguments):
+            raise AdminActionError("'arguments' keys must be strings.")
+
+        identity = self.store.identities.identities.get(actor)
+        if identity is None:
+            # The token authenticated, so this means identities.yaml was
+            # rewritten underneath the session. Better a clear error than
+            # a call that silently runs as nobody.
+            raise AdminActionError(f"No identity {actor!r}.")
+
+        try:
+            result = await service.call(identity, tool_id, arguments)
+        except Denied as denial:
+            # The *true* reason, not `agent_message`: FR-7.7 keeps a denial
+            # non-descriptive for an agent so a probing caller learns
+            # nothing from it. An admin is who the audit log's honest
+            # reason is written for, and diagnosing a definition is the
+            # whole point of this action.
+            return {
+                "ok": False,
+                "id": tool_id,
+                "outcome": "denied",
+                "denial_reason": denial.reason.value,
+                "detail": denial.detail,
+            }
+
+        return {
+            "ok": result.outcome == "ok",
+            "id": tool_id,
+            "outcome": result.outcome,
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+            "truncated": result.truncated,
+            "external_untrusted": result.external_untrusted,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
 
     def grant_list(self, _actor: str, args: dict[str, Any]) -> dict[str, Any]:
         tool_id = args.get("tool_id")
@@ -583,6 +695,12 @@ _EXPOSED: tuple[str, ...] = (
 
 EXPOSED_ACTIONS: frozenset[str] = frozenset(_EXPOSED)
 
+#: The awaited half of the allowlist -- see `AdminService.call_async`.
+#: Disjoint from `_EXPOSED` on purpose: one name, one dispatch path.
+_EXPOSED_ASYNC: tuple[str, ...] = ("tool_exec",)
+
+EXPOSED_ASYNC_ACTIONS: frozenset[str] = frozenset(_EXPOSED_ASYNC)
+
 
 # -- Applying an approved pending action (called only from ui.py) -----------
 
@@ -700,5 +818,6 @@ __all__ = [
     "AdminActionError",
     "AdminService",
     "EXPOSED_ACTIONS",
+    "EXPOSED_ASYNC_ACTIONS",
     "apply_pending",
 ]

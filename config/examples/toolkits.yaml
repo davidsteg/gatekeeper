@@ -17,6 +17,31 @@
 #
 # Adopting means: read, adapt, understand - not copy.
 
+# FR-2.11: may an 'admin'-role identity RUN catalog tools (admin.tool_exec
+# on /admin/mcp), not merely define them? Off unless set, and left off
+# here on purpose.
+#
+# What it buys: an admin agent can verify a definition it just wrote --
+# set an argv, run the tool, read the real exit code -- instead of asking
+# an agent on /mcp whether it works.
+#
+# What it costs: the execution skips grants and scopes, because an admin
+# identity can hold neither (grant_set refuses any non-agent role). So
+# with this on, tool_create (auto-applies) + tool_enable (auto-applies
+# for a 'read' category) + tool_exec is a path from an admin token to a
+# running command that no human reviewed. Off, that path still ends at
+# grant_set and its pending queue, which needs a console session.
+#
+# Everything below the permission layer still applies either way: the
+# tool must be enabled, protected_resources stay blocked, and this file's
+# binaries/denied_args/path_roots are re-checked against the resolved
+# argv. The switch widens WHO may call, never WHAT may be called.
+#
+# It lives here, in Tier 1, precisely so a stolen admin token cannot turn
+# it on -- that takes a redeploy (FR-4.11).
+#
+# admin_exec: true
+
 # FR-8.3g: named destinations a toolkit may reach, in addition to (or
 # instead of) the single implicit target it would otherwise use. A
 # destination carries only connection info and an optional credential

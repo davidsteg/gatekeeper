@@ -22,7 +22,7 @@ from .audit import AuditLog
 from .catalog import Catalog, ToolDef, load_catalog
 from .credentials import CredentialStore
 from .errors import ConfigError, DenialReason, Denied
-from .identity import Identity, load_identities
+from .identity import ADMIN_ROLE, Identity, load_identities
 from .ratelimit import RateLimiter
 from .tier1 import Tier1, Toolkit, load_tier1
 
@@ -106,12 +106,46 @@ class Service:
 
     # -- Call --------------------------------------------------------------
 
+    def _admin_may_execute(self, identity: Identity) -> bool:
+        """Whether this call runs under the FR-2.8 admin-execution exception.
+
+        Two conditions, both required: the identity carries the `admin`
+        role, and Tier 1 declared `admin_exec: true` at deploy time. The
+        authority is derived here rather than passed in as an argument --
+        no caller can ask for the exception, so no future caller can ask
+        for it by mistake.
+
+        An admin identity cannot be reached from `/mcp` at all
+        (`server.py`'s `AuthMiddleware` rejects `admin` there and every
+        other role on `/admin/mcp`), so this can only ever be true for a
+        call that entered through `admin.tool_exec`.
+
+        What it relaxes: the grant check (`may_call`) and the scope
+        profile (`covers_scope`). An admin identity can hold neither --
+        `grant_set` refuses any identity whose role is not `agent` -- so
+        enforcing them here would deny every call rather than check
+        anything.
+
+        What it does not relax, all of which still runs unchanged: the
+        tool must exist and be enabled; FR-4.12's protected-resource block
+        list; Tier 1's binary allowlist, denied arguments and path roots,
+        re-checked against the *resolved* argv in `build_argv`; the rate
+        limit; and the audit record. The exception widens who may call,
+        never what may be called.
+        """
+        return identity.role == ADMIN_ROLE and self.tier1.admin_exec
+
     def _authorize(self, identity: Identity, tool_id: str) -> ToolDef:
         tool = self.catalog.tools.get(tool_id)
         if tool is None:
             raise Denied(DenialReason.UNKNOWN_TOOL, f"Tool {tool_id!r} does not exist")
         if not tool.enabled:
             raise Denied(DenialReason.TOOL_DISABLED, f"Tool {tool_id!r} is disabled")
+        if self._admin_may_execute(identity):
+            # Deliberately after the enabled check: a disabled definition
+            # stays disabled for everyone. FR-4.12 and Tier 1 are checked
+            # further down `call()` and are not affected by this branch.
+            return tool
         if not identity.may_call(tool.id):
             raise Denied(
                 DenialReason.NOT_GRANTED,
@@ -359,12 +393,17 @@ class Service:
             # remains locked even if the permission profile would cover it.
             validate.check_protected(scopes, toolkit)
 
-            for scope in scopes:
-                if not identity.covers_scope(scope):
-                    raise Denied(
-                        DenialReason.SCOPE_MISMATCH,
-                        f"Scope {scope!r} is not covered by the profile",
-                    )
+            # `check_protected` above stays outside this branch on purpose:
+            # FR-4.12 is a Tier 1 block list, not a permission, and an admin
+            # is exactly who it is meant to stop from shutting down
+            # gatekeeper's own stack.
+            if not self._admin_may_execute(identity):
+                for scope in scopes:
+                    if not identity.covers_scope(scope):
+                        raise Denied(
+                            DenialReason.SCOPE_MISMATCH,
+                            f"Scope {scope!r} is not covered by the profile",
+                        )
 
             # The executor-specific request is built here, inside the same
             # try/except as everything else -- a bad parameter surfaces as

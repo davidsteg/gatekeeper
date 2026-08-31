@@ -68,6 +68,13 @@ Layers 2, 3, 5, 6, 7, 8 are the foundation and live in code. Layer 4 is runtime 
 - **FR-2.8** The admin token is **not** an agent token with additional permissions, but a separate role on a separate endpoint (`/admin/mcp`).
 - **FR-2.9** Admin tools **never** appear in `tools/list` of the agent endpoint, not even for the admin token. A compromised agent path cannot reach catalog management.
 - **FR-2.10** The admin endpoint can optionally be additionally restricted at the network level (bind address / source IP).
+- **FR-2.11 Admin execution (`admin.tool_exec`), off by default.** An admin identity configures tools but cannot call them: `/mcp` rejects the `admin` role, and FR-2.2's grants only take effect for an `agent`. That leaves the admin unable to verify its own change — it must ask an agent whether a definition works. `admin.tool_exec` runs a catalog tool on `/admin/mcp` through the ordinary execution path, audited under the admin's own identity (FR-9.1).
+
+  It is **not** a general widening of the admin role, and the distinction matters: the call skips the grant table and the scope profile — an admin can hold neither, so checking them would deny everything rather than decide anything — but nothing below the permission layer. The tool must be enabled; FR-4.12's protected resources stay blocked; Tier 1's binaries, denied arguments and path roots are re-checked against the *resolved* argv (FR-4.6); the rate limit counts. The exception widens **who** may call, never **what** may be called.
+
+  Skipping grants is a real cost, and it is stated rather than hidden: with this on, `tool_create` (auto-applies) plus `tool_enable` (auto-applies for a `read` category) plus `tool_exec` is a path from an admin token to a running command with no human in it. Off, that path ends at `grant_set`, which goes through the pending queue and a console session. The compensation is placement, not a permission check: `admin_exec` is declared in `toolkits.yaml` at deploy time and therefore cannot be turned on through the admin API (FR-4.11). A stolen admin token cannot grant itself execution; it can only use it where an operator already decided to allow it.
+
+  Tool **categories are not gated** here. A grant-holding agent runs a `write` tool directly today; the pending queue governs catalog and permission *changes*, not executions. A second rule at this point would make `admin.tool_exec` and `/mcp` disagree about what one definition means.
 
 ---
 
