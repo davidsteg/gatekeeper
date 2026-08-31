@@ -60,6 +60,18 @@ cannot. It is in every release.
 
 ---
 
+## 0.40.2
+
+**A regression test pins the docker `compose` argv contract — no behaviour changes.**
+
+A reported `docker.compose_ps` failure (exit 125, `unknown shorthand flag: 'p' in -p`) was investigated as a defect in the docker executor. It is not one. There is no separate docker executor module — `docker` shares `execute.py` with `local` — and the only command builder is `validate.build_argv`, which is verbatim: it prepends `tool.binary` and appends exactly one resolved string per `argv` template element (FR-5.3/5.4). Against the shipped example catalog it produces `docker compose -p <stack> ...` for all six `docker.compose_*` tools, and `execute.run` hands that argv to the binary unchanged.
+
+A `docker -p ...` on the wire therefore reflects the definition the running catalog resolved to, not the assembly of it. For a versioned entry (FR-3.3) that is the version `current_version` names — which need not be the version a reader of `admin.tool_get`'s full `versions` list inspects.
+
+- **`tests/test_docker_compose_argv.py`** — new. Three guards: the shipped catalog builds `compose` ahead of `-p` for every `docker.compose_*` tool; the exact argv for `docker.compose_ps`; and `build_argv` inserting nothing. The last is deliberate — injecting a missing `compose` in the builder would mask a malformed definition instead of leaving it visible in the argv, and would break FR-5.3's promise that the template is the command.
+
+No `src/` changes. `tests/` is excluded from the image by `.dockerignore`, so the image content is unchanged from 0.40.1.
+
 ## 0.40.1
 
 **`google_api.py` is now baked into the image — the host no longer needs to place the skill script manually.**
