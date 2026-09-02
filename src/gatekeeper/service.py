@@ -31,6 +31,7 @@ from .catalog import Catalog, ToolDef, load_catalog
 from .credentials import CredentialStore
 from .errors import ConfigError, DenialReason, Denied
 from .identity import Identity, load_identities
+from .notifications import CatalogNotifier
 from .ratelimit import RateLimiter
 from .tier1 import Tier1, Toolkit, is_runnable, load_tier1
 
@@ -69,6 +70,14 @@ class Service:
         self.tier1 = tier1
         self.catalog = catalog
         self.audit = audit
+        #: Announces `notifications/tools/list_changed` to already-connected
+        #: agents. Owned here rather than by `server.py` because the writes
+        #: that change the catalog (`store.ConfigStore`, `reload_config`
+        #: below) reach the `Service`, not the ASGI layer -- and a change
+        #: that is not announced is one every agent keeps missing until it
+        #: reconnects. `server.build_app` binds it to the event loop and
+        #: wires it into the `/mcp` mount; until then its sends are no-ops.
+        self.catalog_notifier = CatalogNotifier()
         self.credentials = credentials
         self.docker_host = docker_host
         self.locks = execute.ResourceLocks()
@@ -688,6 +697,10 @@ class Service:
         self.tier1 = tier1
         self.catalog = catalog
         self.limiter = RateLimiter(tier1.rate_limits)
+        # A reload is a catalog change like any write: toolkit
+        # propose/update/delete deploys land here, and so does a SIGHUP
+        # after a hand-edited tools.yaml.
+        self.catalog_notifier.tool_catalog_changed()
 
         logger.info(
             "Configuration reloaded: %d toolkits, %d tools, %d identities",

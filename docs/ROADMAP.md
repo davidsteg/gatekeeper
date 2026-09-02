@@ -50,6 +50,13 @@ item.
 - `write_external` category — distinct rate-limit bucket, agent-facing
   "cannot be undone" warning, requires an explicit grant
 - Operations console (`/ui`) — no JavaScript, CSP-locked, server-rendered SVG
+- **Live catalog change notification (FR-1.5)** — `/mcp` advertises
+  `tools.listChanged: true` and sends `notifications/tools/list_changed` to
+  every connected session whenever a write changes what an agent may call
+  (tool create/update/enable/disable/delete, grant and role changes, a
+  deployed toolkit proposal, a SIGHUP reload). Both protocol eras are
+  served: a `subscriptions/listen` stream at 2026-07-28+, the standalone
+  `GET /mcp` SSE stream before it (`notifications.py`)
 
 ## Not implemented (by design or not yet)
 

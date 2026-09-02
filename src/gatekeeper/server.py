@@ -14,6 +14,7 @@ from typing import Any
 
 import mcp.types as types
 from mcp.server.lowlevel import Server
+from mcp.server.lowlevel.server import InitializationOptions, NotificationOptions
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
@@ -30,6 +31,7 @@ from .audit import AuditLog
 from .errors import DenialReason, Denied
 from .execute import OUTCOME_OK, OUTCOME_UNKNOWN
 from .identity import ADMIN_ROLE, IdentityStore
+from .notifications import SESSION_ID_HEADER, CatalogNotifier
 from .service import Service
 from .ui import UI_COMPANION_PATHS, UI_PREFIX, build_ui_routes
 
@@ -46,6 +48,11 @@ PUBLIC_PATHS = frozenset({"/health/live", "/health/ready", "/health/startup"})
 #: the other -- not filtered, rejected outright.
 MCP_PATH = "/mcp"
 ADMIN_MCP_PATH = "/admin/mcp"
+
+#: How long a retained `/mcp` session may go without a request before the
+#: transport is terminated and forgotten. Only handshake-era (2025-11-25
+#: and earlier) clients hold sessions at all; see `build_app`.
+SESSION_IDLE_TIMEOUT_SECONDS = 3600.0
 
 
 class AuthMiddleware:
@@ -139,6 +146,43 @@ class AuthMiddleware:
         await self.app(scope, receive, send)
 
 
+class SessionReaper:
+    """Drops a tracked MCP session when its client terminates it.
+
+    `DELETE /mcp` with an `Mcp-Session-Id` is the spec's "I am done with
+    this session" -- the one moment gatekeeper is told a connection has
+    ended rather than having to infer it. Everything else is handled by the
+    notifier's own bound: a client that vanishes without a DELETE ages out
+    of the least-recently-active end of the map.
+
+    Sits inside `AuthMiddleware`, so an unauthenticated DELETE never
+    reaches it and cannot be used to silence another identity's session.
+    """
+
+    def __init__(self, app: ASGIApp, *, notifier: CatalogNotifier) -> None:
+        self.app = app
+        self.notifier = notifier
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope.get("type") == "http"
+            and scope.get("method") == "DELETE"
+            and scope.get("path") == MCP_PATH
+        ):
+            session_id = _header(scope, SESSION_ID_HEADER)
+            if session_id:
+                self.notifier.forget(session_id)
+        await self.app(scope, receive, send)
+
+
+def _header(scope: Scope, name: str) -> str | None:
+    wanted = name.encode("latin-1")
+    for key, value in scope.get("headers", ()):
+        if key == wanted:
+            return value.decode("latin-1")
+    return None
+
+
 def _bearer_token(scope: Scope) -> str | None:
     for name, value in scope.get("headers", ()):
         if name == b"authorization":
@@ -149,11 +193,53 @@ def _bearer_token(scope: Scope) -> str | None:
     return None
 
 
-def build_mcp_server(service: Service) -> Server[None]:
+class _AnnouncingServer(Server[None]):
+    """A `Server` that advertises `tools.listChanged` to handshake-era clients.
+
+    At 2026-07-28 and later the SDK derives the flag from whether
+    `subscriptions/listen` is registered, so nothing is needed here. The
+    `initialize` reply of the earlier era instead reads it off a
+    `NotificationOptions`, and the runner builds that reply by calling
+    `create_initialization_options()` with no arguments, once per
+    connection -- `streamable_http_app()` offers no way to pass one in.
+    Overriding the method is therefore the seam: every caller that does not
+    supply its own options gets gatekeeper's.
+    """
+
+    def __init__(self, *args: Any, notification_options: NotificationOptions, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._notification_options = notification_options
+
+    def create_initialization_options(
+        self,
+        notification_options: NotificationOptions | None = None,
+        experimental_capabilities: dict[str, dict[str, Any]] | None = None,
+        extensions: dict[str, dict[str, Any]] | None = None,
+    ) -> InitializationOptions:
+        return super().create_initialization_options(
+            notification_options or self._notification_options,
+            experimental_capabilities,
+            extensions,
+        )
+
+
+def build_mcp_server(service: Service, notifier: CatalogNotifier) -> Server[None]:
+    """The agent-facing MCP server.
+
+    `notifier` is the one thing that makes a catalog change visible to an
+    already-connected agent: it serves `subscriptions/listen` for
+    2026-07-28+ clients, supplies the handshake era's `listChanged`
+    advertisement, and remembers which sessions to push the notification
+    to. See `notifications.py` for why both routes exist.
+    """
+
     async def on_list_tools(
         ctx: Any, _params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
         identity = _identity_from(ctx)
+        # The moment a client acquires a list it may cache is the moment it
+        # becomes worth notifying.
+        notifier.track(ctx)
         tools = [
             types.Tool(
                 name=view.name,
@@ -189,7 +275,17 @@ def build_mcp_server(service: Service) -> Server[None]:
             isError=result.outcome != OUTCOME_OK,
         )
 
-    return Server(
+    async def on_initialized(ctx: Any, _params: types.NotificationParams | None) -> None:
+        """Register a handshake-era session as soon as it is usable.
+
+        `notifications/initialized` is the first message that carries the
+        session id the transport just assigned, so it is the earliest point
+        a connection can be addressed -- earlier than the client's first
+        `tools/list`, and it also covers a client that never lists at all.
+        """
+        notifier.track(ctx)
+
+    server = _AnnouncingServer(
         "gatekeeper",
         version=__version__,
         instructions=(
@@ -200,7 +296,13 @@ def build_mcp_server(service: Service) -> Server[None]:
         ),
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
+        on_subscriptions_listen=notifier.listen_handler,
+        notification_options=notifier.notification_options,
     )
+    server.add_notification_handler(
+        "notifications/initialized", types.NotificationParams, on_initialized
+    )
+    return server
 
 
 def _render(result: Any) -> str:
@@ -262,7 +364,8 @@ def build_app(
     programming error, not a runtime configuration to degrade gracefully
     from.
     """
-    mcp_server = build_mcp_server(service)
+    notifier = service.catalog_notifier
+    mcp_server = build_mcp_server(service, notifier)
 
     async def health_live(_request: Request) -> Response:
         return JSONResponse({"status": "live"})
@@ -363,12 +466,34 @@ def build_app(
             )
         )
 
+    # `stateless_http=False` on this mount, unlike `/admin/mcp` below.
+    # Handshake-era clients (2025-11-25 and earlier) receive
+    # `notifications/tools/list_changed` on the standalone SSE stream they
+    # open with `GET /mcp`, and that stream only exists if the transport
+    # keeps the session between requests -- a stateless mount hands every
+    # request its own short-lived transport, so there is nowhere to push
+    # to. 2026-07-28 clients are unaffected either way: their requests are
+    # self-contained and the session manager routes them past this flag
+    # entirely, with change notifications riding the `subscriptions/listen`
+    # stream instead. `/admin/mcp` stays stateless because its tool list is
+    # a fixed constant -- it has nothing to announce.
     primary_app = mcp_server.streamable_http_app(
         streamable_http_path=MCP_PATH,
         host=host,
-        stateless_http=True,
+        stateless_http=False,
         custom_starlette_routes=routes,
     )
+    # Retained sessions need a way to end. A client that goes away without
+    # sending `DELETE /mcp` -- a killed agent, a lost network -- otherwise
+    # leaves its transport and its parked task behind for the life of the
+    # container, and gatekeeper is a daemon that runs for months.
+    # `streamable_http_app()` takes no such argument, so it is set on the
+    # session manager it just built; both places that read it do so per
+    # request, not at construction. A reaped session's next request gets
+    # the spec's 404 and the client re-initializes -- the same reconnect
+    # that used to be the only remedy for a stale catalog, now needed only
+    # after a full hour of complete silence.
+    mcp_server.session_manager.session_idle_timeout = SESSION_IDLE_TIMEOUT_SECONDS
 
     all_routes = list(primary_app.routes)
     # Every `streamable_http_app()` result carries its own session manager,
@@ -407,12 +532,17 @@ def build_app(
 
     @contextlib.asynccontextmanager
     async def combined_lifespan(_app: Starlette) -> Any:
+        # The MCP transports live on this loop, and catalog writes arrive
+        # from the console's own (synchronous) request handling -- the
+        # notifier needs to know which loop to hand the send to.
+        notifier.bind_loop()
         async with contextlib.AsyncExitStack() as stack:
             for sub_app in sub_apps:
                 await stack.enter_async_context(sub_app.router.lifespan_context(sub_app))
             yield
 
     app = Starlette(routes=all_routes, lifespan=combined_lifespan)
+    app.add_middleware(SessionReaper, notifier=notifier)
     app.add_middleware(
         AuthMiddleware, identities=identities, audit=audit, ui_enabled=ui
     )
