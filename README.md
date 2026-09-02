@@ -24,8 +24,9 @@ No shell injection. No command confusion. No hidden side effects.
 - **Granular permissions** — per-tool, per-identity, scoped by resource
 - **Complete audit trail** — every call logged, even the rejected ones
 - **Empty on install** — nothing ships preconfigured; every capability is an audited decision
-- **Not just local commands** — `http`, `truenas`, and `ssh` executors reach outside
-  APIs and remote hosts the same way, with SSRF-safe target checks, mandatory SSH
+- **Not just local commands** — `http`, `truenas`, `ssh`, and `opencode` executors
+  reach outside APIs, remote hosts, and a headless coding agent the same way, with
+  SSRF-safe target checks, mandatory SSH
   host-key pinning, and secrets kept in a write-only credential store; see
   [Integrations](#integrations-add-sonarr-pfsense-and-18-others-without-writing-yaml) below
 
@@ -70,11 +71,11 @@ Toggle between **Cards** (grouped by toolkit, one card per tool with parameters,
 
 Each tool is a template — a fixed action, not a free-form command. For a local binary that's a program path, arguments, and parameter rules; for an HTTP service (see Integrations below) it's a method and path instead, shown as `REQUEST` on the card. Either way the editor shows the Tier 1 limits it has to stay inside, so you know what's allowed before you save. Defining and granting are two steps — a tool with no grantees exists but is invisible to every agent.
 
-### Integrations: add Sonarr, pfSense, and 19 others without writing YAML
+### Integrations: add Sonarr, pfSense, and 20 others without writing YAML
 
 ![](.readme-assets/integrations.png)
 
-Reaching an outside service (Sonarr, Radarr, Home Assistant, pfSense, n8n, TrueNAS, a plain Linux host over SSH, …) used to mean nothing — gatekeeper could only run local commands and Docker. Now it has `http`, `truenas`, and `ssh` executors alongside `docker`, and a library of 21 starter integrations for common homelab/SaaS services so you don't have to write the request shapes by hand:
+Reaching an outside service (Sonarr, Radarr, Home Assistant, pfSense, n8n, TrueNAS, a plain Linux host over SSH, a headless opencode server, …) used to mean nothing — gatekeeper could only run local commands and Docker. Now it has `http`, `truenas`, `ssh`, and `opencode` executors alongside `docker`, and a library of 22 starter integrations for common homelab/SaaS services so you don't have to write the request shapes by hand:
 
 ```
  1. Pick a card                2. Paste its YAML once           3. Create a tool

@@ -17,7 +17,15 @@ import tempfile
 from collections import Counter
 from typing import Any
 
-from . import execute, execute_google, execute_http, execute_ssh, execute_truenas, validate
+from . import (
+    execute,
+    execute_google,
+    execute_http,
+    execute_opencode,
+    execute_ssh,
+    execute_truenas,
+    validate,
+)
 from .audit import AuditLog
 from .catalog import Catalog, ToolDef, load_catalog
 from .credentials import CredentialStore
@@ -377,6 +385,7 @@ class Service:
             rpc_call: tuple[str, dict[str, str]] | None = None
             google_call: tuple[str, list[str]] | None = None
             google_env: dict[str, str] | None = None
+            opencode_operation: str | None = None
             if toolkit.executor in ("docker", "local", "ssh"):
                 argv = validate.build_argv(tool, values, toolkit)
                 # Resolved here, inside the same try/except as everything
@@ -398,6 +407,12 @@ class Service:
                 # audited like any other denial, not an exception escaping
                 # call() (FR-10.2). Analogous to `_environment` for docker.
                 google_env = self._google_token_env(toolkit.credential)
+            elif toolkit.executor == "opencode":
+                # No request to build (execute_opencode.py owns the request
+                # shapes) -- but `session_id` and `directory` are checked
+                # here, inside this try/except, so a bad one is an audited
+                # denial rather than a failure discovered mid-workflow.
+                opencode_operation = validate.build_opencode_call(tool, values, toolkit)
             elif toolkit.executor == "file":
                 pass  # parameters resolved directly into the call below
         except Denied as denial:
@@ -477,6 +492,18 @@ class Service:
                     # A per-tool override is also Tier 1 (tools.yaml, not
                     # agent-supplied), and narrows the toolkit's authority.
                     run_as=effective_run_as,
+                )
+            elif toolkit.executor == "opencode":
+                assert opencode_operation is not None
+                result = await execute_opencode.run(
+                    operation=opencode_operation,
+                    values=values,
+                    toolkit=toolkit,
+                    credentials=self.credentials,
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent,
+                    redact=self.audit.redact,
                 )
             elif toolkit.executor == "google":
                 assert google_call is not None
@@ -598,6 +625,8 @@ class Service:
             return await execute_ssh.probe(toolkit)
         if toolkit.executor == "google":
             return await execute_google.probe(toolkit)
+        if toolkit.executor == "opencode":
+            return await execute_opencode.probe(toolkit)
         return False
 
     def render_metrics(self) -> str:
