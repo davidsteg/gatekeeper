@@ -183,6 +183,19 @@ toolkits:
 
 See [toolkits example](config/examples/toolkits.yaml) for full reference.
 
+**`local` means "a program inside this container", not "on the NAS".** The
+distinction bites hardest with ZFS: `/usr/bin/zfs` is not in the image and
+installing it would not help, because the `zfs` command is a wrapper around
+an ioctl on `/dev/zfs` that only the host kernel answers. Pool and dataset
+work belongs on the `truenas` executor (`pool.query`,
+`pool.dataset.query`, `pool.dataset.create`, `zfs.snapshot.*` — see the
+worked example), and anything with no API equivalent belongs on `ssh`,
+where the paths are the host's `/usr/sbin/zfs` and `/usr/sbin/zpool`. The
+same holds for `ps aux` and `top`. Startup now warns, by name and path,
+when a `local` toolkit points at a binary this image does not contain —
+otherwise the tools stay listed and the first sign of trouble is a "No
+such file or directory" on an agent call hours later.
+
 A `file` toolkit (`executor: file` — read/write/patch/list, no binary and no
 argv) performs its operations as the container user. If it has to reach files
 owned by somebody else, it can declare `run_as: "3001:3001"` (or an account

@@ -417,6 +417,46 @@ class Tier1:
                 refs.setdefault(dest.credential, []).append(f"{dest.name} (destination)")
         return {name: tuple(labels) for name, labels in refs.items()}
 
+    def missing_local_binaries(self) -> dict[str, tuple[str, ...]]:
+        """`local` toolkit name -> the binaries it declares that this
+        container does not have.
+
+        The other half of `credential_references`: a toolkit that parses
+        clean and still cannot run. A binary path is checked for *shape*
+        at load time -- absolute, no traversal -- but never for existence,
+        because Tier 1 is read before anything is executed. So a toolkit
+        naming `/usr/bin/zfs` on an image that never installed it loads
+        without complaint, its tools stay `enabled: true` in the catalog,
+        and the first report is a "No such file or directory" on an agent
+        call hours later (FR-8.4: `zpool status` is not reachable from
+        inside the container at all -- that one belongs on `truenas` or
+        `ssh`, no path in this field can fix it).
+
+        `local` only, deliberately. An `ssh` toolkit's binaries live on the
+        remote host, so testing them against this filesystem would answer a
+        question about the wrong machine; a `docker` toolkit's single
+        binary is baked into the image and has its own `docker version`
+        probe.
+        """
+        missing: dict[str, tuple[str, ...]] = {}
+        for toolkit in self.toolkits.values():
+            if toolkit.executor != "local":
+                continue
+            absent = tuple(b for b in toolkit.binaries if not is_runnable(b))
+            if absent:
+                missing[toolkit.name] = absent
+        return missing
+
+
+def is_runnable(path: str) -> bool:
+    """Exists, is a regular file, and is executable by this process.
+
+    One definition for the startup warning above and the readiness probe
+    in `service.py`, so the two can never drift into disagreeing about
+    what makes a `local` toolkit usable.
+    """
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
 
 def _is_absolute(path: str) -> bool:
     """Absolute by POSIX OR by host convention.

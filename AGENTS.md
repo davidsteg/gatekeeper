@@ -99,6 +99,18 @@ network access outside localhost is needed.
   row use; do not hand-roll a second one, it will forget the
   destination-level `credential:` override (FR-8.3g). A dangling reference is
   a startup warning, not an abort, and shows as a note on `/ui/credentials`.
+- **`local` binaries are validated for shape, never for existence — and
+  host state is not a binary problem.** Tier 1 checks that a binary path is
+  absolute and traversal-free, then loads; it is parsed before anything
+  runs, so a toolkit naming a binary the image lacks starts clean and fails
+  on first call. `Tier1.missing_local_binaries()` is the startup warning and
+  `service._probe_one`'s readiness check sharing one `is_runnable()`; keep
+  it `local`-only, since an `ssh` toolkit's binaries are on another
+  filesystem entirely. Before "just apt-install it" in the Dockerfile, check
+  FR-8.4: `zfs`/`zpool`/`ps aux`/`top` do not return host values from inside
+  this container at any path, and belong on `truenas` or `ssh` — the
+  Dockerfile carries the long form of why ZFS in particular is not
+  installable out of this problem.
 - **`document.querySelector('form')` on an authenticated `/ui` page grabs
   the sidebar's logout form, not the page's content form** — the sidebar
   renders before `<main>` in the DOM. When scripting the console (browser

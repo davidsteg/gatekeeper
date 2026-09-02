@@ -309,6 +309,33 @@ def cmd_serve(args: argparse.Namespace) -> int:
             ),
         )
 
+    # The same failure shape one field over: a `local` toolkit naming a
+    # binary this image does not contain. Tier 1 checks the *shape* of a
+    # binary path (absolute, no traversal) but is parsed long before
+    # anything runs, so the toolkit loads clean, its tools stay enabled in
+    # the catalog, and the evidence is a "No such file or directory" on the
+    # first agent call. `/health/ready` has known this all along -- the
+    # readiness probe walks exactly these paths -- but nobody reads a
+    # readiness endpoint to find out why a tool they just wrote fails.
+    #
+    # Warning, not abort, for the reason above it: one unrunnable toolkit
+    # must not take down the ones that work.
+    unrunnable = tier1.missing_local_binaries()
+    if unrunnable:
+        logger.warning(
+            "%d local toolkit(s) declare binaries this container does not "
+            "have: %s. Their tools stay listed but fail on call. Either "
+            "install the binary in the image, or -- for anything that is "
+            "host state rather than a program (ZFS, pools, host processes) "
+            "-- move the toolkit to the 'truenas' or 'ssh' executor, which "
+            "is where it is reachable from (REQUIREMENTS.md FR-8.4).",
+            len(unrunnable),
+            "; ".join(
+                f"{name} ({', '.join(paths)})"
+                for name, paths in sorted(unrunnable.items())
+            ),
+        )
+
     service = Service(
         tier1=tier1,
         catalog=catalog,
