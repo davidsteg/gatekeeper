@@ -60,6 +60,25 @@ cannot. It is in every release.
 
 ---
 
+## 0.41.2
+
+**Fix: every `docker compose` call failed in production with `unknown shorthand flag: 'p' in -p` (exit 125) while the build stayed green, because the image ran as uid 568 but left `HOME=/root` — a directory that user cannot read. The docker CLI derives its config directory, and with it the first entry of its cli-plugin search path, from HOME.**
+
+The reported symptom pointed at the docker executor dropping the `compose` subcommand, and 0.40.2 had already pinned that it cannot: there is no docker branch that touches argv. `toolkit.executor == "docker"` runs the same `validate.build_argv` -> `execute.run` path as `local` (four docker-specific lines exist in the whole call path: one builds an env, two select the shared branch, one is the readiness probe), `build_argv` prepends the binary and appends one resolved string per template element, and `_unpriv` `execv`s what it was handed. With the live `tools.yaml` confirmed to carry `argv[0] == "compose"`, the argv reaching the process was `docker compose -p …` — and the failure had to be below it.
+
+It was. The full stderr carried a line the first reports did not:
+
+```
+WARNING: Error loading config file: open /root/.docker/config.json: permission denied
+unknown shorthand flag: 'p' in -p
+```
+
+`python:3.12-slim` sets `HOME=/root`, and `USER 568:568` never overrode it. So the CLI looked for its config, and for `$HOME/.docker/cli-plugins` ahead of the system plugin directories, in a path readable only by root. `compose` did not resolve as a plugin; docker fell through to its root command, where `-p` is not a flag, and reported the compose project flag as an unknown shorthand. The Dockerfile's own comment above the runtime `apt` line has predicted this exact error string for a missing compose plugin since the plugin was first installed — reached here by an unreadable config directory rather than an absent file.
+
+The image now creates `/home/apps/.docker` owned by 568:568 and sets `HOME` and `DOCKER_CONFIG` to it.
+
+**What let it ship twice is the more useful half.** `RUN docker compose version` has guarded this image since the compose plugin was added — but it runs as root, before `USER 568:568`, and root can read its own home. A build-time check performed as a different user than the workload verifies the wrong thing: it went green through 0.41.0 and 0.41.1 while every compose call in production failed. The check is now repeated after the drop, where it reproduces the runtime user's view, and `tests/test_dockerfile_runtime_user.py` pins all three halves — HOME is not `/root`, the directory exists and belongs to 568, and at least one compose check runs after `USER`. The tests read the Dockerfile as text, so they fail on a regression without needing a daemon or a build.
+
 ## 0.41.1
 
 **Fix: a `local` toolkit naming a binary the image does not contain loaded clean, kept its tools listed as enabled, and reported nothing until an agent called one and got "No such file or directory". Startup now names the toolkit and the missing paths — and says where host state actually lives, because for the case that prompted this no path would have worked.**
