@@ -87,6 +87,7 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 | `http` | LAN/SaaS APIs (Sonarr, Radarr, Home Assistant, pfSense, GitHub, …) | HTTP request; base URL, method, and path prefix come from the toolkit, never a parameter |
 | `truenas` | ZFS, pool status, dataset management | JSON-RPC 2.0 over WebSocket (TrueNAS's REST v2.0 is deprecated) |
 | `ssh` | A remote Linux host's allowlisted binaries | binary + argv (same shape as `docker`/`local`), run over an SSH exec channel |
+| `opencode` | A headless opencode coding-agent server | HTTP; one operation = one fixed multi-request workflow, whitelisted by operation name |
 
 `http` toolkit boundaries (`tier1.py`'s `Toolkit`): `base_url`,
 `allowed_methods`, `allowed_path_prefixes`, `allowed_cidrs`, `credential`,
@@ -94,6 +95,28 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 `execute_http.py` resolves the target host itself and checks the resolved IP
 against `allowed_cidrs` immediately before connecting — a hostname-only check
 would leave a DNS-rebinding gap between the check and the actual connect.
+
+`opencode` toolkit boundaries: `base_url`, `allowed_cidrs`, `credential`
+(all three exactly as for `http`, including the pre-connect resolved-IP
+check), plus `allowed_opencode_operations` and `path_roots`. It is its own
+executor rather than an `http` toolkit because the useful unit of work is
+not a request: `ask` is a session creation plus a message, `run` is a
+session, an async dispatch and a poll loop. As `http` tools those would be
+three or four agent round trips per task, with the session id and every
+raw intermediate response travelling through the agent's context. So the
+whitelist acts on *operation names* the way `truenas`'s acts on RPC method
+names, the request paths live in `execute_opencode.py`'s one `_EP` table
+and nowhere else, and no parameter on any operation carries a URL, a host
+or a path. The two agent-supplied values that leave the parameter
+allowlist behind are checked before execution and again in the executor:
+`session_id` against a character set that cannot introduce a path segment
+(it is the only value that ever reaches a request path), and `directory`
+— sent as opencode's `x-opencode-directory` header, which is what lets one
+toolkit fan out across repositories — against the toolkit's `path_roots`.
+That check is lexical, not `realpath`-based, and its existence half runs
+only where the matching root is visible in gatekeeper's own filesystem:
+the path names a directory in the *opencode container's* namespace, so
+resolving symlinks would resolve them in the wrong one.
 
 `truenas` toolkit boundaries: `ws_url`, `allowed_rpc_methods`, `credential`.
 The whitelist acts on JSON-RPC method *names* — a method not listed
@@ -164,14 +187,16 @@ created or rotated.
 ## Integrations
 
 `integrations.py` — a small library of starter definitions (toolkit YAML block +
-2-4 starter tools + an inline-SVG logo) for 21 services: Sonarr, Radarr,
+2-7 starter tools + an inline-SVG logo) for 22 services: Sonarr, Radarr,
 Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n, Uptime Kuma, Immich,
 Telegram, Google API (static-key subset), TrueNAS, pfSense, Jellystat,
-Jellyseerr, Netdata, SABnzbd, Paperless-ngx, Docker, and Linux-over-SSH. Most are
+Jellyseerr, Netdata, SABnzbd, Paperless-ngx, Docker, Linux-over-SSH, and
+opencode. Most are
 `http`-shaped; Docker reuses the `docker` executor's own toolkit/tool shape
 (binaries/denied_args/path_roots, mirroring `config/examples/toolkits.yaml`)
 and Linux reuses the `ssh` executor's, via `_tool_argv()` rather than the
-http-shaped `_tool()` helper. Reachable from `/ui/tools/integrations` —
+http-shaped `_tool()` helper; opencode uses `_opencode_tool()`, whose tools
+carry an `opencode_operation` and no request shape at all. Reachable from `/ui/tools/integrations` —
 picking an integration's tool pre-fills the *existing* tool editor, then
 goes through the exact same Tier 1 validation as hand-written YAML.
 Integrations never create a toolkit; `/ui/toolkits/reference` (or
@@ -254,11 +279,15 @@ src/gatekeeper/
                        caps, resource locks
   execute_http.py      The `http` executor: SSRF-safe target resolution,
                        no-redirect-follow, credential-as-header injection
+  execute_opencode.py  The `opencode` executor: one operation = one fixed
+                       multi-request workflow against a headless opencode
+                       server; reuses execute_http's SSRF/credential/JSON-cap
+                       helpers, request paths fixed in its own `_EP` table
   execute_truenas.py   The `truenas` executor: JSON-RPC 2.0 over WebSocket
   execute_ssh.py        The `ssh` executor: binary+argv over an SSH exec
                        channel, mandatory host-key pinning
   credentials.py       The write-only, encrypted credential store
-  integrations.py      Starter toolkit/tool definitions + logos for 21
+  integrations.py      Starter toolkit/tool definitions + logos for 22
                        services, used by /ui/tools/integrations
   identity.py          scrypt token hashing, constant-time verify,
                        IdentityStore, roles
@@ -281,7 +310,8 @@ config/
 tests/
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_ui.py, test_ui_admin.py, test_credentials.py, test_execute_http.py,
-  test_execute_truenas.py, test_execute_ssh.py, test_integrations.py,
+  test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py,
+  test_integrations.py,
   test_ui_credentials.py, test_ui_integrations.py, test_admin_mcp.py,
   test_catalog_versioning.py, test_pending.py, conftest.py
 ```

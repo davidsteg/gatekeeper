@@ -28,6 +28,25 @@ TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 CATEGORIES = frozenset({"read", "write", "write_external"})
 PARAM_TYPES = frozenset({"string", "enum", "integer", "path", "boolean"})
 
+#: What each `opencode` operation reads, as ``(required, optional)``
+#: parameter names. The `opencode` executor has no argv, path or params
+#: template a definition could bind values through -- like the `file`
+#: executor's `path`/`content`, the parameter *names* are the contract.
+#:
+#: Enforced in both directions at load time (`_validate_opencode_params`):
+#: a missing required parameter is an error, and so is a parameter outside
+#: the set, which the executor would otherwise accept and silently ignore.
+OPENCODE_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "ask": (("prompt",), ("directory", "model", "agent", "title", "session_id")),
+    "run": (("prompt",), ("directory", "model", "agent", "title", "session_id")),
+    "fire": (("prompt",), ("directory", "model", "agent", "title", "session_id")),
+    "check": (("session_id",), ("directory",)),
+    "review_changes": (("session_id",), ("directory",)),
+    "abort": (("session_id",), ("directory",)),
+    "providers": ((), ("directory",)),
+    "health": ((), ()),
+}
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Parameter:
@@ -130,6 +149,16 @@ class ToolDef:
     #: one argv element's worth of value (FR-5.4: a parameter cannot
     #: structurally produce an additional argument).
     google_args: dict[str, dict[str, Any]] | None = None
+
+    # -- `opencode` executor -------------------------------------------
+    #: One of `tier1.OPENCODE_OPERATIONS` -- the fixed workflow this tool
+    #: performs against the opencode server, not agent-suppliable, exactly
+    #: like `binary` for the argv executors, `rpc_method` for truenas and
+    #: `google_action` for google. There is no path/method/argv field:
+    #: `execute_opencode.py` owns the request shapes, and the tool's
+    #: parameters are the fixed names that operation reads
+    #: (`OPENCODE_OPERATION_PARAMS` below).
+    opencode_operation: str | None = None
 
     #: Per-tool override of the toolkit's ``run_as`` (file executor only).
     #: ``None`` -- the default -- means "use the toolkit's ``run_as``", so a
@@ -242,6 +271,44 @@ def _parse_parameter(name: str, spec: dict[str, Any], where: str) -> Parameter:
     )
 
 
+def _validate_opencode_params(
+    operation: str, parameters: dict[str, Parameter], where: str
+) -> None:
+    """Both halves of the `opencode` parameter contract, at load time.
+
+    The `opencode` executor reads fixed parameter names (there is no argv
+    or path template binding them), so a typo -- `dir` for `directory` --
+    would otherwise be accepted at load, ignored at call, and only visible
+    as opencode working in the wrong repository. Checked in both
+    directions for that reason: required names must be present *and*
+    required, and no name outside the operation's set may be declared.
+    """
+    required, optional = OPENCODE_OPERATION_PARAMS[operation]
+    known = set(required) | set(optional)
+
+    for name in required:
+        param = parameters.get(name)
+        if param is None:
+            raise ConfigError(
+                f"{where}: opencode operation {operation!r} needs a "
+                f"{name!r} parameter"
+            )
+        if not param.required:
+            raise ConfigError(
+                f"{where}: parameter {name!r} must be required for opencode "
+                f"operation {operation!r}"
+            )
+
+    unknown = sorted(set(parameters) - known)
+    if unknown:
+        raise ConfigError(
+            f"{where}: opencode operation {operation!r} does not read "
+            f"{unknown} -- it reads {sorted(known) or 'no parameters'}. A "
+            "parameter it does not read would be accepted and silently "
+            "ignored."
+        )
+
+
 def _validate_ceilings(tool: ToolDef, toolkit: Toolkit, where: str) -> None:
     """FR-4.5: A tool may stay below the toolkit limits, never exceed them.
 
@@ -332,6 +399,25 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
                 except ConfigError as exc:
                     raise Tier1Violation(f"{where}: {exc}") from exc
 
+    elif toolkit.executor == "opencode":
+        if not toolkit.allows_opencode_operation(tool.opencode_operation or ""):
+            raise Tier1Violation(
+                f"{where}: opencode operation {tool.opencode_operation!r} is not "
+                f"in the allowlist {list(toolkit.allowed_opencode_operations)} of "
+                f"toolkit {toolkit.name!r}"
+            )
+        # `directory` is checked against the toolkit's `path_roots` at call
+        # time (`execute_opencode.check_directory`) -- the same role
+        # `allowed_path_prefixes` plays for http. A tool that offers the
+        # parameter on a toolkit with no roots would therefore accept a
+        # value it can only ever deny; that is a deploy-time mistake, so
+        # it is caught at load time rather than on the first call.
+        if "directory" in tool.parameters and not toolkit.path_roots:
+            raise Tier1Violation(
+                f"{where}: declares a 'directory' parameter, but toolkit "
+                f"{toolkit.name!r} has no path_roots to validate it against"
+            )
+
     _validate_ceilings(tool, toolkit, where)
 
 
@@ -388,6 +474,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     file_operation: str | None = None
     google_action: str | None = None
     google_args_val: dict[str, dict[str, Any]] | None = None
+    opencode_operation: str | None = None
     #: Per-tool run_as override -- only the `file` branch sets this; the
     #: other executors leave it at None, and a `run_as` on a non-file tool
     #: is rejected by tier1.py at load time.
@@ -505,6 +592,17 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         # the typo guard below covers them via the `flag` collection
         # above and the parameter existence check in build_google_call.
 
+    elif toolkit.executor == "opencode":
+        opencode_operation = spec.get("opencode_operation") or spec.get("operation")
+        if not isinstance(opencode_operation, str) or not opencode_operation:
+            raise ConfigError(f"{where}: field 'opencode_operation' is missing")
+        if opencode_operation not in OPENCODE_OPERATION_PARAMS:
+            raise ConfigError(
+                f"{where}: opencode_operation {opencode_operation!r} is unknown "
+                f"(known: {sorted(OPENCODE_OPERATION_PARAMS)})"
+            )
+        _validate_opencode_params(opencode_operation, parameters, where)
+
     # Every placeholder must point to a declared parameter. A typo
     # in the template would otherwise only surface at runtime -- and
     # then land as an unresolvable placeholder in the request.
@@ -541,6 +639,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         file_operation=file_operation,
         google_action=google_action,
         google_args=google_args_val,
+        opencode_operation=opencode_operation,
         run_as=tool_run_as,
     )
     _validate_against_tier1(tool, toolkit)

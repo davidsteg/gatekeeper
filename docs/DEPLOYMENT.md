@@ -80,6 +80,77 @@ names the credential it used (`"credentials": ["jellyfin"]`) and contains the
 value nowhere. A `credential_unavailable` denial means step 2 and step 3
 disagree about the name.
 
+## Wiring an opencode server (`executor: opencode`)
+
+The `opencode` executor talks to a **headless opencode server** over its
+HTTP API. gatekeeper does not start, supervise, or contain opencode — it
+is a separate container you run yourself, exactly like Sonarr behind an
+`http` toolkit.
+
+**1. Run opencode headless and note its address.** The server listens on
+port `4096` inside its container; whatever host address that maps to is
+what goes in `base_url`.
+
+**2. Add the toolkit** (Tier 1 — `toolkits.yaml`, redeploy, never the
+console). Copy the block from
+[`config/examples/toolkits.yaml`](../config/examples/toolkits.yaml) or
+`/ui/toolkits/reference`, then edit three lines:
+
+- `base_url` — scheme, host, port. The only place any of the three ever
+  appears; no tool and no parameter can influence the target.
+- `allowed_cidrs` — the narrow `/32` of that one host (FR-8.15). This is
+  what the executor re-checks the *resolved* IP against before every
+  request of a workflow, so a hostname that later resolves elsewhere is
+  refused mid-workflow, not just at the start.
+- `path_roots` — the project roots opencode may be pointed at. An agent's
+  `directory` parameter is checked against these; a toolkit with no
+  `path_roots` accepts no `directory` at all, and a tool that offers one
+  anyway fails at load time rather than on the first call.
+
+Narrow `allowed_opencode_operations` while you are there: a toolkit that
+should only report on somebody else's sessions lists
+`check`/`review_changes`/`health` and simply never mentions `run`.
+
+**3. Mount the project roots into both containers, at the same paths.**
+opencode resolves `directory` in its own filesystem; gatekeeper resolves
+`path_roots` in its own. When the same host directory is mounted at the
+same path in both, gatekeeper additionally catches a typo'd directory
+before the call goes out. When it is not mounted into gatekeeper at all,
+the `path_roots` containment check still applies — only the existence
+check is skipped, because this container genuinely cannot answer it.
+
+**4. Auth is optional and off by default.** opencode ships with no
+authentication. If the server is reachable by anything other than
+gatekeeper, set `OPENCODE_SERVER_PASSWORD` on it, create a `basic`
+credential at `/ui/credentials` whose value is `<user>:<password>`, and
+name it with `credential:` on the toolkit — it is then sent as an
+`Authorization: Basic` header, and never appears in a tool definition, a
+response, or the audit log.
+
+**5. Create the tools, enable them, grant them.** Either from
+`/ui/tools/integrations` (the *opencode* card carries all seven starter
+tools) or by copying the entries from
+[`config/examples/tools.yaml`](../config/examples/tools.yaml). They ship
+`enabled: false`, like every other starter definition.
+
+**6. Reconnect the agent, do not restart the container** — see the next
+section for why. Then check `opencode.health` first: it answers
+`{"healthy": true, "version": ...}` and needs neither a session nor a
+project directory, which makes it the cheapest confirmation that the
+address, the CIDR allowlist, and (if configured) the credential are all
+right.
+
+Two things worth deciding deliberately before granting:
+
+- **`run` and `fire` let another agent edit files.** They are
+  `write_external` in the shipped definitions for that reason. What they
+  can reach is exactly `path_roots`, so keep it to the repositories you
+  mean.
+- **A timed-out `run` is `unknown`, not `failed`.** The prompt reached
+  opencode and the session keeps working on the other side; the response
+  says so and carries the session id. The follow-up is `check`, never a
+  retry — a retry would start the same work a second time.
+
 ## A new tool does not appear in an agent session
 
 Reported as an admin/agent split: `admin.tool_create` + `admin.tool_enable`

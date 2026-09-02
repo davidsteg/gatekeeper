@@ -23,8 +23,9 @@ import re
 from typing import Any
 from urllib.parse import unquote
 
-from .catalog import PLACEHOLDER_RE, Parameter, ToolDef
+from .catalog import OPENCODE_OPERATION_PARAMS, PLACEHOLDER_RE, Parameter, ToolDef
 from .errors import DenialReason, Denied
+from .execute_opencode import check_directory, check_session_id
 from .tier1 import Toolkit
 
 
@@ -403,6 +404,46 @@ def build_google_call(
             args.append(value)
 
     return args
+
+
+def build_opencode_call(
+    tool: ToolDef, values: dict[str, str], toolkit: Toolkit
+) -> str:
+    """Checks an `opencode` call against Tier 1 and returns its operation.
+
+    There is no request to build: `execute_opencode.py` owns the request
+    shapes, and the tool's parameters are read by fixed name. What this
+    function exists for is that the two values which *do* leave the
+    parameter allowlist behind -- `session_id`, which reaches a request
+    path, and `directory`, which must stay inside the toolkit's
+    `path_roots` -- are checked here, inside `service.call`'s validation
+    block, so a bad one is an ordinary audited denial rather than a
+    failure discovered mid-workflow.
+
+    The operation re-check is the invariant assertion `build_argv`'s
+    `check_binary` and `build_rpc_call`'s method check already are:
+    `opencode_operation` is fixed per tool and not agent-suppliable.
+    """
+    assert tool.opencode_operation is not None
+
+    if not toolkit.allows_opencode_operation(tool.opencode_operation):
+        raise Denied(
+            DenialReason.TIER1_VIOLATION,
+            f"Opencode operation {tool.opencode_operation!r} is not allowed "
+            "for this toolkit.",
+        )
+
+    # An operation that *needs* a session id is checked even when the
+    # value is absent or empty -- `resolve_parameters` would normally have
+    # caught that via the parameter's own `required`/pattern, but this
+    # function is the layer that must hold when it did not.
+    required, _optional = OPENCODE_OPERATION_PARAMS[tool.opencode_operation]
+    if "session_id" in required or values.get("session_id"):
+        check_session_id(values.get("session_id", ""))
+    if values.get("directory"):
+        check_directory(values["directory"], toolkit)
+
+    return tool.opencode_operation
 
 
 def resolve_scopes(tool: ToolDef, values: dict[str, str]) -> list[str]:

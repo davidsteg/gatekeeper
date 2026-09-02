@@ -260,6 +260,49 @@ toolkits:
     max_timeout_seconds: 60
     max_output_bytes: 131072
 
+  # The `opencode` executor: a headless opencode server on the LAN, driven
+  # over its own HTTP API. Same two target fields as an `http` toolkit and
+  # for the same reasons -- `base_url` is the only place a scheme and host
+  # may appear (FR-8.5), `allowed_cidrs` is what the executor re-checks the
+  # resolved IP against before *every* request of a workflow (FR-8.9), so
+  # keep it the narrow /32 that covers that one host (FR-8.15).
+  #
+  # What differs from `http`: one call is a fixed multi-request workflow,
+  # not a single request, so the whitelist acts on operation names --
+  # exactly like allowed_rpc_methods for truenas. `run` simply never
+  # appears in a toolkit meant only to report on somebody else's sessions.
+  # There is no allowed_path_prefixes: the request paths are fixed in
+  # execute_opencode.py, not composed from a tool definition.
+  #
+  # `path_roots` is what an agent's `directory` parameter is checked
+  # against -- the project roots opencode may ever be pointed at. Without
+  # it, no tool on this toolkit may offer `directory` at all.
+  #
+  # No credential line by default: opencode ships without auth. If you set
+  # OPENCODE_SERVER_PASSWORD on the server, create a `basic` credential
+  # (value "<user>:<password>") and name it here.
+  opencode:
+    executor: opencode
+    base_url: "http://opencode.lan:4096"
+    allowed_cidrs:
+      - 10.10.200.90/32
+    allowed_opencode_operations:
+      - ask
+      - run
+      - fire
+      - check
+      - review_changes
+      - abort
+      - providers
+      - health
+    path_roots:
+      - /mnt/raid/projects
+    # A `run` drives a coding agent to completion -- minutes, not seconds.
+    # The ceiling belongs here; each tool stays below it (FR-4.5).
+    max_timeout_seconds: 900
+    max_output_bytes: 131072
+    # credential: opencode
+
 # FR-6.8
 rate_limits:
   read:

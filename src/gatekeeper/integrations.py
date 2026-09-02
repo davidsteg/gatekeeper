@@ -217,6 +217,54 @@ def _google_tool(
     }
 
 
+def _opencode_tool(
+    tool_id: str, *, toolkit: str, title: str, description: str,
+    operation: str, parameters: dict[str, Any] | None = None,
+    category: str = "read", idempotent: bool = True,
+    required_scopes: list[str] | None = None,
+    timeout_seconds: int = 60, max_output_bytes: int = 65536,
+) -> dict[str, Any]:
+    """The `opencode`-executor-shaped counterpart to `_tool()`/`_google_tool()`.
+
+    No method/path and no argv: `opencode_operation` names the fixed
+    workflow, and the parameters are the fixed names that operation reads
+    (`catalog.OPENCODE_OPERATION_PARAMS`), which is also why one outside
+    that set is a load-time error rather than a silently ignored field.
+    """
+    return {
+        "id": tool_id, "toolkit": toolkit, "version": 1, "title": title,
+        "description": description, "category": category, "idempotent": idempotent,
+        "enabled": False, "opencode_operation": operation,
+        "parameters": parameters or {}, "required_scopes": required_scopes or [],
+        "timeout_seconds": timeout_seconds, "max_output_bytes": max_output_bytes,
+    }
+
+
+#: Shared parameter shapes for the opencode starter tools. `directory` is
+#: checked against the toolkit's `path_roots` at call time, which is what
+#: lets one toolkit serve every project root listed there.
+_OPENCODE_PROMPT = {
+    "type": "string", "required": True, "pattern": r"^[\s\S]{1,20000}$",
+    "description": "What opencode should do.",
+}
+_OPENCODE_DIRECTORY = {
+    "type": "string", "required": False, "pattern": "^/[A-Za-z0-9._/-]{0,255}$",
+    "description": (
+        "Absolute project root, e.g. /mnt/raid/projects/myrepo. Must lie "
+        "inside the toolkit's path_roots."
+    ),
+}
+_OPENCODE_SESSION = {
+    "type": "string", "required": True, "pattern": "^[A-Za-z0-9_-]{1,128}$",
+    "description": "The session id returned by ask/run/fire.",
+}
+_OPENCODE_MODEL = {
+    "type": "string", "required": False,
+    "pattern": "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$",
+    "description": "provider/model, e.g. anthropic/claude-opus-5. Optional.",
+}
+
+
 #: The *-arr apps and Jellyfin share one auth shape: an API key in a
 #: fixed header name, key query param also accepted by the target but
 #: never used by gatekeeper (FR-8.14).
@@ -1320,6 +1368,154 @@ _INTEGRATIONS_LIST: list[Integration] = [
                 },
                 category="write", idempotent=False,
                 required_scopes=["drive.file"],
+            ),
+        ),
+    ),
+    # -- opencode (the `opencode` executor) --------------------------------
+    #
+    # A headless opencode server on the LAN, driven over its own HTTP API.
+    # Same target fields as an http toolkit (base_url + allowed_cidrs, and
+    # the resolved IP is re-checked before every request of a workflow),
+    # but the whitelist acts on operation names because one call is a
+    # multi-request workflow rather than one request.
+    Integration(
+        key="opencode",
+        display_name="opencode",
+        logo_svg=monogram("oc", "#f5a623"),
+        toolkit_yaml=(
+            "  opencode:\n"
+            "    executor: opencode\n"
+            '    base_url: "http://CHANGEME:4096"\n'
+            "    allowed_cidrs:\n"
+            # RFC 5737 TEST-NET-3, as in _http_toolkit_yaml: a valid
+            # placeholder that can never resolve to a real host, so an
+            # unedited copy-paste fails closed.
+            '      - "203.0.113.1/32"  # CHANGEME -- e.g. 192.168.1.42/32, this one host\n'
+            "    allowed_opencode_operations:\n"
+            "      - ask\n"
+            "      - run\n"
+            "      - fire\n"
+            "      - check\n"
+            "      - review_changes\n"
+            "      - abort\n"
+            "      - providers\n"
+            "      - health\n"
+            "    # The project roots opencode may be pointed at. A tool's\n"
+            "    # 'directory' parameter is checked against these; without\n"
+            "    # them no tool on this toolkit may offer one at all.\n"
+            "    path_roots:\n"
+            '      - /mnt/raid/projects   # CHANGEME\n'
+            "    # opencode ships without auth. If you set\n"
+            "    # OPENCODE_SERVER_PASSWORD on the server, create a 'basic'\n"
+            "    # credential (value '<user>:<password>') and uncomment:\n"
+            "    # credential: opencode\n"
+            "    max_timeout_seconds: 900\n"
+            "    max_output_bytes: 131072\n"
+        ),
+        credential_kind="basic",
+        notes=(
+            "opencode is a coding agent, so its tools are the sharpest in "
+            "this library: 'run' lets another agent edit files in the "
+            "project roots you list. Grant 'ask'/'check'/'review_changes' "
+            "freely; treat 'run'/'fire' as write_external and keep "
+            "path_roots to the repositories you actually mean. No auth by "
+            "default -- set OPENCODE_SERVER_PASSWORD on the server and a "
+            "'basic' credential here if the server is reachable beyond "
+            "gatekeeper."
+        ),
+        tool_specs=(
+            _opencode_tool(
+                "opencode.health", toolkit="opencode", title="Opencode health",
+                description=(
+                    "Reports whether the opencode server is reachable and "
+                    "which version it runs."
+                ),
+                operation="health", timeout_seconds=15, max_output_bytes=4096,
+            ),
+            _opencode_tool(
+                "opencode.ask", toolkit="opencode", title="Ask opencode",
+                description=(
+                    "Creates a session, sends one prompt, returns the answer. "
+                    "For questions about a codebase; use 'run' for work that "
+                    "changes files."
+                ),
+                operation="ask", category="write", idempotent=False,
+                parameters={
+                    "prompt": _OPENCODE_PROMPT,
+                    "directory": _OPENCODE_DIRECTORY,
+                    "model": _OPENCODE_MODEL,
+                },
+                timeout_seconds=180,
+            ),
+            _opencode_tool(
+                "opencode.run", toolkit="opencode", title="Run a coding task",
+                description=(
+                    "Sends a task, waits until the session finishes, reports "
+                    "status, todos and changed files. A timeout means UNKNOWN, "
+                    "not failed -- follow up with 'check', never a retry."
+                ),
+                operation="run", category="write_external", idempotent=False,
+                parameters={
+                    "prompt": _OPENCODE_PROMPT,
+                    "directory": _OPENCODE_DIRECTORY,
+                    "model": _OPENCODE_MODEL,
+                },
+                timeout_seconds=900,
+            ),
+            _opencode_tool(
+                "opencode.fire", toolkit="opencode",
+                title="Start a task in the background",
+                description=(
+                    "Sends a task and returns its session id immediately. "
+                    "Poll it afterwards with 'check'."
+                ),
+                operation="fire", category="write_external", idempotent=False,
+                parameters={
+                    "prompt": _OPENCODE_PROMPT,
+                    "directory": _OPENCODE_DIRECTORY,
+                    "model": _OPENCODE_MODEL,
+                },
+                timeout_seconds=60, max_output_bytes=8192,
+            ),
+            _opencode_tool(
+                "opencode.check", toolkit="opencode", title="Check a session",
+                description=(
+                    "Progress report for one session: status, todo list, and "
+                    "the files it has changed so far."
+                ),
+                operation="check",
+                parameters={
+                    "session_id": _OPENCODE_SESSION,
+                    "directory": _OPENCODE_DIRECTORY,
+                },
+                timeout_seconds=30,
+            ),
+            _opencode_tool(
+                "opencode.review_changes", toolkit="opencode",
+                title="Review a session's changes",
+                description=(
+                    "Per-file added/removed line counts for everything a "
+                    "session changed, plus the totals."
+                ),
+                operation="review_changes",
+                parameters={
+                    "session_id": _OPENCODE_SESSION,
+                    "directory": _OPENCODE_DIRECTORY,
+                },
+                max_output_bytes=131072,
+            ),
+            _opencode_tool(
+                "opencode.abort", toolkit="opencode", title="Abort a session",
+                description="Stops a running opencode session.",
+                operation="abort", category="write",
+                parameters={
+                    "session_id": {
+                        **_OPENCODE_SESSION,
+                        "description": "The session id to stop.",
+                    },
+                    "directory": _OPENCODE_DIRECTORY,
+                },
+                timeout_seconds=30, max_output_bytes=8192,
             ),
         ),
     ),

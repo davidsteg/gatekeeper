@@ -21,11 +21,31 @@ from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, read_config_file
 
 #: Executor types implemented.
-KNOWN_EXECUTORS = frozenset({"docker", "local", "http", "truenas", "ssh", "file", "google"})
+KNOWN_EXECUTORS = frozenset(
+    {"docker", "local", "http", "truenas", "ssh", "file", "google", "opencode"}
+)
 
 #: FR-8.6: methods an `http` toolkit may allow at all. A toolkit may
 #: narrow this further; it may never widen it.
 HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
+
+#: The complete vocabulary of the `opencode` executor -- the same shelf as
+#: HTTP_METHODS above: a toolkit picks a subset of these, it can never name
+#: an operation outside the set. Each is one fixed workflow against the
+#: opencode server's HTTP API, implemented in `execute_opencode.py`; there
+#: is no operation that forwards a caller-supplied path or URL.
+OPENCODE_OPERATIONS = frozenset(
+    {
+        "ask",
+        "run",
+        "fire",
+        "check",
+        "review_changes",
+        "abort",
+        "providers",
+        "health",
+    }
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -161,6 +181,21 @@ class Toolkit:
     #: to deny it, it structurally does not exist.
     allowed_google_actions: tuple[str, ...] = ()
 
+    # -- `opencode` executor only --------------------------------------
+    #
+    # The `opencode` executor drives a headless opencode server over its
+    # own HTTP API. It reuses `base_url` and `allowed_cidrs` above (same
+    # fields, same FR-8.5/8.9 meaning: the target lives exclusively on the
+    # toolkit, and the *resolved* IP is checked immediately before every
+    # connect) -- what differs from `http` is that one call is a fixed
+    # multi-request *workflow*, not a single request. So the whitelist
+    # acts on operation names, exactly like `allowed_rpc_methods` for
+    # truenas and `allowed_google_actions` for google: "run" simply never
+    # appears in a read-only opencode toolkit's list, and there is no
+    # separate permission to deny it.
+    #: Subset of `OPENCODE_OPERATIONS` this toolkit may ever perform.
+    allowed_opencode_operations: tuple[str, ...] = ()
+
     def check_binary(self, binary: str) -> None:
         """FR-4.1: the executable must be exactly in the allowlist."""
         if binary not in self.binaries:
@@ -286,6 +321,18 @@ class Toolkit:
         perform", named differently by their respective protocols.
         """
         return action in self.allowed_google_actions
+
+    # -- `opencode` executor ---------------------------------------------
+
+    def allows_opencode_operation(self, operation: str) -> bool:
+        """The whitelist acts on `execute_opencode.py` operation names.
+
+        `run` simply never appears in a toolkit meant only to report on
+        sessions somebody else started -- there is no separate permission
+        to deny it, it structurally does not exist. Same reasoning as
+        `allows_rpc_method`/`allows_google_action` above.
+        """
+        return operation in self.allowed_opencode_operations
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -494,6 +541,10 @@ def _check_destination_shape(
         raise ConfigError(f"{where} has no 'docker_host', required for a docker toolkit")
     if executor == "http" and dest.base_url is None:
         raise ConfigError(f"{where} has no 'base_url', required for an http toolkit")
+    if executor == "opencode" and dest.base_url is None:
+        raise ConfigError(
+            f"{where} has no 'base_url', required for an opencode toolkit"
+        )
     if executor == "truenas" and dest.ws_url is None:
         raise ConfigError(f"{where} has no 'ws_url', required for a truenas toolkit")
 
@@ -596,6 +647,7 @@ def load_tier1(path: str) -> Tier1:
         google_script: str | None = None
         google_container: str | None = None
         allowed_google_actions: tuple[str, ...] = ()
+        allowed_opencode_operations: tuple[str, ...] = ()
 
         # `run_as` (file executor only). Parsed for every executor rather
         # than only inside the `file` branch below, so a `run_as` on an
@@ -720,6 +772,53 @@ def load_tier1(path: str) -> Tier1:
             )
             if not allowed_google_actions:
                 raise ConfigError(f"{where}: 'allowed_google_actions' must not be empty")
+        elif executor == "opencode":
+            # Same two target fields as `http`, and for the same reasons:
+            # `base_url` is the only place a scheme and host may appear
+            # (FR-8.5), `allowed_cidrs` is what the executor re-checks the
+            # resolved IP against before every connect (FR-8.9). No
+            # `allowed_path_prefixes`: the request paths of an opencode
+            # operation are fixed in `execute_opencode.py`, not composed
+            # from a tool definition, so there is no path template a
+            # prefix list could constrain.
+            base_url = str(_require(spec, "base_url", where))
+            base_url = _validate_http_base_url(base_url, where)
+            if "{credential}" in base_url:
+                # `http`'s one documented exception (Telegram's bot API,
+                # FR-8.10) is substituted by `execute_http._substitute_base_url`.
+                # The opencode executor has no such substitution, so a
+                # placeholder here would be sent verbatim as part of every
+                # request path -- a base_url that reads as "the secret goes
+                # here" and does not is worse than one that refuses to start.
+                raise ConfigError(
+                    f"{where}: base_url must not contain a '{{credential}}' "
+                    "placeholder -- the opencode executor sends its credential "
+                    "as a header, and would send this literally."
+                )
+            allowed_cidrs = _str_tuple(_require(spec, "allowed_cidrs", where), where)
+            if not allowed_cidrs:
+                raise ConfigError(f"{where}: 'allowed_cidrs' must not be empty")
+            for cidr in allowed_cidrs:
+                try:
+                    ipaddress.ip_network(cidr, strict=False)
+                except ValueError as exc:
+                    raise ConfigError(
+                        f"{where}: allowed_cidrs entry {cidr!r} is not a valid "
+                        f"IP network: {exc}"
+                    ) from None
+            allowed_opencode_operations = _str_tuple(
+                _require(spec, "allowed_opencode_operations", where), where
+            )
+            if not allowed_opencode_operations:
+                raise ConfigError(
+                    f"{where}: 'allowed_opencode_operations' must not be empty"
+                )
+            unknown_ops = sorted(set(allowed_opencode_operations) - OPENCODE_OPERATIONS)
+            if unknown_ops:
+                raise ConfigError(
+                    f"{where}: allowed_opencode_operations {unknown_ops} are not "
+                    f"opencode operations (known: {sorted(OPENCODE_OPERATIONS)})"
+                )
 
         toolkits[name] = Toolkit(
             name=name,
@@ -748,6 +847,7 @@ def load_tier1(path: str) -> Tier1:
             google_script=google_script,
             google_container=google_container,
             allowed_google_actions=allowed_google_actions,
+            allowed_opencode_operations=allowed_opencode_operations,
         )
 
     limits = raw.get("rate_limits") or {}

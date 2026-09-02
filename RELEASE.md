@@ -60,6 +60,42 @@ cannot. It is in every release.
 
 ---
 
+## 0.41.0
+
+**New `opencode` executor: an agent can hand a coding task to a headless opencode server, and get back a result rather than a transcript.**
+
+opencode runs as a headless server and speaks an OpenAPI 3.1 HTTP API — not MCP. Reaching it through the existing `http` executor works endpoint by endpoint, and that is precisely the problem: the useful unit of work is not an endpoint. Asking a question is `POST /session` and then `POST /session/{id}/message`. Running a task is a session, an async dispatch, and a poll loop until it stops working. As `http` tools that is three or four agent round trips per task, with the session id and every raw intermediate response travelling through the agent's context for nobody to read.
+
+So `opencode` is its own executor, shaped like `truenas` and `google`: **the whitelist acts on operation names, and one operation is one fixed multi-request workflow.** Eight of them — `ask`, `run`, `fire`, `check`, `review_changes`, `abort`, `providers`, `health`. The four that carry the load are `ask`/`run` for foreground work and `fire`+`check` for background work: `fire` returns a session id immediately, `check` reports status, todos and changed files for it later.
+
+What it does **not** do is get its own security model. The transport is HTTP, so it reuses `execute_http.py`'s own helpers rather than restating them: the target lives exclusively in the toolkit's `base_url` (FR-8.5), the *resolved* IP is re-checked against `allowed_cidrs` immediately before **every request of a workflow** rather than once at its start (FR-8.9 — a `run` can poll for minutes, which is exactly the rebinding window a single check would leave open), redirects are reported and never followed (FR-8.8), the credential is injected as a header by the executor (FR-8.14), and responses are capped and marked external, untrusted data (FR-8.12/8.13).
+
+Two parameter values leave the per-parameter allowlist behind, and both are checked before execution *and* again inside the executor:
+
+- **`session_id`** is the only value that ever reaches a request path, and is restricted to a character set that cannot introduce a path segment. `ses_1/../../global/health` is refused at both layers.
+- **`directory`** becomes opencode's `x-opencode-directory` header — which is what lets one toolkit serve every repository instead of one toolkit per repository — and must lie inside the toolkit's `path_roots`. A toolkit that declares none accepts no `directory` at all, and a tool that offers one anyway fails at load time rather than on the first call. The containment check is lexical rather than `realpath`-based, and its *existence* half runs only where the matching root is visible in gatekeeper's own filesystem: the path names a directory in the **opencode container's** namespace, so resolving symlinks would resolve them in the wrong one. Where the root is mounted into both containers (the usual case) a typo is still caught before the call goes out.
+
+A timed-out `run` reports **`unknown`, not `failed`** (FR-6.9), and names the session — including one the workflow created itself, which is the one path that never reaches a summary and where losing the id would strand a session the agent can then never check on. The prompt reached opencode and the session keeps working on the other side; the follow-up is `check`, and a retry would start the same work a second time.
+
+- **`src/gatekeeper/execute_opencode.py`** — new. The eight workflows, the SSRF-checked request helper, and one `_EP` table holding every request path. That table is the only part of the module that tracks an external API's shape, so a future opencode release that moves an endpoint is a one-line change rather than a hunt through eight workflows. For the same reason the response readers are deliberately tolerant: several field names are accepted for each value, and an operation whose summary came back empty attaches the raw (capped) payload instead — an upstream rename costs a less tidy answer and is visible in the response, never a silently empty one. The request *body* is the opposite case and is deliberately precise — one shape, opencode's own — because shipping extra keys on the chance one of them is the real one would leave nobody able to say which shape this executor asserts. Response bodies are read streamed and capped at the tool's `max_output_bytes`, and a body that exceeds it is reported as exactly that rather than truncated into an unparseable half-document.
+- **`tier1.py`** — `opencode` joins `KNOWN_EXECUTORS`; new `OPENCODE_OPERATIONS` vocabulary (the same shelf as `HTTP_METHODS`) and `allowed_opencode_operations` on `Toolkit`, validated against it at load. An `opencode` toolkit requires `base_url` and `allowed_cidrs`, exactly as `http` does; it may declare `destinations` (`base_url` per destination) like `docker`/`http`/`truenas`. A `{credential}` placeholder in its `base_url` is refused at load: `http`'s one documented exception (FR-8.10, Telegram) has no counterpart here, and an unsubstituted placeholder would be sent literally in every request path.
+- **`catalog.py`** — `opencode_operation` on `ToolDef`, plus `OPENCODE_OPERATION_PARAMS`: what each operation reads, enforced in *both* directions at load time. A missing required parameter is an error, and so is a parameter outside the set — `dir` typed for `directory` would otherwise be accepted, ignored, and visible only as opencode working in the wrong repository.
+- **`validate.py`** — `build_opencode_call`, running the `session_id`/`directory` checks inside `service.call`'s validation block so a bad value is an ordinary audited denial rather than a failure discovered mid-workflow.
+- **`service.py`/`ui.py`** — dispatch, `/health/ready` probe (TCP-connect only, like `http`), executor icon, and a tool card that shows the operation and the parameters it reads instead of an empty binary/argv row.
+- **`integrations.py`** — an `opencode` integration (22 services now) with seven starter tools, reachable from `/ui/tools/integrations`.
+- **`config/examples/`** — a documented `opencode` toolkit and its eight tools.
+- **`tests/test_execute_opencode.py`** — new, 50 tests against a real loopback HTTP server standing in for the opencode API. The properties that matter here — the resolved IP is actually checked per request, the directory actually leaves as `x-opencode-directory` and nothing else, a session id actually cannot address a different endpoint, a redirect actually is not followed, a `run` actually polls until the session finishes — are exactly what a mocked transport would silently assume away. Two of them go through a real `Service`, so the wiring around the executor (authorize → validate → dispatch → audit) is covered too: a `directory` outside `path_roots` lands in the audit log as `denied`/`path_escape` with nothing having left the process.
+
+### What you must do at deploy time
+
+1. Run opencode headless; note the host address its port `4096` maps to.
+2. Paste the toolkit block into `toolkits.yaml` and edit three lines: `base_url`, `allowed_cidrs` (the narrow `/32` of that one host — FR-8.15), and `path_roots` (the project roots opencode may be pointed at). Redeploy.
+3. Mount those project roots into **both** containers at the same paths, so a typo'd `directory` is caught before the call goes out.
+4. opencode ships without auth. If its port is reachable by anything but gatekeeper, set `OPENCODE_SERVER_PASSWORD` on the server, create a `basic` credential (value `<user>:<password>`) at `/ui/credentials`, and name it with `credential:` on the toolkit.
+5. Create the tools from `/ui/tools/integrations`, enable and grant them, then **reconnect the agent's MCP session** — a container restart is not what refreshes a connected client's tool list (see docs/DEPLOYMENT.md). `opencode.health` is the cheapest confirmation that address, CIDR allowlist and credential are all right: it needs neither a session nor a project directory.
+
+`run` and `fire` let another agent edit files inside `path_roots`; they are `write_external` in the shipped definitions for that reason. `ask`, `check`, `review_changes`, `providers` and `health` change nothing.
+
 ## 0.40.2
 
 **A regression test pins the docker `compose` argv contract — no behaviour changes.**

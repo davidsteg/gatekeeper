@@ -19,6 +19,17 @@ item.
   into the single command string SSH's exec channel requires
   (`execute_ssh.py`). One toolkit = one host; no destinations support yet
   (see below).
+- `opencode` executor — drives a headless opencode coding-agent server
+  over its own HTTP API (`execute_opencode.py`). Eight operations
+  (`ask`/`run`/`fire`/`check`/`review_changes`/`abort`/`providers`/
+  `health`), whitelisted by name per toolkit the way `truenas` whitelists
+  RPC methods; one operation is a fixed multi-request workflow, so a task
+  is one agent round trip rather than four. Reuses `execute_http.py`'s
+  SSRF check (resolved IP re-checked before *every* request), credential
+  header injection, and JSON field capping. A `directory` parameter,
+  checked against the toolkit's `path_roots`, becomes opencode's
+  `x-opencode-directory` header — one toolkit therefore serves every
+  project root listed there.
 - Credential store — write-only, encrypted at rest (`credentials.py`).
   Kinds: `api_key_header`, `bearer`, `basic`, `ws_api_key`, `url_path`,
   `url_query`, `docker_tls`, `ssh_private_key`
@@ -27,10 +38,10 @@ item.
   into destination-qualified, independently-grantable IDs
   (`docker.compose_up@nas1`) — REQUIREMENTS.md FR-8.3g-j (`tier1.py`,
   `catalog.py`)
-- Integrations — starter toolkit YAML + tools + logo for 21 services
+- Integrations — starter toolkit YAML + tools + logo for 22 services
   (Sonarr, Radarr, Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n,
   Uptime Kuma, Immich, Telegram, Google API, TrueNAS, pfSense, Jellystat,
-  Netdata, SABnzbd, Paperless-ngx, Docker, Linux-over-SSH), reachable
+  Netdata, SABnzbd, Paperless-ngx, Docker, Linux-over-SSH, opencode), reachable
   from `/ui/tools/integrations` (`integrations.py`). TrueNAS's starter set
   covers pool listing, dataset listing, snapshot listing, and snapshot
   deletion (`pool.query`/`pool.dataset.query`/`zfs.snapshot.query`/
@@ -58,10 +69,22 @@ item.
   tempfile, and parses JSON output. Covers Gmail, Calendar, Drive. Other
   OAuth2 providers (Microsoft, etc.) would follow the same pattern — a
   new toolkit on the `google` executor, not a new executor.
-- **`ssh` destinations** — a `docker`/`http`/`truenas` toolkit can declare
-  several named destinations (see below); `ssh` toolkits can't yet
-  (`tier1.py` rejects a `destinations:` list on an `ssh` toolkit) — one
+- **`ssh` destinations** — a `docker`/`http`/`truenas`/`opencode` toolkit
+  can declare several named destinations (see below); `ssh` toolkits can't
+  yet (`tier1.py` rejects a `destinations:` list on an `ssh` toolkit) — one
   toolkit per host for now, add another toolkit for a second host.
+- **The opencode request paths track an external API.** They live in one
+  table (`execute_opencode.py`'s `_EP`) precisely so a future opencode
+  release that moves an endpoint is a one-line change rather than a hunt
+  through eight workflows. The response *readers* are deliberately
+  tolerant for the same reason: several field names are accepted for each
+  value, and an operation whose summary came back empty attaches the raw
+  (capped) payload instead, so an upstream rename costs a less tidy answer
+  and is visible in the response — never a silently empty one.
+- **No opencode session listing.** `check`/`review_changes`/`abort` all
+  take a session id an agent got from `ask`/`run`/`fire`; there is no
+  "list every session on this server" operation, which would hand one
+  identity a view of work started under another.
 - **TrueNAS SCRAM-SHA-512 mutual auth** — API-key auth
   (`auth.login_with_api_key`) is implemented and is the baseline; SCRAM is
   TrueNAS 26's preferred alternative and is a follow-up, not a blocker.

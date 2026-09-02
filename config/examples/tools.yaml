@@ -666,3 +666,225 @@ tools:
     required_scopes: ["drive.file"]
     timeout_seconds: 60
     max_output_bytes: 8192
+  # -- opencode ---------------------------------------------------------
+  #
+  # No 'binary'/'argv', no 'method'/'path' -- 'opencode_operation' is the
+  # fixed workflow, and the parameters are the fixed names that operation
+  # reads (catalog.py's OPENCODE_OPERATION_PARAMS). A parameter the
+  # operation does not read is rejected at load time rather than accepted
+  # and silently ignored.
+  #
+  # The four workflow tools carry the load: ask/run for foreground work,
+  # fire + check for background work. `directory` is optional on all of
+  # them and is validated against the toolkit's path_roots -- one toolkit
+  # therefore fans out across every project root you list there, without a
+  # toolkit per repository.
+
+  - id: opencode.health
+    toolkit: opencode
+    version: 1
+    title: Opencode health
+    description: >-
+      Reports whether the opencode server is reachable and which version it
+      runs. No session, no project directory.
+    category: read
+    idempotent: true
+    enabled: false
+    opencode_operation: health
+    parameters: {}
+    required_scopes: []
+    timeout_seconds: 15
+    max_output_bytes: 4096
+
+  - id: opencode.providers
+    toolkit: opencode
+    version: 1
+    title: List providers
+    description: >-
+      Lists the model providers the opencode server has configured and the
+      default model per provider.
+    category: read
+    idempotent: true
+    enabled: false
+    opencode_operation: providers
+    parameters:
+      directory:
+        type: string
+        required: false
+        pattern: "^/[A-Za-z0-9._/-]{0,255}$"
+        description: >-
+          Absolute project root, e.g. /mnt/raid/projects/myrepo. Must lie
+          inside the toolkit's path_roots.
+    required_scopes: []
+    timeout_seconds: 15
+    max_output_bytes: 16384
+
+  - id: opencode.ask
+    toolkit: opencode
+    version: 1
+    title: Ask opencode
+    description: >-
+      Creates a session, sends one prompt, and returns the answer. Use for
+      questions about a codebase; use 'run' for work that changes files.
+    category: write
+    idempotent: false
+    enabled: false
+    opencode_operation: ask
+    parameters:
+      prompt:
+        type: string
+        required: true
+        pattern: "^[\\s\\S]{1,20000}$"
+        description: The question to ask.
+      directory:
+        type: string
+        required: false
+        pattern: "^/[A-Za-z0-9._/-]{0,255}$"
+        description: Absolute project root. Must lie inside path_roots.
+      model:
+        type: string
+        required: false
+        pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
+        description: "provider/model, e.g. anthropic/claude-opus-5. Optional."
+    required_scopes: []
+    timeout_seconds: 180
+    max_output_bytes: 65536
+
+  - id: opencode.run
+    toolkit: opencode
+    version: 1
+    title: Run a coding task
+    description: >-
+      Sends a task, waits until the session finishes, and reports status,
+      todos and changed files. A timeout means UNKNOWN, not failed -- the
+      session keeps running; follow up with 'check', never a retry.
+    category: write_external
+    idempotent: false
+    enabled: false
+    opencode_operation: run
+    parameters:
+      prompt:
+        type: string
+        required: true
+        pattern: "^[\\s\\S]{1,20000}$"
+        description: The task to carry out.
+      directory:
+        type: string
+        required: false
+        pattern: "^/[A-Za-z0-9._/-]{0,255}$"
+        description: Absolute project root. Must lie inside path_roots.
+      model:
+        type: string
+        required: false
+        pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
+        description: "provider/model. Optional."
+    required_scopes: []
+    timeout_seconds: 900
+    max_output_bytes: 65536
+
+  - id: opencode.fire
+    toolkit: opencode
+    version: 1
+    title: Start a task in the background
+    description: >-
+      Sends a task and returns its session id immediately, without waiting.
+      Poll it afterwards with 'check'.
+    category: write_external
+    idempotent: false
+    enabled: false
+    opencode_operation: fire
+    parameters:
+      prompt:
+        type: string
+        required: true
+        pattern: "^[\\s\\S]{1,20000}$"
+        description: The task to carry out.
+      directory:
+        type: string
+        required: false
+        pattern: "^/[A-Za-z0-9._/-]{0,255}$"
+        description: Absolute project root. Must lie inside path_roots.
+      model:
+        type: string
+        required: false
+        pattern: "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
+        description: "provider/model. Optional."
+    required_scopes: []
+    timeout_seconds: 60
+    max_output_bytes: 8192
+
+  - id: opencode.check
+    toolkit: opencode
+    version: 1
+    title: Check a session
+    description: >-
+      Progress report for one session: status, todo list, and the files it
+      has changed so far.
+    category: read
+    idempotent: true
+    enabled: false
+    opencode_operation: check
+    parameters:
+      session_id:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_-]{1,128}$"
+        description: The session id returned by ask/run/fire.
+      directory:
+        type: string
+        required: false
+        pattern: "^/[A-Za-z0-9._/-]{0,255}$"
+        description: Absolute project root. Must lie inside path_roots.
+    required_scopes: []
+    timeout_seconds: 30
+    max_output_bytes: 65536
+
+  - id: opencode.review_changes
+    toolkit: opencode
+    version: 1
+    title: Review a session's changes
+    description: >-
+      Per-file added/removed line counts for everything a session has
+      changed, plus the totals.
+    category: read
+    idempotent: true
+    enabled: false
+    opencode_operation: review_changes
+    parameters:
+      session_id:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_-]{1,128}$"
+        description: The session id returned by ask/run/fire.
+      directory:
+        type: string
+        required: false
+        pattern: "^/[A-Za-z0-9._/-]{0,255}$"
+        description: Absolute project root. Must lie inside path_roots.
+    required_scopes: []
+    timeout_seconds: 60
+    max_output_bytes: 131072
+
+  - id: opencode.abort
+    toolkit: opencode
+    version: 1
+    title: Abort a session
+    description: Stops a running opencode session.
+    category: write
+    idempotent: true
+    enabled: false
+    opencode_operation: abort
+    parameters:
+      session_id:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_-]{1,128}$"
+        description: The session id to stop.
+      directory:
+        type: string
+        required: false
+        pattern: "^/[A-Za-z0-9._/-]{0,255}$"
+        description: Absolute project root. Must lie inside path_roots.
+    required_scopes: []
+    timeout_seconds: 30
+    max_output_bytes: 8192

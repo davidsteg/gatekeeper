@@ -418,6 +418,7 @@ _EXECUTOR_ICONS = {
     "google": "cloud",
     "cloud": "cloud",
     "api": "cloud",
+    "opencode": "terminal",
 }
 
 
@@ -2948,6 +2949,16 @@ def _view_tools(
                 detail_label, detail_value = "params", " ".join(
                     f"{k}={v}" for k, v in (tool.params_template or {}).items()
                 ) or "-"
+            elif tk_executor_name == "opencode":
+                # An opencode tool has no binary/argv and no path either:
+                # the operation *is* the action, and its parameters are
+                # fixed names the executor reads (catalog.py's
+                # OPENCODE_OPERATION_PARAMS), not a template.
+                action_label, action_value = "operation", tool.opencode_operation or ""
+                detail_label, detail_value = (
+                    "reads",
+                    ", ".join(sorted(tool.parameters)) or "-",
+                )
             else:
                 action_label, action_value = "binary", tool.binary or ""
                 detail_label, detail_value = "argv", " ".join(tool.argv)
@@ -5387,7 +5398,7 @@ def build_ui_routes(
         return _shell(
             request, "Integrations", _view_integrations(service, session, store), session,
             icon="package", active="/tools/integrations",
-            subtitle="Starter definitions for common services, built on the http/truenas/docker/ssh executors.",
+            subtitle="Starter definitions for common services, built on the http/truenas/docker/ssh/google/opencode executors.",
         )
 
     async def integration_pick(request: Request) -> Response:
