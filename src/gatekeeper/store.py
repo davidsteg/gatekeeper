@@ -146,6 +146,10 @@ class ConfigStore:
         # Reload from the file, not from memory: only this proves
         # that the running state matches what a restart would produce.
         self.service.catalog = load_catalog(self.tools_path, self.service.tier1)
+        # ...and tell the agents already connected, or they keep serving
+        # the list they fetched when their session was established. Every
+        # tool create/update/enable/disable/delete funnels through here.
+        self.service.catalog_notifier.tool_catalog_changed()
 
     def _specs(self) -> list[dict[str, Any]]:
         return [dict(spec) for spec in self.service.catalog.raw]
@@ -278,6 +282,12 @@ class ConfigStore:
         # Swap the contents, not the object: `AuthMiddleware` and the
         # UI routes hold a reference to the store, not to the dict.
         self.identities.identities = fresh.identities
+        # A grant change is a catalog change from where an agent sits:
+        # `tools/list` is filtered per identity (FR-1.4), so granting or
+        # revoking a tool changes the list that agent will be served. The
+        # notification carries no payload, so announcing it to every
+        # session tells nobody what anyone else may call.
+        self.service.catalog_notifier.tool_catalog_changed()
 
     def _admins(self, identities: dict[str, Identity]) -> list[str]:
         return [i.id for i in identities.values() if i.role == ADMIN_ROLE]

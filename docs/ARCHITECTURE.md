@@ -238,7 +238,14 @@ src/gatekeeper/
                        routes;
                        composes /mcp and /admin/mcp into one Starlette app
                        with a combined lifespan (two independent
-                       StreamableHTTPSessionManagers, one per Server)
+                       StreamableHTTPSessionManagers, one per Server).
+                       /mcp retains sessions, /admin/mcp is stateless --
+                       see "Telling connected agents the catalog changed"
+  notifications.py     CatalogNotifier: fans notifications/tools/
+                       list_changed out to every connected agent, on both
+                       protocol eras. Owned by Service, so the writes that
+                       change a catalog announce it without knowing about
+                       the ASGI layer
   _authctx.py          Shared "identity out of the MCP request context"
                        helper -- used by server.py and admin_server.py so
                        neither imports the other
@@ -313,7 +320,8 @@ tests/
   test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py,
   test_integrations.py,
   test_ui_credentials.py, test_ui_integrations.py, test_admin_mcp.py,
-  test_catalog_versioning.py, test_pending.py, conftest.py
+  test_catalog_versioning.py, test_pending.py, test_notifications.py,
+  test_mcp_live_catalog.py, conftest.py
 ```
 
 ## UI architecture (`ui.py`)
@@ -366,6 +374,45 @@ Kinds: `call`, `auth_failure`, `startup`, `admin_change`, `admin_denied`,
 `ui_login`. Outcomes for `call`: `ok`, `denied`, `failed`, `unknown`
 (timeout on a non-idempotent tool — the operation may have completed on the
 other side, so it is not reported as a failure that would provoke a retry).
+
+## Telling connected agents the catalog changed
+
+A Tier 2 write reloads the state it wrote, synchronously and in-process, so
+`tools/list` is live from the very next request. What used to be missing is
+the other half: **nothing told a client to ask again.** MCP clients fetch
+the tool list once when the session is established and keep it, so a tool
+created by `admin.tool_create` stayed invisible to every already-connected
+agent until it reconnected.
+
+`notifications.py`'s `CatalogNotifier` closes that gap. It lives on the
+`Service`, so the two places that can change what an agent may call --
+`ConfigStore._write_tools` / `_write_identities` and `Service.reload_config`
+(the SIGHUP and toolkit-deploy path) -- announce the change without knowing
+anything about the transport. The announcement is fire-and-forget by
+design: an admin write must not fail, or wait, because a client went away.
+
+How the notification reaches a client depends on the protocol era, and
+`/mcp` serves both:
+
+| Era | `tools.listChanged` comes from | Delivered on |
+|---|---|---|
+| 2026-07-28+ | serving `subscriptions/listen` | the listen stream the client opened (a long-lived POST) |
+| 2025-11-25 and earlier | `NotificationOptions(tools_changed=True)` in the `initialize` reply | the standalone SSE stream from `GET /mcp` |
+
+The second row is why `/mcp` runs **stateful** (`stateless_http=False`)
+while `/admin/mcp` stays stateless: a standalone stream only exists if the
+transport keeps the session between requests. Sessions are tracked by the
+`Mcp-Session-Id` the transport assigns, dropped when the client sends
+`DELETE /mcp`, reaped after an hour with no request
+(`server.SESSION_IDLE_TIMEOUT_SECONDS`), and bounded by an LRU so a client
+that vanishes without either cannot grow the map. `/admin/mcp` has nothing
+to announce -- its tool list is a fixed constant -- so it gains nothing from
+holding sessions.
+
+The notification carries no payload. It says "your list is stale", not what
+changed, so broadcasting it to every session tells no agent anything about
+another agent's catalog -- which is what makes a single fan-out compatible
+with FR-1.4's per-identity filtering of `tools/list` itself.
 
 ## Scale: single instance, blocking I/O by design
 
