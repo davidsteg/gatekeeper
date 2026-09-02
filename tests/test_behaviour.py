@@ -12,6 +12,7 @@ import sys
 from unittest import mock
 
 import pytest
+import yaml
 
 from conftest import PYTHON, make_catalog
 from gatekeeper import execute
@@ -878,3 +879,75 @@ def test_a_read_only_configuration_names_the_way_out(tmp_path, monkeypatch):
     assert message is not None
     assert "gatekeeper password --identity root" in message
     assert not identities.identities["root"].can_sign_in
+
+# -- A `local` toolkit naming a binary this container does not have ----------
+#
+# The counterpart to test_credentials.py's dangling-credential checks: a
+# toolkit that parses clean and still cannot run. Tier 1 validates the shape
+# of a binary path (absolute, no traversal) but never its existence, because
+# it is read before anything executes -- so `/usr/bin/zfs` on an image that
+# never installed it loads without complaint, its tools stay enabled, and the
+# only evidence is an errno on the first agent call.
+
+
+def _tier1_toolkits(tmp_path, toolkits: dict):
+    path = tmp_path / "toolkits.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {"toolkits": toolkits, "audit": {"dir": str(tmp_path / "logs")}}
+        ),
+        encoding="utf-8",
+    )
+    return load_tier1(str(path))
+
+
+def test_missing_local_binaries_reports_the_absent_paths(tmp_path):
+    tier1 = _tier1_toolkits(
+        tmp_path,
+        {
+            "zfs": {"executor": "local", "binaries": ["/usr/bin/zfs", "/usr/bin/zpool"]},
+            "diag": {"executor": "local", "binaries": [PYTHON]},
+        },
+    )
+    # Only the absent ones, and only the toolkit that has any.
+    assert tier1.missing_local_binaries() == {
+        "zfs": ("/usr/bin/zfs", "/usr/bin/zpool")
+    }
+
+
+def test_missing_local_binaries_ignores_non_local_executors(tmp_path):
+    """An `ssh` toolkit's binaries live on the remote host.
+
+    Checking them against this filesystem would answer a question about the
+    wrong machine -- and would fire on every correctly configured ssh
+    toolkit, which is the fastest way to teach an operator to ignore the
+    warning entirely.
+    """
+    tier1 = _tier1_toolkits(
+        tmp_path,
+        {
+            "linux": {
+                "executor": "ssh",
+                "ssh_host": "diag-host.lan",
+                "ssh_user": "gatekeeper",
+                "ssh_known_hosts": "diag-host.lan ssh-ed25519 AAAAC3Nza",
+                "binaries": ["/usr/sbin/zfs", "/usr/sbin/zpool"],
+            },
+        },
+    )
+    assert tier1.missing_local_binaries() == {}
+
+
+async def test_readiness_probe_agrees_with_the_startup_warning(tmp_path, service):
+    """One definition of "runnable", not two.
+
+    `/health/ready` has always walked these paths; the startup warning is
+    the same walk surfaced where an operator actually looks. They must not
+    be able to disagree about whether a toolkit can run.
+    """
+    tier1 = _tier1_toolkits(
+        tmp_path,
+        {"zfs": {"executor": "local", "binaries": ["/usr/bin/zfs"]}},
+    )
+    assert tier1.missing_local_binaries()
+    assert await service._probe_one(tier1.toolkits["zfs"]) is False

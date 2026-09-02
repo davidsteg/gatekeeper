@@ -32,7 +32,7 @@ from .credentials import CredentialStore
 from .errors import ConfigError, DenialReason, Denied
 from .identity import Identity, load_identities
 from .ratelimit import RateLimiter
-from .tier1 import Tier1, Toolkit, load_tier1
+from .tier1 import Tier1, Toolkit, is_runnable, load_tier1
 
 
 def _write_private_file(path: str, content: str) -> None:
@@ -598,9 +598,7 @@ class Service:
 
     async def _probe_one(self, toolkit: Toolkit) -> bool:
         if toolkit.executor == "local":
-            return all(
-                os.path.isfile(b) and os.access(b, os.X_OK) for b in toolkit.binaries
-            )
+            return all(is_runnable(b) for b in toolkit.binaries)
         if toolkit.executor == "docker":
             try:
                 result = await execute.run(

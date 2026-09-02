@@ -60,6 +60,24 @@ cannot. It is in every release.
 
 ---
 
+## 0.41.1
+
+**Fix: a `local` toolkit naming a binary the image does not contain loaded clean, kept its tools listed as enabled, and reported nothing until an agent called one and got "No such file or directory". Startup now names the toolkit and the missing paths — and says where host state actually lives, because for the case that prompted this no path would have worked.**
+
+Reported from a stack with a `zfs` toolkit on `executor: local`, binaries `/usr/bin/zfs` and `/usr/bin/zpool`, four tools enabled against it (`zfs.list`, `zfs.get`, `zfs.zpool_status`, `zfs.create`), all four failing. The first instinct — add `zfsutils-linux` to the Dockerfile — is wrong three times over, and the Dockerfile now says so in full next to the `procps`/`tzdata` line, so the next person does not rediscover it:
+
+- `zfs` is a thin wrapper over `ioctl()` on `/dev/zfs`, answered by the host's kernel module. `compose.yaml` mounts no devices, adds no capabilities and runs `read_only` as uid 568, so the command fails with "Failed to load ZFS module stack" whether or not the binary is present. Installing it changes the error text, not the outcome.
+- Mounting `/dev/zfs` to fix that would open a second root-equivalent hole beside the Docker socket, and a worse-behaved one. FR-8.2 accepts exactly one such hole because gatekeeper *is* the whitelist constraining it; that argument does not carry to a device whose ioctl surface includes `zfs destroy` and `zfs rollback`, and which `denied_args` cannot narrow — `zfs` is one binary with a hundred subcommands, which is precisely the shape FR-4.9 warns about.
+- Debian bookworm ships `zfsutils-linux` in *contrib*, not main, so the apt line fails outright without editing `sources.list` — and at 2.1.11 it is two minor versions behind the OpenZFS 2.3.x module a current TrueNAS runs.
+
+FR-8.3 and FR-8.4's table have said since v1 where this belongs: `zpool status` is "not available" in the container and needs `truenas` or `ssh`. The four tools map onto the `truenas` executor as `pool.dataset.query`, `pool.query` and `pool.dataset.create` — already the worked example in `config/examples/`. For what genuinely has no API equivalent, `ssh` runs the host's own `/usr/sbin/zfs` and `/usr/sbin/zpool`; note the directory, which is where a `binaries:` list copied from a `local` toolkit gets it wrong a second time.
+
+What was missing was any of this being said at a time anyone would hear it. Tier 1 validates a binary path's *shape* — absolute, no traversal — and is parsed before anything executes, so existence is never in question at load; the catalog then loads the tools against a toolkit that parses fine, and `enabled: true` is the truth about the tool, not about the binary. `/health/ready` has walked exactly these paths all along, but nobody reads a readiness endpoint to find out why a tool they just wrote fails.
+
+`cmd_serve` now reports it where the credential check already reports its own sibling failure, in the same shape and for the same reason: how many `local` toolkits declare binaries this container lacks, which toolkits, which paths, and the two directions a fix can go — install it, or move the toolkit to the executor the thing is actually reachable from. A warning, not an abort; one unrunnable toolkit must not take down the ones that work.
+
+`Tier1.missing_local_binaries()` is the walk, and `is_runnable()` under it is now the single definition of a usable `local` binary — `service._probe_one` calls it instead of its own inlined copy, so the startup warning and `/health/ready` cannot drift into disagreeing. Deliberately `local`-only: an `ssh` toolkit's binaries live on another machine, so checking them here would answer a question about the wrong filesystem and would fire on every correctly configured ssh toolkit, which is the fastest way to teach an operator to ignore a warning. Tests cover the absent-path report, the ssh exemption, and the probe agreeing with the warning.
+
 ## 0.41.0
 
 **New `opencode` executor: an agent can hand a coding task to a headless opencode server, and get back a result rather than a transcript.**

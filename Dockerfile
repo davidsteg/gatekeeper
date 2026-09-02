@@ -61,6 +61,33 @@ FROM python:3.12-slim
 # without it, python:3.12-slim has no timezone database and TZ=America/New_York
 # is silently ignored -- which would leave the 0.37.x local-time display
 # reporting UTC.
+#
+# NOT installed, deliberately: zfsutils-linux (`zfs`, `zpool`). A toolkit
+# pointing a `local` executor at /usr/bin/zfs is a config error no image
+# change can fix, so adding the package here would buy a different error
+# message and nothing else:
+#
+#   1. ZFS userland is a thin wrapper over ioctl() on /dev/zfs, served by
+#      the host's kernel module. compose.yaml mounts no devices, adds no
+#      capabilities and runs read_only as uid 568, so `zfs list` gets
+#      "Failed to load ZFS module stack" whether or not the binary exists.
+#   2. Mounting /dev/zfs to fix (1) would be a second root-equivalent hole
+#      next to the Docker socket -- and a worse-behaved one. FR-8.2 accepts
+#      exactly one such hole because gatekeeper is the whitelist that
+#      constrains it; that argument does not extend to a device whose ioctl
+#      surface includes `zfs destroy` and `zfs rollback` and which
+#      denied_args cannot narrow, `zfs` being one binary with a hundred
+#      subcommands.
+#   3. Debian bookworm ships zfsutils-linux in *contrib*, not main, so this
+#      apt line would fail outright without editing sources.list -- and at
+#      2.1.11 it is two minor versions behind the OpenZFS 2.3.x kernel
+#      module a current TrueNAS runs.
+#
+# FR-8.3/8.4 already settle where ZFS belongs: the `truenas` executor
+# (JSON-RPC over WebSocket), or `ssh` for what has no API equivalent --
+# where the binaries are /usr/sbin/zfs and /usr/sbin/zpool, on the host,
+# not /usr/bin/* in here. Startup warns when a `local` toolkit names a
+# binary this image lacks, so the next attempt says so at boot.
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends procps tzdata \
  && rm -rf /var/lib/apt/lists/* \
