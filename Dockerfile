@@ -124,7 +124,24 @@ COPY src/gatekeeper/_google_api/ /opt/gatekeeper/google/
 RUN docker compose version
 
 # NFR-1: unprivileged user. 568 is the homelab convention (apps).
-RUN groupadd -g 568 apps && useradd -u 568 -g 568 -M -s /usr/sbin/nologin apps
+#
+# HOME has to move with USER, and this is not cosmetic. python:3.12-slim
+# leaves HOME=/root; a `USER 568:568` that does not override it hands the
+# runtime user a home directory it cannot read. The docker CLI derives its
+# config directory from HOME, and that directory is the *first* entry of
+# its cli-plugin search path -- so uid 568 got
+#
+#   WARNING: Error loading config file: open /root/.docker/config.json:
+#            permission denied
+#
+# followed by `compose` failing to resolve as a plugin. docker then falls
+# through to its root command, where `-p` is not a flag, and answers
+# `unknown shorthand flag: 'p' in -p` with exit 125 -- exactly the symptom
+# the comment above the runtime apt line predicts for a missing plugin,
+# reached here by an unreadable config dir rather than an absent file.
+RUN groupadd -g 568 apps && useradd -u 568 -g 568 -M -s /usr/sbin/nologin apps \
+ && mkdir -p /home/apps/.docker \
+ && chown -R 568:568 /home/apps
 
 # /var/log is where logs go (FHS), and keeping the audit log out of
 # /etc/gatekeeper is what lets that mount be :ro -- a configuration
@@ -132,6 +149,8 @@ RUN groupadd -g 568 apps && useradd -u 568 -g 568 -M -s /usr/sbin/nologin apps
 # then Tier 1 cannot be made immutable at runtime. Only the default for a
 # fresh 'init'; an existing toolkits.yaml keeps whatever it already says.
 ENV PATH="/opt/venv/bin:${PATH}" \
+    HOME=/home/apps \
+    DOCKER_CONFIG=/home/apps/.docker \
     GATEKEEPER_CONFIG_DIR=/etc/gatekeeper \
     GATEKEEPER_AUDIT_DIR=/var/log/gatekeeper \
     GATEKEEPER_PORT=8080 \
@@ -139,6 +158,15 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1
 
 USER 568:568
+
+# The compose check again, as the user that actually runs it.
+#
+# The one above passes as root, whose own HOME is readable -- so it stayed
+# green through 0.41.0 and 0.41.1 while every compose call in production
+# failed. A build-time check that runs as a different user than the
+# workload verifies the wrong thing; this line is the one that would have
+# caught it, and it is placed here, after USER, for that reason alone.
+RUN docker compose version
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
