@@ -19,6 +19,7 @@ from typing import Any
 
 from . import (
     execute,
+    execute_agent,
     execute_google,
     execute_http,
     execute_opencode,
@@ -30,7 +31,8 @@ from .audit import AuditLog
 from .catalog import Catalog, ToolDef, load_catalog
 from .credentials import CredentialStore
 from .errors import ConfigError, DenialReason, Denied
-from .identity import Identity, load_identities
+from .identity import Identity, IdentityStore, load_identities
+from .messages import MessageStore
 from .notifications import CatalogNotifier
 from .ratelimit import RateLimiter
 from .tier1 import Tier1, Toolkit, is_runnable, load_tier1
@@ -66,10 +68,21 @@ class Service:
         audit: AuditLog,
         credentials: CredentialStore | None = None,
         docker_host: str | None = None,
+        identities: IdentityStore | None = None,
     ) -> None:
         self.tier1 = tier1
         self.catalog = catalog
         self.audit = audit
+        #: The live identity store, when the caller has one. Used for
+        #: exactly one thing: checking that a message's recipient is a
+        #: configured identity (`validate.build_agent_call`). Held as a
+        #: reference rather than a copied set because `store.py`'s
+        #: `_write_identities` replaces `.identities` in place on this same
+        #: object -- so an identity created through the console is a valid
+        #: recipient from the next call on, with no reload here.
+        #: `None` (a bare `Service` in a test, or `gatekeeper check`) means
+        #: the recipient is checked for shape only.
+        self.identities = identities
         #: Announces `notifications/tools/list_changed` to already-connected
         #: agents. Owned here rather than by `server.py` because the writes
         #: that change the catalog (`store.ConfigStore`, `reload_config`
@@ -94,6 +107,11 @@ class Service:
         #: .hermes/google_token.json, for the `google` executor. Cleared
         #: on credential rotation via `invalidate_google_token_cache`.
         self._google_token_dirs: dict[str, str] = {}
+        #: mailbox path -> the `MessageStore` that owns it, for the `agent`
+        #: executor. Keyed on the path, not the toolkit, so two `agent`
+        #: toolkits pointed at the same file share one lock instead of
+        #: racing each other's writes.
+        self._mailboxes: dict[str, MessageStore] = {}
 
     # -- Registry ---------------------------------------------------------
 
@@ -343,6 +361,25 @@ class Service:
         self._docker_tls_dirs[cred_name] = tmp_dir
         return {"DOCKER_CERT_PATH": tmp_dir, "DOCKER_TLS_VERIFY": "1"}
 
+    def _mailbox(self, toolkit: Toolkit) -> MessageStore:
+        """The `MessageStore` for an `agent` toolkit's mailbox file.
+
+        Cached per path so concurrent calls serialize on one lock. The
+        path is Tier 1 and validated at load time -- there is no parameter
+        that reaches this function.
+        """
+        path = toolkit.mailbox_path or ""
+        store = self._mailboxes.get(path)
+        if store is None:
+            store = MessageStore(path=path)
+            self._mailboxes[path] = store
+        return store
+
+    def _known_recipients(self) -> frozenset[str] | None:
+        if self.identities is None:
+            return None
+        return frozenset(self.identities.identities)
+
     async def call(
         self, identity: Identity, tool_id: str, arguments: dict[str, Any]
     ) -> execute.Result:
@@ -395,6 +432,7 @@ class Service:
             google_call: tuple[str, list[str]] | None = None
             google_env: dict[str, str] | None = None
             opencode_operation: str | None = None
+            agent_operation: str | None = None
             if toolkit.executor in ("docker", "local", "ssh"):
                 argv = validate.build_argv(tool, values, toolkit)
                 # Resolved here, inside the same try/except as everything
@@ -422,6 +460,16 @@ class Service:
                 # here, inside this try/except, so a bad one is an audited
                 # denial rather than a failure discovered mid-workflow.
                 opencode_operation = validate.build_opencode_call(tool, values, toolkit)
+            elif toolkit.executor == "agent":
+                # Same shape as opencode: no request to build, but the one
+                # value that means something outside this tool -- the
+                # recipient identity -- is checked here, inside this
+                # try/except, so a message to a misspelled identity is an
+                # audited denial rather than a message nobody ever reads.
+                agent_operation = validate.build_agent_call(
+                    tool, values, toolkit,
+                    known_recipients=self._known_recipients(),
+                )
             elif toolkit.executor == "file":
                 pass  # parameters resolved directly into the call below
         except Denied as denial:
@@ -466,6 +514,22 @@ class Service:
                     toolkit=toolkit, credentials=self.credentials,
                     timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes,
                     idempotent=tool.idempotent, redact=self.audit.redact,
+                )
+            elif toolkit.executor == "agent":
+                assert agent_operation is not None
+                result = await execute_agent.run(
+                    operation=agent_operation,
+                    # The authenticated identity, never a parameter: this
+                    # is what makes `from` on a delivered message a fact
+                    # rather than a claim, and what makes `read_messages`
+                    # able to read exactly one mailbox -- the caller's own
+                    # (FR-1.4, applied to messages instead of tools).
+                    sender=identity.id,
+                    values=values,
+                    toolkit=toolkit,
+                    store=self._mailbox(toolkit),
+                    max_output_bytes=max_output_bytes,
+                    redact=self.audit.redact,
                 )
             elif toolkit.executor == "file":
                 from .execute_file import run as _file_run
@@ -634,6 +698,8 @@ class Service:
             return await execute_google.probe(toolkit)
         if toolkit.executor == "opencode":
             return await execute_opencode.probe(toolkit)
+        if toolkit.executor == "agent":
+            return await execute_agent.probe(toolkit)
         return False
 
     def render_metrics(self) -> str:

@@ -47,6 +47,17 @@ OPENCODE_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = 
     "health": ((), ()),
 }
 
+#: The `agent` executor's parameter contract, same shape and same
+#: both-directions enforcement as OPENCODE_OPERATION_PARAMS above
+#: (`_validate_agent_params`). There is no `from` and no mailbox selector
+#: in either row, and that is the point: the sender is the authenticated
+#: identity and the reader is the calling one, both supplied by
+#: `service.call`, neither settable by an agent.
+AGENT_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "send_message": (("to", "body"), ("subject",)),
+    "read_messages": ((), ("limit", "peek")),
+}
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Parameter:
@@ -159,6 +170,13 @@ class ToolDef:
     #: parameters are the fixed names that operation reads
     #: (`OPENCODE_OPERATION_PARAMS` below).
     opencode_operation: str | None = None
+
+    # -- `agent` executor ----------------------------------------------
+    #: One of `tier1.AGENT_OPERATIONS` -- `send_message` or
+    #: `read_messages`, fixed per tool and not agent-suppliable, exactly
+    #: like `file_operation` for the file executor. The mailbox file it
+    #: acts on is Tier 1 (`Toolkit.mailbox_path`), never a parameter.
+    agent_operation: str | None = None
 
     #: Per-tool override of the toolkit's ``run_as`` (file executor only).
     #: ``None`` -- the default -- means "use the toolkit's ``run_as``", so a
@@ -309,6 +327,46 @@ def _validate_opencode_params(
         )
 
 
+def _validate_agent_params(
+    operation: str, parameters: dict[str, Parameter], where: str
+) -> None:
+    """The `agent` parameter contract at load time, both directions.
+
+    Same reasoning as `_validate_opencode_params`: `execute_agent.py`
+    reads fixed parameter names with no argv or path template binding
+    them, so `recipient` written for `to` would load fine, be ignored at
+    call time, and show up only as messages nobody receives.
+
+    The check that a parameter *outside* the set is refused is the one
+    that matters most here: a tool declaring `from` would read as though
+    an agent could choose its sender. It cannot -- `service.call` passes
+    the authenticated identity -- and a definition that suggests
+    otherwise is worse than one that fails to load.
+    """
+    required, optional = AGENT_OPERATION_PARAMS[operation]
+    known = set(required) | set(optional)
+
+    for name in required:
+        param = parameters.get(name)
+        if param is None:
+            raise ConfigError(
+                f"{where}: agent operation {operation!r} needs a {name!r} parameter"
+            )
+        if not param.required:
+            raise ConfigError(
+                f"{where}: parameter {name!r} must be required for agent "
+                f"operation {operation!r}"
+            )
+
+    unknown = sorted(set(parameters) - known)
+    if unknown:
+        raise ConfigError(
+            f"{where}: agent operation {operation!r} does not read {unknown} -- "
+            f"it reads {sorted(known) or 'no parameters'}. A parameter it does "
+            "not read would be accepted and silently ignored."
+        )
+
+
 def _validate_ceilings(tool: ToolDef, toolkit: Toolkit, where: str) -> None:
     """FR-4.5: A tool may stay below the toolkit limits, never exceed them.
 
@@ -418,6 +476,14 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
                 f"{toolkit.name!r} has no path_roots to validate it against"
             )
 
+    elif toolkit.executor == "agent":
+        if not toolkit.allows_agent_operation(tool.agent_operation or ""):
+            raise Tier1Violation(
+                f"{where}: agent operation {tool.agent_operation!r} is not in "
+                f"the allowlist {list(toolkit.allowed_agent_operations)} of "
+                f"toolkit {toolkit.name!r}"
+            )
+
     _validate_ceilings(tool, toolkit, where)
 
 
@@ -475,6 +541,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     google_action: str | None = None
     google_args_val: dict[str, dict[str, Any]] | None = None
     opencode_operation: str | None = None
+    agent_operation: str | None = None
     #: Per-tool run_as override -- only the `file` branch sets this; the
     #: other executors leave it at None, and a `run_as` on a non-file tool
     #: is rejected by tier1.py at load time.
@@ -603,6 +670,17 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
             )
         _validate_opencode_params(opencode_operation, parameters, where)
 
+    elif toolkit.executor == "agent":
+        agent_operation = spec.get("agent_operation") or spec.get("operation")
+        if not isinstance(agent_operation, str) or not agent_operation:
+            raise ConfigError(f"{where}: field 'agent_operation' is missing")
+        if agent_operation not in AGENT_OPERATION_PARAMS:
+            raise ConfigError(
+                f"{where}: agent_operation {agent_operation!r} is unknown "
+                f"(known: {sorted(AGENT_OPERATION_PARAMS)})"
+            )
+        _validate_agent_params(agent_operation, parameters, where)
+
     # Every placeholder must point to a declared parameter. A typo
     # in the template would otherwise only surface at runtime -- and
     # then land as an unresolvable placeholder in the request.
@@ -640,6 +718,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         google_action=google_action,
         google_args=google_args_val,
         opencode_operation=opencode_operation,
+        agent_operation=agent_operation,
         run_as=tool_run_as,
     )
     _validate_against_tier1(tool, toolkit)

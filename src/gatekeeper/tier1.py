@@ -22,7 +22,7 @@ from .errors import ConfigError, read_config_file
 
 #: Executor types implemented.
 KNOWN_EXECUTORS = frozenset(
-    {"docker", "local", "http", "truenas", "ssh", "file", "google", "opencode"}
+    {"docker", "local", "http", "truenas", "ssh", "file", "google", "opencode", "agent"}
 )
 
 #: FR-8.6: methods an `http` toolkit may allow at all. A toolkit may
@@ -46,6 +46,21 @@ OPENCODE_OPERATIONS = frozenset(
         "health",
     }
 )
+
+#: The complete vocabulary of the `agent` executor -- the mailbox behind
+#: `messages.py`. Same shelf idea as OPENCODE_OPERATIONS above: a toolkit
+#: names a subset, never something outside the set. A toolkit that lists
+#: only `read_messages` is a mailbox an identity may empty but not fill --
+#: there is no separate permission to deny sending, it structurally does
+#: not exist for that toolkit.
+AGENT_OPERATIONS = frozenset({"send_message", "read_messages"})
+
+#: Defaults for the two `agent` ceilings, applied when a toolkit names
+#: neither. They live here rather than in `messages.py` so Tier 1 stays the
+#: one place a limit is stated -- and so `messages.py` can import them
+#: without pulling the executor in.
+DEFAULT_MAX_MESSAGE_BYTES = 4096
+DEFAULT_MAILBOX_LIMIT = 200
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -196,6 +211,31 @@ class Toolkit:
     #: Subset of `OPENCODE_OPERATIONS` this toolkit may ever perform.
     allowed_opencode_operations: tuple[str, ...] = ()
 
+    # -- `agent` executor only -----------------------------------------
+    #
+    # The `agent` executor is a mailbox between gatekeeper identities
+    # (`messages.py`). It reaches nothing outside this container: no
+    # binary, no host, no credential -- so it has no target field of the
+    # kind every other executor above needs. What Tier 1 fixes instead is
+    # *where the mailbox lives* and *how big it may get*, neither of
+    # which any parameter can influence.
+    #: Absolute path of the mailbox file (`messages.yaml`). Required for an
+    #: `agent` toolkit. Deploy-time and only deploy-time: there is no
+    #: parameter, tool field, or admin API through which a call can pick a
+    #: different file, the same way FR-8.5 keeps a URL off the `http`
+    #: parameter surface.
+    mailbox_path: str | None = None
+    #: Subset of `AGENT_OPERATIONS` this toolkit may ever perform.
+    allowed_agent_operations: tuple[str, ...] = ()
+    #: Ceiling on one message's subject + body, in bytes. A mailbox is for
+    #: coordination, not for shipping payloads through gatekeeper.
+    max_message_bytes: int = DEFAULT_MAX_MESSAGE_BYTES
+    #: Ceiling on how many messages one recipient's mailbox holds. Read
+    #: messages beyond it are pruned oldest-first; a delivery that would
+    #: push the *unread* count past it is refused instead (see
+    #: `messages.MessageStore.deliver`).
+    max_mailbox_messages: int = DEFAULT_MAILBOX_LIMIT
+
     def check_binary(self, binary: str) -> None:
         """FR-4.1: the executable must be exactly in the allowlist."""
         if binary not in self.binaries:
@@ -333,6 +373,17 @@ class Toolkit:
         `allows_rpc_method`/`allows_google_action` above.
         """
         return operation in self.allowed_opencode_operations
+
+    # -- `agent` executor -------------------------------------------------
+
+    def allows_agent_operation(self, operation: str) -> bool:
+        """The whitelist acts on `execute_agent.py` operation names.
+
+        `send_message` simply never appears on a toolkit meant only to let
+        an identity drain its own mailbox. Same reasoning as
+        `allows_opencode_operation` above.
+        """
+        return operation in self.allowed_agent_operations
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -594,9 +645,9 @@ def _toolkit_destinations(
 ) -> tuple[str, ...]:
     """Resolves and validates one toolkit's `destinations:` list (FR-8.3g):
 
-    `local` may not declare any (nothing remote to connect to), every name
-    must exist in the top-level `destinations` section, and each must carry
-    the field its executor needs.
+    `local` and `agent` may not declare any (nothing remote to connect
+    to), every name must exist in the top-level `destinations` section, and
+    each must carry the field its executor needs.
     """
     dest_names = _str_tuple(spec.get("destinations"), where)
     if dest_names and executor == "local":
@@ -608,6 +659,11 @@ def _toolkit_destinations(
         raise ConfigError(
             f"{where}: 'ssh' toolkits cannot declare destinations yet -- "
             "one toolkit, one host (use a separate toolkit per host)"
+        )
+    if dest_names and executor == "agent":
+        raise ConfigError(
+            f"{where}: 'agent' toolkits cannot declare destinations -- the "
+            "mailbox is a local file (mailbox_path), not a target to connect to"
         )
     for dest_name in dest_names:
         if dest_name not in destinations:
@@ -688,6 +744,10 @@ def load_tier1(path: str) -> Tier1:
         google_container: str | None = None
         allowed_google_actions: tuple[str, ...] = ()
         allowed_opencode_operations: tuple[str, ...] = ()
+        mailbox_path: str | None = None
+        allowed_agent_operations: tuple[str, ...] = ()
+        max_message_bytes = DEFAULT_MAX_MESSAGE_BYTES
+        max_mailbox_messages = DEFAULT_MAILBOX_LIMIT
 
         # `run_as` (file executor only). Parsed for every executor rather
         # than only inside the `file` branch below, so a `run_as` on an
@@ -859,6 +919,41 @@ def load_tier1(path: str) -> Tier1:
                     f"{where}: allowed_opencode_operations {unknown_ops} are not "
                     f"opencode operations (known: {sorted(OPENCODE_OPERATIONS)})"
                 )
+        elif executor == "agent":
+            # No target field: the `agent` executor reaches nothing outside
+            # this container. What Tier 1 fixes is the mailbox file and the
+            # two ceilings -- none of them influenceable by a parameter.
+            mailbox_path = str(_require(spec, "mailbox_path", where))
+            if not _is_absolute(mailbox_path):
+                raise ConfigError(
+                    f"{where}: 'mailbox_path' must be an absolute path -- "
+                    "otherwise the working directory would decide where "
+                    "messages are stored"
+                )
+            if ".." in PurePosixPath(mailbox_path).parts:
+                raise ConfigError(
+                    f"{where}: 'mailbox_path' must not contain '..' -- state "
+                    "the path it actually resolves to"
+                )
+            allowed_agent_operations = _str_tuple(
+                _require(spec, "allowed_agent_operations", where), where
+            )
+            if not allowed_agent_operations:
+                raise ConfigError(
+                    f"{where}: 'allowed_agent_operations' must not be empty"
+                )
+            unknown_agent_ops = sorted(set(allowed_agent_operations) - AGENT_OPERATIONS)
+            if unknown_agent_ops:
+                raise ConfigError(
+                    f"{where}: allowed_agent_operations {unknown_agent_ops} are not "
+                    f"agent operations (known: {sorted(AGENT_OPERATIONS)})"
+                )
+            max_message_bytes = int(spec.get("max_message_bytes", DEFAULT_MAX_MESSAGE_BYTES))
+            max_mailbox_messages = int(
+                spec.get("max_mailbox_messages", DEFAULT_MAILBOX_LIMIT)
+            )
+            if max_message_bytes <= 0 or max_mailbox_messages <= 0:
+                raise ConfigError(f"{where}: mailbox ceilings must be positive")
 
         toolkits[name] = Toolkit(
             name=name,
@@ -888,6 +983,10 @@ def load_tier1(path: str) -> Tier1:
             google_container=google_container,
             allowed_google_actions=allowed_google_actions,
             allowed_opencode_operations=allowed_opencode_operations,
+            mailbox_path=mailbox_path,
+            allowed_agent_operations=allowed_agent_operations,
+            max_message_bytes=max_message_bytes,
+            max_mailbox_messages=max_mailbox_messages,
         )
 
     limits = raw.get("rate_limits") or {}
