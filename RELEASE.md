@@ -60,6 +60,67 @@ cannot. It is in every release.
 
 ---
 
+## 0.42.0
+
+**`notifications/tools/list_changed` is sent, and `tools.listChanged` is advertised as `true`. A tool created, enabled or granted while an agent is connected now reaches that agent's session without a reconnect — the open decision left standing by 0.36.5, now made.**
+
+The server side was never the stale half: every Tier 2 write reloads what it
+wrote and `tools/list` is answered live. What was missing is the other half of
+the handshake — nothing told a connected client to ask again, so the list it
+cached at connect time was the list it kept. 0.36.5 documented that and
+deliberately stopped there, because sending the notification means holding
+sessions on `/mcp`.
+
+**What changed**
+
+- **`notifications.py` (new)** — `CatalogNotifier` fans the notification out
+  to every connected agent. It lives on the `Service`, so the writes that can
+  change what an agent may call announce the change without knowing anything
+  about the transport, and the announcement is fire-and-forget: an admin write
+  never fails, and never waits, because a client went away.
+- **`server.py`** — `/mcp` now serves `subscriptions/listen` and advertises
+  `tools.listChanged: true`. Both protocol eras are covered, because they
+  deliver the notification differently:
+  - **2026-07-28 and later** — there is no standing server stream at this era.
+    A client opts in with `subscriptions/listen`, whose response *is* the
+    stream. Serving that method is also what makes the capability true; the
+    SDK derives the flag from it.
+  - **2025-11-25 and earlier** — the notification rides the standalone SSE
+    stream the client opens with `GET /mcp`, and the capability comes from
+    `NotificationOptions(tools_changed=True)` in the `initialize` reply.
+- **`store.py` / `service.py`** — every write that changes an agent's tool
+  list announces it: `_write_tools` (tool create/update/enable/disable/delete),
+  `_write_identities` (grant and role changes, identity create/delete, token
+  rotation) and `reload_config` (a deployed toolkit proposal, and SIGHUP).
+
+**The wire change, stated plainly.** `/mcp` runs with `stateless_http=False`
+now; `/admin/mcp` stays stateless, since its tool list is a fixed constant and
+it has nothing to announce. **2026-07-28 clients are unaffected** — their
+requests are self-contained and the session manager routes them past that flag
+entirely. **2025-era clients now receive an `Mcp-Session-Id`** on `initialize`
+and must echo it, which the MCP spec has required of them since 2025-03-26 and
+both SDKs do. A session with no request for an hour is terminated
+(`server.SESSION_IDLE_TIMEOUT_SECONDS`); the client's next request gets the
+spec's 404 and it re-initializes — so an abandoned session cannot accumulate in
+a container that runs for months.
+
+**No new privilege anywhere.** The notification carries no payload: it says
+"your list is stale", never what changed, so one fan-out to every session
+discloses nothing about another identity's catalog and leaves FR-1.4's
+per-identity filtering of `tools/list` exactly as it was. Authorization is
+still read from each request's own token; a retained session is a channel, not
+a credential.
+
+**Tests.** `test_notifications.py` covers the notifier itself — which writes
+announce, the LRU bound on tracked sessions, and that a broken session is
+dropped instead of stopping the others. `test_mcp_live_catalog.py` gains five
+tests that drive a real socket (`httpx2.ASGITransport` buffers a whole response
+before yielding it, so a long-lived stream is invisible through it): the
+`initialize` reply advertises `listChanged`, so does `server/discover`, a tool
+change wakes a listening session, it wakes *every* listening session and not
+just one, and a hand-driven 2025-era session receives it on its standalone
+stream.
+
 ## 0.41.2
 
 **Fix: every `docker compose` call failed in production with `unknown shorthand flag: 'p' in -p` (exit 125) while the build stayed green, because the image ran as uid 568 but left `HOME=/root` — a directory that user cannot read. The docker CLI derives its config directory, and with it the first entry of its cli-plugin search path, from HOME.**

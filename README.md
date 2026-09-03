@@ -266,7 +266,10 @@ The agent now sees only tools it has permission for.
 
 - **Who**: agents, viewers, admins
 - **Credential**: token (in `Authorization: Bearer` header)
-- **Session**: stateless, token-based
+- **Session**: authorization is per request and token-based — every request
+  is authenticated on its own, and no cookie is ever read. The transport
+  keeps a session for older-protocol clients so `notifications/tools/list_changed`
+  has a stream to travel on; it carries no authority of its own.
 - **Rotate it**: `/ui` under Identities (for admins/viewers) or via CLI for new tokens
 
 These are intentionally separate. A leaked console password doesn't open `/mcp`. A leaked token doesn't open the dashboard.
