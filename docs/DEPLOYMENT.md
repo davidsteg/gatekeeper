@@ -158,33 +158,36 @@ Reported as an admin/agent split: `admin.tool_create` + `admin.tool_enable`
 new tools, and the agent's `/mcp` session does not — until the container is
 restarted.
 
-**The server is not the stale half.** Every Tier 2 write reloads the state
-it just wrote, synchronously, in the same process: `ConfigStore._write_tools`
-reassigns `service.catalog` from the file, and `_write_identities` swaps the
-identity contents in place. `tools/list` is answered from those objects on
-every request, so the first request after the write already contains the new
-tool — and it is callable on the same connection. Two tests in
-`test_mcp_live_catalog.py` assert exactly that against a live MCP session, so
-"the catalog is a startup snapshot" can be ruled out without re-checking.
+**Since 0.42.0 this should not happen.** gatekeeper now sends
+`notifications/tools/list_changed` on every write that can change what an
+agent may call, and advertises `tools.listChanged: true` so clients act on
+it. If a session still does not see a new tool, work through it in this
+order:
 
-What is missing is the other half of the handshake: **nothing tells a
-connected client to ask again.** Most MCP clients fetch `tools/list` once
-when the session is established and keep that list for the session's
-lifetime. MCP's mechanism for invalidating it is a
-`notifications/tools/list_changed`, which gatekeeper does not send — and
-cannot today, because `/mcp` runs `stateless_http=True`: each request gets
-its own short-lived transport, so there is no retained session to push a
-notification into. Restarting the container "fixes" it only because it forces
-every client to reconnect and re-fetch.
+1. **Does the client say it supports the notification?** Check the
+   capability the server advertised at connect time. On the 2026-07-28 wire
+   the client must open a `subscriptions/listen` stream to receive anything
+   at all — a client that never opens one gets no change notifications, by
+   spec. On 2025-era wires it must keep the `GET /mcp` stream open.
+2. **Is the session still the one that connected?** A session with no
+   request for an hour is reaped
+   (`server.SESSION_IDLE_TIMEOUT_SECONDS`); the client's next request gets
+   a 404 and it re-initializes, which re-fetches anyway.
+3. **Did the client re-fetch and still not see it?** Then it is a grant or
+   a Tier 1 problem, not a staleness one — check `admin.grant_list` and
+   `/health/startup`'s `disabled_by_tier1`.
 
-So the remedy is a **client reconnect, not a container restart** — cheaper,
-and it does not interrupt anything else the container is doing. In practice
-that means restarting the agent's MCP connection (in most hosts, reloading
-the MCP server entry or the session), not `docker restart gatekeeper`.
+**The server has never been the stale half**, so it is not worth
+re-investigating: every Tier 2 write reloads the state it just wrote,
+synchronously, in the same process — `ConfigStore._write_tools` reassigns
+`service.catalog` from the file, and `_write_identities` swaps the identity
+contents in place. `tools/list` is answered from those objects on every
+request. `test_mcp_live_catalog.py` asserts that against a live MCP session,
+alongside the notification itself.
 
-Making this automatic requires `/mcp` to hold sessions so the notification
-has somewhere to go. That is a wire-protocol change for every connected
-agent, not a bug fix, and is deliberately not made silently.
+A **client reconnect** remains the manual fallback, and is still cheaper
+than `docker restart gatekeeper` — it does not interrupt anything else the
+container is doing.
 
 ## Config reload without a restart
 
