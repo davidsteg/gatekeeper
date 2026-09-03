@@ -342,6 +342,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
         audit=audit,
         credentials=credentials,
         docker_host=os.environ.get("DOCKER_HOST"),
+        # The same store `AuthMiddleware` holds -- `store.py` mutates it in
+        # place, so an identity created through the console is immediately
+        # a valid `agent.send_message` recipient. The `agent` executor is
+        # the only consumer.
+        identities=identities,
     )
 
     def _on_credentials_change() -> None:

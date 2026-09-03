@@ -60,6 +60,79 @@ cannot. It is in every release.
 
 ---
 
+## 0.43.0
+
+**Agent-to-agent messaging: the `agent` executor, a mailbox between gatekeeper identities. `agent.send_message` leaves a message for another identity, `agent.read_messages` collects the ones addressed to the caller. Delivery is on the recipient's next call, not immediately — and that is a protocol fact, not a shortcut.**
+
+**Why a mailbox and not a push.** MCP gives a server no way to hand a running
+client an unsolicited payload. The one notification a client like Hermes
+acts on is `notifications/tools/list_changed` — added in 0.42.0 — and it
+carries *nothing*: it says "your tool list is stale", never what happened.
+That emptiness is deliberate (it is what lets one fan-out be compatible with
+FR-1.4's per-identity filtering), and it is also why it cannot carry a
+message. "Agent A pushes text into agent B's live session" is therefore not
+implementable over MCP without changing the client. A mailbox is: A's
+message is persisted, addressed to a gatekeeper identity, and B receives it
+the next time B calls `agent.read_messages`. Reliable, restart-safe, and no
+client-side change.
+
+**What changed**
+
+- **`messages.py` (new)** — the mailbox file (`messages.yaml`), written with
+  the same atomic-write primitives as `pending.yaml` and `tools.yaml`
+  (`_atomic.py`): no half-written file, no silent overwrite of a concurrent
+  delivery, and the temp file is created 0600 before it is moved into place.
+  Ordering is `(created_at, position in the file)` — `created_at` has second
+  granularity, so without the second half a mailbox would silently stop
+  being FIFO exactly when traffic picks up.
+- **`execute_agent.py` (new)** — the `agent` executor. Two operations and no
+  third, both in-process Python: no shell, no argv, no process spawn, no
+  network. FR-5.4 holds structurally here the way it does for the `file`
+  executor — there is no argv for a parameter value to smuggle a second
+  argument into, because there is no argv.
+- **`tier1.py`** — an `agent` toolkit's boundaries: `mailbox_path` (absolute,
+  traversal-free, required), `allowed_agent_operations` (the whitelist acts
+  on operation names, exactly as `allowed_rpc_methods` does for truenas —
+  a toolkit that lists only `read_messages` is a mailbox an identity may
+  empty but never fill), and the two ceilings `max_message_bytes` /
+  `max_mailbox_messages`. No destinations: the mailbox is a local file, not
+  a target to connect to.
+- **`catalog.py` / `validate.py` / `service.py`** — `agent_operation` on a
+  tool, the load-time parameter contract, and the call-pipeline wiring. The
+  recipient is checked against the live identity store inside the validation
+  block, so a message addressed to a misspelled identity is an ordinary
+  audited denial rather than a message that silently lands in a mailbox
+  nobody will ever open.
+
+**Two things are deliberately not parameters, and the catalog refuses a
+definition that adds them.** The **sender** is the authenticated identity,
+passed by `service.call` — `from` on a delivered message is a fact, not a
+claim. The **mailbox** is the calling identity's own: `read_messages` has no
+"as" or "mailbox" argument to widen it. FR-1.4 makes an agent's *tools*
+invisible to other identities; this is the same statement for its messages.
+
+**Messages are stored in plaintext.** `messages.yaml` is not the credential
+store: nothing in it is encrypted at rest, and an operator reading the file
+reads every message. Known credential values are scrubbed on the way *in*
+(FR-10.6, applied before persistence rather than only on the way out), so a
+secret gatekeeper itself holds cannot be laundered into a mailbox — but that
+covers exactly the secrets gatekeeper knows, and nothing an agent typed from
+elsewhere. A mailbox is for coordination, never for handing over a secret.
+This is stated in the module, in the example toolkit, and in the shipped
+tool descriptions, because it is the one property of this feature somebody
+will otherwise assume the other way around.
+
+`read_messages` output is marked `external_untrusted` (FR-8.12) for the same
+reason an HTTP response is: another agent wrote that text, and that agent may
+itself have been fed by a foreign API. It is data to act on deliberately,
+never instructions to follow because they arrived.
+
+**Deploying it.** `config/examples/toolkits.yaml` carries the `agent` toolkit
+and `config/examples/agent-tools.yaml` the two tool definitions, shipped
+`enabled: false` like every other example. `mailbox_path` must be on a
+writable, persistent volume — `/etc/gatekeeper` in the default compose, or
+`/var/lib/gatekeeper` under the split-state hardening.
+
 ## 0.42.0
 
 **`notifications/tools/list_changed` is sent, and `tools.listChanged` is advertised as `true`. A tool created, enabled or granted while an agent is connected now reaches that agent's session without a reconnect — the open decision left standing by 0.36.5, now made.**
