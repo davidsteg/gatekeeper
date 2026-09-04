@@ -303,6 +303,50 @@ toolkits:
     max_output_bytes: 131072
     # credential: opencode
 
+  # The agent mailbox -- agent-to-agent messaging between gatekeeper
+  # identities (`messages.py`, `execute_agent.py`). Built-in Python, like
+  # the `file` executor: no binary, no host, no credential, nothing outside
+  # this container. So it has no target field; what Tier 1 fixes instead is
+  # where the mailbox lives and how big it may get.
+  #
+  # It is a POSTBOX, not a push. MCP gives a server no way to hand a running
+  # client an unsolicited payload -- the one notification a client acts on,
+  # notifications/tools/list_changed, carries no payload at all. So a message
+  # reaches its recipient on that recipient's NEXT agent.read_messages call,
+  # not the moment it is sent. Reliable, restart-safe, no client change.
+  #
+  # `mailbox_path` must be on a writable, persistent volume -- the mailbox
+  # surviving a restart is the whole point. /etc/gatekeeper is where the
+  # other runtime-written files (tools.yaml, identities.yaml, pending.yaml)
+  # already live in the default compose. If you run the split-state
+  # hardening (GATEKEEPER_STATE_DIR, config mounted :ro), put it in
+  # /var/lib/gatekeeper/messages.yaml instead -- the :ro mount cannot hold
+  # a file gatekeeper writes.
+  #
+  # A toolkit that lists only `read_messages` is a mailbox an identity may
+  # empty but never fill: there is no separate permission to deny sending,
+  # it structurally does not exist for that toolkit.
+  #
+  # Messages are stored IN PLAINTEXT. Known credential values are scrubbed
+  # on the way in (FR-10.6), but that covers only the secrets gatekeeper
+  # itself holds. A mailbox is for coordination ("media-jellyfin is back
+  # up, go ahead"), never for handing over a secret.
+  agent:
+    executor: agent
+    mailbox_path: /etc/gatekeeper/messages.yaml
+    allowed_agent_operations:
+      - send_message
+      - read_messages
+    # One message's subject + body. A mailbox is not a transport for
+    # payloads; put the long form where both agents can already read it.
+    max_message_bytes: 4096
+    # Per recipient. Read messages beyond this are pruned oldest-first; a
+    # delivery that would push the UNREAD count past it is refused instead
+    # -- an unread message is the only copy of what somebody meant to say.
+    max_mailbox_messages: 200
+    max_timeout_seconds: 10
+    max_output_bytes: 65536
+
 # FR-6.8
 rate_limits:
   read:

@@ -29,6 +29,11 @@ No shell injection. No command confusion. No hidden side effects.
   SSRF-safe target checks, mandatory SSH
   host-key pinning, and secrets kept in a write-only credential store; see
   [Integrations](#integrations-add-sonarr-pfsense-and-18-others-without-writing-yaml) below
+- **Agents can leave each other messages** — the `agent` executor is a mailbox
+  between identities: `agent.send_message` addresses another identity,
+  `agent.read_messages` collects your own. The sender is your authenticated
+  identity, never an argument; delivery is on the recipient's next call, because
+  MCP has no way to push into a running session
 
 ---
 

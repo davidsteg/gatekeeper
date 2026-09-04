@@ -23,7 +23,13 @@ import re
 from typing import Any
 from urllib.parse import unquote
 
-from .catalog import OPENCODE_OPERATION_PARAMS, PLACEHOLDER_RE, Parameter, ToolDef
+from .catalog import (
+    AGENT_OPERATION_PARAMS,
+    OPENCODE_OPERATION_PARAMS,
+    PLACEHOLDER_RE,
+    Parameter,
+    ToolDef,
+)
 from .errors import DenialReason, Denied
 from .execute_opencode import check_directory, check_session_id
 from .tier1 import Toolkit
@@ -444,6 +450,74 @@ def build_opencode_call(
         check_directory(values["directory"], toolkit)
 
     return tool.opencode_operation
+
+
+#: An identity id, as `store.create_identity` writes them: alphanumeric
+#: plus dash and underscore. The recipient of a message is one of these and
+#: nothing else -- the shape check below is the cheap half, the existence
+#: check against the live identity store is the half that matters.
+RECIPIENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def build_agent_call(
+    tool: ToolDef,
+    values: dict[str, str],
+    toolkit: Toolkit,
+    *,
+    known_recipients: frozenset[str] | None = None,
+) -> str:
+    """Checks an `agent` (mailbox) call against Tier 1 and returns its
+    operation.
+
+    There is no request to build -- `execute_agent.py` acts on
+    `messages.py` directly. What this function exists for is the one value
+    that leaves the parameter allowlist behind and means something outside
+    the tool: `to`, the recipient identity. It is checked here, inside
+    `service.call`'s validation block, so a message addressed to a
+    misspelled identity is an ordinary audited denial rather than a
+    message that silently lands in a mailbox nobody will ever open.
+
+    `known_recipients` is the live set of configured identities, passed by
+    `service.call` when it has one. `None` means "not available" and the
+    check degrades to the shape test rather than refusing everything --
+    the recipient set is Tier 2 and may legitimately not be wired in a
+    bare `Service` (a test, a `gatekeeper check` run).
+
+    The operation re-check is the same invariant assertion `build_argv`'s
+    `check_binary` and `build_opencode_call`'s operation check are:
+    `agent_operation` is fixed per tool and not agent-suppliable.
+    """
+    assert tool.agent_operation is not None
+
+    if not toolkit.allows_agent_operation(tool.agent_operation):
+        raise Denied(
+            DenialReason.TIER1_VIOLATION,
+            f"Agent operation {tool.agent_operation!r} is not allowed for "
+            "this toolkit.",
+        )
+
+    required, _optional = AGENT_OPERATION_PARAMS[tool.agent_operation]
+    if "to" in required:
+        # Checked even when absent or empty: `resolve_parameters` would
+        # normally have caught that via the parameter's own `required`
+        # flag, but this function is the layer that must hold when it
+        # did not.
+        recipient = values.get("to", "")
+        if not RECIPIENT_RE.fullmatch(recipient):
+            raise Denied(
+                DenialReason.PARAM_INVALID,
+                "Parameter 'to' must be a gatekeeper identity id "
+                "(letters, digits, '-' and '_').",
+            )
+        if known_recipients is not None and recipient not in known_recipients:
+            raise Denied(
+                DenialReason.PARAM_INVALID,
+                f"There is no identity {recipient!r}. A message can only be "
+                "addressed to a configured gatekeeper identity -- an unknown "
+                "one has no mailbox anybody would ever read.",
+            )
+
+    return tool.agent_operation
 
 
 def resolve_scopes(tool: ToolDef, values: dict[str, str]) -> list[str]:

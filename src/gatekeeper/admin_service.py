@@ -281,6 +281,12 @@ class AdminService:
                 # configured", which for `run_as` means an approved
                 # toolkit_update proposal looking like it never took effect.
                 "run_as": tk.run_as,
+                # `agent` executor only, reported for the same reason as
+                # `run_as` above: an `agent` toolkit has no `target`, so
+                # without these two it would read as a toolkit that
+                # reaches nothing and may do nothing.
+                "mailbox_path": tk.mailbox_path,
+                "allowed_agent_operations": list(tk.allowed_agent_operations),
             }
             for name, tk in sorted(tier1.toolkits.items())
         ]
