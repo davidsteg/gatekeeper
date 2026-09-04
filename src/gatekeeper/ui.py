@@ -402,6 +402,10 @@ _ICONS = {
     '<circle cx="6" cy="6" r="3"/><circle cx="17" cy="6" r="3"/>'
     '<path d="M17 9a8 8 0 0 1-8 8"/>',
     "cloud": '<path d="M7 18h10.5a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.6-1.8A4.5 4.5 0 0 0 7 18z"/>',
+    # The `agent` executor: a mailbox between identities, not a target
+    # somewhere -- an envelope says that better than a package would.
+    "mail": '<rect x="3" y="5" width="18" height="14" rx="2"/>'
+    '<path d="m3.5 6.5 8.5 6 8.5-6"/>',
 }
 
 # Which glyph best represents an executor: a docker-run toolkit reads as a
@@ -419,6 +423,7 @@ _EXECUTOR_ICONS = {
     "cloud": "cloud",
     "api": "cloud",
     "opencode": "terminal",
+    "agent": "mail",
 }
 
 
@@ -2955,6 +2960,16 @@ def _view_tools(
                 # fixed names the executor reads (catalog.py's
                 # OPENCODE_OPERATION_PARAMS), not a template.
                 action_label, action_value = "operation", tool.opencode_operation or ""
+                detail_label, detail_value = (
+                    "reads",
+                    ", ".join(sorted(tool.parameters)) or "-",
+                )
+            elif tk_executor_name == "agent":
+                # A mailbox tool has no binary, no path and no host: the
+                # operation is the action, and its parameters are the
+                # fixed names `execute_agent.py` reads (catalog.py's
+                # AGENT_OPERATION_PARAMS), not a template.
+                action_label, action_value = "operation", tool.agent_operation or ""
                 detail_label, detail_value = (
                     "reads",
                     ", ".join(sorted(tool.parameters)) or "-",

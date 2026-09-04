@@ -88,6 +88,7 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 | `truenas` | ZFS, pool status, dataset management | JSON-RPC 2.0 over WebSocket (TrueNAS's REST v2.0 is deprecated) |
 | `ssh` | A remote Linux host's allowlisted binaries | binary + argv (same shape as `docker`/`local`), run over an SSH exec channel |
 | `opencode` | A headless opencode coding-agent server | HTTP; one operation = one fixed multi-request workflow, whitelisted by operation name |
+| `agent` | Other gatekeeper identities | in-process mailbox (`messages.yaml`); no shell, no network, no credential |
 
 `http` toolkit boundaries (`tier1.py`'s `Toolkit`): `base_url`,
 `allowed_methods`, `allowed_path_prefixes`, `allowed_cidrs`, `credential`,
@@ -139,6 +140,54 @@ of it: every argv element is `shlex.quote`d before being joined into that
 string. No general "Linux CLI"/arbitrary-command tool exists or is
 planned — only fixed, allowlisted binaries per tool, exactly like
 `docker`/`local` (REQUIREMENTS.md §17).
+
+`agent` toolkit boundaries: `mailbox_path`, `allowed_agent_operations`,
+`max_message_bytes`, `max_mailbox_messages`. It is the only executor with
+no target field at all -- it reaches nothing outside the container, so
+what Tier 1 fixes instead is *where the mailbox file lives* and *how big
+it may get*, neither influenceable by a parameter. The whitelist acts on
+operation names the way `truenas`'s acts on RPC method names: a toolkit
+listing only `read_messages` is a mailbox an identity may empty but never
+fill. Destinations are refused -- a local file is not a target to connect
+to.
+
+### Agent-to-agent messaging (the mailbox)
+
+`messages.py` + `execute_agent.py`. Two operations: `agent.send_message`
+leaves a message in another gatekeeper identity's mailbox,
+`agent.read_messages` returns the ones addressed to the caller and marks
+them read.
+
+**It is a mailbox because it cannot be a push.** MCP gives a server no way
+to hand a running client an unsolicited payload. The one notification a
+client acts on is `notifications/tools/list_changed` (see "Telling
+connected agents the catalog changed" below), and it carries no payload by
+design -- that emptiness is what makes a single fan-out compatible with
+FR-1.4, and it is also what makes it useless as a transport for a message.
+So delivery is "on the recipient's next `read_messages` call", never
+"immediately". Reliable and restart-safe, with no client-side change.
+
+Two values are deliberately **not** parameters, and `catalog.py` refuses a
+tool definition that declares them:
+
+* the **sender** -- `service.call` passes the authenticated identity, so
+  `from` on a delivered message is a fact, not a claim;
+* the **mailbox** -- `read_messages` reads the calling identity's own and
+  has no argument to widen it. FR-1.4 makes an agent's *tools* invisible to
+  other identities; this is the same statement for its messages.
+
+**The store is plaintext.** `messages.yaml` is not the credential store:
+nothing in it is encrypted at rest. Known credential values are scrubbed on
+the way *in* (FR-10.6, applied before persistence rather than only on the
+way out), so a secret gatekeeper holds cannot be laundered into a mailbox --
+but that covers exactly the secrets gatekeeper knows. `read_messages`
+output is marked `external_untrusted` (FR-8.12): another agent wrote that
+text, and that agent may itself have been fed by a foreign API.
+
+Bounds: one message is capped at `max_message_bytes`; a recipient's mailbox
+at `max_mailbox_messages`. Read messages beyond the cap are pruned
+oldest-first, but a delivery that would push the *unread* count past it is
+refused -- an unread message is the only copy of what somebody meant to say.
 
 ### Destinations (multi-host per toolkit)
 
@@ -290,6 +339,12 @@ src/gatekeeper/
                        multi-request workflow against a headless opencode
                        server; reuses execute_http's SSRF/credential/JSON-cap
                        helpers, request paths fixed in its own `_EP` table
+  execute_agent.py     The `agent` executor: two in-process mailbox
+                       operations (send_message/read_messages), no shell,
+                       no network -- the sender is the authenticated
+                       identity, never a parameter
+  messages.py          The mailbox file (messages.yaml) behind it, written
+                       with `_atomic.py`'s primitives like pending.yaml
   execute_truenas.py   The `truenas` executor: JSON-RPC 2.0 over WebSocket
   execute_ssh.py        The `ssh` executor: binary+argv over an SSH exec
                        channel, mandatory host-key pinning
@@ -318,7 +373,7 @@ tests/
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_ui.py, test_ui_admin.py, test_credentials.py, test_execute_http.py,
   test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py,
-  test_integrations.py,
+  test_integrations.py, test_agent_messaging.py,
   test_ui_credentials.py, test_ui_integrations.py, test_admin_mcp.py,
   test_catalog_versioning.py, test_pending.py, test_notifications.py,
   test_mcp_live_catalog.py, conftest.py

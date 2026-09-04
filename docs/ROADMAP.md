@@ -30,6 +30,18 @@ item.
   checked against the toolkit's `path_roots`, becomes opencode's
   `x-opencode-directory` header — one toolkit therefore serves every
   project root listed there.
+- `agent` executor — a mailbox between gatekeeper identities
+  (`execute_agent.py`, `messages.py`). `agent.send_message` addresses
+  another identity, `agent.read_messages` collects the caller's own and
+  marks them read. Deliberately a **mailbox, not a push**: MCP gives a
+  server no way to hand a running client an unsolicited payload, and the
+  one notification a client acts on (`tools/list_changed`) carries none by
+  design — so delivery is on the recipient's next call, without any
+  client-side change. The sender is the authenticated identity and the
+  mailbox is the calling one; neither is a parameter, and `catalog.py`
+  refuses a tool definition that declares them. Messages sit in plaintext
+  in `mailbox_path` (known credential values scrubbed on the way in);
+  `read_messages` output is marked `external_untrusted` (FR-8.12).
 - Credential store — write-only, encrypted at rest (`credentials.py`).
   Kinds: `api_key_header`, `bearer`, `basic`, `ws_api_key`, `url_path`,
   `url_query`, `docker_tls`, `ssh_private_key`
@@ -60,6 +72,17 @@ item.
 
 ## Not implemented (by design or not yet)
 
+- **Pushing a message into an agent's *running* session.** Not a gap in the
+  mailbox above — a protocol limit. An MCP client does not listen for
+  arbitrary server-initiated payloads; the only notification a client like
+  Hermes acts on is `notifications/tools/list_changed`, and it carries no
+  payload by design (see `notifications.py`). So the earliest a message can
+  reach agent B is B's next tool call, and `agent.read_messages` is that
+  call. Closing this would mean changing the *client*, not gatekeeper — an
+  out-of-band channel (a webhook into the agent's host, a session-side
+  poller) rather than anything the MCP surface can offer. Deliberately not
+  faked: a "notify" that only fires when the recipient happens to call
+  something anyway is the mailbox with a misleading name.
 - **Nested `params_template` values** — the `truenas` executor's
   `params_template` (`validate.py`'s `build_rpc_call`) only substitutes
   flat string placeholders into a positional argument list; it cannot
