@@ -49,11 +49,12 @@ OPENCODE_OPERATIONS = frozenset(
 
 #: The complete vocabulary of the `agent` executor -- the mailbox behind
 #: `messages.py`. Same shelf idea as OPENCODE_OPERATIONS above: a toolkit
-#: names a subset, never something outside the set. A toolkit that lists
-#: only `read_messages` is a mailbox an identity may empty but not fill --
-#: there is no separate permission to deny sending, it structurally does
-#: not exist for that toolkit.
-AGENT_OPERATIONS = frozenset({"send_message", "read_messages"})
+#: names a subset, never something outside the set. `mailbox_status` is
+#: the read-only poll of that mailbox -- it counts unread, it never
+#: consumes. A toolkit that lists only `read_messages` is a mailbox an
+#: identity may empty but not fill -- there is no separate permission to
+#: deny sending, it structurally does not exist for that toolkit.
+AGENT_OPERATIONS = frozenset({"send_message", "read_messages", "mailbox_status"})
 
 #: Defaults for the two `agent` ceilings, applied when a toolkit names
 #: neither. They live here rather than in `messages.py` so Tier 1 stays the

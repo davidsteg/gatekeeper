@@ -50,12 +50,15 @@ OPENCODE_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = 
 #: The `agent` executor's parameter contract, same shape and same
 #: both-directions enforcement as OPENCODE_OPERATION_PARAMS above
 #: (`_validate_agent_params`). There is no `from` and no mailbox selector
-#: in either row, and that is the point: the sender is the authenticated
+#: in any row, and that is the point: the sender is the authenticated
 #: identity and the reader is the calling one, both supplied by
-#: `service.call`, neither settable by an agent.
+#: `service.call`, neither settable by an agent. `mailbox_status` reads
+#: no parameters at all -- its count is over the caller's own mailbox --
+#: so a tool for it that declares any is refused at load time.
 AGENT_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "send_message": (("to", "body"), ("subject",)),
     "read_messages": ((), ("limit", "peek")),
+    "mailbox_status": ((), ()),
 }
 
 
@@ -172,10 +175,11 @@ class ToolDef:
     opencode_operation: str | None = None
 
     # -- `agent` executor ----------------------------------------------
-    #: One of `tier1.AGENT_OPERATIONS` -- `send_message` or
-    #: `read_messages`, fixed per tool and not agent-suppliable, exactly
-    #: like `file_operation` for the file executor. The mailbox file it
-    #: acts on is Tier 1 (`Toolkit.mailbox_path`), never a parameter.
+    #: One of `tier1.AGENT_OPERATIONS` -- `send_message`, `read_messages`
+    #: or `mailbox_status`, fixed per tool and not agent-suppliable,
+    #: exactly like `file_operation` for the file executor. The mailbox
+    #: file it acts on is Tier 1 (`Toolkit.mailbox_path`), never a
+    #: parameter.
     agent_operation: str | None = None
 
     #: Per-tool override of the toolkit's ``run_as`` (file executor only).
