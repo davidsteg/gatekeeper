@@ -60,6 +60,58 @@ cannot. It is in every release.
 
 ---
 
+## 0.44.0
+
+**The `agent` executor gains `mailbox_status`: a read-only unread count that does not consume the mailbox. It complements `send_message`/`read_messages`/`peek` — the cheap question an agent asks before spending a `read_messages` call's output budget on a mailbox that may be empty, and the one it can poll without consequence.**
+
+**What changed**
+
+- **`execute_agent.py`** — third operation, same in-process shape as the
+  other two: no shell, no argv, no process spawn, no network, so FR-5.4
+  holds structurally here exactly as it did in 0.43.0. The count is over
+  the caller's own mailbox — the same isolation `read_messages` has, with
+  no parameter to widen it — and the status payload carries no body at
+  all, only a count and the identity it is about. Output is marked
+  `external_untrusted` (FR-8.12) anyway: the count is still a fact about
+  what other agents delivered, and it gets the same marking rather than a
+  special case of its own.
+- **`messages.py`** — `count_unread`: read-only in the strict sense.
+  Nothing is marked read, nothing is written, the file is not even
+  re-serialized, so an agent may poll as often as it likes with zero
+  effect on the mailbox. The load and the count are one snapshot under
+  the store's lock, so a concurrent delivery cannot make the number a
+  lie about a file that changed mid-read.
+- **`tier1.py` / `catalog.py`** — `mailbox_status` joins `AGENT_OPERATIONS`
+  and the load-time parameter contract. It reads no parameters at all —
+  its count is over the caller's own mailbox — so a tool for it that
+  declares any is refused at load time. A toolkit's
+  `allowed_agent_operations` decides whether an identity gets the poll,
+  exactly as it already decided whether it gets the read.
+- **`tests/test_agent_messaging.py`** — the non-consumption contract is
+  pinned from every side: the count is per-recipient and skips read
+  messages, it leaves mtime and content alone, status/peek loops never
+  take a message but the first real read takes all of them, no message
+  gains a `read_at` on disk from being counted, the output is marked
+  untrusted, and the payload needs no redaction because it carries no
+  subject or body.
+
+**Mailbox pull-notification stays external, by design.** 0.43.0 made the
+agent pull-based: delivery is on the recipient's next call, never a push.
+`mailbox_status` does not change that — it is the poll, not a
+notification channel. Checking "is anything waiting" on a schedule is a
+job for an external cron monitor script that calls the tool and raises an
+alarm; it is not a reason for gatekeeper to grow a push it deliberately
+does not have. MCP gives a server no way to hand a running client an
+unsolicited payload, and that is as true of a count as of a message body.
+
+**Operational note: MCP client circuit-breakers.** A client that has
+watched repeated slow calls lock a server out for roughly fifty seconds —
+during which calls fail fast instead of hanging. This is client-side
+protection against a slow upstream, not a gatekeeper bug: a status or
+read call that took long enough to trip it is reported as the client's
+own circuit-breaker, and the remedy is the slow call, not the server.
+Worth knowing before an agent's poll looks like an outage.
+
 ## 0.43.0
 
 **Agent-to-agent messaging: the `agent` executor, a mailbox between gatekeeper identities. `agent.send_message` leaves a message for another identity, `agent.read_messages` collects the ones addressed to the caller. Delivery is on the recipient's next call, not immediately — and that is a protocol fact, not a shortcut.**
