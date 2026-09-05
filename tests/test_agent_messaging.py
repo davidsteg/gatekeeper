@@ -17,6 +17,9 @@ would be quietest about:
   there is no argument through which an agent could claim another one.
 * **Persistence.** A message survives a restart -- the store is a file,
   not a process-lifetime dict.
+* **Status is a poll, not a consumption.** `mailbox_status` counts the
+  caller's unread without marking any of them read -- an agent may poll
+  it as often as it likes; only a `read_messages` without `peek` empties.
 """
 
 from __future__ import annotations
@@ -41,7 +44,9 @@ from conftest import make_catalog  # noqa: E402
 # -- Fixtures ---------------------------------------------------------------
 
 
-def _toolkit_yaml(mailbox: str, *, operations=("send_message", "read_messages"), **extra):
+def _toolkit_yaml(
+    mailbox: str, *, operations=("send_message", "read_messages", "mailbox_status"), **extra
+):
     spec = {
         "executor": "agent",
         "mailbox_path": mailbox,
@@ -133,6 +138,24 @@ def _tool_specs():
             "timeout_seconds": 5,
             "max_output_bytes": 8192,
         },
+        {
+            "id": "agent.mailbox_status",
+            "toolkit": "agent",
+            "agent_operation": "mailbox_status",
+            "version": 1,
+            "title": "How many messages are waiting for me",
+            "description": (
+                "Returns the number of unread messages in my mailbox "
+                "without reading any of them."
+            ),
+            "category": "read",
+            "idempotent": True,
+            "enabled": True,
+            "parameters": {},
+            "required_scopes": [],
+            "timeout_seconds": 5,
+            "max_output_bytes": 8192,
+        },
     ]
 
 
@@ -153,7 +176,11 @@ def agent_identities(tmp_path):
                         "id": name,
                         "role": "agent",
                         "token_hash": hash_token(f"token-{name}"),
-                        "tools": ["agent.send_message", "agent.read_messages"],
+                        "tools": [
+                            "agent.send_message",
+                            "agent.read_messages",
+                            "agent.mailbox_status",
+                        ],
                         "scopes": [],
                     }
                     for name in ("dev", "homelab", "media", "personal")
@@ -181,6 +208,10 @@ def _send(service, identities, sender, **args):
 
 def _read(service, identities, reader, **args):
     return service.call(identities.identities[reader], "agent.read_messages", args)
+
+
+def _status(service, identities, caller, **args):
+    return service.call(identities.identities[caller], "agent.mailbox_status", args)
 
 
 def _payload(result):
@@ -282,6 +313,36 @@ def test_a_full_mailbox_does_not_block_a_different_recipient(mailbox_path):
         store.deliver(to="homelab", sender="dev", subject="s2", body="b", max_messages=1)
     store.deliver(to="media", sender="dev", subject="s", body="b", max_messages=1)
     assert store.unread_count("media") == 1
+
+
+def test_count_unread_is_per_recipient_and_skips_read(mailbox_path):
+    store = MessageStore(path=mailbox_path)
+    store.deliver(to="homelab", sender="dev", subject="s1", body="b")
+    store.deliver(to="homelab", sender="dev", subject="s2", body="b")
+    store.deliver(to="media", sender="dev", subject="s3", body="b")
+
+    assert store.count_unread("homelab") == 2
+    assert store.count_unread("media") == 1
+    assert store.count_unread("personal") == 0
+
+    store.collect("homelab", limit=1)  # one read, one left
+    assert store.count_unread("homelab") == 1
+    store.collect("homelab", limit=1)  # now all read, nothing left
+    assert store.count_unread("homelab") == 0
+    # Read messages stay on disk for the audit trail -- the count just
+    # stops including them.
+    assert len(store.inbox("homelab", unread_only=False)) == 2
+
+
+def test_count_unread_does_not_write_the_file(mailbox_path):
+    """The poll is free: a status call leaves mtime and content alone."""
+    store = MessageStore(path=mailbox_path)
+    store.deliver(to="homelab", sender="dev", subject="s", body="b")
+    before = open(mailbox_path, "rb").read()
+
+    store.count_unread("homelab")
+
+    assert open(mailbox_path, "rb").read() == before
 
 
 # -- Tier 1 -----------------------------------------------------------------
@@ -489,6 +550,87 @@ async def test_read_output_is_marked_untrusted(agent_service, agent_identities):
     assert read.external_untrusted is True
 
 
+async def test_status_counts_only_the_callers_own_messages(agent_service, agent_identities):
+    """The count is over the calling identity's mailbox -- the same
+    isolation `read_messages` has, with no parameter to widen it."""
+    await _send(agent_service, agent_identities, "dev", to="homelab", body="one")
+    await _send(agent_service, agent_identities, "dev", to="homelab", body="two")
+    await _send(agent_service, agent_identities, "dev", to="media", body="not mine")
+
+    homelab = _payload(await _status(agent_service, agent_identities, "homelab"))
+    assert homelab["identity"] == "homelab"
+    assert homelab["unread"] == 2
+    media = _payload(await _status(agent_service, agent_identities, "media"))
+    assert media["unread"] == 1
+    personal = _payload(await _status(agent_service, agent_identities, "personal"))
+    assert personal["unread"] == 0
+
+
+async def test_status_follows_reads_and_deliveries(agent_service, agent_identities):
+    """The count an agent polls is the same one its next read returns."""
+    await _send(agent_service, agent_identities, "dev", to="homelab", body="one")
+    await _send(agent_service, agent_identities, "dev", to="homelab", body="two")
+    assert _payload(await _status(agent_service, agent_identities, "homelab"))["unread"] == 2
+
+    read = _payload(await _read(agent_service, agent_identities, "homelab", limit=1))
+    assert read["count"] == 1
+    assert _payload(await _status(agent_service, agent_identities, "homelab"))["unread"] == 1
+
+    await _send(agent_service, agent_identities, "dev", to="homelab", body="three")
+    assert _payload(await _status(agent_service, agent_identities, "homelab"))["unread"] == 2
+
+
+async def test_status_does_not_consume_peek_does_not_consume_read_does(
+    agent_service, agent_identities
+):
+    """The non-consumption contract, side by side: however often an agent
+    polls the count or peeks, every message is still there for the
+    first real read -- and that one takes all of them."""
+    await _send(agent_service, agent_identities, "dev", to="homelab", body="once")
+
+    for _ in range(3):
+        assert _payload(await _status(agent_service, agent_identities, "homelab"))["unread"] == 1
+        peeked = _payload(await _read(agent_service, agent_identities, "homelab", peek=True))
+        assert peeked["count"] == 1
+
+    taken = _payload(await _read(agent_service, agent_identities, "homelab"))
+    assert taken["count"] == 1
+    assert _payload(await _status(agent_service, agent_identities, "homelab"))["unread"] == 0
+
+
+async def test_status_does_not_mark_read_on_disk(agent_service, agent_identities, mailbox_path):
+    """Status is read-only on disk, not just read-only in effect: no
+    message gains a `read_at` from being counted."""
+    await _send(agent_service, agent_identities, "dev", to="homelab", body="still unread")
+    await _status(agent_service, agent_identities, "homelab")
+    on_disk = yaml.safe_load(open(mailbox_path, encoding="utf-8").read())
+    assert [e["read_at"] for e in on_disk["messages"]] == [None]
+
+
+async def test_status_output_is_marked_untrusted(agent_service, agent_identities):
+    """FR-8.12: no bodies are returned, but the count is still a fact
+    about what other agents delivered."""
+    await _send(agent_service, agent_identities, "dev", to="homelab", body="x")
+    status = await _status(agent_service, agent_identities, "homelab")
+    assert status.external_untrusted is True
+
+
+async def test_status_output_needs_no_redaction(agent_service, agent_identities, mailbox_path):
+    """The status payload is a count -- no subject or body is in it, so
+    even a credential that survived sending cannot reach the poller's
+    output. Redaction is not *needed* here, and this pins that."""
+    agent_service.audit.set_secrets(("hunter2-the-real-key",))
+    await _send(
+        agent_service, agent_identities, "dev",
+        to="homelab", subject="hunter2-the-real-key", body="hunter2-the-real-key",
+    )
+
+    status = await _status(agent_service, agent_identities, "homelab")
+    assert status.external_untrusted is True
+    assert "hunter2-the-real-key" not in status.stdout
+    assert _payload(status)["unread"] == 1
+
+
 async def test_send_output_is_not_marked_untrusted(agent_service, agent_identities):
     sent = await _send(agent_service, agent_identities, "dev", to="homelab", body="x")
     assert sent.external_untrusted is False
@@ -615,7 +757,7 @@ async def test_a_grant_is_still_what_decides(agent_tier1, agent_catalog, tmp_pat
 
 async def test_visible_tools_follow_the_grant(agent_service, agent_identities):
     names = [v.name for v in agent_service.visible_tools(agent_identities.identities["dev"])]
-    assert names == ["agent.read_messages", "agent.send_message"]
+    assert names == ["agent.mailbox_status", "agent.read_messages", "agent.send_message"]
 
 
 # -- The shipped example ----------------------------------------------------
