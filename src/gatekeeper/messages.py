@@ -283,6 +283,24 @@ class MessageStore:
                 self._write(entries)
             return [message for _, message in taken], remaining
 
+    def count_unread(self, recipient: str) -> int:
+        """How many unread messages are waiting for `recipient`.
+
+        Read-only in the strict sense: nothing is marked read, nothing
+        is written, the file is not even re-serialized -- `mailbox_status`
+        can be polled as often as an agent likes with no effect on the
+        mailbox. Under the lock anyway, so a concurrent delivery cannot
+        make the count a lie about a file that changed mid-read: the
+        load and the count are one snapshot.
+        """
+        with self._lock:
+            return sum(
+                1
+                for entry in self._load()
+                if str(entry.get("to") or "") == recipient
+                and entry.get("read_at") is None
+            )
+
 
 __all__ = [
     "MailboxFull",
