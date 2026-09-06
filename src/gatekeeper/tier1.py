@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import ipaddress
+import logging
 import os
 from pathlib import PurePosixPath
 from typing import Any
@@ -19,6 +20,8 @@ import yaml
 
 from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, read_config_file
+
+logger = logging.getLogger("gatekeeper")
 
 #: Executor types implemented.
 KNOWN_EXECUTORS = frozenset(
@@ -55,6 +58,25 @@ OPENCODE_OPERATIONS = frozenset(
 #: identity may empty but not fill -- there is no separate permission to
 #: deny sending, it structurally does not exist for that toolkit.
 AGENT_OPERATIONS = frozenset({"send_message", "read_messages", "mailbox_status"})
+
+
+def missing_agent_operations(toolkit: Toolkit) -> tuple[str, ...]:
+    """Operations in the `agent` vocabulary that `toolkit` does not allow.
+
+    A toolkit's `allowed_agent_operations` is pinned in its toolkits.yaml
+    at deploy time, and nothing can add to it afterwards -- `toolkit_update`
+    deliberately has no write path to it (FR-4.11), so when a new release
+    adds an operation, a deployed toolkit can only learn about it by a
+    host-side edit. The empty tuple means "nothing is missing"; a toolkit
+    that names a subset on purpose (a read-only mailbox, say) still gets
+    the empty tuple only when it names the whole vocabulary -- the caller
+    decides whether a subset is deliberate, this walk just reports the
+    difference.
+    """
+    if toolkit.executor != "agent":
+        return ()
+    return tuple(sorted(AGENT_OPERATIONS - set(toolkit.allowed_agent_operations)))
+
 
 #: Defaults for the two `agent` ceilings, applied when a toolkit names
 #: neither. They live here rather than in `messages.py` so Tier 1 stays the
@@ -989,6 +1011,31 @@ def load_tier1(path: str) -> Tier1:
             max_message_bytes=max_message_bytes,
             max_mailbox_messages=max_mailbox_messages,
         )
+
+        # A toolkit's allowed_agent_operations is pinned at deploy time,
+        # and toolkit_update cannot touch the field by design (FR-4.11) --
+        # so when a release adds an operation to the vocabulary (0.44.0
+        # added mailbox_status), a toolkit deployed before then can only
+        # learn about it by a host-side edit of toolkits.yaml. Naming
+        # the difference here is what turns "the tool I read about is
+        # never offered to me" into a line in the startup log. Not a
+        # subset judgment: a toolkit that deliberately allows less is
+        # a valid configuration, and the warning says only what is
+        # missing from the vocabulary -- the operator decides whether
+        # the omission is on purpose.
+        unavailable = missing_agent_operations(toolkits[name])
+        if unavailable:
+            logger.warning(
+                "Toolkit %r does not allow the agent operation(s) %s. A "
+                "toolkit's allowed_agent_operations is set in toolkits.yaml "
+                "and cannot be changed by a proposal -- add the operation "
+                "there (a Tier-1 file: host-side edit, then SIGHUP or "
+                "redeploy to reload) if identities on this toolkit should "
+                "have it. The operations this toolkit allows stay: %s.",
+                name,
+                ", ".join(unavailable),
+                ", ".join(toolkits[name].allowed_agent_operations),
+            )
 
     limits = raw.get("rate_limits") or {}
     rate_limits = {

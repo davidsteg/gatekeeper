@@ -60,6 +60,58 @@ cannot. It is in every release.
 
 ---
 
+## 0.44.1
+
+**Deployed agent toolkits cannot learn about new agent operations on their own — 0.44.0 added `mailbox_status` to the executor's vocabulary, but a toolkit pinned before then still lists only `send_message`/`read_messages`, and nothing ever told the operator. Startup now warns, naming the toolkit and the missing operations.**
+
+**What changed**
+
+- **`tier1.py`** — while loading `toolkits.yaml`, an `agent` toolkit whose
+  `allowed_agent_operations` names fewer operations than the executor's
+  vocabulary (`AGENT_OPERATIONS`) emits a startup WARNING naming the
+  toolkit and the missing operations. A warning, not an abort: a subset
+  is a valid configuration — a read-only mailbox toolkit that lists only
+  `read_messages` has not misconfigured anything — and only the operator
+  knows whether the omission is deliberate. The warning also fires on
+  `gatekeeper check` and on a SIGHUP reload, since all three load Tier 1
+  through the same `load_tier1()` path.
+- **`pyproject.toml`** — version bump, so the workflow publishes this note.
+
+**The migration: add `mailbox_status` by hand.** `toolkits.yaml` is a
+Tier-1 file — the boundary that makes the admin token *not* equivalent
+to root (REQUIREMENTS.md §6) — and `admin.toolkit_update` can, by
+design, change only a toolkit's `executor`/`binaries`/`denied_args`/
+`run_as` (`UPDATE_WRITABLE_FIELDS` in `toolkit_proposals.py`). It cannot
+touch `allowed_agent_operations`, so there is no proposal, console
+route, or admin call that adds the operation: the only path is the one
+every Tier-1 change has — on the host, edit the file, then reload. For a
+deployment that wants the poll, the finished field reads:
+
+```yaml
+  agent:
+    executor: agent
+    mailbox_path: /etc/gatekeeper/messages.yaml
+    allowed_agent_operations:
+      - send_message
+      - read_messages
+      - mailbox_status
+```
+
+then `docker kill -s HUP gatekeeper` (or a redeploy) re-reads it. An
+identity gets the poll only if the operator *also* creates and enables an
+`agent.mailbox_status` tool on the toolkit — the warning is about the
+toolkit's ceiling, not about a tool that appears by itself.
+
+**Why toolkit_update cannot change this field.** The narrow write path
+exists so an executor swap or a change of the OS user a `file` toolkit
+runs as doesn't require a redeploy — it changes *who* an operation runs
+as, never *what* is allowed (`path_roots`, `protected_resources`, limits,
+and every operation allowlist stay deploy-time only, FR-4.11). A
+proposal surface that could widen `allowed_agent_operations` would be a
+proposal surface that could widen Tier 1 reach, which is exactly the
+line FR-4.11 draws; that the line costs a host edit when the vocabulary
+grows is the price of the admin token not being root.
+
 ## 0.44.0
 
 **The `agent` executor gains `mailbox_status`: a read-only unread count that does not consume the mailbox. It complements `send_message`/`read_messages`/`peek` — the cheap question an agent asks before spending a `read_messages` call's output budget on a mailbox that may be empty, and the one it can poll without consequence.**
