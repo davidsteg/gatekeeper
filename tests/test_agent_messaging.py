@@ -25,10 +25,12 @@ would be quietest about:
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import pytest
 import yaml
+from conftest import make_catalog  # noqa: E402
 
 from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
@@ -37,9 +39,6 @@ from gatekeeper.identity import IdentityStore, hash_token, load_identities
 from gatekeeper.messages import MailboxFull, MessageStore
 from gatekeeper.service import Service
 from gatekeeper.tier1 import load_tier1
-
-from conftest import make_catalog  # noqa: E402
-
 
 # -- Fixtures ---------------------------------------------------------------
 
@@ -382,6 +381,93 @@ def test_unknown_agent_operation_is_refused(tmp_path, mailbox_path):
     )
     with pytest.raises(ConfigError, match="are not agent operations"):
         load_tier1(str(path))
+
+
+def _load_with(caplog, path):
+    with caplog.at_level(logging.WARNING, logger="gatekeeper"):
+        return load_tier1(path)
+
+
+def test_missing_agent_operations_warn_at_load(tmp_path, mailbox_path, caplog):
+    """A pre-0.44.0 toolkit: loads clean, and says what it does not allow.
+
+    This is the deployed-toolkit case the warning exists for -- the yaml
+    is valid, the toolkit works, and the only trace of `mailbox_status`
+    is this line in the startup log.
+    """
+    path = tmp_path / "toolkits.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            _toolkit_yaml(mailbox_path, operations=("send_message", "read_messages"))
+        ),
+        encoding="utf-8",
+    )
+    tier1 = _load_with(caplog, str(path))
+    assert tier1.toolkit("agent").allowed_agent_operations == (
+        "send_message",
+        "read_messages",
+    )
+    assert "mailbox_status" in caplog.text
+    assert "'agent'" in caplog.text
+
+
+def test_a_subset_by_design_warns_too_but_names_the_allowed_set(
+    tmp_path, mailbox_path, caplog
+):
+    """The read-only mailbox: a valid, deliberate subset -- same warning.
+
+    The loader cannot tell deliberate from stale, so it reports the
+    difference either way; the message also names what the toolkit
+    still allows, so an operator can see the omission was on purpose.
+    """
+    path = tmp_path / "toolkits.yaml"
+    path.write_text(
+        yaml.safe_dump(_toolkit_yaml(mailbox_path, operations=("read_messages",))),
+        encoding="utf-8",
+    )
+    tier1 = _load_with(caplog, str(path))
+    assert tier1.toolkit("agent").allowed_agent_operations == ("read_messages",)
+    assert "send_message" in caplog.text
+    assert "mailbox_status" in caplog.text
+    assert "read_messages" in caplog.text
+
+
+def test_a_complete_toolkit_warns_about_nothing(tmp_path, mailbox_path, caplog):
+    path = tmp_path / "toolkits.yaml"
+    path.write_text(yaml.safe_dump(_toolkit_yaml(mailbox_path)), encoding="utf-8")
+    tier1 = _load_with(caplog, str(path))
+    assert tier1.toolkit("agent").allowed_agent_operations == (
+        "send_message",
+        "read_messages",
+        "mailbox_status",
+    )
+    assert "mailbox_status" not in caplog.text
+    assert "does not allow the agent operation" not in caplog.text
+
+
+def test_missing_agent_operations_helper_skips_non_agent_toolkits(tmp_path, caplog):
+    """The warning is agent-scoped: an http toolkit never triggers it."""
+    from gatekeeper.tier1 import missing_agent_operations
+
+    path = tmp_path / "toolkits.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "toolkits": {
+                    "diag": {
+                        "executor": "local",
+                        "binaries": ["/usr/bin/uptime"],
+                        "max_timeout_seconds": 10,
+                        "max_output_bytes": 65536,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    tier1 = _load_with(caplog, str(path))
+    assert missing_agent_operations(tier1.toolkit("diag")) == ()
+    assert "agent operation" not in caplog.text
 
 
 def test_agent_toolkit_cannot_declare_destinations(tmp_path, mailbox_path):
