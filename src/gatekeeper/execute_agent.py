@@ -4,7 +4,7 @@ Three operations, and no fourth: `send_message` puts one message into
 another gatekeeper identity's mailbox, `read_messages` takes the caller's
 own unread ones out of it, and `mailbox_status` reports how many are
 waiting without taking any of them out. All three run in-process against
-`messages.py` -- no shell, no argv, no process spawn, no network -- so
+`messages.py` -- no shell, no argv, no process spawn -- so
 FR-5.3/5.4 hold structurally here the way they do for the `file`
 executor: there is no argv for a parameter value to smuggle a second
 argument into, because there is no argv.
@@ -33,13 +33,20 @@ same marking rather than a special case of its own.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import logging
+import os
 import time
+import urllib.request
 from collections.abc import Callable
 
 from .execute import OUTCOME_FAILED, OUTCOME_OK, Result
 from .messages import MailboxFull, Message, MessageStore
 from .tier1 import Toolkit
+
+logger = logging.getLogger("gatekeeper")
 
 #: What `read_messages` returns in one call when the tool declares no
 #: `limit` parameter, and the ceiling for one that does. The real bound on
@@ -152,6 +159,8 @@ def _send(
     except OSError as exc:
         return _failed(f"Mailbox is not writable: {exc}", started)
 
+    _notify_delivery(message)
+
     return Result(
         outcome=OUTCOME_OK,
         exit_code=0,
@@ -173,6 +182,57 @@ def _send(
         truncated=False,
         duration_ms=int((time.monotonic() - started) * 1000),
     )
+
+
+def _notify_delivery(message: Message) -> None:
+    """Optional deploy-time webhook: "a mailbox delivery just happened".
+
+    An *operator's* side channel, not an agent's: the URL and the secret
+    come from the environment (`GATEKEEPER_NOTIFY_URL`,
+    `GATEKEEPER_NOTIFY_SECRET`), never from a tool definition, parameter,
+    or the message itself -- so nothing an agent sends can choose where
+    the POST goes or what signs it. Unset URL means no POST at all, which
+    is the default and keeps the executor network-free for every
+    deployment that has not deliberately opted in.
+
+    Failure is deliberately invisible to the sender: the message is
+    already durably in the mailbox when this runs, so a webhook that
+    times out or refuses the connection changes nothing about delivery
+    and must not fail the call. Warn and move on.
+    """
+    url = os.environ.get("GATEKEEPER_NOTIFY_URL", "")
+    if not url:
+        return
+    raw_body = json.dumps(
+        {
+            "id": message.id,
+            "from": message.sender,
+            "to": message.to,
+            "subject": message.subject,
+            "body": message.body,
+            "created_at": message.created_at,
+        }
+    ).encode("utf-8")
+    secret = os.environ.get("GATEKEEPER_NOTIFY_SECRET", "").encode()
+    sig = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+    request = urllib.request.Request(
+        url,
+        data=raw_body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Gatekeeper-Signature": sig,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            response.read()
+    except Exception:
+        logger.warning(
+            "Mailbox delivery webhook %s failed; the message itself "
+            "was delivered regardless.",
+            url,
+        )
 
 
 def _read(

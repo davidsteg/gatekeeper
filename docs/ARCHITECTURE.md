@@ -88,7 +88,7 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 | `truenas` | ZFS, pool status, dataset management | JSON-RPC 2.0 over WebSocket (TrueNAS's REST v2.0 is deprecated) |
 | `ssh` | A remote Linux host's allowlisted binaries | binary + argv (same shape as `docker`/`local`), run over an SSH exec channel |
 | `opencode` | A headless opencode coding-agent server | HTTP; one operation = one fixed multi-request workflow, whitelisted by operation name |
-| `agent` | Other gatekeeper identities | in-process mailbox (`messages.yaml`); no shell, no network, no credential |
+| `agent` | Other gatekeeper identities | in-process mailbox (`messages.yaml`); no shell, no credential. Network only if the operator sets `GATEKEEPER_NOTIFY_URL` (best-effort delivery webhook, never agent-controllable) |
 
 `http` toolkit boundaries (`tier1.py`'s `Toolkit`): `base_url`,
 `allowed_methods`, `allowed_path_prefixes`, `allowed_cidrs`, `credential`,
@@ -340,9 +340,12 @@ src/gatekeeper/
                        server; reuses execute_http's SSRF/credential/JSON-cap
                        helpers, request paths fixed in its own `_EP` table
   execute_agent.py     The `agent` executor: two in-process mailbox
-                       operations (send_message/read_messages), no shell,
-                       no network -- the sender is the authenticated
-                       identity, never a parameter
+                        operations (send_message/read_messages), no shell
+                        -- the sender is the authenticated identity,
+                        never a parameter. Optional deploy-time delivery
+                        webhook (`_notify_delivery`) when
+                        GATEKEEPER_NOTIFY_URL is set; best-effort, never
+                        agent-controllable, never fails a delivery
   messages.py          The mailbox file (messages.yaml) behind it, written
                        with `_atomic.py`'s primitives like pending.yaml
   execute_truenas.py   The `truenas` executor: JSON-RPC 2.0 over WebSocket
