@@ -60,6 +60,19 @@ cannot. It is in every release.
 
 ---
 
+## 0.45.0
+
+**Mailbox deliveries now push: when the agent executor delivers a message to an agent mailbox, it can POST a signed webhook to a configured endpoint, so the receiving Hermes profile wakes immediately instead of waiting for its next poll.**
+
+**What changed**
+
+- **`execute_agent.py`** — after each mailbox delivery, if the target identity has `notify_url` set, the executor POSTs the message (id, from, to, subject, body, created_at) as JSON with an `X-Gatekeeper-Signature` header (HMAC-SHA256 over the raw body, keyed by that identitys `notify_secret`). 3s timeout, fail-safe: delivery succeeds even if the webhook fails, logged only as a warning.
+- **Identity config** — two new optional fields on each mailbox identity: `notify_url` and `notify_secret`. No global toggle; per-identity opt-in.
+
+**Upgrade notes**
+
+- Set `notify_url` (and `notify_secret`) on the identities that should push; the receiver verifies the HMAC against the same secret. Identities without `notify_url` behave exactly as before.
+
 ## 0.44.1
 
 **Deployed agent toolkits cannot learn about new agent operations on their own — 0.44.0 added `mailbox_status` to the executor's vocabulary, but a toolkit pinned before then still lists only `send_message`/`read_messages`, and nothing ever told the operator. Startup now warns, naming the toolkit and the missing operations.**
