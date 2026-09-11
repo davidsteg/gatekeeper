@@ -20,8 +20,8 @@ workflow, see [AGENTS.md](../AGENTS.md).
 | `GATEKEEPER_NO_BOOTSTRAP` | `1`/`true` disables first-start auto-bootstrap |
 | `GATEKEEPER_HOST` / `GATEKEEPER_PORT` | Bind address for `serve` |
 | `GATEKEEPER_TRUSTED_PROXIES` | Comma-separated IPs/CIDRs of reverse proxies allowed to set `X-Forwarded-For`/`X-Forwarded-Proto` (or `*` to trust any peer). See [Behind a reverse proxy](#behind-a-reverse-proxy) below — unset is not safe for the common container topology |
-| `GATEKEEPER_NOTIFY_URL` | If set, every `agent.send_message` delivery POSTs the message (JSON) to this URL as a best-effort webhook — signed with `GATEKEEPER_NOTIFY_SECRET` in `X-Gatekeeper-Signature` (HMAC-SHA256), 3s timeout, failures only logged and never failing the delivery. Unset (the default) means no POST at all |
-| `GATEKEEPER_NOTIFY_SECRET` | HMAC-SHA256 secret for `X-Gatekeeper-Signature` on the delivery webhook; empty when unset, which still signs (with the empty secret) |
+| `GATEKEEPER_NOTIFY_URL` | If set, every `agent.send_message` delivery POSTs the message (JSON) to this URL as a best-effort webhook — signed for the Hermes webhook adapter (generic HMAC V2): X-Webhook-Timestamp (unix seconds) + X-Webhook-Signature-V2 = hex HMAC-SHA256 of <timestamp>.<body>, 3s timeout, failures only logged and never failing the delivery. Unset (the default) means no POST at all |
+| `GATEKEEPER_NOTIFY_SECRET` | HMAC-SHA256 secret for X-Webhook-Signature-V2 on the delivery webhook; empty when unset, which still signs (with the empty secret) |
 | `DOCKER_HOST` | Passed through to the `docker` executor's child process only |
 
 A `credentials.yaml` with any entries in it, but no master key configured,

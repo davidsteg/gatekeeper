@@ -60,6 +60,10 @@ cannot. It is in every release.
 
 ---
 
+## 0.45.1
+
+- fix(mailbox): delivery webhook now signs with the Hermes webhook-adapter generic HMAC V2 scheme (X-Webhook-Timestamp + X-Webhook-Signature-V2, hex HMAC-SHA256 of timestamp.body). The previous X-Gatekeeper-Signature header is unknown to the adapter and was rejected as Invalid signature, so mailbox-push receivers never validated.
+
 ## 0.45.0
 
 **Mailbox deliveries now push: when the agent executor delivers a message to an agent mailbox, it can POST a signed webhook to a configured endpoint, so the receiving Hermes profile wakes immediately instead of waiting for its next poll.**

@@ -214,13 +214,17 @@ def _notify_delivery(message: Message) -> None:
         }
     ).encode("utf-8")
     secret = os.environ.get("GATEKEEPER_NOTIFY_SECRET", "").encode()
-    sig = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+    # Hermes webhook adapter generic HMAC V2: signature is hex HMAC-SHA256 of
+    # <timestamp>.<raw_body> with unix seconds in X-Webhook-Timestamp.
+    ts = str(int(time.time()))
+    sig = hmac.new(secret, ts.encode() + b"." + raw_body, hashlib.sha256).hexdigest()
     request = urllib.request.Request(
         url,
         data=raw_body,
         headers={
             "Content-Type": "application/json",
-            "X-Gatekeeper-Signature": sig,
+            "X-Webhook-Timestamp": ts,
+            "X-Webhook-Signature-V2": sig,
         },
         method="POST",
     )
