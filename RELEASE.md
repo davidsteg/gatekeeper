@@ -3126,3 +3126,7 @@ Plus 25 tests for UI write access.
 Verified against a real Docker daemon, not just unit tests: stacks
 started, queried, and stopped while protection mechanisms were triggered
 individually.
+### 0.45.1 addendum (CI fix)
+
+- test(mailbox): assert the V2 headers (X-webhook-timestamp + X-webhook-signature-v2) and timestamp-bound signature instead of the removed X-Gatekeeper-Signature header; fixes CI #146 test-suite failure.
+
