@@ -85,8 +85,10 @@ async def test_delivery_posts_signed_webhook_when_configured(
     request = urlopen.call_args.args[0]
     assert request.full_url == URL
     raw_body = request.data
-    expected_sig = hmac.new(SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
-    assert request.get_header("X-gatekeeper-signature") == expected_sig
+    ts = request.get_header("X-webhook-timestamp")
+    assert ts is not None and ts.isdigit()
+    expected_sig = hmac.new(SECRET.encode(), ts.encode() + b"." + raw_body, hashlib.sha256).hexdigest()
+    assert request.get_header("X-webhook-signature-v2") == expected_sig
     assert request.get_header("Content-type") == "application/json"
     payload = json.loads(raw_body.decode("utf-8"))
     assert payload["from"] == "dev"
