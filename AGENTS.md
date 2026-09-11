@@ -139,3 +139,30 @@ gatekeeper integration list             # list available service integrations
 gatekeeper integration show <key>       # print one integration's toolkit YAML + starter tools
 gatekeeper serve --ui                  # start the server with the admin console
 ```
+
+## Working with the dispatching agent (Hermes)
+
+The usual client is Hermes, an orchestrating agent that drives this repo
+through opencode ask/fire. Session prompts come in two flavors; both are
+legitimate; behave accordingly:
+
+- Free task prompts (implement X, find out why Y fails): use your full
+  abilities - explore the repo, run whatever commands you need, decide your
+  own path, report a summary at the end. Do NOT ask permission for ordinary
+  steps (branching, editing, running tests).
+- Exact command prompts (Run this exact shell command and paste its raw
+  stdout verbatim, nothing else): the client is verifying one precise
+  mechanical step and parses the output literally. Execute exactly that
+  command; do not substitute, extend, or improve it; do not wrap stdout in
+  prose or fences beyond quoting it. A chatty answer instead of raw output
+  is a failure mode here - it costs the client a whole retry round through
+  a slow link.
+
+When an exact-command prompt is one step of a release chain (commit, merge,
+push), treat failure as data, not as an error to fix: if the command fails,
+report the exact stderr verbatim and stop; the client decides next steps.
+
+Client-side ask timeouts (59s) are transport noise, not task failures - work
+the client dispatched continues server-side. Never restart work after a
+timeout; finish and leave the tree in a consistent state (edits done, commit
+only when the prompt says so).
