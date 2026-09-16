@@ -37,6 +37,50 @@ from .tier1 import Toolkit
 #: this module ships with, not a permanent ceiling.
 _AUTH_METHOD = "auth.login_with_api_key"
 
+def _method_frame(method: str, params: list, request_id: str) -> dict:
+    """Wrap a JSON-RPC call in TrueNAS middleware framing."""
+    return {"msg": "method", "method": method, "params": params, "id": request_id}
+
+async def _send_method(ws: Any, method: str, params: list, request_id: str) -> None:
+    await ws.send(json.dumps(_method_frame(method, params, request_id)))
+
+async def _recv_result(ws: Any, request_id: str, timeout_seconds: float):
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+        except (TimeoutError, asyncio.TimeoutError):
+            return None
+        try:
+            frame = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(frame, dict) and frame.get("msg") == "result" and frame.get("id") == request_id:
+            return raw
+
+async def _middleware_handshake(
+    ws: Any, timeout_seconds: float
+) -> None:
+    """TrueNAS 26 middleware framing: a connect handshake must precede the first method frame (verified against ws://host:8080/websocket)."""
+    await ws.send(json.dumps({"msg": "connect", "version": "1", "support": ["1"]}))
+    deadline = time.monotonic() + 1.0
+    while True:
+        remaining = min(deadline - time.monotonic(), timeout_seconds)
+        if remaining <= 0:
+            return
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+        except (TimeoutError, asyncio.TimeoutError):
+            return
+        try:
+            frame = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(frame, dict) and frame.get("msg") == "connected":
+            return
 
 async def _authenticate(
     ws: Any, credential: ResolvedCredential | None, timeout_seconds: float
@@ -44,16 +88,7 @@ async def _authenticate(
     if credential is None:
         return
     request_id = str(uuid.uuid4())
-    await ws.send(
-        json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": _AUTH_METHOD,
-                "params": [credential.value],
-                "id": request_id,
-            }
-        )
-    )
+    await _send_method(ws, _AUTH_METHOD, [credential.value], request_id)
     raw = await asyncio.wait_for(ws.recv(), timeout=timeout_seconds)
     response = json.loads(raw)
     if response.get("error") or not response.get("result"):
@@ -132,6 +167,7 @@ async def run(
 
     try:
         try:
+            await _middleware_handshake(ws, timeout_seconds)
             await _authenticate(ws, credential, timeout_seconds)
         except Denied as denial:
             return _denied(denial)
@@ -141,19 +177,10 @@ async def run(
         # A `params_template` is an ordered name->value mapping in the
         # tool definition; it is sent positionally, in declaration order,
         # matching how TrueNAS's JSON-RPC methods take positional args.
-        await ws.send(
-            json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "method": method,
-                    "params": list(params.values()),
-                    "id": request_id,
-                }
-            )
-        )
-        try:
-            raw = await asyncio.wait_for(ws.recv(), timeout=timeout_seconds)
-        except TimeoutError:
+        # FR-8.3d: sent in middleware framing, params positional.
+        await _send_method(ws, method, list(params.values()), request_id)
+        raw = await _recv_result(ws, request_id, timeout_seconds)
+        if raw is None:
             duration = int((time.monotonic() - started) * 1000)
             return Result(
                 outcome=OUTCOME_FAILED if idempotent else OUTCOME_UNKNOWN,

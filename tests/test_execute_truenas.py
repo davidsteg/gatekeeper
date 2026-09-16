@@ -23,38 +23,43 @@ from gatekeeper.tier1 import load_tier1
 async def _fake_truenas(websocket):
     async for raw in websocket:
         request = json.loads(raw)
+        if request.get("msg") == "connect":
+            await websocket.send(json.dumps({"msg": "connected", "version": "1"}))
+            continue
+        if request.get("msg") != "method":
+            continue
         method = request.get("method")
         request_id = request.get("id")
         if method == "auth.login_with_api_key":
             key = request["params"][0]
             ok = key == "correct-key"
             await websocket.send(
-                json.dumps({"jsonrpc": "2.0", "id": request_id, "result": ok})
+                json.dumps({"msg": "result", "id": request_id, "result": ok})
             )
             continue
         if method == "pool.query":
             await websocket.send(
                 json.dumps(
-                    {"jsonrpc": "2.0", "id": request_id, "result": [{"name": "tank"}]}
+                    {"msg": "result", "id": request_id, "result": [{"name": "tank"}]}
                 )
             )
             continue
         if method == "pool.dataset.create":
             name = request["params"][0] if request.get("params") else None
             await websocket.send(
-                json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"name": name}})
+                json.dumps({"msg": "result", "id": request_id, "result": {"name": name}})
             )
             continue
         if method == "slow.method":
             await asyncio.sleep(2)
             await websocket.send(
-                json.dumps({"jsonrpc": "2.0", "id": request_id, "result": True})
+                json.dumps({"msg": "result", "id": request_id, "result": True})
             )
             continue
         await websocket.send(
             json.dumps(
                 {
-                    "jsonrpc": "2.0", "id": request_id,
+                    "msg": "result", "id": request_id,
                     "error": {"code": -32601, "message": "Method not found"},
                 }
             )
