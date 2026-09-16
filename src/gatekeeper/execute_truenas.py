@@ -52,7 +52,7 @@ async def _recv_result(ws: Any, request_id: str, timeout_seconds: float):
             return None
         try:
             raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             return None
         try:
             frame = json.loads(raw)
@@ -73,7 +73,7 @@ async def _middleware_handshake(
             return
         try:
             raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             return
         try:
             frame = json.loads(raw)
