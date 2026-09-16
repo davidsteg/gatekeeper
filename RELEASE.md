@@ -60,6 +60,12 @@ cannot. It is in every release.
 
 ---
 
+## 0.45.2
+
+### Fixed
+
+- truenas executor now speaks the TrueNAS 26 middleware WebSocket framing (connect handshake + msg method/result envelopes) instead of bare JSON-RPC, which TrueNAS 26.0.0 rejects; pool.dataset tools become usable against a real middleware.
+
 ## 0.45.1
 
 - fix(mailbox): delivery webhook now signs with the Hermes webhook-adapter generic HMAC V2 scheme (X-Webhook-Timestamp + X-Webhook-Signature-V2, hex HMAC-SHA256 of timestamp.body). The previous X-Gatekeeper-Signature header is unknown to the adapter and was rejected as Invalid signature, so mailbox-push receivers never validated.
