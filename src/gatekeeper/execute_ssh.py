@@ -41,8 +41,12 @@ from .tier1 import Toolkit
 async def _connect(toolkit: Toolkit, credential: ResolvedCredential | None, timeout_seconds: float):
     assert toolkit.ssh_host is not None
     client_keys = None
+    password = None
     if credential is not None:
-        client_keys = [asyncssh.import_private_key(credential.value)]
+        if credential.kind == "ssh_password":
+            password = credential.value
+        else:
+            client_keys = [asyncssh.import_private_key(credential.value)]
     # `known_hosts=<str>` is treated by asyncssh as a *filename* to open --
     # `import_known_hosts` is what turns the pinned `known_hosts`-format
     # text in Tier 1 into the in-memory object form `connect()` needs to
@@ -56,10 +60,16 @@ async def _connect(toolkit: Toolkit, credential: ResolvedCredential | None, time
             username=toolkit.ssh_user,
             known_hosts=known_hosts,
             client_keys=client_keys,
+            password=password,
             # No interactive prompts exist in this process -- a key that
             # needs a passphrase or a server that falls back to
             # keyboard-interactive/password auth must fail closed, not hang.
-            preferred_auth=["publickey"] if client_keys else ["none"],
+            # `client_keys=None` is also load-bearing for password auth:
+            # asyncssh would otherwise offer a default identity from
+            # ~/.ssh if any, before ever trying the password.
+            preferred_auth=["password"] if password else (
+                ["publickey"] if client_keys else ["none"]
+            ),
         ),
         timeout=timeout_seconds,
     )
@@ -109,11 +119,12 @@ async def run(
                     f"Credential {toolkit.credential!r} is not configured yet.",
                 )
             )
-        if credential.kind != "ssh_private_key":
+        if credential.kind not in ("ssh_private_key", "ssh_password"):
             return _denied(
                 Denied(
                     DenialReason.CREDENTIAL_UNAVAILABLE,
-                    f"Credential {toolkit.credential!r} is not an ssh_private_key credential.",
+                    f"Credential {toolkit.credential!r} is not an ssh_private_key "
+                    "or ssh_password credential.",
                 )
             )
 
