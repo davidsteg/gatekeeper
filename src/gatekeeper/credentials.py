@@ -44,6 +44,11 @@ from .errors import ConfigError
 #: `ssh` executor; the matching public key must already be in the remote
 #: host's authorized_keys, which is out of gatekeeper's control by design
 #: (a credential names a secret gatekeeper holds, not one it can push).
+#: ssh_password's value is the literal password for the `ssh` executor's
+#: other auth mode -- passed to asyncssh as `password=`, never offered as
+#: a client key, and gated to `preferred_auth=['password']` so a server
+#: that falls back to keyboard-interactive still fails closed instead of
+#: prompting (no interactive prompts exist in this process).
 #: url_query, like url_path, is a deliberately narrow exception to "a
 #: credential is always a header" (FR-8.14) -- for a service with no
 #: header-auth option at all (SABnzbd's classic API), injected as a query
@@ -59,7 +64,7 @@ from .errors import ConfigError
 KINDS = frozenset(
     {
         "api_key_header", "bearer", "basic", "ws_api_key", "url_path",
-        "url_query", "docker_tls", "ssh_private_key", "oauth2",
+        "url_query", "docker_tls", "ssh_private_key", "ssh_password", "oauth2",
     }
 )
 
