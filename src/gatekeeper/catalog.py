@@ -116,6 +116,7 @@ class ToolDef:
     description: str
     category: str
     idempotent: bool
+    ssh_dispatch: bool = dataclasses.field(default=False, kw_only=True)
     enabled: bool
     parameters: dict[str, Parameter]
     required_scopes: tuple[str, ...]
@@ -705,6 +706,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         description=str(spec.get("description", "")),
         category=category,
         idempotent=bool(spec.get("idempotent", False)),
+        ssh_dispatch=bool(spec.get("ssh_dispatch", False)),
         enabled=bool(spec.get("enabled", False)),
         parameters=parameters,
         required_scopes=scopes,
