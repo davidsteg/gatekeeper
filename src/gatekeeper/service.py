@@ -504,7 +504,7 @@ class Service:
                 result = await execute_ssh.run(
                     argv, toolkit=toolkit, credentials=self.credentials,
                     timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes,
-                    idempotent=tool.idempotent, redact=self.audit.redact,
+                    idempotent=tool.idempotent, redact=self.audit.redact, tool=tool,
                 )
             elif toolkit.executor == "http":
                 assert http_request is not None
