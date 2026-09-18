@@ -59,7 +59,9 @@ async def _handle_process(process):
 async def ssh_server():
     host_key = asyncssh.generate_private_key("ssh-ed25519")
     client_key = asyncssh.generate_private_key("ssh-ed25519")
-    server_factory = lambda: _RecordingServer(client_key.convert_to_public())
+
+    def server_factory():
+        return _RecordingServer(client_key.convert_to_public())
 
     server = await asyncssh.create_server(
         server_factory,
@@ -243,7 +245,9 @@ async def test_timeout_on_non_idempotent_is_unknown(toolkit, credentials):
 
 async def test_denied_binary_rejected_before_send(toolkit):
     tk, tier1 = toolkit
-    with pytest.raises(Exception):
+    from gatekeeper.errors import ConfigError
+
+    with pytest.raises(ConfigError):
         _tool(tier1, id="demo_ssh.evil", binary="/usr/bin/does-not-exist")
 
 
@@ -254,6 +258,88 @@ async def test_denied_arg_rejected_at_build_time(toolkit):
 
     with pytest.raises(Denied):
         validate.build_argv(tool, {"arg": "--evil"}, tk)
+
+
+def _credential_store(tmp_path, monkeypatch, kind, value):
+    monkeypatch.setenv(KEY_ENV, generate_master_key())
+    from gatekeeper.audit import AuditLog
+
+    audit = AuditLog(str(tmp_path / f"logs-{kind}"))
+    store = CredentialStore(path=str(tmp_path / f"credentials-{kind}.yaml"), audit=audit)
+    store.create(
+        "demo_ssh_key", kind=kind, value=value, actor="test", rev="",
+    )
+    return store
+
+
+def _fake_connect(calls):
+    """A monkeypatched `asyncssh.connect` recording its kwargs, then failing
+
+    the call -- what is under test in these cases is *which auth material
+    leaves the process*, not the handshake itself.
+    """
+    def fake_connect(host, **kwargs):
+        calls.append((host, kwargs))
+        raise asyncssh.ChannelOpenError(1, "stop before a real handshake")
+    return fake_connect
+
+
+async def test_password_credential_uses_password_auth(toolkit, tmp_path, monkeypatch):
+    """ssh_password → password kwarg + preferred_auth=['password']."""
+    tk, tier1 = toolkit
+    calls: list = []
+    monkeypatch.setattr(execute_ssh.asyncssh, "connect", _fake_connect(calls))
+    store = _credential_store(tmp_path, monkeypatch, "ssh_password", "sekret")
+    result = await execute_ssh.run(
+        ["/usr/bin/uptime"], toolkit=tk, credentials=store,
+        timeout_seconds=5, max_output_bytes=65536, idempotent=True,
+    )
+    assert calls, "connect() was never reached"
+    _, kwargs = calls[0]
+    assert kwargs["password"] == "sekret"
+    assert kwargs["client_keys"] is None
+    assert kwargs["preferred_auth"] == ["password"]
+    # connect() raised, so the run itself fails -- expected, not under test.
+    assert result.outcome == OUTCOME_FAILED
+
+
+async def test_private_key_credential_uses_publickey_auth(
+    toolkit, ssh_server, tmp_path, monkeypatch
+):
+    """ssh_private_key → client_keys + preferred_auth=['publickey']."""
+    tk, tier1 = toolkit
+    calls: list = []
+    monkeypatch.setattr(execute_ssh.asyncssh, "connect", _fake_connect(calls))
+    key = asyncssh.generate_private_key("ssh-ed25519")
+    store = _credential_store(
+        tmp_path, monkeypatch, "ssh_private_key", key.export_private_key().decode()
+    )
+    await execute_ssh.run(
+        ["/usr/bin/uptime"], toolkit=tk, credentials=store,
+        timeout_seconds=5, max_output_bytes=65536, idempotent=True,
+    )
+    assert calls, "connect() was never reached"
+    _, kwargs = calls[0]
+    assert kwargs["password"] is None
+    assert kwargs["client_keys"] == [asyncssh.import_private_key(
+        key.export_private_key().decode()
+    )]
+    assert kwargs["preferred_auth"] == ["publickey"]
+
+
+async def test_non_ssh_credential_denied_before_connect(toolkit, tmp_path, monkeypatch):
+    """A bearer credential is denied in run(), before asyncssh.connect()."""
+    tk, tier1 = toolkit
+    calls: list = []
+    monkeypatch.setattr(execute_ssh.asyncssh, "connect", _fake_connect(calls))
+    store = _credential_store(tmp_path, monkeypatch, "bearer", "tok")
+    result = await execute_ssh.run(
+        ["/usr/bin/uptime"], toolkit=tk, credentials=store,
+        timeout_seconds=5, max_output_bytes=65536, idempotent=True,
+    )
+    assert result.outcome == OUTCOME_FAILED
+    assert "not an ssh_private_key" in result.stderr
+    assert calls == []
 
 
 async def test_probe_reachable(toolkit):

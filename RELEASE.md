@@ -60,6 +60,12 @@ cannot. It is in every release.
 
 ---
 
+## 0.45.3
+
+### Added
+
+- ssh executor accepts a new credential kind ssh_password (value = literal password) in addition to ssh_private_key: password auth is passed to asyncssh as password= with preferred_auth=["password"], never offered as a client key, and fails closed if the server only offers keyboard-interactive. The kind gate in execute_ssh now accepts both kinds.
+
 ## 0.45.2
 
 ### Fixed
