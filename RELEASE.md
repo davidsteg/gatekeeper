@@ -60,6 +60,12 @@ cannot. It is in every release.
 
 ---
 
+## 0.45.4
+
+### Added
+
+- ssh executor: tools may set ssh_dispatch: true - the dispatched command is wrapped as nohup CMD </dev/null >>/tmp/gatekeeper-dispatch.log 2>&1 & echo dispatched, so the remote shell returns immediately and the command survives the calling container dying (enables gatekeeper self-recreate over ssh).
+- Catalog parses the optional boolean tool key ssh_dispatch (default false); service passes the tool to the ssh executor; non-dispatch behavior unchanged.
 ## 0.45.3
 
 ### Added
