@@ -84,6 +84,7 @@ async def run(
     max_output_bytes: int,
     idempotent: bool,
     redact: Any = None,
+    tool: Any = None,
 ) -> Result:
     started = time.monotonic()
 
@@ -134,6 +135,8 @@ async def run(
     # an extra command via ';'/'&&'/backticks/etc. even though it is,
     # unavoidably, being parsed by a shell on the other end.
     command = " ".join(shlex.quote(part) for part in argv)
+    if getattr(tool, 'ssh_dispatch', False):
+        command = 'nohup ' + command + ' </dev/null >>/tmp/gatekeeper-dispatch.log 2>&1 & echo dispatched'
 
     try:
         async with await _connect(toolkit, credential, timeout_seconds) as conn:

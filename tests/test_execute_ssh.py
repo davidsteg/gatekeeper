@@ -12,6 +12,7 @@ directly, which doubles as a check on exactly what `execute_ssh.py` sent.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import asyncssh
 import pytest
@@ -367,3 +368,26 @@ audit:
     tier1 = load_tier1(str(path))
     tk = tier1.toolkit("demo_ssh")
     assert await execute_ssh.probe(tk) is False
+
+
+async def test_dispatch_mode_returns_immediately(toolkit, credentials):
+    tk, tier1 = toolkit
+    tool = _tool(tier1, id="demo_ssh.sleep", category="write", idempotent=False,
+                 ssh_dispatch=True)
+    argv = validate.build_argv(tool, {"arg": "30"}, tk)
+    # The toolkit's binary allowlist has no /usr/bin/sleep -- same as the
+    # "slow" timeout test above, craft the argv the fake server sees so
+    # the dispatched command is exactly "sleep 30" wrapped in nohup.
+    argv = ["sleep 30"]
+    before = time.monotonic()
+    result = await execute_ssh.run(
+        argv, toolkit=tk, credentials=credentials,
+        timeout_seconds=25, max_output_bytes=65536, idempotent=False, tool=tool,
+    )
+    elapsed = time.monotonic() - before
+    assert elapsed < 5
+    assert result.outcome == OUTCOME_OK
+    # The server echoes back the exact command string it received --
+    # which doubles as the check on what execute_ssh.py sent.
+    assert result.stdout.startswith("ran: nohup ")
+    assert result.stdout.rstrip("\n").endswith("echo dispatched")
