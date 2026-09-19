@@ -17,7 +17,7 @@ import yaml
 
 from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, Tier1Violation, read_config_file
-from .tier1 import Tier1, Toolkit
+from .tier1 import Tier1, Toolkit, _validate_http_base_url
 
 #: Placeholders in argv, derived and scope templates.
 PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
@@ -139,6 +139,12 @@ class ToolDef:
     query_template: dict[str, str] = dataclasses.field(default_factory=dict)
     body_template: dict[str, Any] | list[Any] | str | None = None
 
+    #: Per-tool base_url override (0.45.5): the http executor resolves and
+    #: SSRF-checks this URL instead of the toolkit base_url when set.
+    #: Parsed/validated in the `http` branch of `_tool_fields`-adjacent spec
+    #: parsing (see `_parse_tool_spec`'s http branch); the executor-side
+    #: override is applied in `service.call` before `execute_http.run`.
+    base_url: str | None = None
     # -- `truenas` executor (FR-8.3a-f) --------------------------------
     #: JSON-RPC method name. Not agent-suppliable -- fixed per tool, exactly
     #: like `binary` for the argv executors.
@@ -547,6 +553,9 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     google_args_val: dict[str, dict[str, Any]] | None = None
     opencode_operation: str | None = None
     agent_operation: str | None = None
+    #: Per-tool base_url override -- only the `http` branch sets this
+    #: (0.45.5); every other executor leaves it at None.
+    tool_base_url: str | None = None
     #: Per-tool run_as override -- only the `file` branch sets this; the
     #: other executors leave it at None, and a `run_as` on a non-file tool
     #: is rejected by tier1.py at load time.
@@ -577,6 +586,14 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         raw_body = spec.get("body")
         if raw_body is not None:
             body_template = _nested_body_map(raw_body, where, "body")
+        # Per-tool base_url override (0.45.5). Optional -- absent means the
+        # toolkit's base_url is used unchanged. Validated with the same
+        # shape check as the toolkit-level field, so a bad value fails at
+        # startup rather than on the first call.
+        if spec.get("base_url") is not None:
+            tool_base_url = _validate_http_base_url(
+                str(spec["base_url"]), where, field="base_url"
+            )
         all_templates.append(path_template)
         all_templates.extend(query_template.values())
         all_templates.extend(_collect_template_strings(body_template))
@@ -726,6 +743,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         opencode_operation=opencode_operation,
         agent_operation=agent_operation,
         run_as=tool_run_as,
+        base_url=tool_base_url,
     )
     _validate_against_tier1(tool, toolkit)
     return tool

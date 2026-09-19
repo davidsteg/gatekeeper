@@ -60,6 +60,12 @@ cannot. It is in every release.
 
 ---
 
+## 0.45.5
+
+### Fixed
+
+- http executor: a tool may now carry its own `base_url`, overriding the toolkit's. Previously the field existed on no definition, so a tool that needed to reach a different host than its toolkit's default had no way to name it. `tools.yaml` parses the optional per-tool `base_url` (same http(s) URL shape check as the toolkit field, failing at startup on a bad value), and `service.call` applies it before `execute_http.run` -- the executor then resolves and SSRF-checks *that* host against the toolkit's `allowed_cidrs` (FR-8.9), exactly like the destination override pattern (FR-8.3g/h). A tool pointed at `http://10.10.200.90:30096` on a toolkit whose default target (`https://dawarich.bridgemill.ch`) is outside `allowed_cidrs` now passes the SSRF check and reaches its target.
+
 ## 0.45.4
 
 ### Added
