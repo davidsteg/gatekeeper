@@ -96,6 +96,11 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 `execute_http.py` resolves the target host itself and checks the resolved IP
 against `allowed_cidrs` immediately before connecting — a hostname-only check
 would leave a DNS-rebinding gap between the check and the actual connect.
+A tool may carry its own `base_url` (tools.yaml, optional): when set,
+`service.call` applies it over the toolkit's value the way a destination
+override does (FR-8.3g/h), and the executor resolves and SSRF-checks *that*
+host against the same `allowed_cidrs` — the override changes the target, not
+the target restrictions.
 
 `opencode` toolkit boundaries: `base_url`, `allowed_cidrs`, `credential`
 (all three exactly as for `http`, including the pre-connect resolved-IP

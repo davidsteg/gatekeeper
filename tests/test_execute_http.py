@@ -9,6 +9,7 @@ HTTP client would silently assume away.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -221,6 +222,97 @@ audit:
     )
     assert result.outcome == OUTCOME_FAILED
     assert "allowed_cidrs" in result.stderr or "cidr" in result.stderr.lower()
+
+
+async def test_tool_base_url_override_passes_ssrf_check(tmp_path, monkeypatch):
+    """Per-tool `base_url` override (0.45.5): the override URL's host is
+
+    what the executor resolves and SSRF-checks against the toolkit's
+    `allowed_cidrs` -- not the toolkit's own base_url. Regression for the
+    bugfix where the executor still resolved the toolkit's base_url: a
+    tool pointed at `http://10.10.200.90:30096` on a toolkit whose base_url
+    (`https://dawarich.bridgemill.ch`) is outside `allowed_cidrs` must pass
+    the SSRF check and actually reach the tool's target.
+
+    The addresses are the real-world values from the bug report; only the
+    name resolution is pinned -- both hosts resolve to the loopback
+    address where the test's own server listens on the URL's literal port
+    (30096), so no outside network is ever contacted.
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", 30096), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    real_getaddrinfo = asyncio.get_event_loop().getaddrinfo
+
+    async def _fake_getaddrinfo(host, port, *args, **kwargs):
+        # Both names -- the tool's target (an on-prem host) and the
+        # toolkit's default (a public hostname) -- resolve to the
+        # loopback test server's address; the port stays as given.
+        return await real_getaddrinfo("127.0.0.1", port, *args, **kwargs)
+
+    monkeypatch.setattr(
+        asyncio.get_event_loop(), "getaddrinfo", _fake_getaddrinfo
+    )
+    try:
+        path = tmp_path / "toolkits-override.yaml"
+        path.write_text(
+            """
+toolkits:
+  demo_http:
+    executor: http
+    base_url: "https://dawarich.bridgemill.ch"
+    allowed_methods: ["GET"]
+    allowed_path_prefixes: ["/api/"]
+    # 10.10.200.90's resolved loopback stand-in (127.0.0.1) is inside:
+    # the override's host is what the executor checks against this list.
+    allowed_cidrs: ["127.0.0.1/32"]
+audit:
+  dir: %(logs)s
+""" % {"logs": str(tmp_path / "logs-override")},
+            encoding="utf-8",
+        )
+        tier1 = load_tier1(str(path))
+        spec = {
+            "id": "demo_http.get_thing",
+            "toolkit": "demo_http",
+            "version": 1,
+            "title": "Get thing",
+            "description": "test",
+            "category": "read",
+            "enabled": True,
+            "method": "GET",
+            "path": "/api/thing/{name}",
+            "base_url": "http://10.10.200.90:30096",
+            "parameters": {
+                "name": {"type": "string", "pattern": "^[a-z]+$", "required": True},
+            },
+            "timeout_seconds": 5,
+            "max_output_bytes": 65536,
+        }
+        tool = parse_tool_spec(spec, tier1)
+        from gatekeeper.audit import AuditLog
+        from gatekeeper.identity import Identity, hash_token
+        from gatekeeper.service import Service
+
+        catalog = make_catalog(tmp_path, tier1, [spec])
+        audit = AuditLog(str(tmp_path / "logs-override2"))
+        identity = Identity(
+            id="agent",
+            role="agent",
+            token_hash=hash_token("unused"),
+            tools=frozenset({"demo_http.get_thing"}),
+            scopes=(),
+        )
+        service = Service(tier1=tier1, catalog=catalog, audit=audit)
+        result = await service.call(identity, "demo_http.get_thing", {"name": "widgets"})
+        assert result.outcome == OUTCOME_OK, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["path"] == "/api/thing/widgets"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 async def test_path_traversal_rejected_before_network(toolkit):

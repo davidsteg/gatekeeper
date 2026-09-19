@@ -507,6 +507,14 @@ class Service:
                     idempotent=tool.idempotent, redact=self.audit.redact, tool=tool,
                 )
             elif toolkit.executor == "http":
+                # Per-tool base_url override (0.45.5): a tool may name its
+                # own target -- same Tier 1 shape as the toolkit field --
+                # and the executor then resolves and SSRF-checks *that*
+                # URL's host against the same allowed_cidrs. Mirrors
+                # `_resolve_toolkit`'s destination pattern: the override
+                # wins when set, the toolkit value stands otherwise.
+                if tool.base_url and tool.base_url != toolkit.base_url:
+                    toolkit = dataclasses.replace(toolkit, base_url=tool.base_url)
                 assert http_request is not None
                 method, path, query, body = http_request
                 result = await execute_http.run(
