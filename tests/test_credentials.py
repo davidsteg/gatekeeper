@@ -12,6 +12,7 @@ import sys
 
 import pytest
 import yaml
+import httpx
 
 from gatekeeper.audit import AuditLog, Redactor
 from gatekeeper.credentials import (
@@ -323,3 +324,107 @@ def test_dangling_reference_detected_and_cleared_by_create(tmp_path, store):
         value="filled-in-later", actor="admin", rev="",
     )
     assert dangling() == []
+
+
+# -- Detection-only probes ---------------------------------------------------
+
+
+class _ProbeResponse:
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+
+
+class _ProbeClient:
+    calls: list[tuple[str, dict[str, str]]] = []
+    status_code = 200
+    exc: Exception | None = None
+
+    def __init__(self, **_kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def get(self, url, *, headers):
+        self.calls.append((url, headers))
+        if self.exc is not None:
+            raise self.exc
+        return _ProbeResponse(self.status_code)
+
+
+async def _assert_probe_status(store, monkeypatch, *, status_code=None, exc=None, expected):
+    from gatekeeper import credentials as credentials_mod
+
+    _ProbeClient.calls = []
+    _ProbeClient.status_code = status_code or 200
+    _ProbeClient.exc = exc
+    monkeypatch.setattr(credentials_mod.httpx, "AsyncClient", _ProbeClient)
+
+    store.create(
+        "probe", kind="bearer", value="secret-token", probe_url="https://service.test/me",
+        actor="admin", rev="",
+    )
+    before = store._raw()["probe"]["ciphertext"]
+
+    assert await store.probe_credential("probe") == expected
+
+    after_raw = store._raw()["probe"]
+    assert after_raw["ciphertext"] == before
+    assert after_raw["previous_ciphertext"] is None
+    assert store._resolve("probe").value == "secret-token"
+    assert store.names()[0].probe_status == expected
+    assert _ProbeClient.calls == [
+        ("https://service.test/me", {"Authorization": "Bearer secret-token"})
+    ]
+
+
+async def test_probe_verified_preserves_secret(store, monkeypatch):
+    await _assert_probe_status(store, monkeypatch, status_code=204, expected="verified")
+
+
+async def test_probe_auth_failed_preserves_secret(store, monkeypatch):
+    await _assert_probe_status(store, monkeypatch, status_code=401, expected="auth_failed")
+
+
+async def test_probe_other_response_preserves_secret(store, monkeypatch):
+    await _assert_probe_status(store, monkeypatch, status_code=500, expected="unreachable")
+
+
+async def test_probe_network_error_preserves_secret(store, monkeypatch):
+    await _assert_probe_status(
+        store, monkeypatch,
+        exc=httpx.ConnectError("boom", request=httpx.Request("GET", "https://service.test/me")),
+        expected="unreachable",
+    )
+
+
+async def test_probe_missing_url_preserves_secret_and_does_not_call_network(store, monkeypatch):
+    from gatekeeper import credentials as credentials_mod
+
+    _ProbeClient.calls = []
+    monkeypatch.setattr(credentials_mod.httpx, "AsyncClient", _ProbeClient)
+    store.create("probe", kind="bearer", value="secret-token", actor="admin", rev="")
+    before = store._raw()["probe"]["ciphertext"]
+
+    assert await store.probe_credential("probe") == "no_probe_url"
+
+    assert store._raw()["probe"]["ciphertext"] == before
+    assert store._resolve("probe").value == "secret-token"
+    assert store.names()[0].probe_status == "no_probe_url"
+    assert _ProbeClient.calls == []
+
+
+def test_mark_suspect_preserves_secret(store):
+    store.create("probe", kind="bearer", value="secret-token", actor="admin", rev="")
+    before = store._raw()["probe"]["ciphertext"]
+
+    store.mark_suspect("probe")
+
+    meta = store.names()[0]
+    assert meta.suspect_status == "auth_failed"
+    assert meta.suspect_at
+    assert store._raw()["probe"]["ciphertext"] == before
+    assert store._resolve("probe").value == "secret-token"

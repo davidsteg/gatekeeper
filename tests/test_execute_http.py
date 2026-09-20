@@ -49,6 +49,9 @@ class _Handler(BaseHTTPRequestHandler):
             time.sleep(2)
             self._respond_json(200, {"ok": True})
             return
+        if self.path.startswith("/api/authfail"):
+            self._respond_json(401, {"ok": False})
+            return
         self._respond_json(
             200,
             {
@@ -411,6 +414,27 @@ async def test_invalid_url_component_denied_not_raised(toolkit, credentials):
     )
     assert result.outcome == OUTCOME_FAILED
     assert "not a valid URL component" in result.stderr
+
+
+async def test_auth_failure_marks_credential_suspect_without_changing_secret(toolkit, credentials):
+    tk, tier1 = toolkit
+    tool = _tool(tier1, id="demo_http.authfail", path="/api/authfail", parameters={})
+    method, path, query, body = validate.build_http_request(tool, {}, tk)
+    before = credentials._raw()["demo_cred"]["ciphertext"]
+
+    result = await execute_http.run(
+        method=method, path=path, query=query, body=body, toolkit=tk,
+        credentials=credentials, timeout_seconds=5, max_output_bytes=65536,
+        idempotent=True,
+    )
+
+    assert result.outcome == OUTCOME_FAILED
+    assert result.exit_code == 401
+    meta = credentials.names()[0]
+    assert meta.suspect_status == "auth_failed"
+    assert meta.suspect_at
+    assert credentials._raw()["demo_cred"]["ciphertext"] == before
+    assert credentials._resolve("demo_cred").value == "super-secret-abc"
 
 
 async def test_credential_kind_mismatch_in_base_url_denied(tmp_path, http_server, monkeypatch):

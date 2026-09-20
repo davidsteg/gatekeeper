@@ -45,6 +45,7 @@ All output text is English; comments remain German.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import hmac
 import html
@@ -551,6 +552,18 @@ def _icon(name: str, size: int = 16) -> str:
         'fill="none" stroke="currentColor" stroke-width="1.7" '
         f'stroke-linecap="round" stroke-linejoin="round">{_ICONS.get(name, "")}</svg>'
     )
+
+
+def _schedule_credential_probe(credentials: CredentialStore, name: str) -> None:
+    async def _run() -> None:
+        try:
+            await credentials.probe_credential(name)
+        except Exception:
+            # A probe is detection-only and save is fail-open; the credential
+            # has already been written and must not be rolled back by metadata.
+            pass
+
+    asyncio.create_task(_run())
 
 
 # -- HTML ------------------------------------------------------------------
@@ -3138,6 +3151,12 @@ def _view_credentials(
             if meta.in_overlap
             else ""
         )
+        probe_tone = {
+            "verified": "ok",
+            "auth_failed": "deny",
+            "unreachable": "warn",
+            "no_probe_url": "",
+        }.get(meta.probe_status, "")
         parts.append(
             '<div class="card">'
             f'<div class="card-head"><span class="name mono">{_e(meta.name)}</span>'
@@ -3153,6 +3172,23 @@ def _view_credentials(
                 f'<div class="row"><div class="row-l">{_icon("terminal", 14)}Header</div>'
                 f'<div class="mono">{_e(meta.header)}</div></div>'
                 if meta.header
+                else ""
+            )
+            + (
+                f'<div class="row"><div class="row-l">{_icon("link", 14)}Probe URL</div>'
+                f'<div class="mono">{_e(meta.probe_url)}</div></div>'
+                if meta.probe_url
+                else ""
+            )
+            + f'<div class="row"><div class="row-l">{_icon("activity", 14)}Probe</div>'
+            f'<div><span class="pill {probe_tone}">{_e(meta.probe_status)}</span>'
+            + (f' <span class="mono muted">{_e(meta.probe_checked_at)}</span>' if meta.probe_checked_at else "")
+            + "</div></div>"
+            + (
+                f'<div class="row"><div class="row-l">{_icon("alert", 14)}Suspect</div>'
+                f'<div><span class="pill deny">{_e(meta.suspect_status)}</span> '
+                f'<span class="mono muted">{_e(meta.suspect_at or "")}</span></div></div>'
+                if meta.suspect_status
                 else ""
             )
             + f'<div class="row"><div class="row-l">{_icon("folder", 14)}Used by</div>'
@@ -4362,6 +4398,11 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         "&quot;client_secret&quot;: ..., &quot;refresh_token&quot;: ...}</code>."
         "</div></span>"
         '<input type="password" name="value" autocomplete="new-password" required></div>'
+        '<div class="field"><span>Probe URL (optional)'
+        '<div class="hint">On save, gatekeeper performs one fail-open HTTP GET '
+        'with <code>Authorization: Bearer &lt;value&gt;</code>, a three-second timeout, '
+        'and no retry. The URL and result are metadata only.</div></span>'
+        '<input name="probe_url" inputmode="url" placeholder="https://service.example/api/me"></div>'
         f'<button type="submit">{_icon("save", 14)}Create</button> '
         f'<a class="btn" href="{UI_PREFIX}/credentials">{_icon("back", 14)}Cancel</a>'
         "</form></div></div>"
@@ -4409,6 +4450,7 @@ def _credential_fill_confirm(
     name = str(payload.get("name", ""))
     kind = str(payload.get("kind", ""))
     header = payload.get("header")
+    probe_url = payload.get("probe_url")
     return (
         (_note(f"<strong>Rejected.</strong> {_e(error)}", tone="bad") if error else "")
         + '<div class="editor card"><div class="pad">'
@@ -4423,6 +4465,11 @@ def _credential_fill_confirm(
             f'<div class="row"><div class="row-l">Header/param</div>'
             f'<div><code>{_e(header)}</code></div></div>'
             if header else ""
+        )
+        + (
+            f'<div class="row"><div class="row-l">Probe URL</div>'
+            f'<div><code>{_e(probe_url)}</code></div></div>'
+            if probe_url else ""
         )
         + "</div>"
         f'<form method="post" action="{UI_PREFIX}/pending/credential-fill">'
@@ -5686,12 +5733,15 @@ def build_ui_routes(
         if credentials is None:
             return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
         rev = str(form.get("rev") or "")
+        name = str(form.get("name") or "").strip()
+        probe_url = str(form.get("probe_url") or "").strip() or None
         try:
             credentials.create(
-                str(form.get("name") or "").strip(),
+                name,
                 kind=str(form.get("kind") or ""),
                 header=str(form.get("header") or "").strip() or None,
                 value=str(form.get("value") or ""),
+                probe_url=probe_url,
                 actor=session.identity, rev=rev,
             )
         except (CredentialWriteRefused, ConfigError) as exc:
@@ -5700,6 +5750,8 @@ def build_ui_routes(
                 _credential_editor(session, rev=rev, error=str(exc)),
                 session, icon="plus", active="/credentials", status=400,
             )
+        if probe_url:
+            _schedule_credential_probe(credentials, name)
         return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
 
     async def credential_rotate_form(request: Request) -> Response:
@@ -5735,6 +5787,8 @@ def build_ui_routes(
                 _credential_rotate_editor(session, name=name, rev=rev, error=str(exc)),
                 session, icon="refresh", active="/credentials", status=400,
             )
+        if any(meta.name == name and meta.probe_url for meta in credentials.names()):
+            _schedule_credential_probe(credentials, name)
         return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
 
     async def credential_delete_form(request: Request) -> Response:
@@ -5809,6 +5863,7 @@ def build_ui_routes(
                 apply=lambda i: credentials.create(
                     i.payload["name"], kind=i.payload["kind"],
                     header=i.payload.get("header"), value=value,
+                    probe_url=i.payload.get("probe_url"),
                     actor=session.identity, rev=credentials.revision(),
                 ),
             )
@@ -5818,6 +5873,9 @@ def build_ui_routes(
                 _credential_fill_confirm(session, item, error=str(exc)),
                 session, icon="ban", active="/requests", status=400,
             )
+        probe_url = item.payload.get("probe_url")
+        if probe_url:
+            _schedule_credential_probe(credentials, str(item.payload.get("name") or ""))
         return RedirectResponse(f"{UI_PREFIX}/requests?tab=change", status_code=303)
 
     async def pending_reject_form(request: Request) -> Response:
