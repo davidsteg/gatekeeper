@@ -60,6 +60,16 @@ cannot. It is in every release.
 
 ---
 
+## 0.45.6
+
+Credential slots can now be health-checked and monitored for auth failures at runtime.
+
+### Added
+
+- Optional `probe_url` per credential slot, with one fail-open GET probe on save (3s timeout, no retries); result shown in the UI as `verified` / `auth_failed` / `unreachable`.
+- Credential health metadata (`probe_status`, `probe_checked_at`, `suspect_status`, `suspect_at`) exposed via the new `admin.cred_list` tool and the credentials UI page.
+- Runtime 401/403 responses through a credential-bound HTTP tool now mark the slot suspect with a timestamp (detection only -- no auto-rotation, no binding changes).
+
 ## 0.45.5
 
 ### Fixed

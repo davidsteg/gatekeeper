@@ -23,6 +23,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 import yaml
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -67,6 +68,8 @@ KINDS = frozenset(
         "url_query", "docker_tls", "ssh_private_key", "ssh_password", "oauth2",
     }
 )
+
+PROBE_STATUSES = frozenset({"no_probe_url", "verified", "auth_failed", "unreachable"})
 
 #: Env var holding the base64 urlsafe Fernet key directly.
 KEY_ENV = "GATEKEEPER_CREDENTIAL_KEY"
@@ -133,6 +136,11 @@ class CredentialMeta:
     created_at: str
     rotated_at: str | None
     in_overlap: bool
+    probe_url: str | None = None
+    probe_status: str = "no_probe_url"
+    probe_checked_at: str | None = None
+    suspect_status: str | None = None
+    suspect_at: str | None = None
     used_by: tuple[str, ...] = ()
 
 
@@ -157,6 +165,14 @@ def _now() -> str:
     overlap window expire up to an hour early or late.
     """
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _classify_probe_status(status_code: int) -> str:
+    if 200 <= status_code < 300:
+        return "verified"
+    if status_code in (401, 403):
+        return "auth_failed"
+    return "unreachable"
 
 
 @dataclasses.dataclass(slots=True)
@@ -250,6 +266,11 @@ class CredentialStore:
                     created_at=str(spec.get("created_at", "")),
                     rotated_at=spec.get("rotated_at"),
                     in_overlap=bool(spec.get("previous_ciphertext")),
+                    probe_url=spec.get("probe_url"),
+                    probe_status=str(spec.get("probe_status") or "no_probe_url"),
+                    probe_checked_at=spec.get("probe_checked_at"),
+                    suspect_status=spec.get("suspect_status"),
+                    suspect_at=spec.get("suspect_at"),
                     used_by=tuple(used_by.get(name, ())),
                 )
             )
@@ -262,6 +283,7 @@ class CredentialStore:
         kind: str,
         value: str,
         header: str | None = None,
+        probe_url: str | None = None,
         actor: str,
         rev: str,
     ) -> None:
@@ -271,6 +293,9 @@ class CredentialStore:
             raise WriteRefused(f"kind {kind!r} requires a header/param name")
         if not value:
             raise WriteRefused("A credential needs a value")
+        probe_url = (probe_url or "").strip() or None
+        if probe_url and not probe_url.startswith(("http://", "https://")):
+            raise WriteRefused("probe_url must be an http(s) URL")
         with self._lock:
             self._check(rev)
             section = self._raw()
@@ -284,6 +309,11 @@ class CredentialStore:
                 "rotated_at": None,
                 "previous_ciphertext": None,
                 "previous_expires_at": None,
+                "probe_url": probe_url,
+                "probe_status": "no_probe_url",
+                "probe_checked_at": None,
+                "suspect_status": None,
+                "suspect_at": None,
             }
             self._write(section)
         # Audit records only the name and kind -- never the value (FR-10.7).
@@ -327,6 +357,10 @@ class CredentialStore:
                 "rotated_at": _now(),
                 "previous_ciphertext": previous_ciphertext,
                 "previous_expires_at": previous_expires_at,
+                "probe_status": "no_probe_url" if not existing.get("probe_url") else "unreachable",
+                "probe_checked_at": None,
+                "suspect_status": None,
+                "suspect_at": None,
             }
             self._write(section)
         self.audit.write(
@@ -381,6 +415,52 @@ class CredentialStore:
             if previous:
                 values.append(self._decrypt(previous))
         return tuple(values)
+
+    async def probe_credential(self, name: str) -> str:
+        """Detection-only credential probe: one bearer GET, no retries.
+
+        The only persisted changes are display metadata. Ciphertext,
+        previous ciphertext, overlap windows, and bindings are copied through
+        untouched from the current file contents.
+        """
+        resolved = self._resolve(name)
+        with self._lock:
+            spec = self._raw().get(name)
+            probe_url = str(spec.get("probe_url") or "") if spec else ""
+        if resolved is None or not probe_url:
+            status = "no_probe_url"
+        else:
+            try:
+                async with httpx.AsyncClient(verify=True, timeout=3.0) as client:
+                    response = await client.get(
+                        probe_url, headers={"Authorization": f"Bearer {resolved.value}"}
+                    )
+                status = _classify_probe_status(response.status_code)
+            except (httpx.HTTPError, OSError, TimeoutError):
+                status = "unreachable"
+
+        checked_at = _now()
+        with self._lock:
+            section = self._raw()
+            existing = section.get(name)
+            if existing is not None:
+                section[name] = {
+                    **existing,
+                    "probe_status": status,
+                    "probe_checked_at": checked_at,
+                }
+                self._write(section)
+        return status
+
+    def mark_suspect(self, name: str, *, status: str = "auth_failed") -> None:
+        """Record display-only suspicion metadata after an auth failure."""
+        with self._lock:
+            section = self._raw()
+            existing = section.get(name)
+            if existing is None:
+                return
+            section[name] = {**existing, "suspect_status": status, "suspect_at": _now()}
+            self._write(section)
 
     # -- Internal: the only decrypt point used by executors ---------------
 

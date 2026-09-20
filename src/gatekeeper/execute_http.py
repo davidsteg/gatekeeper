@@ -336,6 +336,9 @@ async def run(
         else:
             stdout = raw.decode("utf-8", errors="replace")
 
+        if credential is not None and response.status_code in (401, 403) and credentials is not None:
+            credentials.mark_suspect(credential.name, status="auth_failed")
+
         if 300 <= response.status_code < 400:
             # FR-8.8: reported as data, never chased. The Location header is
             # itself untrusted external data and is included as such.

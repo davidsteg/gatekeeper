@@ -257,6 +257,21 @@ _TOOLS: list[types.Tool] = [
         },
     ),
     types.Tool(
+        name="admin.cred_list",
+        title="List credential metadata",
+        description=(
+            "Lists credential slots and read-only detection metadata: kind, "
+            "header/param name, used-by references, optional probe URL/status, "
+            "and suspect auth-failure timestamps. Values, ciphertext, and "
+            "rotation secret material are never returned."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
         name="admin.cred_propose",
         title="Propose a new credential slot",
         description=(
@@ -277,6 +292,7 @@ _TOOLS: list[types.Tool] = [
                 "name": {"type": "string"},
                 "kind": {"type": "string", "enum": sorted(CREDENTIAL_KINDS)},
                 "header": {"type": "string"},
+                "probe_url": {"type": "string"},
             },
             "required": ["name", "kind"],
             "additionalProperties": False,

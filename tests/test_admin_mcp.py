@@ -890,6 +890,7 @@ async def test_cred_propose_always_pending(admin_mcp_env, credential_store):
     assert items[0].action == "cred_propose"
     assert items[0].payload == {
         "name": "sonarr", "kind": "api_key_header", "header": "X-Api-Key",
+        "probe_url": None,
     }
     # Never written to disk: no credential exists until a human fills a value.
     assert credential_store.names() == []

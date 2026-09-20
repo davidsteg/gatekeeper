@@ -292,6 +292,30 @@ class AdminService:
         ]
         return {"toolkits": toolkits, "destinations": sorted(tier1.destinations)}
 
+    def cred_list(self, _actor: str, _args: dict[str, Any]) -> dict[str, Any]:
+        if self.credentials is None:
+            return {"credentials": []}
+        used_by = self.store.service.tier1.credential_references()
+        return {
+            "credentials": [
+                {
+                    "name": meta.name,
+                    "kind": meta.kind,
+                    "header": meta.header,
+                    "created_at": meta.created_at,
+                    "rotated_at": meta.rotated_at,
+                    "in_overlap": meta.in_overlap,
+                    "used_by": list(meta.used_by),
+                    "probe_url": meta.probe_url,
+                    "probe_status": meta.probe_status,
+                    "probe_checked_at": meta.probe_checked_at,
+                    "suspect_status": meta.suspect_status,
+                    "suspect_at": meta.suspect_at,
+                }
+                for meta in self.credentials.names(used_by=used_by)
+            ]
+        }
+
     # -- Always auto-apply ---------------------------------------------------
 
     def tool_create(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -548,6 +572,11 @@ class AdminService:
         header = args.get("header")
         if header is not None and not isinstance(header, str):
             raise AdminActionError("'header' must be a string if given.")
+        probe_url = args.get("probe_url")
+        if probe_url is not None and not isinstance(probe_url, str):
+            raise AdminActionError("'probe_url' must be a string if given.")
+        if probe_url and not probe_url.startswith(("http://", "https://")):
+            raise AdminActionError("'probe_url' must be an http(s) URL if given.")
         if kind in ("api_key_header", "url_query") and not header:
             raise AdminActionError(f"kind {kind!r} requires a 'header' (header/param name).")
         existing_names = {meta.name for meta in self.credentials.names()}
@@ -556,7 +585,7 @@ class AdminService:
         item = self.pending.propose(
             action="cred_propose",
             actor=actor,
-            payload={"name": name, "kind": kind, "header": header},
+            payload={"name": name, "kind": kind, "header": header, "probe_url": probe_url},
             base_rev=self.credentials.revision(),
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
@@ -581,6 +610,7 @@ _EXPOSED: tuple[str, ...] = (
     "pending_list",
     "release_notes",
     "toolkit_list",
+    "cred_list",
     "toolkit_propose",
     "toolkit_update",
     "toolkit_delete",

@@ -131,6 +131,24 @@ async def test_create_credential_never_echoes_value(credentials_env):
         assert "api_key_header" in page.text
 
 
+async def test_credentials_page_shows_probe_and_suspect_metadata_without_value(credentials_env):
+    credentials = credentials_env["credentials"]
+    credentials.create(
+        "sonarr", kind="bearer", value=SECRET_VALUE,
+        probe_url="https://service.test/me", actor="root", rev="",
+    )
+    credentials.mark_suspect("sonarr")
+
+    async with _client(credentials_env["app"]) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/credentials")
+
+    assert "https://service.test/me" in page.text
+    assert "no_probe_url" in page.text
+    assert "auth_failed" in page.text
+    assert SECRET_VALUE not in page.text
+
+
 async def test_viewer_cannot_create_credential(credentials_env):
     async with _client(credentials_env["app"]) as client:
         csrf = await _signed_in(client, "eye")
