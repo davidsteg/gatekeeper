@@ -778,3 +778,118 @@ async def test_probe_reports_unreachable_for_missing_script(tmp_path):
     tier1 = load_tier1(str(path))
     tk = tier1.toolkit("gmail")
     assert await execute_google.probe(tk) is False
+
+# -- The service token the CLI requires ------------------------------------
+#
+# google_api.py dispatches on `<service> <action>`: `gmail labels`, not a
+# bare `labels`. A deployment's `allowed_google_actions` may hold single
+# words, and since that list is Tier 1 the tool definition naming `labels`
+# is allowed to be right -- so the executor supplies the service token,
+# taken from the toolkit name. A real subprocess here for
+# test_google_fallback.py's reason: "the CLI got the right argv" is what a
+# mocked subprocess would assert about itself.
+
+
+def _bare_action_toolkit(tmp_path, google_script, *, name, actions):
+    """A google toolkit whose allowlist holds bare single-word actions."""
+    path = tmp_path / f"toolkits-{name}.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "toolkits": {
+                    name: {
+                        "executor": "google",
+                        "google_script": google_script,
+                        "allowed_google_actions": actions,
+                        "credential": "google",
+                        "max_timeout_seconds": 20,
+                        "max_output_bytes": 65536,
+                    }
+                },
+                "audit": {"dir": str(tmp_path / f"logs-{name}")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return load_tier1(str(path)).toolkit(name)
+
+
+async def test_a_bare_action_runs_under_its_service(tmp_path, google_script, google_env):
+    """The reported failure mode, fixed: a gmail.labels-style toolkit whose
+
+    action is the single word `labels` runs `gmail labels`, and the CLI
+    exits 0 instead of dying on a usage error.
+    """
+    tk = _bare_action_toolkit(tmp_path, google_script, name="gmail", actions=["labels"])
+    argv = execute_google._build_argv(tk, "labels", [])
+
+    assert " ".join(argv[2:]) == "gmail labels"
+
+    result = await execute_google.run(
+        google_action="labels",
+        args=[],
+        toolkit=tk,
+        timeout_seconds=10,
+        max_output_bytes=65536,
+        idempotent=True,
+        env=google_env,
+    )
+    assert result.outcome == OUTCOME_OK
+    assert result.exit_code == 0
+    assert [entry["id"] for entry in json.loads(result.stdout)] == ["INBOX", "UNREAD"]
+
+
+@pytest.mark.parametrize(
+    "name, action, expected",
+    [
+        ("gmail", "labels", "gmail labels"),
+        ("calendar", "list", "calendar list"),
+        ("drive", "search", "drive search"),
+        ("google-calendar", "list", "calendar list"),  # qualified toolkit name
+    ],
+)
+def test_the_service_comes_from_the_toolkit_name(
+    tmp_path, google_script, name, action, expected
+):
+    tk = _bare_action_toolkit(tmp_path, google_script, name=name, actions=[action])
+    argv = execute_google._build_argv(tk, action, [])
+
+    assert " ".join(argv[2:]) == expected
+
+
+def test_an_action_already_naming_its_service_is_left_alone(tmp_path, google_script):
+    """The form config/examples/toolkits.yaml ships -- prefixing it again
+
+    would run `gmail gmail search`.
+    """
+    tk = _bare_action_toolkit(
+        tmp_path, google_script, name="gmail", actions=["gmail search"]
+    )
+    argv = execute_google._build_argv(tk, "gmail search", ["is:unread"])
+
+    assert argv[2:] == ["gmail", "search", "is:unread"]
+
+
+def test_flags_and_positionals_survive_the_prefix(tmp_path, google_script):
+    """Only the head of the argv is in question: the per-call tail
+
+    `validate.build_google_call` built is passed through element for
+    element (FR-5.4 -- one parameter, one argv element).
+    """
+    tk = _bare_action_toolkit(tmp_path, google_script, name="gmail", actions=["search"])
+    argv = execute_google._build_argv(tk, "search", ["is:unread from:a b", "--max", "10"])
+
+    assert argv[2:] == ["gmail", "search", "is:unread from:a b", "--max", "10"]
+
+
+def test_an_unrecognizable_toolkit_name_runs_the_action_unchanged(
+    tmp_path, google_script
+):
+    """Nothing in `mailbox` says which Google API this is, and guessing a
+
+    service token would turn a working call into a usage error.
+    """
+    tk = _bare_action_toolkit(tmp_path, google_script, name="mailbox", actions=["labels"])
+    argv = execute_google._build_argv(tk, "labels", [])
+
+    assert argv[2:] == ["labels"]

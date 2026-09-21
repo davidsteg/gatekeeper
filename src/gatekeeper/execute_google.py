@@ -37,6 +37,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -96,12 +97,66 @@ def _resolve_script(toolkit: Toolkit, *, warn: bool) -> str:
     return GOOGLE_FALLBACK_SCRIPT
 
 
+#: The services the bundled google_api.py CLI dispatches on. Its argv is
+#: ``google_api.py <service> <action> [args]`` -- the service token is not
+#: optional and not inferred by the script, so `gmail labels` is a listing
+#: of labels while a bare `labels` is a usage error.
+GOOGLE_SERVICES = ("gmail", "calendar", "drive")
+
+
+def _service_prefix(toolkit: Toolkit) -> str | None:
+    """The CLI service token this toolkit's actions run under.
+
+    Taken from the toolkit name -- `gmail` -> gmail, `calendar` ->
+    calendar, `drive` -> drive -- because the toolkit *is* the service
+    (one toolkit per Google API, the same 1:1 model integrations.py
+    ships). Names carrying a qualifier (`google-calendar`,
+    `gmail-personal`) still resolve: the name is split on non-alphanumeric
+    separators and the first part naming a known service wins.
+
+    There is no def-side fix to prefer over this: `allowed_google_actions`
+    is Tier 1 and a deployment's list may legitimately hold bare single
+    words (`labels`, `list`, `search`), so the tool definition naming
+    `labels` is allowed to be right and the argv still has to say
+    `gmail labels`.
+
+    `None` for a toolkit whose name says nothing about the service --
+    better to run the action exactly as configured than to guess a
+    service token and turn a working call into a usage error.
+    """
+    for part in re.split(r"[^a-z0-9]+", toolkit.name.lower()):
+        if part in GOOGLE_SERVICES:
+            return part
+    return None
+
+
+def _action_argv(toolkit: Toolkit, google_action: str) -> list[str]:
+    """`google_action` as argv words, with the service token in front.
+
+    An action that already names its service (`gmail search`, the form
+    config/examples/toolkits.yaml uses) is passed through untouched --
+    prefixing it again would run `gmail gmail search`. A bare action
+    (`labels`, `list`, `search`) gets the toolkit's service inserted
+    before it; flags and positional args in `args` are never touched,
+    since only the head of the argv is in question here.
+    """
+    parts = google_action.split()
+    if not parts or parts[0] in GOOGLE_SERVICES:
+        return parts
+    service = _service_prefix(toolkit)
+    if service is None:
+        return parts
+    return [service, *parts]
+
+
 def _build_argv(toolkit: Toolkit, google_action: str, args: list[str]) -> list[str]:
     """Assembles the full argv list.
 
     `google_action` is a fixed string like ``"gmail search"`` (not
     agent-suppliable); `args` is the per-call tail built by
-    `validate.build_google_call`. The binary that runs is the same
+    `validate.build_google_call`. The action goes through `_action_argv`
+    first, which supplies the service token the CLI requires when the
+    configured action is a bare word. The binary that runs is the same
     interpreter that is running gatekeeper (`sys.executable`, the same
     idiom `conftest.py`'s `PYTHON` uses) -- never a bare `python`, which
     some environments resolve to `python3` and some don't resolve at all.
@@ -113,7 +168,7 @@ def _build_argv(toolkit: Toolkit, google_action: str, args: list[str]) -> list[s
     google_api.py in another container on the same host.
     """
     assert toolkit.google_script is not None
-    action_parts = google_action.split()
+    action_parts = _action_argv(toolkit, google_action)
     script = _resolve_script(toolkit, warn=True)
     if toolkit.google_container:
         return [
