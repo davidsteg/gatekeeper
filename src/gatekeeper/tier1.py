@@ -50,6 +50,17 @@ OPENCODE_OPERATIONS = frozenset(
     }
 )
 
+#: Where the image itself carries `google_api.py`: the Dockerfile has
+#: copied `src/gatekeeper/_google_api/` to `/opt/gatekeeper/google/` since
+#: 0.40.1, so every image from that release on has this exact path.
+#:
+#: It lives here rather than in `execute_google.py` for the same reason
+#: DEFAULT_MAX_MESSAGE_BYTES below does: the startup warning in this module
+#: and the executor's runtime fallback must name the same path, and
+#: `execute_google` already imports Tier 1 (the other direction would be
+#: circular).
+GOOGLE_FALLBACK_SCRIPT = "/opt/gatekeeper/google/google_api.py"
+
 #: The complete vocabulary of the `agent` executor -- the mailbox behind
 #: `messages.py`. Same shelf idea as OPENCODE_OPERATIONS above: a toolkit
 #: names a subset, never something outside the set. `mailbox_status` is
@@ -76,6 +87,32 @@ def missing_agent_operations(toolkit: Toolkit) -> tuple[str, ...]:
     if toolkit.executor != "agent":
         return ()
     return tuple(sorted(AGENT_OPERATIONS - set(toolkit.allowed_agent_operations)))
+
+
+def missing_google_script(toolkit: Toolkit) -> str | None:
+    """The `google_script` a `google` toolkit names and this filesystem
+
+    does not have -- `None` when there is nothing to report.
+
+    Same shape of problem as `Tier1.missing_local_binaries`: the path is
+    checked for *shape* at load time (absolute, no traversal) but never
+    for existence, so a toolkit written in the 0.38/0.40.0 era -- when
+    `google_api.py` still lived on the host and was mounted in -- parses
+    clean, keeps its tools `enabled: true`, and only reports the problem
+    as a FileNotFound on an agent call later. The executor falls back to
+    GOOGLE_FALLBACK_SCRIPT at call time so those toolkits keep working;
+    this is what says so at startup, while the operator is still looking.
+
+    `google_container` toolkits are skipped, for the reason
+    `missing_local_binaries` skips `ssh`: the script lives on another
+    container's filesystem, so testing it against this one would answer a
+    question about the wrong machine.
+    """
+    if toolkit.executor != "google" or toolkit.google_container:
+        return None
+    if not toolkit.google_script or os.path.isfile(toolkit.google_script):
+        return None
+    return toolkit.google_script
 
 
 #: Defaults for the two `agent` ceilings, applied when a toolkit names
@@ -1036,6 +1073,38 @@ def load_tier1(path: str) -> Tier1:
                 ", ".join(unavailable),
                 ", ".join(toolkits[name].allowed_agent_operations),
             )
+
+        # Same idea one executor over: a `google_script` that no longer
+        # exists. 0.40.1 moved google_api.py into the image, so a toolkit
+        # deployed before that still points at a host path that is not in
+        # this container -- which used to surface only as a FileNotFound
+        # on the first call. The executor now falls back to the image's
+        # own copy, so this is a warning and not an abort: the toolkit
+        # works either way, and this is where an operator finds out that
+        # the configuration and what runs have drifted apart.
+        absent_script = missing_google_script(toolkits[name])
+        if absent_script:
+            if os.path.isfile(GOOGLE_FALLBACK_SCRIPT):
+                logger.warning(
+                    "Toolkit %r names google_script %s, which does not exist "
+                    "in this container -- calls fall back to the image's own "
+                    "copy at %s (baked in since 0.40.1). Point google_script "
+                    "at that path in toolkits.yaml to make the configuration "
+                    "say what actually runs.",
+                    name,
+                    absent_script,
+                    GOOGLE_FALLBACK_SCRIPT,
+                )
+            else:
+                logger.warning(
+                    "Toolkit %r names google_script %s, which does not exist "
+                    "in this container, and the image's own copy at %s is "
+                    "missing too -- every call on this toolkit will fail "
+                    "until one of the two paths exists.",
+                    name,
+                    absent_script,
+                    GOOGLE_FALLBACK_SCRIPT,
+                )
 
     limits = raw.get("rate_limits") or {}
     rate_limits = {

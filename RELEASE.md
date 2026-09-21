@@ -1,13 +1,3 @@
-## 0.45.7 
-
- - admin.credential_bind: propose a toolkit-level credential binding (toolkit plus credential name only, never values) via the pending-queue; human approval at /ui/requests applies it to toolkits.yaml, re-validates, and hot-reloads 
-
- - value-like properties refused at proposal time; unknown names rejected; dangling references keep the loader warning contract 
-
- - /ui/requests: credential-bind proposals reviewable and approvable 
-
- - tests: 193 focus-suite green, ruff clean 
-
 # Releases
 
 The notes live here, not in a web form. They go through the same review as
@@ -69,6 +59,28 @@ to.
 cannot. It is in every release.
 
 ---
+
+## 0.45.8
+
+A `google` toolkit pointing at a pre-0.40.1 script path keeps working, and a credential slot created with the wrong `kind` is no longer a dead end.
+
+### Added
+
+- `admin.cred_delete` deletes a credential slot by name over `/admin/mcp`. Auto-applies, for `tool_disable`'s reason -- it removes a credential, never creates or reveals one -- and is refused while any toolkit or destination still references the slot, naming them. The refusal walks `Tier1.credential_references()`, the same walk `cred_list`'s "used_by" and the startup dangling-reference check use, so the destination-level `credential:` override (FR-8.3g) is included. This is the way out of a wrong `kind`: a slot's kind is fixed at creation, so a token created as `bearer` for a service that wants `api_key_header` is deleted here and proposed again via `admin.cred_propose` -- where a human still types the value (FR-10.2/10.8). Audited by name; no value is accepted or returned.
+
+### Fixed
+
+- `google` executor: a toolkit whose `google_script` names a path that does not exist on this filesystem now falls back to the image's own copy at `/opt/gatekeeper/google/google_api.py` (baked in since 0.40.1) instead of dying on a `FileNotFound` that named only the path that was wrong. A toolkit written in the 0.38/0.40.0 era names a host path that was mounted into the container back then and simply is not there now; those deployments keep running. The substitution warns once per call and once at startup (`tier1.missing_google_script`), naming both the configured and the substituted path, so it is not a silent divergence between `toolkits.yaml` and what runs -- a warning, not an abort. Not applied to `google_container` toolkits, where the script lives on another container's filesystem and this one has no opinion about it. `probe` resolves the same path quietly, so a toolkit working via the fallback no longer reports itself unready.
+
+## 0.45.7
+
+ - admin.credential_bind: propose a toolkit-level credential binding (toolkit plus credential name only, never values) via the pending-queue; human approval at /ui/requests applies it to toolkits.yaml, re-validates, and hot-reloads
+
+ - value-like properties refused at proposal time; unknown names rejected; dangling references keep the loader warning contract
+
+ - /ui/requests: credential-bind proposals reviewable and approvable
+
+ - tests: 193 focus-suite green, ruff clean
 
 ## 0.45.6
 

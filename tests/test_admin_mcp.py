@@ -1328,3 +1328,224 @@ async def test_credential_bind_deploy_is_not_reachable_from_admin_mcp(
         result = await client.call_tool("admin.credential_bind_deploy", {"id": "x"})
     assert "admin.credential_bind_deploy" not in names
     assert result.is_error
+
+
+# -- admin.cred_delete (remove a slot by name; the way out of a wrong kind) --
+
+
+async def test_cred_delete_is_on_the_admin_tool_list_and_takes_a_name_only(
+    admin_mcp_env, credential_store
+):
+    app, _store, _pending, _tp = admin_mcp_env["build"](credentials=credential_store)
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    assert "admin.cred_delete" in tools
+    schema = tools["admin.cred_delete"].input_schema
+    assert set(schema["properties"]) == {"name"}
+    assert schema["required"] == ["name"]
+    assert schema["additionalProperties"] is False
+    assert "value" not in schema["properties"]
+
+
+async def test_cred_delete_removes_an_unbound_slot(admin_mcp_env, credential_store):
+    """The fix this exists for, end to end: a slot created with the wrong
+
+    kind (`bearer` where the service wants `api_key_header`) is gone
+    afterwards, and the name is free for a `cred_propose` with the right
+    one -- no console, no redeploy.
+    """
+    credential_store.create(
+        "paperless-token", kind="bearer", value="wrong-kind-secret",
+        actor="root", rev="",
+    )
+    app, _store, _pending, _tp = admin_mcp_env["build"](credentials=credential_store)
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.cred_delete", {"name": "paperless-token"})
+        assert not result.is_error
+        payload = json.loads(result.content[0].text)
+        assert payload == {"applied": True, "name": "paperless-token"}
+
+        listed = await client.call_tool("admin.cred_list", {})
+    assert [c["name"] for c in json.loads(listed.content[0].text)["credentials"]] == []
+    assert credential_store.names() == []
+
+
+async def test_cred_delete_audits_the_name_and_never_the_value(
+    admin_mcp_env, credential_store, tmp_path
+):
+    """Audited like every other credential operation: the name of the slot
+
+    that went away, nothing that was in it (FR-10.2).
+    """
+    credential_store.create(
+        "paperless-token", kind="bearer", value="super-secret-token-xyz",
+        actor="root", rev="",
+    )
+    app, _store, _pending, _tp = admin_mcp_env["build"](credentials=credential_store)
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.cred_delete", {"name": "paperless-token"})
+    assert not result.is_error
+
+    audit_path = tmp_path / "cred-logs" / "audit.jsonl"
+    lines = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    deletions = [line for line in lines if line.get("action") == "credential_delete"]
+    assert len(deletions) == 1
+    assert deletions[0]["target"] == "paperless-token"
+    assert deletions[0]["actor"] == "hermes"
+    assert all("super-secret-token-xyz" not in json.dumps(line) for line in lines)
+
+
+async def test_cred_delete_refuses_an_unknown_slot_by_name(
+    admin_mcp_env, credential_store
+):
+    """Same validation family as `cred_list`/`credential_bind`: the name is
+
+    checked against the running store and refused by name, rather than
+    reported as a generic write failure.
+    """
+    credential_store.create(
+        "paperless-token", kind="bearer", value="v", actor="root", rev="",
+    )
+    app, _store, _pending, _tp = admin_mcp_env["build"](credentials=credential_store)
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.cred_delete", {"name": "never-created"})
+    assert result.is_error
+    assert "never-created" in result.content[0].text
+    # The slot that does exist is untouched.
+    assert [meta.name for meta in credential_store.names()] == ["paperless-token"]
+
+
+async def test_cred_delete_without_a_credential_store_is_a_clean_error(admin_mcp_env):
+    app, _store, _pending, _tp = admin_mcp_env["build"]()  # no credentials=
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool("admin.cred_delete", {"name": "paperless-token"})
+    assert result.is_error
+
+
+def _admin_with(tmp_path, toolkits: dict, credentials):
+    """An `AdminService` over a Tier 1 written here rather than the `tier1`
+
+    fixture -- the refusal below needs a toolkit that actually *binds* a
+    credential, and a binding is deploy-time (FR-10.4), so it cannot be
+    added to a loaded configuration afterwards. Same build-it-inline shape
+    as `test_toolkit_list_reports_a_set_run_as` above.
+    """
+    from gatekeeper.admin_service import AdminService
+    from gatekeeper.tier1 import load_tier1
+
+    toolkits_path = tmp_path / "bound-toolkits.yaml"
+    toolkits_path.write_text(
+        yaml.safe_dump({**toolkits, "audit": {"dir": str(tmp_path / "logs")}}),
+        encoding="utf-8",
+    )
+    tier1 = load_tier1(str(toolkits_path))
+    tools_path = tmp_path / "bound-tools.yaml"
+    tools_path.write_text(yaml.safe_dump({"tools": []}), encoding="utf-8")
+    identities_path = tmp_path / "bound-identities.yaml"
+    identities_path.write_text(
+        yaml.safe_dump(
+            {
+                "identities": [
+                    {
+                        "id": "hermes", "role": "admin",
+                        "token_hash": hash_token(generate_token()),
+                        "tools": [], "scopes": [],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit = AuditLog(str(tmp_path / "logs"))
+    service = Service(tier1=tier1, catalog=load_catalog(str(tools_path), tier1), audit=audit)
+    store = ConfigStore(
+        service=service, identities=load_identities(str(identities_path)), audit=audit,
+        tools_path=str(tools_path), identities_path=str(identities_path),
+    )
+    pending = PendingStore(path=str(tmp_path / "bound-pending.yaml"), audit=audit)
+    toolkit_proposals = ToolkitProposalStore(
+        path=str(tmp_path / "bound-proposals.yaml"), audit=audit, service=service,
+        toolkits_path=str(toolkits_path), tools_path=str(tools_path),
+        identities_path=str(identities_path),
+    )
+    return AdminService(
+        store=store, pending=pending, toolkit_proposals=toolkit_proposals,
+        credentials=credentials,
+    )
+
+
+def test_cred_delete_refuses_a_slot_a_toolkit_still_binds(tmp_path, credential_store):
+    """Deleting a bound slot would not fail loudly -- the toolkit would
+
+    keep its `credential:` line and refuse every call with "is not
+    configured yet". So the refusal names what still points at it.
+    """
+    from gatekeeper.admin_service import AdminActionError
+
+    credential_store.create(
+        "paperless-token", kind="bearer", value="v", actor="root", rev="",
+    )
+    admin = _admin_with(
+        tmp_path,
+        {
+            "toolkits": {
+                "paperless": {
+                    "executor": "http",
+                    "base_url": "https://paperless.lan",
+                    "allowed_methods": ["GET"],
+                    "allowed_path_prefixes": ["/api/"],
+                    "allowed_cidrs": ["10.0.0.0/8"],
+                    "credential": "paperless-token",
+                    "max_timeout_seconds": 10,
+                    "max_output_bytes": 65536,
+                }
+            }
+        },
+        credential_store,
+    )
+    with pytest.raises(AdminActionError, match="paperless"):
+        admin.cred_delete("hermes", {"name": "paperless-token"})
+    assert [meta.name for meta in credential_store.names()] == ["paperless-token"]
+
+
+def test_cred_delete_also_sees_a_destination_level_binding(tmp_path, credential_store):
+    """The half a hand-rolled second walk forgets: a destination's own
+
+    `credential:` (FR-8.3g) binds the slot just as a toolkit's does, and
+    `credential_references()` is the one walk that covers both.
+    """
+    from gatekeeper.admin_service import AdminActionError
+
+    credential_store.create(
+        "docker-nas2-tls", kind="docker_tls", value="{}", actor="root", rev="",
+    )
+    admin = _admin_with(
+        tmp_path,
+        {
+            "destinations": {
+                "nas2": {
+                    "docker_host": "tcp://nas2.lan:2376",
+                    "docker_tls": True,
+                    "credential": "docker-nas2-tls",
+                }
+            },
+            "toolkits": {
+                "docker": {
+                    "executor": "docker",
+                    "binaries": ["/usr/bin/docker"],
+                    "destinations": ["nas2"],
+                    "max_timeout_seconds": 10,
+                    "max_output_bytes": 65536,
+                }
+            },
+        },
+        credential_store,
+    )
+    with pytest.raises(AdminActionError, match="nas2"):
+        admin.cred_delete("hermes", {"name": "docker-nas2-tls"})
+    assert [meta.name for meta in credential_store.names()] == ["docker-nas2-tls"]

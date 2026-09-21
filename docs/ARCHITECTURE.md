@@ -280,6 +280,11 @@ No OAuth2 in the `http` executor — it supports static credentials only
 flow use the `google` executor instead (added 0.38.0), which runs
 `google_api.py` as a local subprocess and materializes an `oauth2`
 credential bundle to a per-call tempfile — see `execute_google.py`.
+The script itself is baked into the image at
+`/opt/gatekeeper/google/google_api.py` (since 0.40.1); a toolkit whose
+`google_script` names a path that no longer exists — the host path
+0.38/0.40.0 deployments mounted in — falls back to that copy and warns
+naming both paths, at startup and on the call.
 
 ## Project structure
 
