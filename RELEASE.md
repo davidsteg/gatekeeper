@@ -1,3 +1,13 @@
+## 0.45.7 
+
+ - admin.credential_bind: propose a toolkit-level credential binding (toolkit plus credential name only, never values) via the pending-queue; human approval at /ui/requests applies it to toolkits.yaml, re-validates, and hot-reloads 
+
+ - value-like properties refused at proposal time; unknown names rejected; dangling references keep the loader warning contract 
+
+ - /ui/requests: credential-bind proposals reviewable and approvable 
+
+ - tests: 193 focus-suite green, ruff clean 
+
 # Releases
 
 The notes live here, not in a web form. They go through the same review as
