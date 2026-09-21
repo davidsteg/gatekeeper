@@ -75,6 +75,17 @@ class Parameter:
     derived: str | None = None
     must_resolve_under: str | None = None
     flag: str | None = None
+    #: The regex exactly as the definition spells it, kept alongside the
+    #: compiled form so `json_schema` publishes the author's string rather
+    #: than anything derived from `re`. The two are the same text today --
+    #: `re.compile(s).pattern` returns `s` -- but "the same text today" is
+    #: not a guarantee a schema-validating client can rely on, and a
+    #: multi-segment path pattern is where a normalizing copy would hurt:
+    #: drop the `/` separator between two repetition groups and
+    #: `sub/file.yaml` stops validating client-side while the server still
+    #: accepts it, with no denial and no audit entry to point at. `None`
+    #: when the definition names no pattern.
+    pattern_source: str | None = None
     #: FR-6.3's control-character reject exists to catch shell/argv/URL
     #: metacharacter smuggling; it doesn't apply to a value that is never
     #: interpreted structurally, only written verbatim (the `file` executor's
@@ -88,7 +99,14 @@ class Parameter:
         return self.derived is not None
 
     def json_schema(self) -> dict[str, Any]:
-        """Schema fragment for `tools/list`."""
+        """Schema fragment for `tools/list`.
+
+        The published `pattern` is the definition's own string, character
+        for character: no re-anchoring, no escaping, no re-joining of
+        segment groups. What an agent validates against is exactly what
+        `validate.py` enforces -- anything else would refuse a value the
+        server accepts (or the reverse) without either side saying so.
+        """
         if self.type == "integer":
             schema: dict[str, Any] = {"type": "integer"}
             if self.minimum is not None:
@@ -102,7 +120,11 @@ class Parameter:
         else:
             schema = {"type": "string"}
             if self.pattern is not None:
-                schema["pattern"] = self.pattern.pattern
+                schema["pattern"] = (
+                    self.pattern_source
+                    if self.pattern_source is not None
+                    else self.pattern.pattern
+                )
         schema["description"] = self.description
         return schema
 
@@ -254,13 +276,26 @@ def _parse_parameter(name: str, spec: dict[str, Any], where: str) -> Parameter:
         )
 
     pattern = None
+    pattern_source = None
     if raw_pattern := spec.get("pattern"):
+        # A pattern is text, and stays the exact text it was written as --
+        # it is both compiled here and published verbatim in the tool's
+        # inputSchema (`Parameter.json_schema`). A non-string would be a
+        # YAML accident (an unquoted regex parsed as something else), and
+        # `str()`-ing it would publish gatekeeper's guess of what the
+        # author meant.
+        if not isinstance(raw_pattern, str):
+            raise ConfigError(
+                f"{where}: parameter {name!r} has a non-string 'pattern' "
+                f"({type(raw_pattern).__name__}). Quote it."
+            )
         try:
             pattern = re.compile(raw_pattern)
         except re.error as exc:
             raise ConfigError(
                 f"{where}: parameter {name!r} has an invalid pattern: {exc}"
             ) from exc
+        pattern_source = raw_pattern
 
     derived = spec.get("derived")
 
@@ -290,6 +325,7 @@ def _parse_parameter(name: str, spec: dict[str, Any], where: str) -> Parameter:
         description=str(spec.get("description", "")),
         required=bool(spec.get("required", False)),
         pattern=pattern,
+        pattern_source=pattern_source,
         values=tuple(str(v) for v in spec.get("values", ())),
         minimum=spec.get("minimum"),
         maximum=spec.get("maximum"),

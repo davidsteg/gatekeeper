@@ -96,9 +96,14 @@ item.
 - **OAuth2 — done for Google Workspace (0.38.0).** The `google` executor
   runs `google_api.py` as a local subprocess, materializes an `oauth2`
   credential bundle (client_id/client_secret/refresh_token) to a per-call
-  tempfile, and parses JSON output. Covers Gmail, Calendar, Drive. Other
-  OAuth2 providers (Microsoft, etc.) would follow the same pattern — a
-  new toolkit on the `google` executor, not a new executor.
+  tempfile, and parses JSON output. Covers Gmail, Calendar, Drive. The
+  refresh token is obtained in the console since 0.46.0
+  (`/ui/oauth/google/authorize` + `/ui/oauth/google/callback`), so no
+  setup script outside gatekeeper handles it. Other OAuth2 providers
+  (Microsoft, etc.) would follow the same pattern — a new toolkit on the
+  `google` executor, not a new executor; their consent flow would be a
+  sibling of the Google routes, which are deliberately Google-specific
+  (endpoints and scope prefix are constants, not configuration).
 - **`ssh` destinations** — a `docker`/`http`/`truenas`/`opencode` toolkit
   can declare several named destinations (see below); `ssh` toolkits can't
   yet (`tier1.py` rejects a `destinations:` list on an `ssh` toolkit) — one

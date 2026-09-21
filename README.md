@@ -429,7 +429,8 @@ workflow, testing, and known pitfalls.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full list with rationale.
 Short version: OAuth2 is supported for Google Workspace via the `google`
-executor (0.38.0); no `destinations:` on an `ssh` toolkit (one toolkit per
+executor (0.38.0), with consent and refresh-token capture in the console
+since 0.46.0; no `destinations:` on an `ssh` toolkit (one toolkit per
 host), no TrueNAS SCRAM mutual auth, and no nested `params_template` values
 for the `truenas` executor.
 
