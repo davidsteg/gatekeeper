@@ -5434,7 +5434,7 @@ def _oauth_result_page(*, ok: bool, credential: str, message: str) -> str:
             f"<code>{_e(credential)}</code>. Nothing about its value is shown "
             "here or anywhere else (FR-10.2).",
             icon="lock",
-            tone="ok",
+            tone="good",
         )
     else:
         body = _note(f"<strong>Not connected.</strong> {_e(message)}", tone="bad")
