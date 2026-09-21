@@ -60,6 +60,31 @@ cannot. It is in every release.
 
 ---
 
+## 0.46.0
+
+Google sign-in happens in the console now: an `oauth2` credential's refresh token arrives from Google directly, instead of through a setup script, a clipboard, and someone's shell history. Plus a pin on what `/mcp` publishes as a parameter's `pattern`.
+
+### Added
+
+- **Google OAuth sign-in at `/ui`.** Two operator-authenticated routes, both `GET`, neither public: `GET /ui/oauth/google/authorize` builds the consent URL from the `oauth2` credential's `client_id` (`access_type=offline`, `prompt=consent`, single-use `state`), and `GET /ui/oauth/google/callback` exchanges the code with that credential's `client_id`/`client_secret` and writes the returned refresh token back into the same credential -- `CredentialStore.rotate` when the credential exists, `create` when it does not. The client secret goes into the token request body and nowhere else; no token, code, or secret is ever rendered, logged, or echoed back (FR-10.2/10.7). The pages say "ok" or "error" and nothing more. The credentials page carries a "Connect Google" button on every `oauth2` credential.
+- **Scopes come from Tier 1.** A `google` toolkit may declare `required_scopes:` (bare names like `gmail.send`, or full scope URLs); the consent screen asks for the union across every google toolkit, read at request time, so a redeploy that adds or narrows a toolkit changes the next sign-in with nothing else to keep in step. With none declared, the default set is asked for: `gmail.readonly`, `gmail.send`, `gmail.modify`, `calendar.events`, `calendar.events.readonly`, `drive`, `drive.file`, `drive.metadata.readonly`, `spreadsheets`, `contacts`. `required_scopes` on a non-`google` toolkit is refused at startup, like `run_as` on a non-`file` one.
+
+### Deploy notes
+
+- **Register the callback URI with the OAuth client.** Google compares `redirect_uri` against the registered string character for character, so add this exact value to the OAuth client's *Authorized redirect URIs* in the Google Cloud console:
+
+  ```
+  https://<your-gatekeeper-host>/ui/oauth/google/callback
+  ```
+
+  The authorize page prints the value this deployment will actually send, in a copyable field -- use that one. Behind a proxy that rewrites the host, set `GATEKEEPER_BASE_URL` (e.g. `https://gatekeeper.example.com`) so the URI is built from the public origin instead of the internal one.
+- The credential must already exist as kind `oauth2` holding `client_id` and `client_secret` before the flow can start -- the console adds only the third field. Creating it still needs `GATEKEEPER_CREDENTIAL_KEY`.
+- Google's redirect back is a cross-site navigation and the console session cookie is `SameSite=Strict`, so the browser usually does not attach it to the callback. The single-use `state` (10-minute lifetime, bound to the operator, the credential, and the redirect URI) is what carries the flow across; a callback with neither cookie nor state goes to the login page like any other unauthenticated console request.
+
+### Fixed
+
+- A tool parameter's `pattern` is published in the `/mcp` `tools/list` `inputSchema` as the definition's own string, character for character -- carried alongside the compiled regex rather than read back out of it, so no re-compiling or re-joining of segment groups can ever narrow it. A multi-segment path pattern is where that would bite: a client validating `sub/file.yaml` against a copy that lost the `/` between its repetition groups refuses the call before it reaches gatekeeper, which means no denial and no audit entry to look at. The console now shows the same string for the same reason. A non-string `pattern` (an unquoted regex that YAML parsed as something else) is refused at load instead of being coerced.
+
 ## 0.45.9
 
 google executor: derive the CLI service prefix from the toolkit name, so gmail.labels composes argv as gmail labels (calendar list, drive search likewise) instead of a bare action word; flags and positional args pass through unchanged. Regression tests cover argv composition and a mocked-OAuth exit 0.

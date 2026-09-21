@@ -467,9 +467,14 @@ class CredentialStore:
     def _resolve(self, name: str) -> ResolvedCredential | None:
         """Used only by `execute_http.py` / `execute_ssh.py` /
 
-        `execute_truenas.py`, and by `service.py`'s docker TLS
-        materialization. Not part of the public API surface exposed
-        through `ui.py` or `store.py` -- no route handler may call this.
+        `execute_truenas.py`, by `service.py`'s docker TLS and google
+        token materialization, and -- since 0.46.0 -- by `ui.py`'s Google
+        OAuth sign-in, which needs the `client_id` for the consent URL
+        and the `client_secret` for the token request. That one is the
+        single route handler allowed to call this, and it is still not a
+        read path: neither value reaches a response, a page, or the audit
+        log (FR-10.2/10.7). Nothing else in `ui.py` or `store.py` may
+        call it.
         """
         spec = self._raw().get(name)
         if spec is None:

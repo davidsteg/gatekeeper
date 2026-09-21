@@ -255,6 +255,17 @@ class Toolkit:
     #: read-only gmail toolkit's list -- there is no separate permission
     #: to deny it, it structurally does not exist.
     allowed_google_actions: tuple[str, ...] = ()
+    #: OAuth scopes this toolkit's actions need, as either bare Google
+    #: scope names ("gmail.send") or full scope URLs. Read by nothing at
+    #: call time -- the refresh token in the credential already carries
+    #: whatever it was granted -- and by exactly one thing at sign-in
+    #: time: the console's Google OAuth consent URL asks for the union
+    #: across every `google` toolkit (`Tier1.google_oauth_scopes`), so
+    #: the grant a human clicks through covers the toolkits this
+    #: deployment actually has, not a list hardcoded somewhere else.
+    #: Empty (the default) means "no opinion" and leaves the console's
+    #: documented default set in place.
+    required_scopes: tuple[str, ...] = ()
 
     # -- `opencode` executor only --------------------------------------
     #
@@ -527,6 +538,29 @@ class Tier1:
             if dest.credential:
                 refs.setdefault(dest.credential, []).append(f"{dest.name} (destination)")
         return {name: tuple(labels) for name, labels in refs.items()}
+
+    def google_oauth_scopes(self) -> tuple[str, ...]:
+        """The union of every `google` toolkit's `required_scopes`.
+
+        Read at request time by the console's Google sign-in (`ui.py`), so
+        a toolkit added or narrowed by a redeploy changes what the next
+        consent screen asks for without a second list to keep in step.
+        Empty when no google toolkit declares any -- the caller supplies
+        its own default then, because an OAuth request with no scope at
+        all is not a useful thing to send.
+
+        Names only, as written: a bare scope name ("gmail.send") or a
+        full scope URL. Normalizing them into URLs is the caller's job,
+        not Tier 1's.
+        """
+        scopes: list[str] = []
+        for toolkit in self.toolkits.values():
+            if toolkit.executor != "google":
+                continue
+            for scope in toolkit.required_scopes:
+                if scope not in scopes:
+                    scopes.append(scope)
+        return tuple(scopes)
 
     def missing_local_binaries(self) -> dict[str, tuple[str, ...]]:
         """`local` toolkit name -> the binaries it declares that this
@@ -831,6 +865,22 @@ def load_tier1(path: str) -> Tier1:
             except RunAsError as exc:
                 raise ConfigError(f"{where}: {exc}") from None
 
+        # `required_scopes` (google executor only), parsed for every
+        # executor for the same reason as `run_as` above: on any other
+        # toolkit there is no OAuth consent screen to put them on, and a
+        # field that reads as "this toolkit needs these scopes" and is
+        # silently ignored is worse than one that refuses to start.
+        required_scopes: tuple[str, ...] = ()
+        if spec.get("required_scopes") is not None:
+            if executor != "google":
+                raise ConfigError(
+                    f"{where}: 'required_scopes' is only supported on a 'google' "
+                    f"toolkit, not on {executor!r}. The other executors "
+                    "authenticate with a header, a key, or a socket -- none of "
+                    "them has an OAuth consent screen to ask a scope for."
+                )
+            required_scopes = _str_tuple(spec.get("required_scopes"), where)
+
         dest_names = _toolkit_destinations(spec, executor, where, destinations)
 
         if executor in ("docker", "local", "ssh"):
@@ -1042,6 +1092,7 @@ def load_tier1(path: str) -> Tier1:
             google_script=google_script,
             google_container=google_container,
             allowed_google_actions=allowed_google_actions,
+            required_scopes=required_scopes,
             allowed_opencode_operations=allowed_opencode_operations,
             mailbox_path=mailbox_path,
             allowed_agent_operations=allowed_agent_operations,

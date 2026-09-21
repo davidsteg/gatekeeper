@@ -286,6 +286,21 @@ The script itself is baked into the image at
 0.38/0.40.0 deployments mounted in — falls back to that copy and warns
 naming both paths, at startup and on the call.
 
+The refresh token in that bundle is obtained by the console itself
+(0.46.0): `GET /ui/oauth/google/authorize` builds Google's consent URL
+from the credential's `client_id`, and `GET /ui/oauth/google/callback`
+exchanges the returned code and writes the refresh token back into the
+same credential (`rotate` when it exists, `create` when it does not).
+Both routes are session-gated and `role: admin`, neither is in
+`server.PUBLIC_PATHS`, and neither renders, logs, or echoes a token, a
+code, or the client secret — the pages say "ok" or "error" (FR-10.2/10.7).
+The scopes asked for are the union of every `google` toolkit's
+`required_scopes` (`Tier1.google_oauth_scopes`), read at request time,
+falling back to a documented default set. What carries the flow across
+Google's cross-site redirect — which a `SameSite=Strict` session cookie
+does not survive — is a single-use `state` bound to the operator, the
+credential, and the redirect URI (`ui.OAuthStateStore`).
+
 ## Project structure
 
 ```

@@ -22,11 +22,55 @@ workflow, see [AGENTS.md](../AGENTS.md).
 | `GATEKEEPER_TRUSTED_PROXIES` | Comma-separated IPs/CIDRs of reverse proxies allowed to set `X-Forwarded-For`/`X-Forwarded-Proto` (or `*` to trust any peer). See [Behind a reverse proxy](#behind-a-reverse-proxy) below — unset is not safe for the common container topology |
 | `GATEKEEPER_NOTIFY_URL` | If set, every `agent.send_message` delivery POSTs the message (JSON) to this URL as a best-effort webhook — signed for the Hermes webhook adapter (generic HMAC V2): X-Webhook-Timestamp (unix seconds) + X-Webhook-Signature-V2 = hex HMAC-SHA256 of <timestamp>.<body>, 3s timeout, failures only logged and never failing the delivery. Unset (the default) means no POST at all |
 | `GATEKEEPER_NOTIFY_SECRET` | HMAC-SHA256 secret for X-Webhook-Signature-V2 on the delivery webhook; empty when unset, which still signs (with the empty secret) |
+| `GATEKEEPER_BASE_URL` | Public origin of the console (e.g. `https://gatekeeper.example.com`), used to build the Google OAuth `redirect_uri`. Only needed behind a proxy that rewrites the host and does not forward it — unset, the request's own base URL is used. See [Google OAuth sign-in](#google-oauth-sign-in) |
 | `DOCKER_HOST` | Passed through to the `docker` executor's child process only |
 
 A `credentials.yaml` with any entries in it, but no master key configured,
 aborts startup (fail closed) rather than running with masking silently
 disabled.
+
+## Google OAuth sign-in
+
+A `google` toolkit authenticates with an `oauth2` credential holding
+`client_id`, `client_secret` and `refresh_token`. The first two come from
+an OAuth client in the Google Cloud console and are typed into
+`/ui/credentials`; the third is produced by the console itself (0.46.0):
+
+1. In the Google Cloud console, add this **exact** string to the OAuth
+   client's *Authorized redirect URIs*:
+
+   ```
+   https://<your-gatekeeper-host>/ui/oauth/google/callback
+   ```
+
+   Google compares it character for character — a mismatch is answered
+   with `redirect_uri_mismatch` and nothing else. `/ui/oauth/google/authorize`
+   prints the value this deployment will actually send, in a copyable
+   field; use that one rather than typing it from here.
+
+2. Create the credential at `/ui/credentials` as kind `oauth2`, with the
+   value `{"client_id": "...", "client_secret": "..."}`.
+
+3. Click **Connect Google** on that credential (or open
+   `/ui/oauth/google/authorize?credential=<name>`), work through Google's
+   consent screen, and the refresh token is written back into the same
+   credential, encrypted. It is never displayed — the page says only
+   whether it worked.
+
+Behind a proxy that rewrites the host, set `GATEKEEPER_BASE_URL` to the
+public origin, otherwise the redirect URI is built from the internal one
+and will not match what you registered.
+
+Which scopes the consent screen asks for is Tier 1: each `google` toolkit
+may carry a `required_scopes:` list (bare names like `gmail.send`, or full
+scope URLs), and the console asks for the union across all of them. With
+none declared, the default set is `gmail.readonly`, `gmail.send`,
+`gmail.modify`, `calendar.events`, `calendar.events.readonly`, `drive`,
+`drive.file`, `drive.metadata.readonly`, `spreadsheets`, `contacts`.
+
+A sign-in that returns no refresh token means Google considers the client
+already granted: remove gatekeeper under the Google account's third-party
+connections and run through it again.
 
 ## Credentials: from zero to a working call
 

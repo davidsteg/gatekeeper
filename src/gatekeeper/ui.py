@@ -55,10 +55,12 @@ import os
 import re
 import secrets
 import time
-from collections.abc import Callable
+import urllib.parse
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta
 from typing import Any
 
+import httpx
 import yaml
 from starlette.datastructures import FormData
 from starlette.requests import Request
@@ -125,6 +127,66 @@ SESSION_TTL_SECONDS = 8 * 3600
 #: parsing it in full would make the page unusable.
 AUDIT_READ_BYTES = 2 * 1024 * 1024
 AUDIT_DEFAULT_LIMIT = 200
+
+
+# -- Google OAuth sign-in -------------------------------------------------
+#
+# The `google` executor needs an `oauth2` credential holding
+# {client_id, client_secret, refresh_token}. The first two come from a
+# Google Cloud OAuth client and can be typed into the credential form;
+# the third cannot -- it only exists after a human has clicked through a
+# consent screen. Before this, that meant running a setup script outside
+# gatekeeper and pasting the resulting token back in, which is exactly
+# the kind of secret handling (clipboard, shell history, a file on
+# someone's laptop) the credential store exists to avoid.
+#
+# So the console performs the code exchange itself: the operator clicks
+# through consent, Google redirects back to the callback route, and the
+# refresh token goes straight into the credential store, encrypted, and
+# is never rendered, logged, or echoed back (FR-10.2/10.7). The pages
+# below say "ok" or "error" and nothing else.
+
+#: Google's consent screen and token endpoint. Constants rather than
+#: configuration: these are Google's, not a deployment's, and a
+#: configurable token endpoint is a credential-exfiltration knob.
+GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+#: Bare scope names in a toolkit's `required_scopes` are expanded with this.
+GOOGLE_SCOPE_PREFIX = "https://www.googleapis.com/auth/"
+
+OAUTH_AUTHORIZE_PATH = f"{UI_PREFIX}/oauth/google/authorize"
+OAUTH_CALLBACK_PATH = f"{UI_PREFIX}/oauth/google/callback"
+
+#: Overrides the base URL the callback `redirect_uri` is built from. Only
+#: needed when the console is reached through a proxy that rewrites the
+#: host and does not forward it -- otherwise the request's own base URL
+#: is what the browser just used and therefore what Google must be told.
+#: The URI has to match the OAuth client's registered redirect URI
+#: character for character, which is why the authorize page prints it.
+BASE_URL_ENV = "GATEKEEPER_BASE_URL"
+
+#: What the consent screen asks for when no `google` toolkit declares
+#: `required_scopes`. The union of what `google_api.py`'s actions need
+#: across gmail, calendar, drive, sheets and contacts -- a deployment
+#: that wants less says so per toolkit in `toolkits.yaml` and gets
+#: exactly that instead (`Tier1.google_oauth_scopes`).
+DEFAULT_GOOGLE_SCOPES = (
+    "gmail.readonly",
+    "gmail.send",
+    "gmail.modify",
+    "calendar.events",
+    "calendar.events.readonly",
+    "drive",
+    "drive.file",
+    "drive.metadata.readonly",
+    "spreadsheets",
+    "contacts",
+)
+
+#: How long an issued `state` stays redeemable. Long enough to read a
+#: consent screen, short enough that an abandoned flow does not leave a
+#: usable handle lying around.
+OAUTH_STATE_TTL_SECONDS = 600
 
 
 # -- Sessions -------------------------------------------------------------
@@ -231,6 +293,72 @@ class LoginThrottle:
         recent = [t for t in self._failures.get(client, []) if t >= cutoff]
         self._failures[client] = recent
         return recent
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class OAuthState:
+    """What an issued `state` stands for: who started the flow, for which
+
+    credential, and with which redirect URI. All three are pinned at
+    issue time, so the callback cannot be talked into writing a different
+    credential or into accepting a code minted for a different URI.
+    """
+
+    identity: str
+    credential: str
+    redirect_uri: str
+
+
+@dataclasses.dataclass(slots=True)
+class OAuthStateStore:
+    """The pending Google consent flows, in memory.
+
+    Like `SessionStore`, deliberately not persisted: a restart cancels
+    every half-finished flow, which costs one more click and keeps a
+    redeemable handle off disk.
+
+    `state` does the binding OAuth expects of it. It matters more here
+    than in a typical web app, because the console session cookie is
+    `SameSite=Strict` and Google's redirect back is a cross-site
+    navigation -- browsers do not attach a Strict cookie to it, so the
+    callback frequently sees no session at all. The state is therefore
+    the proof that this callback belongs to a flow an authenticated
+    operator started: 32 random bytes, handed out only to a signed-in
+    admin, usable exactly once, expiring in
+    `OAUTH_STATE_TTL_SECONDS`. Where a session *is* present it must be
+    the same operator's -- a state redeemed under someone else's session
+    is refused rather than silently accepted.
+    """
+
+    ttl: int = OAUTH_STATE_TTL_SECONDS
+    _states: dict[str, tuple[OAuthState, float]] = dataclasses.field(default_factory=dict)
+
+    def issue(self, *, identity: str, credential: str, redirect_uri: str) -> str:
+        self._prune()
+        state = secrets.token_urlsafe(32)
+        self._states[state] = (
+            OAuthState(identity=identity, credential=credential, redirect_uri=redirect_uri),
+            time.monotonic() + self.ttl,
+        )
+        return state
+
+    def take(self, state: str | None) -> OAuthState | None:
+        """Single use: a redeemed state is gone, a replay finds nothing."""
+        self._prune()
+        if not state:
+            return None
+        entry = self._states.pop(state, None)
+        if entry is None:
+            return None
+        pending, expires = entry
+        if time.monotonic() >= expires:
+            return None
+        return pending
+
+    def _prune(self) -> None:
+        now = time.monotonic()
+        for state in [s for s, (_, exp) in self._states.items() if now >= exp]:
+            self._states.pop(state, None)
 
 
 # -- Reading the audit log -------------------------------------------------------
@@ -1349,6 +1477,10 @@ a.btn.primary { background: var(--accent); border-color: var(--accent); color: v
    no matching rule -- input, button, and the "reset" link fell back to
    plain inline flow and lined up on text baseline instead of centered,
    which is what actually made the search button look unaligned. */
+/* A value the operator has to copy out of the console verbatim (the
+   Google OAuth redirect URI): a readonly, full-width field, because with
+   scripts forbidden the browser's own select-all is the copy button. */
+.copyline { width: 100%; margin-top: .4rem; }
 .filter-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .8rem; }
 .filter-row input[type="text"] { flex: 1; min-width: 10rem; }
 a.reset { align-self: center; color: var(--muted); text-decoration: none; font-size: .83rem; padding: .4rem .3rem; }
@@ -2792,7 +2924,12 @@ def _param_cell(tool: ToolDef) -> str:
             marks.append('<span class="pill accent">required</span>')
         detail = []
         if p.pattern is not None:
-            detail.append(f"pattern <code>{_e(p.pattern.pattern)}</code>")
+            # The definition's own string, the same one `tools/list`
+            # publishes -- so the console and the agent never show two
+            # different ideas of what this parameter accepts.
+            detail.append(
+                f"pattern <code>{_e(p.pattern_source or p.pattern.pattern)}</code>"
+            )
         if p.values:
             detail.append("values " + ", ".join(f"<code>{_e(v)}</code>" for v in p.values))
         if p.minimum is not None or p.maximum is not None:
@@ -3140,8 +3277,18 @@ def _view_credentials(
     for meta in metas:
         ops = ""
         if session.can_write and store is not None:
+            # An oauth2 credential's third field (the refresh token) cannot
+            # be typed in -- it only exists after a consent screen. The
+            # button starts that flow; see `oauth_google_authorize`.
+            connect = (
+                f'<a class="btn" href="{OAUTH_AUTHORIZE_PATH}?credential={_e(meta.name)}">'
+                f'{_icon("link", 14)}Connect Google</a>'
+                if meta.kind == "oauth2"
+                else ""
+            )
             ops = (
-                f'<a class="btn" href="{UI_PREFIX}/credentials/rotate?name={_e(meta.name)}">'
+                connect
+                + f'<a class="btn" href="{UI_PREFIX}/credentials/rotate?name={_e(meta.name)}">'
                 f'{_icon("refresh", 14)}Rotate</a>'
                 + f'<a class="btn" title="Delete" '
                 f'href="{UI_PREFIX}/credentials/delete?name={_e(meta.name)}">'
@@ -5124,6 +5271,182 @@ def _view_docs(request: Request) -> str:
     )
 
 
+# -- Google OAuth sign-in -------------------------------------------------
+
+
+def _google_scope_urls(scopes: Iterable[str]) -> list[str]:
+    """Bare names become full scope URLs; full URLs are left alone.
+
+    `required_scopes: [gmail.send]` and
+    `required_scopes: [https://www.googleapis.com/auth/gmail.send]` are
+    the same request -- a toolkit may write whichever reads better next
+    to its `allowed_google_actions`.
+    """
+    urls: list[str] = []
+    for scope in scopes:
+        scope = scope.strip()
+        if not scope:
+            continue
+        url = scope if "://" in scope else GOOGLE_SCOPE_PREFIX + scope
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _public_base_url(request: Request) -> str:
+    """The origin a browser reaches this console at, without trailing slash.
+
+    `GATEKEEPER_BASE_URL` wins when set, because behind a proxy that
+    rewrites the host the request's own view of itself is the internal
+    one, and Google compares the `redirect_uri` against the registered
+    string exactly.
+    """
+    configured = os.environ.get(BASE_URL_ENV, "").strip()
+    if configured:
+        return configured.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def _google_consent_url(*, client_id: str, redirect_uri: str, scopes: list[str], state: str) -> str:
+    """Google's consent screen URL for one flow.
+
+    `access_type=offline` plus `prompt=consent` is what makes Google
+    return a *refresh* token: without them a re-authorization of an
+    already-granted client comes back with an access token only, and an
+    access token is useless here -- it expires in an hour and the
+    `google` executor has nothing to renew it with.
+    """
+    query = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(scopes),
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": state,
+        }
+    )
+    return f"{GOOGLE_AUTH_ENDPOINT}?{query}"
+
+
+class OAuthExchangeError(Exception):
+    """A code exchange that did not produce a usable answer.
+
+    Carries a message safe to render: never the response body, never a
+    token, never the client secret.
+    """
+
+
+async def _exchange_google_code(
+    *, code: str, client_id: str, client_secret: str, redirect_uri: str
+) -> dict[str, Any]:
+    """Trades the authorization code for a refresh token.
+
+    A module-level function rather than an inline request so a test can
+    replace it without a network listener, and so there is exactly one
+    place where the token response exists. The caller reads
+    `refresh_token` out of it and nothing else is kept -- the access
+    token in the same response is deliberately dropped on the floor.
+    """
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            GOOGLE_TOKEN_ENDPOINT,
+            data={
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+        )
+    if response.status_code >= 400:
+        # The body may quote the client_secret back -- the status is the
+        # only part of it that may ever reach a page or the audit log.
+        raise OAuthExchangeError(
+            f"Google refused the code exchange (HTTP {response.status_code})."
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        raise OAuthExchangeError("Google's token response was not JSON.") from None
+    if not isinstance(payload, dict):
+        raise OAuthExchangeError("Google's token response was not an object.")
+    return payload
+
+
+def _copyable(value: str) -> str:
+    """A line the operator has to paste somewhere else.
+
+    A readonly input, not a button: the CSP forbids scripts on every
+    page (design decision 4 above), so "copy" is the browser's own
+    select-all in a focused field.
+    """
+    return f'<input class="mono copyline" readonly spellcheck="false" value="{_e(value)}">'
+
+
+def _oauth_google_page(
+    *, credential: str, callback_uri: str, consent_url: str, scopes: list[str],
+) -> str:
+    """The authorize page: what Google must know, then the link to Google."""
+    scope_rows = "".join(
+        f'<div class="row"><div class="row-l">{_icon("lock", 14)}Scope</div>'
+        f'<div class="mono">{_e(scope)}</div></div>'
+        for scope in scopes
+    )
+    return (
+        _note(
+            "<strong>Authorized redirect URI</strong> &mdash; this exact "
+            "string has to be registered on the OAuth client in the Google "
+            "Cloud console, or Google refuses the sign-in with "
+            "<code>redirect_uri_mismatch</code>.<br>"
+            + _copyable(callback_uri),
+            icon="link",
+        )
+        + '<div class="card"><div class="card-head">'
+        f'<span class="name mono">{_e(credential)}</span>'
+        f'<span class="pill">{_icon("lock", 12)}oauth2</span>'
+        f'<span class="pill">{len(scopes)} scope(s)</span></div>'
+        '<div class="rows">'
+        f'<div class="row"><div class="row-l">{_icon("key", 14)}Credential</div>'
+        f"<div>The refresh token Google returns is written into "
+        f"<code>{_e(credential)}</code>, encrypted. It is never shown here, "
+        "and the client secret never leaves the store.</div></div>"
+        + scope_rows
+        + "</div>"
+        '<div class="pad">'
+        f'<a class="btn primary" href="{_e(consent_url)}" rel="noreferrer">'
+        f'{_icon("link", 14)}Continue to Google</a> '
+        f'<a class="btn" href="{UI_PREFIX}/credentials">{_icon("back", 14)}Cancel</a>'
+        "</div></div>"
+    )
+
+
+def _oauth_result_page(*, ok: bool, credential: str, message: str) -> str:
+    """The callback's whole vocabulary: ok, or an error with a reason.
+
+    No token, no code, no client secret, no response body -- not on
+    success, and not on any of the failure paths either.
+    """
+    if ok:
+        body = _note(
+            f"<strong>Connected.</strong> A refresh token was stored in "
+            f"<code>{_e(credential)}</code>. Nothing about its value is shown "
+            "here or anywhere else (FR-10.2).",
+            icon="lock",
+            tone="ok",
+        )
+    else:
+        body = _note(f"<strong>Not connected.</strong> {_e(message)}", tone="bad")
+    return (
+        body
+        + '<div class="pad">'
+        f'<a class="btn" href="{UI_PREFIX}/credentials">'
+        f'{_icon("back", 14)}Back to credentials</a>'
+        "</div>"
+    )
+
+
 def build_ui_routes(
     *,
     service: Service,
@@ -5135,6 +5458,7 @@ def build_ui_routes(
     toolkit_proposals: ToolkitProposalStore | None = None,
     sessions: SessionStore | None = None,
     throttle: LoginThrottle | None = None,
+    oauth_states: OAuthStateStore | None = None,
 ) -> list[Route]:
     """Builds the UI routes.
 
@@ -5143,6 +5467,7 @@ def build_ui_routes(
     """
     sessions = sessions or SessionStore()
     throttle = throttle or LoginThrottle()
+    oauth_states = oauth_states or OAuthStateStore()
 
     def _nonce() -> str:
         return secrets.token_urlsafe(16)
@@ -5938,6 +6263,323 @@ def build_ui_routes(
             )
         return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
 
+    # -- Google OAuth sign-in -----------------------------------------
+    #
+    # Two GET routes, both behind the console session and `role: admin`
+    # exactly like every other write path -- they are deliberately not in
+    # `server.PUBLIC_PATHS`: the callback writes a credential, and a
+    # publicly reachable write is a write by whoever finds the URL.
+    #
+    # The callback has one wrinkle nothing else in this file has: Google
+    # sends the browser back cross-site, and the session cookie is
+    # `SameSite=Strict`, so it is usually *not* attached to that
+    # navigation. The single-use `state` (see `OAuthStateStore`) is what
+    # carries the operator's identity across that gap. A bare hit with
+    # neither cookie nor state is an unauthenticated request to a console
+    # route and goes to the login page, like every other one.
+
+    def _google_credential_names() -> list[str]:
+        """The credential names `google` toolkits point at (Tier 1)."""
+        names: list[str] = []
+        for toolkit in service.tier1.toolkits.values():
+            if toolkit.executor == "google" and toolkit.credential:
+                if toolkit.credential not in names:
+                    names.append(toolkit.credential)
+        return sorted(names)
+
+    def _oauth_scopes() -> list[str]:
+        """Read at request time, not at startup: a toolkit added or
+        narrowed by a redeploy changes the next consent screen without
+        anything here to keep in step.
+        """
+        declared = service.tier1.google_oauth_scopes()
+        return _google_scope_urls(declared or DEFAULT_GOOGLE_SCOPES)
+
+    def _oauth_client(name: str) -> tuple[str, str]:
+        """client_id/client_secret out of the oauth2 credential.
+
+        The one read of a credential value in this file. It never leaves
+        this function's callers: the id goes into the consent URL (which
+        is where Google requires it), the secret goes into the token
+        request body and nowhere else -- not into a page, not into the
+        audit log, not into a process argument (FR-10.2/10.7).
+        """
+        assert credentials is not None
+        resolved = credentials._resolve(name)
+        if resolved is None:
+            raise OAuthExchangeError(
+                f"Credential {name!r} does not exist yet. Create it as kind "
+                "oauth2 with the client_id and client_secret of your Google "
+                "OAuth client first -- this page only adds the refresh token."
+            )
+        if resolved.kind != "oauth2":
+            raise OAuthExchangeError(
+                f"Credential {name!r} is kind {resolved.kind!r}, not oauth2."
+            )
+        try:
+            bundle = json.loads(resolved.value)
+        except (json.JSONDecodeError, TypeError):
+            raise OAuthExchangeError(
+                f"Credential {name!r} does not hold a JSON bundle."
+            ) from None
+        client_id = bundle.get("client_id") if isinstance(bundle, dict) else None
+        client_secret = bundle.get("client_secret") if isinstance(bundle, dict) else None
+        if not client_id or not client_secret:
+            raise OAuthExchangeError(
+                f"Credential {name!r} is missing client_id/client_secret."
+            )
+        return str(client_id), str(client_secret)
+
+    def _oauth_error(
+        request: Request, session: Session, message: str, *, status: int = 400,
+    ) -> Response:
+        return _shell(
+            request, "Google sign-in",
+            _oauth_result_page(ok=False, credential="", message=message),
+            session, icon="ban", active="/credentials", status=status,
+        )
+
+    async def oauth_google_authorize(request: Request) -> Response:
+        session = _current(request)
+        if session is None:
+            return _to_login()
+        if store is None or credentials is None or not session.can_write:
+            return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
+
+        name = request.query_params.get("credential", "").strip()
+        available = _google_credential_names()
+        if not name:
+            if len(available) == 1:
+                name = available[0]
+            elif not available:
+                return _oauth_error(
+                    request, session,
+                    "No google toolkit in toolkits.yaml names a credential, so "
+                    "there is nothing to connect. Toolkits are deploy-time only "
+                    "(FR-4.11).",
+                )
+            else:
+                return _oauth_error(
+                    request, session,
+                    "Several google toolkits name different credentials ("
+                    + ", ".join(available)
+                    + "). Add ?credential=<name> to say which one to connect.",
+                )
+        try:
+            client_id, _secret = _oauth_client(name)
+        except OAuthExchangeError as exc:
+            return _oauth_error(request, session, str(exc))
+
+        redirect_uri = _public_base_url(request) + OAUTH_CALLBACK_PATH
+        scopes = _oauth_scopes()
+        state = oauth_states.issue(
+            identity=session.identity, credential=name, redirect_uri=redirect_uri,
+        )
+        # Names and scopes only -- no client id, no code, no token.
+        audit.write(
+            {
+                "kind": "ui_oauth",
+                "actor": session.identity,
+                "action": "google_authorize",
+                "credential": name,
+                "scopes": scopes,
+                "redirect_uri": redirect_uri,
+            }
+        )
+        return _shell(
+            request, "Connect Google",
+            _oauth_google_page(
+                credential=name,
+                callback_uri=redirect_uri,
+                consent_url=_google_consent_url(
+                    client_id=client_id, redirect_uri=redirect_uri,
+                    scopes=scopes, state=state,
+                ),
+                scopes=scopes,
+            ),
+            session, icon="lock", active="/credentials",
+            subtitle=(
+                "Google returns a refresh token; gatekeeper stores it in the "
+                "credential and never shows it again."
+            ),
+        )
+
+    def _oauth_session(session: Session | None, identity_id: str) -> Session:
+        """The session the result page is rendered for.
+
+        A real one when the browser sent the cookie. Otherwise a
+        render-only stand-in for the operator the state was issued to --
+        it is never put in `SessionStore` and grants nothing; it exists
+        so the result page has a sidebar to draw. Every link on it leads
+        back through the normal session check.
+        """
+        if session is not None:
+            return session
+        known = identities.identities.get(identity_id)
+        return Session(
+            identity=identity_id,
+            # An identity that no longer exists gets the narrowest role
+            # the console has: the page is a result message, not access.
+            role=known.role if known is not None else "viewer",
+            csrf=secrets.token_urlsafe(24),
+        )
+
+    async def oauth_google_callback(request: Request) -> Response:
+        session = _current(request)
+        pending_state = oauth_states.take(request.query_params.get("state", ""))
+        if pending_state is None:
+            if session is None:
+                # No cookie, no state: an unauthenticated request to a
+                # console route, answered like every other one.
+                return _to_login()
+            audit.write(
+                {
+                    "kind": "ui_oauth",
+                    "actor": session.identity,
+                    "action": "google_callback",
+                    "result": "state_mismatch",
+                }
+            )
+            return _oauth_error(
+                request, session,
+                "This did not match a sign-in started from this console -- the "
+                "state is missing, expired, or was already used. Start again "
+                "from the credentials page. Nothing was changed.",
+            )
+        if session is not None and session.identity != pending_state.identity:
+            audit.write(
+                {
+                    "kind": "ui_oauth",
+                    "actor": session.identity,
+                    "action": "google_callback",
+                    "result": "identity_mismatch",
+                    "credential": pending_state.credential,
+                }
+            )
+            return _oauth_error(
+                request, session,
+                "This sign-in was started by a different operator. Nothing "
+                "was changed.",
+            )
+
+        actor = pending_state.identity
+        name = pending_state.credential
+        page_session = _oauth_session(session, actor)
+
+        def _fail(result: str, message: str, *, detail: str = "") -> Response:
+            record: dict[str, Any] = {
+                "kind": "ui_oauth",
+                "actor": actor,
+                "action": "google_callback",
+                "result": result,
+                "credential": name,
+            }
+            if detail:
+                record["detail"] = detail
+            audit.write(record)
+            return _oauth_error(request, page_session, message)
+
+        # The state was issued to an admin; between then and now that
+        # identity could have been demoted or deleted. Writing a
+        # credential on the authority of a role someone no longer has is
+        # what `SessionStore.drop_identity` prevents for ordinary
+        # sessions -- a flow in flight is no different.
+        current = identities.identities.get(actor)
+        if current is None or current.role != ADMIN_ROLE:
+            return _fail(
+                "role_required",
+                "The account that started this sign-in can no longer write "
+                "credentials. Nothing was changed.",
+            )
+
+        # Google's own refusal (the operator clicked "Cancel", or the
+        # client is not allowed to ask for these scopes). Truncated: the
+        # value is Google's text arriving through a URL.
+        denial = request.query_params.get("error", "").strip()[:64]
+        if denial:
+            return _fail(
+                "denied",
+                f"Google did not grant access ({denial}). Nothing was changed.",
+                detail=denial,
+            )
+        code = request.query_params.get("code", "")
+        if not code:
+            return _fail("no_code", "Google sent no authorization code back.")
+        if store is None or credentials is None:
+            return _fail(
+                "read_only",
+                "This console cannot write credentials (no writable "
+                "configuration).",
+            )
+
+        try:
+            client_id, client_secret = _oauth_client(name)
+        except OAuthExchangeError as exc:
+            return _fail("credential_unusable", str(exc))
+
+        try:
+            payload = await _exchange_google_code(
+                code=code,
+                client_id=client_id,
+                client_secret=client_secret,
+                redirect_uri=pending_state.redirect_uri,
+            )
+        except OAuthExchangeError as exc:
+            return _fail("exchange_failed", str(exc))
+        except httpx.HTTPError as exc:
+            return _fail(
+                "exchange_failed",
+                f"Google's token endpoint was not reachable ({type(exc).__name__}).",
+            )
+
+        refresh_token = payload.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            # Google omits it when the client was already granted these
+            # scopes and the request did not force a fresh consent -- the
+            # access token that comes instead is useless here.
+            return _fail(
+                "no_refresh_token",
+                "Google returned no refresh token. Remove gatekeeper's access "
+                "under your Google account's third-party connections and try "
+                "again. Nothing was changed.",
+            )
+
+        bundle = json.dumps(
+            {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+            }
+        )
+        existing = {meta.name for meta in credentials.names()}
+        try:
+            if name in existing:
+                credentials.rotate(
+                    name, value=bundle, actor=actor, rev=credentials.revision(),
+                )
+            else:
+                credentials.create(
+                    name, kind="oauth2", value=bundle, actor=actor,
+                    rev=credentials.revision(),
+                )
+        except (CredentialWriteRefused, ConfigError) as exc:
+            return _fail("write_refused", str(exc))
+
+        audit.write(
+            {
+                "kind": "ui_oauth",
+                "actor": actor,
+                "action": "google_callback",
+                "result": "ok",
+                "credential": name,
+            }
+        )
+        return _shell(
+            request, "Google sign-in",
+            _oauth_result_page(ok=True, credential=name, message=""),
+            page_session, icon="lock", active="/credentials",
+        )
+
     # -- Pending (FR-2.8/2.9) --------------------------------------------
     # Approve/reject go through `writer`, exactly like every other admin
     # write: session, `role: admin`, CSRF. `apply_pending`/`pending.reject`
@@ -6257,6 +6899,10 @@ def build_ui_routes(
         Route(f"{UI_PREFIX}/credentials/rotate", writer(credential_rotate), methods=["POST"]),
         Route(f"{UI_PREFIX}/credentials/delete", credential_delete_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/credentials/delete", writer(credential_delete), methods=["POST"]),
+        # Both GET, both session-gated in the handler, neither public:
+        # the callback writes a credential.
+        Route(OAUTH_AUTHORIZE_PATH, oauth_google_authorize, methods=["GET"]),
+        Route(OAUTH_CALLBACK_PATH, oauth_google_callback, methods=["GET"]),
         Route(
             f"{UI_PREFIX}/requests",
             guarded(
