@@ -11,8 +11,8 @@ an ordinary tool/grant change, and so `EXPOSED_ACTIONS`/`admin_server.py`'s
 drift-check has one fewer place to accidentally expose `deploy`/`reject`
 from `/admin/mcp`.
 
-Three proposal ``kind``s share this one queue and one review surface
-(`/ui/requests`, Toolkit tab), because all three change Tier 1 and none may
+Four proposal ``kind``s share this one queue and one review surface
+(`/ui/requests`, Toolkit tab), because all four change Tier 1 and none may
 ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
 
 - ``"create"`` (`admin.toolkit_propose`) -- drafts a brand-new toolkit.
@@ -32,6 +32,18 @@ ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
   time, must not still be referenced by any non-deleted tool (deleting a
   toolkit out from under a live tool is exactly the "way to bring the
   service down" `catalog.parse_tool_spec` guards against).
+- ``"bind"`` (`admin.credential_bind`) -- points an *existing* toolkit at a
+  *named* credential slot. ``spec`` is exactly ``{"credential": <name>}``
+  and nothing else: a name, never a value, never a destination-level
+  override, never a `path_roots`/limits field. FR-10.4 makes the
+  toolkit->credential *binding* Tier 1 ("only changeable via redeploy")
+  precisely so an admin agent cannot redirect a toolkit at a credential of
+  its choosing; what this kind relaxes is the *redeploy*, not the
+  human -- the agent may only ever queue the name pair here, and only a
+  human clicking Approve & Deploy at `/ui/requests` writes it, exactly as
+  `"update"` relaxed the redeploy for an executor swap. The value side
+  (FR-10.2/10.8) is untouched: no secret material passes through this
+  queue in either direction.
 
 `deploy` is the only function that ever writes `toolkits.yaml`:
 
@@ -40,9 +52,14 @@ ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
    ``"update"``, merges the proposed fields into the *existing* toolkit's
    body, which must already exist. For ``"delete"``, removes the named
    toolkit's key entirely, refusing if any non-deleted tool still
-   references it.
+   references it. For ``"bind"``, sets the *existing* toolkit's
+   ``credential:`` to the proposed name.
 2. Writes the merged content to a temp file and validates it with the exact
-   `load_tier1()` startup uses. Nothing real is touched if this fails.
+   `load_tier1()` startup uses. Nothing real is touched if this fails. A
+   ``"bind"`` additionally re-reads the binding back out of that validated
+   Tier 1 through `Tier1.credential_references()` -- the same walk startup
+   and the console use -- so a binding that parsed but did not actually
+   land is caught before the real file is written.
 3. Only then: atomically writes the real file (`_atomic.py`, the same
    primitives `store.py`/`pending.py` use).
 4. Calls `Service.reload_config(...)` synchronously, in-process -- the same
@@ -81,8 +98,17 @@ from .tier1 import load_tier1
 #: surfaces as a collision or a Tier-1 validation error instead.
 STATUSES = frozenset({"pending", "deployed", "rejected"})
 
-#: The three shapes a proposal can take -- see the module docstring.
-KINDS = frozenset({"create", "update", "delete"})
+#: The four shapes a proposal can take -- see the module docstring.
+KINDS = frozenset({"create", "update", "delete", "bind"})
+
+#: The one and only field a `"bind"` proposal carries. Not folded into
+#: `UPDATE_WRITABLE_FIELDS`: `admin.toolkit_update` takes a free-form
+#: `updates` mapping, so adding `credential` there would let one proposal
+#: swap an executor *and* redirect the credential in a single card, which
+#: is the combination FR-10.4 is least willing to see reviewed at a glance.
+#: A bind is its own kind so its card says exactly one thing -- this
+#: toolkit, that credential name -- and a reviewer can check that one claim.
+BIND_FIELD = "credential"
 
 #: Fields `"update"`-kind proposals may change. Everything else
 #: (`path_roots`, `protected_resources`, limits) stays deploy-time only
@@ -116,11 +142,13 @@ _PROPOSE_ACTION_NAMES = {
     "create": "toolkit_propose",
     "update": "toolkit_update_propose",
     "delete": "toolkit_delete_propose",
+    "bind": "credential_bind_propose",
 }
 _DEPLOY_ACTION_NAMES = {
     "create": "toolkit_deploy",
     "update": "toolkit_update_deploy",
     "delete": "toolkit_delete_deploy",
+    "bind": "credential_bind_deploy",
 }
 
 
@@ -294,6 +322,27 @@ class ToolkitProposalStore:
                 "A delete proposal takes no 'spec' -- there is nothing to "
                 "change, only a toolkit to remove."
             )
+        if kind == "bind":
+            # Shape only -- `deploy()` re-checks this same set as its own
+            # authoritative gate. The point of pinning the spec to exactly
+            # one key is that a bind proposal can never grow a second
+            # payload: no destination-level override, no `path_roots`, no
+            # limits (FR-4.11), and above all nothing value-shaped, which
+            # would otherwise reach `toolkit_proposals.yaml` -- a plaintext
+            # Tier 1 file -- and sit there in the clear.
+            extra = sorted(set(spec) - {BIND_FIELD})
+            if extra or BIND_FIELD not in spec:
+                raise ToolkitProposalWriteRefused(
+                    f"A bind proposal carries exactly {{'{BIND_FIELD}': "
+                    "<name>} and nothing else"
+                    + (f" -- got {extra} as well." if extra else ".")
+                )
+            credential = spec[BIND_FIELD]
+            if not credential or not isinstance(credential, str):
+                raise ToolkitProposalWriteRefused(
+                    f"A bind proposal's '{BIND_FIELD}' must be a non-empty "
+                    "credential name."
+                )
         with self._lock:
             entries = self._load()
             item = ToolkitProposal(
@@ -405,6 +454,26 @@ class ToolkitProposalStore:
                     )
                 before_fields = {k: existing.get(k) for k in item.spec}
                 merged_toolkits[item.name] = {**existing, **item.spec}
+            elif item.kind == "bind":
+                existing = toolkit_section.get(item.name)
+                if not isinstance(existing, dict):
+                    raise ToolkitProposalWriteRefused(
+                        f"No toolkit named {item.name!r} exists in toolkits.yaml "
+                        "-- it may have been renamed or removed by a redeploy "
+                        "since this proposal was made. Reject this proposal."
+                    )
+                extra = sorted(set(item.spec) - {BIND_FIELD})
+                if extra or BIND_FIELD not in item.spec:
+                    # Defense in depth, exactly as the `"update"` branch
+                    # re-checks `UPDATE_WRITABLE_FIELDS`: deploy() validates
+                    # its own authoritative input rather than trusting a
+                    # value it merely wrote earlier.
+                    raise ToolkitProposalWriteRefused(
+                        f"A bind proposal may only set '{BIND_FIELD}'"
+                        + (f" -- this one also carries {extra}." if extra else ".")
+                    )
+                before_fields = {BIND_FIELD: existing.get(BIND_FIELD)}
+                merged_toolkits[item.name] = {**existing, BIND_FIELD: item.spec[BIND_FIELD]}
             elif item.kind == "delete":
                 existing = toolkit_section.get(item.name)
                 if not isinstance(existing, dict):
@@ -449,7 +518,7 @@ class ToolkitProposalStore:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
                     handle.write(merged_text)
                 try:
-                    load_tier1(tmp_path)
+                    validated = load_tier1(tmp_path)
                 except ConfigError as exc:
                     raise ToolkitProposalWriteRefused(
                         f"Proposed toolkit {item.name!r} is invalid: {exc}"
@@ -459,6 +528,32 @@ class ToolkitProposalStore:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+
+            if item.kind == "bind":
+                # The file parses; does the *reference* actually resolve?
+                # Read it back through `Tier1.credential_references()` --
+                # the same single walk the startup check and the console's
+                # "Used by" row use -- rather than trusting the dict we
+                # merged. This is about the binding landing where Tier 1
+                # can see it, not about the credential store having a value
+                # for it: a name with no value is a dangling reference,
+                # which keeps its existing contract of a startup warning
+                # and a note on /ui/credentials, never an abort (FR-8.3g).
+                credential = item.spec[BIND_FIELD]
+                bound = validated.toolkits.get(item.name)
+                if bound is None or bound.credential != credential:
+                    raise ToolkitProposalWriteRefused(
+                        f"Binding {item.name!r} to credential {credential!r} "
+                        "did not survive a Tier 1 reload -- toolkits.yaml was "
+                        "not touched. Reject this proposal."
+                    )
+                if item.name not in validated.credential_references().get(credential, ()):
+                    raise ToolkitProposalWriteRefused(
+                        f"Toolkit {item.name!r} does not appear among the "
+                        f"references to credential {credential!r} after "
+                        "validation -- toolkits.yaml was not touched. Reject "
+                        "this proposal."
+                    )
 
             before_names = sorted(toolkit_section)
             _atomic_write(self.toolkits_path, merged_text)
@@ -501,6 +596,7 @@ class ToolkitProposalStore:
 
 
 __all__ = [
+    "BIND_FIELD",
     "KINDS",
     "STATUSES",
     "UPDATE_WRITABLE_FIELDS",

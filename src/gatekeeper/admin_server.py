@@ -299,6 +299,52 @@ _TOOLS: list[types.Tool] = [
         },
     ),
     types.Tool(
+        name="admin.credential_bind",
+        title="Propose binding a toolkit to a credential",
+        description=(
+            "Proposes pointing an existing toolkit at an existing "
+            "credential slot -- two names and nothing else. There is no "
+            "'value' property and anything value-shaped sent anyway "
+            "(value, secret, token, password, api_key, ...) is explicitly "
+            "refused rather than stored or ignored quietly: no operation "
+            "on /admin/mcp ever carries secret material (FR-10.2/10.8). "
+            "This is the half admin.cred_propose does not cover -- a "
+            "credential nothing references is inert, and the binding "
+            "itself is Tier 1 (FR-10.4), so it is always written to the "
+            "toolkit-proposal queue and never applies on its own, not even "
+            "when both names already exist. A human reviews it at "
+            "/ui/requests (Toolkit tab) and, if they approve, gatekeeper "
+            "writes 'credential: <name>' under that toolkit in "
+            "toolkits.yaml, re-validates it, and reloads it into the "
+            "running process -- no redeploy needed, but also no way for "
+            "this call to make it live by itself. Toolkit-level only: a "
+            "destination's own credential override, path_roots, "
+            "protected_resources and limits stay deploy-time only "
+            "(FR-4.11) and are rejected here. Both names are checked "
+            "against the running configuration (admin.toolkit_list, "
+            "admin.cred_list), so an unknown one is refused immediately, "
+            "by name."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "toolkit": {
+                    "type": "string",
+                    "description": "Name of an existing toolkit (admin.toolkit_list)",
+                },
+                "credential": {
+                    "type": "string",
+                    "description": (
+                        "Name of an existing credential slot "
+                        "(admin.cred_list) -- a name, never a value"
+                    ),
+                },
+            },
+            "required": ["toolkit", "credential"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
         name="admin.toolkit_propose",
         title="Propose a new toolkit",
         description=(

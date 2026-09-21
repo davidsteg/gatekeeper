@@ -1091,3 +1091,240 @@ def _python() -> str:
     # the `tier1` fixture's binary allowlist contains, so the realpath has
     # to be taken here too or the allowlist check rejects it.
     return os.path.realpath(sys.executable)
+
+
+# -- admin.credential_bind (toolkit -> credential *name*, human-approved) ---
+
+
+async def test_credential_bind_is_on_the_admin_tool_list(admin_mcp_env, credential_store):
+    app, _store, _pending, _tp = admin_mcp_env["build"](credentials=credential_store)
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        names = {t.name for t in (await client.list_tools()).tools}
+    assert "admin.credential_bind" in names
+
+
+async def test_credential_bind_schema_takes_two_names_and_nothing_else(
+    admin_mcp_env, credential_store
+):
+    """The schema documents the intent; the checks in `credential_bind`
+
+    itself are the enforcement, since `additionalProperties: False` is
+    advisory to a well-behaved client rather than a transport gate.
+    """
+    app, _store, _pending, _tp = admin_mcp_env["build"](credentials=credential_store)
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    schema = tools["admin.credential_bind"].input_schema
+    assert set(schema["properties"]) == {"toolkit", "credential"}
+    assert sorted(schema["required"]) == ["credential", "toolkit"]
+    assert schema["additionalProperties"] is False
+    assert "value" not in schema["properties"]
+
+
+async def test_credential_bind_queues_and_never_auto_applies(
+    admin_mcp_env, credential_store, tier1
+):
+    """Queue-only, even with both names valid and the merge guaranteed to
+
+    succeed: the binding is Tier 1 (FR-10.4), so only a human at
+    /ui/requests can make it live.
+    """
+    credential_store.create(
+        "sonarr-api-key", kind="api_key_header", header="X-Api-Key",
+        value="filled-in-by-a-human", actor="root", rev="",
+    )
+    app, _store, pending, toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.credential_bind", {"toolkit": "demo", "credential": "sonarr-api-key"}
+        )
+    assert not result.is_error
+    payload = json.loads(result.content[0].text)
+    assert payload["applied"] is False
+    assert payload["pending"] is True
+
+    items = toolkit_proposals.list(status="pending")
+    assert len(items) == 1
+    assert items[0].kind == "bind"
+    assert items[0].name == "demo"
+    # Only the two names -- no value, no ciphertext, nothing else.
+    assert items[0].spec == {"credential": "sonarr-api-key"}
+
+    # The Tier 1 file and the running config are both untouched.
+    assert tier1.toolkit("demo").credential is None
+    on_disk = yaml.safe_load(
+        (admin_mcp_env["tools_path"].parent / "toolkits.yaml").read_text(encoding="utf-8")
+    )
+    assert "credential" not in on_disk["toolkits"]["demo"]
+    # And it never lands in the Tier-2-shaped queue.
+    assert pending.list() == []
+
+
+async def test_credential_bind_refuses_an_unknown_toolkit_by_name(
+    admin_mcp_env, credential_store
+):
+    credential_store.create(
+        "sonarr-api-key", kind="api_key_header", header="X-Api-Key",
+        value="v", actor="root", rev="",
+    )
+    app, _store, _pending, toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.credential_bind",
+            {"toolkit": "no-such-toolkit", "credential": "sonarr-api-key"},
+        )
+    assert result.is_error
+    assert "no-such-toolkit" in result.content[0].text
+    assert toolkit_proposals.list() == []
+
+
+async def test_credential_bind_refuses_an_unknown_credential_by_name(
+    admin_mcp_env, credential_store
+):
+    app, _store, _pending, toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store  # empty store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.credential_bind", {"toolkit": "demo", "credential": "never-created"}
+        )
+    assert result.is_error
+    assert "never-created" in result.content[0].text
+    assert toolkit_proposals.list() == []
+
+
+async def test_credential_bind_rejects_a_smuggled_value(admin_mcp_env, credential_store):
+    """The same guarantee `cred_propose` gives, at the other end of the
+
+    pair: a caller who sent secret material learns immediately that it
+    went nowhere, and it must never reach toolkit_proposals.yaml -- a
+    plaintext Tier 1 file (FR-10.2/10.8).
+    """
+    credential_store.create(
+        "sonarr-api-key", kind="api_key_header", header="X-Api-Key",
+        value="v", actor="root", rev="",
+    )
+    app, _store, _pending, toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.credential_bind",
+            {
+                "toolkit": "demo",
+                "credential": "sonarr-api-key",
+                "value": "sneaked-in-secret",
+            },
+        )
+    assert result.is_error
+    assert "sneaked-in-secret" not in result.content[0].text
+    assert toolkit_proposals.list() == []
+    assert "sneaked-in-secret" not in (
+        (admin_mcp_env["tools_path"].parent / "toolkit-proposals.yaml").read_text(
+            encoding="utf-8"
+        )
+        if (admin_mcp_env["tools_path"].parent / "toolkit-proposals.yaml").exists()
+        else ""
+    )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"secret": "s"},
+        {"token": "t"},
+        {"password": "p"},
+        {"api_key": "k"},
+    ],
+)
+async def test_credential_bind_rejects_every_value_shaped_argument(
+    admin_mcp_env, credential_store, extra
+):
+    credential_store.create(
+        "sonarr-api-key", kind="api_key_header", header="X-Api-Key",
+        value="v", actor="root", rev="",
+    )
+    app, _store, _pending, toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.credential_bind",
+            {"toolkit": "demo", "credential": "sonarr-api-key", **extra},
+        )
+    assert result.is_error
+    assert toolkit_proposals.list() == []
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"destination": "sonarr-lan"},
+        {"path_roots": ["/"]},
+        {"protected_resources": []},
+        {"max_output_bytes": 1 << 30},
+    ],
+)
+async def test_credential_bind_refuses_deploy_time_only_fields(
+    admin_mcp_env, credential_store, extra
+):
+    """Toolkit-level binding only. A destination's own `credential:`
+
+    override beats the toolkit's (FR-8.3g), and path_roots/
+    protected_resources/limits stay redeploy-only (FR-4.11) -- so none of
+    them may ride along on a card a human reads as "this toolkit, that
+    credential".
+    """
+    credential_store.create(
+        "sonarr-api-key", kind="api_key_header", header="X-Api-Key",
+        value="v", actor="root", rev="",
+    )
+    app, _store, _pending, toolkit_proposals = admin_mcp_env["build"](
+        credentials=credential_store
+    )
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.credential_bind",
+            {"toolkit": "demo", "credential": "sonarr-api-key", **extra},
+        )
+    assert result.is_error
+    assert toolkit_proposals.list() == []
+
+
+async def test_credential_bind_without_a_credential_store_is_a_clean_error(admin_mcp_env):
+    app, _store, _pending, toolkit_proposals = admin_mcp_env["build"]()  # no credentials=
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.credential_bind", {"toolkit": "demo", "credential": "sonarr-api-key"}
+        )
+    assert result.is_error
+    assert toolkit_proposals.list() == []
+
+
+async def test_credential_bind_deploy_is_not_reachable_from_admin_mcp(
+    admin_mcp_env, credential_store
+):
+    """The structural half of FR-2.8: the queue is writable from here, the
+
+    approval is not -- same as toolkit_deploy/toolkit_reject.
+    """
+    app, _store, _pending, _tp = admin_mcp_env["build"](credentials=credential_store)
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        names = {t.name for t in (await client.list_tools()).tools}
+        result = await client.call_tool("admin.credential_bind_deploy", {"id": "x"})
+    assert "admin.credential_bind_deploy" not in names
+    assert result.is_error

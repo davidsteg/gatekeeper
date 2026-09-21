@@ -18,11 +18,15 @@ and Tier 2 change-approval flow diagrams.
 A toolkit **proposal** (`toolkit_proposals.yaml`) is the one deliberate,
 narrow exception: an `admin.toolkit_propose` call from `/admin/mcp` can
 draft a brand-new Tier 1 toolkit, `admin.toolkit_update` can propose a
-narrowly-scoped change (`executor`/`binaries`/`denied_args` only, never
-`path_roots`/`protected_resources`/limits) to an *existing* one, and
+narrowly-scoped change (`executor`/`binaries`/`denied_args`/`run_as` only,
+never `path_roots`/`protected_resources`/limits) to an *existing* one,
 `admin.toolkit_delete` can propose removing an *existing* one (refused at
-deploy time if any non-deleted tool still references it) -- but either way
-it only ever lands in this separate Tier 2 file -- never `pending.yaml` --
+deploy time if any non-deleted tool still references it), and
+`admin.credential_bind` can propose pointing an *existing* toolkit at an
+*existing* credential slot (two names, never a value; toolkit-level only,
+so a destination's own `credential:` override stays deploy-time) -- but
+either way it only ever lands in this separate Tier 2 file -- never
+`pending.yaml` --
 and only a human clicking "Approve & Deploy" at `/ui/requests` (Toolkit
 tab) writes it into `toolkits.yaml` and reloads it into the running
 process (`Service.reload_config`, no restart). See
@@ -317,9 +321,12 @@ src/gatekeeper/
   toolkit_proposals.py  ToolkitProposalStore (toolkit_proposals.yaml) --
                        admin.toolkit_propose (new toolkit, kind="create"),
                        admin.toolkit_update (executor/binaries/
-                       denied_args change to an existing one, kind="update"),
-                       and admin.toolkit_delete (remove an existing one,
-                       kind="delete") all land here, never pending.yaml.
+                       denied_args/run_as change to an existing one,
+                       kind="update"), admin.toolkit_delete (remove an
+                       existing one, kind="delete") and
+                       admin.credential_bind (point an existing toolkit at
+                       an existing credential name, kind="bind") all land
+                       here, never pending.yaml.
                        deploy() merges/removes + validates via load_tier1()
                        before writing toolkits.yaml, then calls
                        Service.reload_config() in-process (no restart).

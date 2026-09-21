@@ -122,7 +122,7 @@ Because the two halves live in different tiers, they can disagree: a binding may
 
 Two things follow for the audit log. Every call record names the credential it used (`"credentials": ["sonarr"]`) so you know what to rotate after a leak — and the value itself is masked everywhere it could surface: in the record, in the tool's own response before that response reaches the agent, and in any field whose name looks like a secret. Setting up the master key that encrypts all of this is step 1 of [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#credentials-from-zero-to-a-working-call).
 
-An admin agent on `/admin/mcp` can propose a new credential's *name*, *kind*, and *header* (`admin.cred_propose`) — but never a value; the tool has no such parameter, and one sent anyway is refused, not stored. The proposal waits in `/ui/requests` until a human reviews exactly what was proposed and types the secret themselves, the same write-only guarantee as creating one by hand.
+An admin agent on `/admin/mcp` can propose a new credential's *name*, *kind*, and *header* (`admin.cred_propose`) — but never a value; the tool has no such parameter, and one sent anyway is refused, not stored. The proposal waits in `/ui/requests` until a human reviews exactly what was proposed and types the secret themselves, the same write-only guarantee as creating one by hand. The matching half, `admin.credential_bind`, proposes which *toolkit* uses that credential — again two names and nothing value-shaped — and lands on the Toolkit tab, because the binding is Tier 1 (FR-10.4): only a human clicking "Approve & Deploy" ever writes it into `toolkits.yaml`.
 
 ### Identities: Manage access
 
@@ -338,9 +338,11 @@ every routine change.
 - **Drafting a new toolkit is possible, deploying it never is — from here.**
   `admin.toolkit_list` reads the live Tier 1 configuration; `admin.toolkit_propose`
   drafts a brand-new toolkit, `admin.toolkit_update` proposes a narrow
-  edit, and `admin.toolkit_delete` proposes removing one (refused at
-  deploy time if a tool still references it) — all three always land in
-  their own review surface, the Toolkit tab of `/ui/requests` — never the
+  edit, `admin.toolkit_delete` proposes removing one (refused at
+  deploy time if a tool still references it), and `admin.credential_bind`
+  proposes pointing an existing toolkit at an existing credential *name*
+  (never a value, never a destination-level override) — all four always
+  land in their own review surface, the Toolkit tab of `/ui/requests` — never the
   Change tab — a toolkit changes what is *possible* at all (Tier 1), not
   just who can do what (Tier 2), so it gets a heavier,
   explicit confirmation. A human clicking "Approve & Deploy" is the only
