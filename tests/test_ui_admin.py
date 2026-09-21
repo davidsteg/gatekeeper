@@ -1292,3 +1292,146 @@ async def test_approve_all_link_appears_with_two_pending(admin_env):
         page = await client.get(f"{UI_PREFIX}/requests?tab=change")
         assert "Approve all (2)" in page.text
         assert f"{UI_PREFIX}/pending/approve-all" in page.text
+
+
+# -- Toolkit tab: kind="bind" (admin.credential_bind) -----------------------
+
+
+async def test_toolkits_bind_proposal_shows_bind_pill_and_the_credential_name(admin_env):
+    """Reviewable at a glance, consistent with the create/update/delete
+
+    pills -- and the card shows the credential *name*, which is all that
+    exists on this side of the wall (FR-10.2).
+    """
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    toolkit_proposals.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        page = await client.get(f"{UI_PREFIX}/requests?tab=toolkit")
+        assert page.status_code == 200
+        assert 'pill accent">bind<' in page.text
+        assert "sonarr-api-key" in page.text
+        # An unbound toolkit says so, rather than reading as a redirect.
+        assert "has no credential today" in page.text
+
+
+async def test_toolkits_bind_confirm_names_the_binding_being_replaced(admin_env):
+    """The FR-10.4 case: a reviewer must not read a redirect as an
+
+    addition, so the credential the toolkit uses *today* is named on the
+    confirmation page, not only the proposed one.
+    """
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    first = toolkit_proposals.propose(
+        name="demo", spec={"credential": "old-key"}, actor="hermes", kind="bind"
+    )
+    toolkit_proposals.deploy(first.id, decided_by="root")
+
+    second = toolkit_proposals.propose(
+        name="demo", spec={"credential": "new-key"}, actor="hermes", kind="bind"
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _signed_in(client)
+        page = await client.get(f"{UI_PREFIX}/toolkits/deploy?id={second.id}")
+        assert page.status_code == 200
+        assert "redirects an existing binding" in page.text
+        assert "old-key" in page.text
+        assert "new-key" in page.text
+
+
+async def test_toolkits_bind_deploy_over_http_writes_and_reloads(admin_env):
+    """The full path a `admin.credential_bind` proposal takes: queued by an
+
+    agent (store-level here), approved by a human at /ui/requests, written
+    into toolkits.yaml and live in the same process -- no restart.
+    """
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    service = admin_env["service"]
+    toolkits_path = admin_env["tools_path"].parent / "toolkits.yaml"
+    assert service.tier1.toolkit("demo").credential is None
+
+    item = toolkit_proposals.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        csrf = await _signed_in(client)
+        response = await client.post(
+            f"{UI_PREFIX}/toolkits/deploy",
+            data={"id": item.id, "_csrf": csrf},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+    assert service.tier1.toolkit("demo").credential == "sonarr-api-key"
+    assert service.tier1.credential_references() == {"sonarr-api-key": ("demo",)}
+    assert toolkit_proposals.get(item.id).status == "deployed"
+
+    # And on disk, so a real restart comes back with it -- with nothing
+    # else about the toolkit disturbed.
+    on_disk = yaml.safe_load(toolkits_path.read_text(encoding="utf-8"))["toolkits"]["demo"]
+    assert on_disk["credential"] == "sonarr-api-key"
+    assert on_disk["path_roots"] == list(service.tier1.toolkit("demo").path_roots)
+
+
+async def test_toolkits_bind_deploy_requires_csrf_token(admin_env):
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    item = toolkit_proposals.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client)
+        response = await client.post(f"{UI_PREFIX}/toolkits/deploy", data={"id": item.id})
+        assert response.status_code == 403
+    assert toolkit_proposals.get(item.id).status == "pending"
+    assert admin_env["service"].tier1.toolkit("demo").credential is None
+
+
+async def test_toolkits_bind_deploy_requires_admin_role(admin_env):
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    item = toolkit_proposals.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        await _login(client, "eye")
+        page = await client.get(f"{UI_PREFIX}/requests?tab=toolkit")
+        assert page.status_code == 200
+        assert f"{UI_PREFIX}/toolkits/deploy" not in page.text
+
+        blocked = await client.post(
+            f"{UI_PREFIX}/toolkits/deploy", data={"id": item.id, "_csrf": "x"}
+        )
+        assert blocked.status_code == 403
+    assert toolkit_proposals.get(item.id).status == "pending"
+    assert admin_env["service"].tier1.toolkit("demo").credential is None
+
+
+async def test_toolkits_bind_to_a_credential_with_no_slot_still_deploys(admin_env):
+    """Dangling-reference parity through the real approval route: the
+
+    binding is Tier 1, the value is Tier 2, and the loader contract for a
+    name with no slot behind it is a startup warning plus a note on
+    /ui/credentials -- never a refusal (FR-8.3g).
+    """
+    toolkit_proposals = admin_env["toolkit_proposals"]
+    item = toolkit_proposals.propose(
+        name="demo", spec={"credential": "no-slot-anywhere"}, actor="hermes", kind="bind"
+    )
+    app = admin_env["app"]
+    async with _client(app) as client:
+        csrf = await _signed_in(client)
+        response = await client.post(
+            f"{UI_PREFIX}/toolkits/deploy",
+            data={"id": item.id, "_csrf": csrf},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+    service = admin_env["service"]
+    assert service.tier1.toolkit("demo").credential == "no-slot-anywhere"
+    # Exactly the set difference __main__.py warns on, with an empty store.
+    assert sorted(service.tier1.credential_references()) == ["no-slot-anywhere"]

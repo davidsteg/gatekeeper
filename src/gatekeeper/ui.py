@@ -86,6 +86,7 @@ from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
 from .tier1 import Destination, Toolkit
 from .toolkit_proposals import (
+    BIND_FIELD,
     ToolkitProposal,
     ToolkitProposalStore,
     ToolkitProposalWriteRefused,
@@ -3589,8 +3590,45 @@ _TOOLKIT_PROPOSAL_TONE = {
 }
 
 
+def _bind_rows(item: ToolkitProposal, current: str | None) -> str:
+    """The two lines a `"bind"` proposal is: the credential name it would
+    set, and the one it would replace.
+
+    The replaced name is the half that matters and the half a plain YAML
+    dump of the spec would not show -- "bind sonarr-api-key" reads as an
+    addition whether the toolkit was unbound or was pointed somewhere else
+    a minute ago, and only the second case is FR-10.4's redirect. Names
+    only, on both sides: this row never resolves a value (FR-10.2).
+    """
+    credential = _e(str(item.spec.get(BIND_FIELD) or ""))
+    if current and current != item.spec.get(BIND_FIELD):
+        replaces = (
+            f'<div class="row"><div class="row-l">{_icon("alert", 14)}Replaces'
+            f'</div><div><code>{_e(current)}</code> &mdash; the binding this '
+            "toolkit has now</div></div>"
+        )
+    elif current:
+        replaces = (
+            f'<div class="row"><div class="row-l">{_icon("check", 14)}Already bound'
+            f'</div><div>This toolkit already uses <code>{_e(current)}</code> '
+            "&mdash; deploying changes nothing.</div></div>"
+        )
+    else:
+        replaces = (
+            f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Replaces'
+            "</div><div class=\"muted\">Nothing &mdash; this toolkit has no "
+            "credential today.</div></div>"
+        )
+    return (
+        f'<div class="row"><div class="row-l">{_icon("lock", 14)}Credential</div>'
+        f"<div><code>{credential}</code> &mdash; a name only; the value stays "
+        "in the credential store and is never read back here.</div></div>"
+        + replaces
+    )
+
+
 def _toolkit_proposal_card(
-    session: Session, item: ToolkitProposal, *, can_decide: bool
+    session: Session, item: ToolkitProposal, *, can_decide: bool, current: str | None = None
 ) -> str:
     tone = _TOOLKIT_PROPOSAL_TONE.get(item.status, "")
     ops = ""
@@ -3604,12 +3642,15 @@ def _toolkit_proposal_card(
     meta = f'{_icon("users", 12)}{_e(item.actor)} &middot; {_e(item.created_at)}'
     is_update = item.kind == "update"
     is_delete = item.kind == "delete"
+    is_bind = item.kind == "bind"
     if is_delete:
         detail_rows = (
             f'<div class="row"><div class="row-l">{_icon("sliders", 14)}Removes '
             f'this toolkit</div><div></div></div>'
             + _decided_row(item)
         )
+    elif is_bind:
+        detail_rows = _bind_rows(item, current) + _decided_row(item)
     else:
         spec_yaml = yaml.safe_dump(
             {item.name: item.spec} if not is_update else item.spec,
@@ -3623,6 +3664,7 @@ def _toolkit_proposal_card(
         )
     kind_pill = (
         '<span class="pill bad">delete</span>' if is_delete
+        else '<span class="pill accent">bind</span>' if is_bind
         else '<span class="pill accent">update</span>' if is_update
         else '<span class="pill accent">create</span>'
     )
@@ -3658,8 +3700,9 @@ def _toolkit_tab(
     """
     parts = [
         _note(
-            "Adding a toolkit, or changing an existing one's executor/"
-            "binaries/denied_args/run_as, normally needs a redeploy (Tier 1 is "
+            "Adding a toolkit, changing an existing one's executor/"
+            "binaries/denied_args/run_as, or binding one to a credential, "
+            "normally needs a redeploy (Tier 1 is "
             "immutable at runtime) -- a proposal below is the one way "
             "around that, and only a human can make it take effect. Live "
             "toolkits are on the <a href=\""
@@ -3686,8 +3729,10 @@ def _toolkit_tab(
             _note(
                 "No proposals yet. This fills up when an admin-role agent "
                 "on /admin/mcp calls admin.toolkit_propose (a brand-new "
-                "toolkit) or admin.toolkit_update (an executor/binaries/"
-                "denied_args/run_as change to an existing one) -- e.g. Hermes "
+                "toolkit), admin.toolkit_update (an executor/binaries/"
+                "denied_args/run_as change to an existing one) or "
+                "admin.credential_bind (pointing an existing toolkit at an "
+                "existing credential slot) -- e.g. Hermes "
                 "hitting an 'Unknown toolkit' wall and drafting the fix "
                 "itself instead of a human hand-editing toolkits.yaml.",
                 icon="share",
@@ -3698,15 +3743,30 @@ def _toolkit_tab(
     can_decide = session.can_write and store is not None
     live = [i for i in items if i.status not in _TOOLKIT_ARCHIVE_STATUSES]
     archived = [i for i in items if i.status in _TOOLKIT_ARCHIVE_STATUSES]
+
+    def _current_binding(item: ToolkitProposal) -> str | None:
+        toolkit = service.tier1.toolkits.get(item.name)
+        return toolkit.credential if toolkit is not None else None
+
     parts.append(
-        "".join(_toolkit_proposal_card(session, i, can_decide=can_decide) for i in reversed(live))
+        "".join(
+            _toolkit_proposal_card(
+                session, i, can_decide=can_decide, current=_current_binding(i)
+            )
+            for i in reversed(live)
+        )
         or '<p class="muted">Nothing pending.</p>'
     )
     if archived:
         parts.append(
             _archive_details(
                 "Archive",
-                "".join(_toolkit_proposal_card(session, i, can_decide=False) for i in reversed(archived)),
+                "".join(
+                    _toolkit_proposal_card(
+                        session, i, can_decide=False, current=_current_binding(i)
+                    )
+                    for i in reversed(archived)
+                ),
                 len(archived),
             )
         )
@@ -3769,7 +3829,9 @@ def _view_requests(
     return tabs + banner + body
 
 
-def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
+def _toolkit_deploy_confirm(
+    session: Session, item: ToolkitProposal, *, current: str | None = None
+) -> str:
     """Deliberately heavier than `_pending_reject_confirm`/the Change tab's
     Approve: this is a Tier 1 change, not a Tier 2 one -- it widens (or, for
     an update, changes) what is *possible* at all on this deployment, not
@@ -3778,7 +3840,8 @@ def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
     """
     is_update = item.kind == "update"
     is_delete = item.kind == "delete"
-    spec_yaml = "" if is_delete else yaml.safe_dump(
+    is_bind = item.kind == "bind"
+    spec_yaml = "" if is_delete or is_bind else yaml.safe_dump(
         {item.name: item.spec} if not is_update else item.spec,
         sort_keys=False, allow_unicode=True,
     )
@@ -3799,6 +3862,54 @@ def _toolkit_deploy_confirm(session: Session, item: ToolkitProposal) -> str:
             "breaks every tool still on it, with no further review."
         )
         prompt = f"<p><strong>Approve &amp; deploy deleting {_e(item.name)}?</strong></p>"
+    elif is_bind:
+        credential = str(item.spec.get(BIND_FIELD) or "")
+        warning = (
+            "<strong>This changes Tier 1.</strong> Which credential a "
+            "toolkit uses is deploy-time by design (FR-10.4), so that an "
+            "admin agent cannot redirect a toolkit at a credential of its "
+            "own choosing -- approving this writes "
+            f"<code>credential: {_e(credential)}</code> under toolkit "
+            f"{_e(item.name)!r} in toolkits.yaml <em>and reloads it into "
+            "this running process immediately</em>. Every call through that "
+            "toolkit authenticates with that credential from the moment you "
+            "click, with no further review afterwards. Nothing else about "
+            "the toolkit changes: binaries, path_roots, protected_resources "
+            "and limits are untouched, and no destination-level override "
+            "can be set this way."
+        )
+        if current and current != credential:
+            # The case FR-10.4 is actually about. A reviewer who reads this
+            # card as "gives the toolkit a credential" would be approving
+            # something else entirely, so it is said before the button, not
+            # left to be noticed in a row above it.
+            warning += (
+                f" <strong>This redirects an existing binding.</strong> "
+                f"Toolkit {_e(item.name)!r} uses <code>{_e(current)}</code> "
+                "today; approving points it at a different credential, and "
+                "whatever that credential authenticates as becomes who this "
+                "toolkit is to the remote side."
+            )
+        detail = (
+            f'<p class="muted">Credential <code>{_e(credential)}</code>'
+            + (
+                f", replacing <code>{_e(current)}</code>."
+                if current and current != credential
+                else " (this toolkit has no credential today)."
+                if not current
+                else " &mdash; already its binding; deploying changes nothing."
+            )
+            + " A name, never a value.</p>"
+        )
+        action_label = "Approve &amp; deploy binding"
+        confirm_label = (
+            "I understand this immediately changes which credential this "
+            "toolkit authenticates with, with no further review."
+        )
+        prompt = (
+            f"<p><strong>Approve &amp; bind {_e(item.name)} to "
+            f"{_e(credential)}?</strong></p>" + detail
+        )
     elif is_update:
         warning = (
             "<strong>This changes Tier 1.</strong> Tier 1 is the reason the "
@@ -5994,8 +6105,12 @@ def build_ui_routes(
         item = toolkit_proposals.get(request.query_params.get("id", ""))
         if item is None or item.status != "pending":
             return RedirectResponse(f"{UI_PREFIX}/requests?tab=toolkit", status_code=303)
+        live = service.tier1.toolkits.get(item.name)
         return _shell(
-            request, "Approve & deploy toolkit", _toolkit_deploy_confirm(session, item),
+            request, "Approve & deploy toolkit",
+            _toolkit_deploy_confirm(
+                session, item, current=live.credential if live is not None else None
+            ),
             session, icon="alert", active="/requests",
         )
 

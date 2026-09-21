@@ -26,6 +26,11 @@ whether a change applies immediately or is written to the pending queue:
 * `cred_propose` always goes to the pending queue too, but is never applied
   through `apply_pending`/`_APPLIERS` below -- see its own docstring. It
   proposes a credential's name/kind/header only, never a value.
+* `credential_bind` goes to the *toolkit*-proposal queue, not the pending
+  one: binding a toolkit to a credential name writes `toolkits.yaml`, which
+  is Tier 1 (FR-10.4), so it shares `toolkit_propose`/`toolkit_update`'s
+  store and review surface rather than the Tier-2-shaped one. Two names,
+  never a value -- see its own docstring.
 
 `approve`/`reject` are deliberately **not** methods on this class and are
 not in `_EXPOSED`. The only place a pending item is ever turned into a live
@@ -54,7 +59,7 @@ from .pending import PendingAction, PendingStore
 from .release_notes import query as _release_query
 from .release_notes import read_full as _release_full
 from .store import ConfigStore, WriteRefused
-from .toolkit_proposals import ToolkitProposalStore
+from .toolkit_proposals import BIND_FIELD, ToolkitProposalStore
 
 #: Same cause as the console popup's fallback, phrased for a caller with no
 #: browser: a build that shipped without RELEASE.md (a bare `pip install`
@@ -69,6 +74,50 @@ _NO_RELEASE_NOTES = (
 #: (ui.py) -- that one is client-side only, so a raw MCP call bypasses it
 #: entirely unless enforced here too.
 _CREDENTIAL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+
+#: Argument names `credential_bind` refuses outright instead of ignoring.
+#:
+#: `cred_propose` refuses a bare `value` for this reason and this one only
+#: applies the same rule wider: a bind proposal is stored in
+#: `toolkit_proposals.yaml`, a plaintext Tier 1 file, so anything
+#: value-shaped that slipped through would sit there in the clear until a
+#: human read the card. The MCP SDK does not enforce
+#: `additionalProperties: False` itself (advisory to a well-behaved client,
+#: not a transport gate), so this list is the actual enforcement point.
+_BIND_VALUE_ARGS = frozenset(
+    {
+        "value",
+        "secret",
+        "token",
+        "password",
+        "passphrase",
+        "api_key",
+        "apikey",
+        "key",
+        "credential_value",
+    }
+)
+
+#: Tier 1 fields that stay deploy-time only (FR-4.11) and are refused here
+#: rather than quietly dropped. `destination` heads the list on purpose: a
+#: destination carries its own `credential:` override (FR-8.3g) that beats
+#: the toolkit's, so accepting one would turn a binding a reviewer reads as
+#: "this toolkit, that credential" into a narrower, less visible one.
+#: `credential_bind` is toolkit-level only.
+_BIND_DEPLOY_TIME_ARGS = frozenset(
+    {
+        "destination",
+        "destinations",
+        "path_roots",
+        "protected_resources",
+        "max_timeout_seconds",
+        "max_output_bytes",
+    }
+)
+
+#: Fields that are proposable, just not from here -- pointed at the tool
+#: that does take them rather than refused with a flat "unknown argument".
+_BIND_UPDATE_ARGS = frozenset({"executor", "binaries", "denied_args", "run_as"})
 
 # Imported lazily inside `audit_query` (not at module level): `ui.py`
 # imports `apply_pending` from this module for its `/ui/requests` routes,
@@ -521,6 +570,98 @@ class AdminService:
         item = self.toolkit_proposals.propose(name=name, spec={}, actor=actor, kind="delete")
         return {"applied": False, "pending": True, "proposal_id": item.id}
 
+    def credential_bind(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Proposes pointing an existing toolkit at an existing credential
+        *slot* -- two names, nothing else (FR-10.2/10.8).
+
+        This is the missing half of `cred_propose`. That one gets a
+        credential *created*; a created credential that nothing references
+        is inert, and closing that gap previously meant a human hand-editing
+        toolkits.yaml and redeploying, because the binding is Tier 1
+        (FR-10.4: "only changeable via redeploy", precisely so an admin
+        agent cannot redirect the `docker` toolkit at a credential of its
+        choosing).
+
+        What this relaxes is the redeploy, not the human -- the same trade
+        `toolkit_update` already made for an executor swap. The proposal is
+        written to `ToolkitProposalStore` and never applies on its own;
+        `/ui/requests` (Toolkit tab) is the only place it can take effect,
+        behind a session, `role: admin`, CSRF and an explicit confirmation.
+        There is no code path from `/admin/mcp` to
+        `ToolkitProposalStore.deploy` (FR-2.8's self-approval prevention is
+        structural here as everywhere else in this class).
+
+        Both names are checked against the *running* configuration -- the
+        same two sources `toolkit_list` and `cred_list` read -- so a typo
+        is refused now, by name, instead of sitting in the queue until a
+        human discovers at review time that it could never have deployed.
+        Reporting whether a credential slot exists is no new disclosure:
+        `cred_list` already reports every slot's name to this same
+        admin-role caller, and neither returns a value.
+        """
+        # Refused before anything else is even looked at, and before the
+        # arguments could reach `toolkit_proposals.yaml`: a caller who sent
+        # a secret here must learn immediately that it went nowhere, not
+        # assume gatekeeper stored it. Same reasoning as `cred_propose`'s
+        # `value` check -- see `_BIND_VALUE_ARGS`.
+        smuggled = sorted(set(args) & _BIND_VALUE_ARGS)
+        if smuggled:
+            raise AdminActionError(
+                f"{smuggled} {'is' if len(smuggled) == 1 else 'are'} not a "
+                "valid argument here -- this binds a toolkit to a credential "
+                "*name*. No operation on /admin/mcp ever carries secret "
+                "material (FR-10.2/10.8); a value is typed by a human in "
+                "/ui/credentials and never reaches this queue."
+            )
+        deploy_time = sorted(set(args) & _BIND_DEPLOY_TIME_ARGS)
+        if deploy_time:
+            raise AdminActionError(
+                f"{deploy_time} cannot be proposed -- this binds a "
+                "credential at the toolkit level only. Destination-level "
+                "credential overrides, path_roots, protected_resources and "
+                "limits stay deploy-time only (FR-4.11) and need a redeploy."
+            )
+        update_args = sorted(set(args) & _BIND_UPDATE_ARGS)
+        if update_args:
+            raise AdminActionError(
+                f"{update_args} cannot be proposed here -- this tool sets a "
+                "toolkit's credential and nothing else. Use "
+                "admin.toolkit_update for those fields."
+            )
+
+        toolkit = _require_str(args, "toolkit")
+        credential = _require_str(args, "credential")
+
+        # The running Tier 1 -- the same source `toolkit_list` reports from,
+        # so what an agent was told exists is what is checked here.
+        tier1 = self.store.service.tier1
+        if toolkit not in tier1.toolkits:
+            known = sorted(tier1.toolkits)
+            raise AdminActionError(
+                f"No toolkit named {toolkit!r} in the running configuration "
+                f"(known toolkits: {known}). Check admin.toolkit_list."
+            )
+        if self.credentials is None:
+            raise AdminActionError(
+                "No credential store is configured on this deployment -- "
+                "there is no credential slot to bind to."
+            )
+        known_credentials = sorted(meta.name for meta in self.credentials.names())
+        if credential not in known_credentials:
+            raise AdminActionError(
+                f"No credential slot named {credential!r} exists "
+                f"(known credentials: {known_credentials}). Propose it first "
+                "with admin.cred_propose, or check admin.cred_list."
+            )
+
+        item = self.toolkit_proposals.propose(
+            name=toolkit,
+            spec={BIND_FIELD: credential},
+            actor=actor,
+            kind="bind",
+        )
+        return {"applied": False, "pending": True, "proposal_id": item.id}
+
     def cred_propose(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
         """Proposes a *named, typed, headerless-or-not credential slot* --
 
@@ -615,6 +756,7 @@ _EXPOSED: tuple[str, ...] = (
     "toolkit_update",
     "toolkit_delete",
     "cred_propose",
+    "credential_bind",
 )
 
 EXPOSED_ACTIONS: frozenset[str] = frozenset(_EXPOSED)

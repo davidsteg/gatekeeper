@@ -12,6 +12,7 @@ and the new toolkit is live in the same process afterwards.
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -506,3 +507,205 @@ def test_deploy_run_as_null_clears_it(tmp_path, sandbox):
     item = store.propose(name="files", spec={"run_as": None}, actor="hermes", kind="update")
     store.deploy(item.id, decided_by="root")
     assert service.tier1.toolkit("files").run_as is None
+
+
+# -- kind="bind": a toolkit -> credential *name*, never a value ---------------
+
+
+def test_bind_propose_carries_only_the_credential_name(tmp_path, sandbox):
+    store, _service, _tp = _env(tmp_path, sandbox)
+    item = store.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+    assert item.kind == "bind"
+    assert item.spec == {"credential": "sonarr-api-key"}
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"credential": "sonarr-api-key", "value": "s3cret"},
+        {"credential": "sonarr-api-key", "path_roots": ["/"]},
+        {"credential": "sonarr-api-key", "destination": "sonarr-lan"},
+        {"credential": "sonarr-api-key", "executor": "http"},
+    ],
+)
+def test_bind_propose_refuses_any_second_field(tmp_path, sandbox, spec):
+    """The spec is pinned to exactly one key so a bind proposal can never
+
+    grow a second payload -- not a value (this file is plaintext Tier 1),
+    not a destination-level override, not a path_roots widening (FR-4.11).
+    """
+    store, _service, _tp = _env(tmp_path, sandbox)
+    with pytest.raises(ToolkitProposalWriteRefused) as exc:
+        store.propose(name="demo", spec=spec, actor="hermes", kind="bind")
+    assert "exactly" in str(exc.value)
+    assert store.list() == []
+
+
+def test_bind_propose_refuses_an_empty_credential(tmp_path, sandbox):
+    store, _service, _tp = _env(tmp_path, sandbox)
+    with pytest.raises(ToolkitProposalWriteRefused):
+        store.propose(name="demo", spec={"credential": ""}, actor="hermes", kind="bind")
+    with pytest.raises(ToolkitProposalWriteRefused):
+        store.propose(name="demo", spec={}, actor="hermes", kind="bind")
+    assert store.list() == []
+
+
+def test_bind_propose_does_not_touch_toolkits_yaml(tmp_path, sandbox):
+    """Queue-only: proposing is not applying, even though both names are
+
+    plausible and nothing about the merge would have failed.
+    """
+    store, service, toolkits_path = _env(tmp_path, sandbox)
+    before = open(toolkits_path, encoding="utf-8").read()
+
+    store.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+
+    assert open(toolkits_path, encoding="utf-8").read() == before
+    assert service.tier1.toolkit("demo").credential is None
+
+
+def test_deploy_bind_writes_the_binding_and_reloads(tmp_path, sandbox):
+    store, service, toolkits_path = _env(tmp_path, sandbox)
+    assert service.tier1.toolkit("demo").credential is None
+
+    item = store.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+    deployed = store.deploy(item.id, decided_by="root")
+
+    assert deployed.status == "deployed"
+    # Live in the same process -- no restart, like every other deploy here.
+    assert service.tier1.toolkit("demo").credential == "sonarr-api-key"
+    assert service.tier1.credential_references() == {"sonarr-api-key": ("demo",)}
+
+    on_disk = yaml.safe_load(open(toolkits_path, encoding="utf-8").read())
+    assert on_disk["toolkits"]["demo"]["credential"] == "sonarr-api-key"
+
+
+def test_deploy_bind_leaves_every_other_field_alone(tmp_path, sandbox):
+    """A bind sets `credential:` and nothing else -- binaries, path_roots,
+
+    protected_resources and the limits come back byte-identical.
+    """
+    store, service, toolkits_path = _env(tmp_path, sandbox)
+    before = yaml.safe_load(open(toolkits_path, encoding="utf-8").read())["toolkits"]["demo"]
+
+    item = store.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+    store.deploy(item.id, decided_by="root")
+
+    after = yaml.safe_load(open(toolkits_path, encoding="utf-8").read())["toolkits"]["demo"]
+    assert after == {**before, "credential": "sonarr-api-key"}
+    assert service.tier1.toolkit("demo").path_roots == tuple(before["path_roots"])
+
+
+def test_deploy_bind_can_redirect_an_existing_binding(tmp_path, sandbox):
+    store, service, _tp = _env(tmp_path, sandbox)
+    first = store.propose(
+        name="demo", spec={"credential": "old-key"}, actor="hermes", kind="bind"
+    )
+    store.deploy(first.id, decided_by="root")
+    assert service.tier1.toolkit("demo").credential == "old-key"
+
+    second = store.propose(
+        name="demo", spec={"credential": "new-key"}, actor="hermes", kind="bind"
+    )
+    store.deploy(second.id, decided_by="root")
+    assert service.tier1.toolkit("demo").credential == "new-key"
+
+
+def test_deploy_bind_rejects_missing_toolkit_and_leaves_state_untouched(tmp_path, sandbox):
+    """A toolkit that vanished in a redeploy between propose and deploy --
+
+    refused at the authoritative gate, with toolkits.yaml untouched.
+    """
+    store, service, toolkits_path = _env(tmp_path, sandbox)
+    before = open(toolkits_path, encoding="utf-8").read()
+    item = store.propose(
+        name="ghost", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+
+    with pytest.raises(ToolkitProposalWriteRefused) as exc:
+        store.deploy(item.id, decided_by="root")
+    assert "ghost" in str(exc.value)
+    assert open(toolkits_path, encoding="utf-8").read() == before
+    assert "ghost" not in service.tier1.toolkits
+    assert store.get(item.id).status == "pending"
+
+
+def test_deploy_bind_rechecks_the_spec_it_wrote_earlier(tmp_path, sandbox):
+    """Defense in depth, exactly as the "update" branch re-checks
+
+    UPDATE_WRITABLE_FIELDS: deploy() validates its own authoritative input
+    rather than trusting what propose() let through -- here, a
+    toolkit_proposals.yaml edited by hand behind the store's back.
+    """
+    store, _service, toolkits_path = _env(tmp_path, sandbox)
+    item = store.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+    raw = yaml.safe_load(open(store.path, encoding="utf-8").read())
+    raw["proposals"][0]["spec"]["path_roots"] = ["/"]
+    open(store.path, "w", encoding="utf-8").write(yaml.safe_dump(raw))
+
+    before = open(toolkits_path, encoding="utf-8").read()
+    with pytest.raises(ToolkitProposalWriteRefused) as exc:
+        store.deploy(item.id, decided_by="root")
+    assert "path_roots" in str(exc.value)
+    assert open(toolkits_path, encoding="utf-8").read() == before
+
+
+def test_deploy_bind_to_a_credential_with_no_slot_still_deploys(tmp_path, sandbox):
+    """Dangling-reference parity (FR-8.3g): the binding is Tier 1, the value
+
+    is Tier 2, and the two are allowed to disagree. A name with no slot
+    behind it is a startup *warning* and a note on /ui/credentials -- never
+    an abort -- so deploy must not invent a stricter rule than the loader
+    it validates with. `__main__.py`'s check is the same set difference.
+    """
+    store, service, _tp = _env(tmp_path, sandbox)
+    item = store.propose(
+        name="demo", spec={"credential": "not-in-any-store"}, actor="hermes", kind="bind"
+    )
+    store.deploy(item.id, decided_by="root")
+
+    assert service.tier1.toolkit("demo").credential == "not-in-any-store"
+    references = service.tier1.credential_references()
+    # Exactly what the startup warning computes, with an empty store.
+    assert sorted(set(references) - set()) == ["not-in-any-store"]
+
+
+def test_bind_reject_leaves_toolkits_yaml_unchanged(tmp_path, sandbox):
+    store, service, toolkits_path = _env(tmp_path, sandbox)
+    before = open(toolkits_path, encoding="utf-8").read()
+    item = store.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+
+    rejected = store.reject(item.id, decided_by="root", reason="wrong credential")
+    assert rejected.status == "rejected"
+    assert open(toolkits_path, encoding="utf-8").read() == before
+    assert service.tier1.toolkit("demo").credential is None
+
+
+def test_bind_is_audited_by_its_own_action_name(tmp_path, sandbox):
+    """A bind must be tellable apart from an executor update in the audit
+
+    log -- both write toolkits.yaml, only one changes who the toolkit
+    authenticates as.
+    """
+    store, _service, _tp = _env(tmp_path, sandbox)
+    item = store.propose(
+        name="demo", spec={"credential": "sonarr-api-key"}, actor="hermes", kind="bind"
+    )
+    store.deploy(item.id, decided_by="root")
+
+    lines = (tmp_path / "logs" / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    actions = [json.loads(line).get("action") for line in lines]
+    assert "credential_bind_propose" in actions
+    assert "credential_bind_deploy" in actions
