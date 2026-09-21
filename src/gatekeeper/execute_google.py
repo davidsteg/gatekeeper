@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -43,7 +44,56 @@ from typing import Any
 from .errors import DenialReason, Denied
 from .execute import OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN, Result
 from .execute_http import MAX_JSON_ITEMS, _cap_json
-from .tier1 import Toolkit
+from .tier1 import GOOGLE_FALLBACK_SCRIPT, Toolkit
+
+logger = logging.getLogger("gatekeeper")
+
+
+def _resolve_script(toolkit: Toolkit, *, warn: bool) -> str:
+    """The script path this call actually runs.
+
+    Normally the toolkit's own `google_script`. When that path does not
+    exist on this filesystem, the image's own copy
+    (`tier1.GOOGLE_FALLBACK_SCRIPT`, there since 0.40.1) stands in: a
+    toolkit written in the 0.38/0.40.0 era names a host path that was
+    mounted into the container back then and simply is not there now, and
+    every call on it dies with a FileNotFound that names only the path
+    that is wrong, never the one that would work. The fallback keeps
+    those deployments running; the warning -- one line, naming both the
+    configured and the substituted path -- is what keeps it from being a
+    silent divergence between what toolkits.yaml says and what runs.
+
+    Not applied to a `google_container` toolkit: there the script lives
+    on another container's filesystem, so this filesystem has no opinion
+    about whether the configured path exists, and substituting a path out
+    of *this* image would be a guess about the wrong machine.
+
+    `warn=False` is for `probe`, which asks the same question for
+    readiness and must not turn a health check into a log line per poll.
+    """
+    assert toolkit.google_script is not None
+    configured = toolkit.google_script
+    if toolkit.google_container:
+        return configured
+    if os.path.isfile(configured):
+        return configured
+    if not os.path.isfile(GOOGLE_FALLBACK_SCRIPT):
+        # Neither path exists -- nothing to fall back to, so the call
+        # fails the ordinary way (the interpreter reports it cannot open
+        # the script), naming the path the operator configured rather than
+        # a second one they never wrote down.
+        return configured
+    if warn:
+        logger.warning(
+            "Toolkit %r: google_script %s does not exist -- falling back to "
+            "the image's copy at %s (baked in since 0.40.1). Update "
+            "google_script in toolkits.yaml so the configuration names the "
+            "script that actually runs.",
+            toolkit.name,
+            configured,
+            GOOGLE_FALLBACK_SCRIPT,
+        )
+    return GOOGLE_FALLBACK_SCRIPT
 
 
 def _build_argv(toolkit: Toolkit, google_action: str, args: list[str]) -> list[str]:
@@ -55,19 +105,22 @@ def _build_argv(toolkit: Toolkit, google_action: str, args: list[str]) -> list[s
     interpreter that is running gatekeeper (`sys.executable`, the same
     idiom `conftest.py`'s `PYTHON` uses) -- never a bare `python`, which
     some environments resolve to `python3` and some don't resolve at all.
-    `google_script` is the script path; `google_container` (optional)
-    switches the call to ``docker exec <container> python <script> ...``
-    for a deployment that keeps google_api.py in another container on the
-    same host.
+    `google_script` is the script path -- resolved through
+    `_resolve_script` first, so a toolkit still naming a pre-0.40.1 host
+    path runs the image's own copy instead of dying on a FileNotFound;
+    `google_container` (optional) switches the call to ``docker exec
+    <container> python <script> ...`` for a deployment that keeps
+    google_api.py in another container on the same host.
     """
     assert toolkit.google_script is not None
     action_parts = google_action.split()
+    script = _resolve_script(toolkit, warn=True)
     if toolkit.google_container:
         return [
             "docker", "exec", toolkit.google_container,
-            "python", toolkit.google_script, *action_parts, *args,
+            "python", script, *action_parts, *args,
         ]
-    return [sys.executable, toolkit.google_script, *action_parts, *args]
+    return [sys.executable, script, *action_parts, *args]
 
 
 def _interpret_exit(
@@ -319,6 +372,8 @@ async def probe(toolkit: Toolkit) -> bool:
             return result.returncode == 0
         except (OSError, TimeoutError):
             return False
-    return os.path.isfile(toolkit.google_script) and os.access(
-        toolkit.google_script, os.R_OK
-    )
+    # The same path the call itself would run (fallback included, quietly:
+    # a readiness poll must not write a log line per probe) -- otherwise a
+    # toolkit that works via the fallback would report itself unready.
+    script = _resolve_script(toolkit, warn=False)
+    return os.path.isfile(script) and os.access(script, os.R_OK)

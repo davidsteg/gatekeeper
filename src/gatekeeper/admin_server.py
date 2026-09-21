@@ -272,6 +272,38 @@ _TOOLS: list[types.Tool] = [
         },
     ),
     types.Tool(
+        name="admin.cred_delete",
+        title="Delete a credential slot",
+        description=(
+            "Deletes a credential slot by name. Applies immediately -- it "
+            "removes a credential, never creates or reveals one -- but is "
+            "refused while any toolkit or destination still references the "
+            "slot (admin.cred_list's 'used_by'), naming them, since "
+            "deleting a bound slot would leave those refusing every call "
+            "with 'credential is not configured yet'. An unknown name is "
+            "refused the same way, by name. This is the way out of a wrong "
+            "'kind': a slot's kind is fixed at creation, so a token created "
+            "as 'bearer' for a service that wants 'api_key_header' is "
+            "deleted here and proposed again with the right kind via "
+            "admin.cred_propose -- where a human still types the value. "
+            "Audited by name; no value is accepted or returned."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "Name of the credential slot to delete "
+                        "(admin.cred_list) -- a name, never a value"
+                    ),
+                },
+            },
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
         name="admin.cred_propose",
         title="Propose a new credential slot",
         description=(

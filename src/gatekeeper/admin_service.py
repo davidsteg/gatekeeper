@@ -16,7 +16,9 @@ whether a change applies immediately or is written to the pending queue:
   `enabled: false` -- creation is always inert (FR-3.x): an admin or a
   later `tool_enable` call is a separate, auditable decision.
 * `tool_disable` always auto-applies -- disabling only ever narrows what an
-  agent can do.
+  agent can do. `cred_delete` auto-applies for the same reason: it removes
+  a credential slot, never creates or reveals one, and is refused outright
+  while any toolkit or destination still references it.
 * `tool_enable`/`tool_update` are category-conditional: a `read`-category
   tool auto-applies, `write`/`write_external` always goes to the pending
   queue.
@@ -381,6 +383,59 @@ class AdminService:
             tool_id, False, actor=actor, rev=self.store.tools_revision()
         )
         return {"applied": True, "id": tool_id}
+
+    def cred_delete(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Deletes a credential *slot* by name -- the missing counterpart
+
+        to `cred_propose`, and the reason a wrong `kind` is no longer a
+        dead end. A slot's kind is fixed at creation (a `paperless` token
+        created as `bearer` when the service wants `api_key_header`
+        authenticates against nothing), and nothing could change or remove
+        it from here: the only way out was a human in `/ui/credentials`.
+        Deleting the slot and proposing it again with the right kind is
+        that fix, reachable over `/admin/mcp` alone.
+
+        Auto-applies, for `tool_disable`'s reason: removing a credential
+        only ever narrows what this deployment can do. The safety is in
+        the refusal below, not in a queue -- and the value is not
+        recoverable from here either way, since re-creating the slot still
+        routes through `cred_propose`, where a human types the secret
+        (FR-10.2/10.8). Nothing value-shaped is accepted or returned here:
+        a name goes in, a name is audited (`CredentialStore.delete` writes
+        `credential_delete` with the name only).
+
+        Refused while the slot is still bound. `credential_references()`
+        is the same walk `cred_list`'s "used_by" and the startup
+        dangling-reference check use -- including the destination-level
+        `credential:` override (FR-8.3g) that a hand-rolled second walk
+        forgets. Deleting a bound slot would not fail loudly; it would
+        turn a working toolkit into one that refuses every call with "is
+        not configured yet", so the binding has to go first (an approved
+        `credential_bind` pointing elsewhere, or a host-side edit).
+        """
+        if self.credentials is None:
+            raise AdminActionError(
+                "No credential store is configured on this deployment -- "
+                "there is no credential slot to delete."
+            )
+        name = _require_str(args, "name")
+        known = sorted(meta.name for meta in self.credentials.names())
+        if name not in known:
+            raise AdminActionError(
+                f"No credential slot named {name!r} exists "
+                f"(known credentials: {known}). Check admin.cred_list."
+            )
+        used_by = self.store.service.tier1.credential_references().get(name, ())
+        if used_by:
+            raise AdminActionError(
+                f"Credential {name!r} is still referenced by "
+                f"{sorted(used_by)} -- deleting it would leave those refusing "
+                "every call with 'credential is not configured yet'. Point "
+                "them at another slot first (admin.credential_bind, "
+                "human-approved), then delete this one."
+            )
+        self.credentials.delete(name, actor=actor, rev=self.credentials.revision())
+        return {"applied": True, "name": name}
 
     # -- Category-conditional ------------------------------------------------
 
@@ -752,6 +807,7 @@ _EXPOSED: tuple[str, ...] = (
     "release_notes",
     "toolkit_list",
     "cred_list",
+    "cred_delete",
     "toolkit_propose",
     "toolkit_update",
     "toolkit_delete",
