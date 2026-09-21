@@ -96,6 +96,63 @@ def test_input_schema_hides_derived_parameters(catalog):
     assert schema["additionalProperties"] is False
 
 
+def test_schema_pattern_is_passed_through_verbatim(tmp_path, tier1):
+    """The pattern an agent is shown is the one the server enforces.
+
+    `tools/list` must publish the configured regex byte-for-byte -- no
+    re-anchoring, no escaping, no "simplified" variant. A client that
+    validates arguments against the published schema would otherwise
+    refuse a value the server accepts: the case that surfaced this is a
+    two-segment path like `sub/file.yaml`, legal under a pattern that
+    allows `/` and rejected by any narrowed copy of it.
+    """
+    raw_pattern = r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+    catalog = make_catalog(
+        tmp_path,
+        tier1,
+        [
+            {
+                "id": "demo.cat",
+                "toolkit": "demo",
+                "binary": PYTHON,
+                "title": "x",
+                "description": "x",
+                "category": "read",
+                "idempotent": True,
+                "enabled": True,
+                "argv": ["-c", "print(1)", "{relpath}"],
+                "parameters": {
+                    "relpath": {
+                        "type": "string",
+                        "required": True,
+                        "pattern": raw_pattern,
+                        "description": "Path relative to the root",
+                    }
+                },
+                "required_scopes": [],
+                "timeout_seconds": 5,
+                "max_output_bytes": 1024,
+            }
+        ],
+    )
+    tool = catalog.get("demo.cat")
+    schema = tool.input_schema()["properties"]["relpath"]
+    assert schema["pattern"] == raw_pattern
+
+    # And the published pattern really does describe the server's answer.
+    assert resolve_parameters(tool, {"relpath": "sub/file.yaml"})["relpath"] == (
+        "sub/file.yaml"
+    )
+    assert resolve_parameters(tool, {"relpath": "file.yaml"})["relpath"] == "file.yaml"
+    for bad in ("/abs/file.yaml", "sub//file.yaml", "sub/file.yaml\n"):
+        with pytest.raises(Denied) as exc:
+            resolve_parameters(tool, {"relpath": bad})
+        assert exc.value.reason in (
+            DenialReason.PARAM_INVALID,
+            DenialReason.CONTROL_CHARACTER,
+        )
+
+
 def test_integer_bounds(tmp_path, tier1):
     catalog = make_catalog(
         tmp_path,
