@@ -60,6 +60,10 @@ cannot. It is in every release.
 
 ---
 
+## 0.45.9
+
+google executor: derive the CLI service prefix from the toolkit name, so gmail.labels composes argv as gmail labels (calendar list, drive search likewise) instead of a bare action word; flags and positional args pass through unchanged. Regression tests cover argv composition and a mocked-OAuth exit 0.
+
 ## 0.45.8
 
 A `google` toolkit pointing at a pre-0.40.1 script path keeps working, and a credential slot created with the wrong `kind` is no longer a dead end.
