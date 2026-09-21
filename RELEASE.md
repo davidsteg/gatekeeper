@@ -72,10 +72,6 @@ A `google` toolkit pointing at a pre-0.40.1 script path keeps working, and a cre
 
 - `google` executor: a toolkit whose `google_script` names a path that does not exist on this filesystem now falls back to the image's own copy at `/opt/gatekeeper/google/google_api.py` (baked in since 0.40.1) instead of dying on a `FileNotFound` that named only the path that was wrong. A toolkit written in the 0.38/0.40.0 era names a host path that was mounted into the container back then and simply is not there now; those deployments keep running. The substitution warns once per call and once at startup (`tier1.missing_google_script`), naming both the configured and the substituted path, so it is not a silent divergence between `toolkits.yaml` and what runs -- a warning, not an abort. Not applied to `google_container` toolkits, where the script lives on another container's filesystem and this one has no opinion about it. `probe` resolves the same path quietly, so a toolkit working via the fallback no longer reports itself unready.
 
-## 0.45.8
-
-google executor legacy fallback: a toolkit whose google_script names a missing host path falls back to the image-bundled /opt/gatekeeper/google/google_api.py (baked in since 0.40.1), with a warning naming both paths plus a tier1 startup warning. admin.cred_delete: delete an unbound credential slot by name over /admin/mcp, refused while referenced, audited by name only.
-
 ## 0.45.7
 
  - admin.credential_bind: propose a toolkit-level credential binding (toolkit plus credential name only, never values) via the pending-queue; human approval at /ui/requests applies it to toolkits.yaml, re-validates, and hot-reloads
