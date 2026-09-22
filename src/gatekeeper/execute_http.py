@@ -9,6 +9,12 @@ allowlist immediately before connecting, closing the DNS-rebinding gap a
 one-time hostname check would leave open (FR-8.9); redirects are reported,
 never followed (FR-8.8); the credential is injected as a header by this
 module directly, never through a tool's own query/body template (FR-8.14).
+
+A tool may declare `body: {raw_param: <name>}` to hand one parameter's own
+JSON document to the target as the request body byte for byte
+(`_raw_json_body`) -- the body's *shape* is the only thing that changes;
+target, method, path and headers stay where every other rule above puts
+them.
 """
 
 from __future__ import annotations
@@ -185,12 +191,57 @@ def _credential_query(credential: ResolvedCredential | None) -> dict[str, str]:
     return {credential.header: credential.value}
 
 
+def _raw_json_body(raw_param: str, body: Any) -> tuple[bytes | None, Any]:
+    """Resolves a tool's `body: {raw_param: <name>}` into a verbatim body.
+
+    Some APIs (n8n's `POST /api/v1/workflows` is this project's case) take
+    one complete JSON document as the body -- the agent already holds that
+    document as a string, and wrapping it as `{"<name>": "<document>"}`
+    would send a JSON string where the target expects a JSON object.
+
+    Returns `(content, fallback_body)`: `content` is the bytes to send as
+    the request body, and `fallback_body` what to send as a normal JSON
+    object instead when raw mode does not apply -- the referenced
+    parameter being absent (an optional one nobody supplied) falls back to
+    the wrapper, exactly the behaviour that existed before this option.
+
+    The raw value *is* the body: it never also appears as a field of a
+    wrapper object, so the parameter is excluded from that object even
+    when other resolved keys sit next to it (a shape `catalog.py` rejects
+    at load time anyway -- see `_body_raw_param`).
+
+    Raises `Denied` when a string value is not parseable JSON. The parse
+    is a validation only; what gets sent is the original bytes, not a
+    re-serialization, so formatting the target may care about survives.
+    """
+    if not isinstance(body, dict) or raw_param not in body:
+        return None, body
+    value = body[raw_param]
+    if isinstance(value, str):
+        try:
+            json.loads(value)
+        except ValueError as exc:
+            raise Denied(
+                DenialReason.PARAM_INVALID,
+                f"Parameter {raw_param!r} must contain valid JSON (it is sent "
+                f"as the request body verbatim), but parsing it failed: {exc}. "
+                "Nothing was sent.",
+            ) from exc
+        return value.encode("utf-8"), None
+    # A non-string value -- an integer/boolean parameter, or a structure a
+    # nested template produced -- is serialized rather than refused: raw
+    # mode is about the parameter alone deciding the body, not about that
+    # body having to arrive as text.
+    return json.dumps(value, ensure_ascii=False).encode("utf-8"), None
+
+
 async def run(
     *,
     method: str,
     path: str,
     query: dict[str, str],
     body: Any | None,
+    raw_param: str | None = None,
     toolkit: Toolkit,
     credentials: CredentialStore | None,
     timeout_seconds: int,
@@ -290,6 +341,22 @@ async def run(
         )
     extensions = {"sni_hostname": host} if scheme == "https" else {}
 
+    # Raw JSON body mode (`body: {raw_param: <name>}`). Resolved before the
+    # client exists, so an unparseable document is refused without a
+    # connection ever being opened -- an invalid body is a parameter
+    # problem, not a network one.
+    raw_content: bytes | None = None
+    if raw_param is not None:
+        try:
+            raw_content, body = _raw_json_body(raw_param, body)
+        except Denied as denial:
+            return _denied(denial)
+    if raw_content is not None:
+        # `json=` sets this itself; a `content=` body does not, and the
+        # whole point of raw mode is to reach an endpoint that wants a JSON
+        # document.
+        headers["Content-Type"] = "application/json"
+
     outcome = OUTCOME_FAILED
     exit_code: int | None = None
     stdout = ""
@@ -302,7 +369,8 @@ async def run(
                 method,
                 request_url,
                 params=query or None,
-                json=body if body else None,
+                content=raw_content,
+                json=body if (raw_content is None and body) else None,
                 headers=headers,
                 extensions=extensions,
             )

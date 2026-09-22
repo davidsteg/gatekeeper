@@ -161,6 +161,19 @@ class ToolDef:
     query_template: dict[str, str] = dataclasses.field(default_factory=dict)
     body_template: dict[str, Any] | list[Any] | str | None = None
 
+    #: Raw JSON body mode (`body: {raw_param: <parameter name>}`): the named
+    #: parameter's own value *is* the request body, sent byte for byte with
+    #: `Content-Type: application/json` instead of being wrapped as
+    #: `{"<name>": "<value>"}` -- the shape an API like n8n's
+    #: `POST /api/v1/workflows` needs, where the agent already holds a
+    #: complete JSON document. FR-8.7 still holds: the parameter fills the
+    #: body and nothing else -- not the method, host, path, or headers --
+    #: and `execute_http.run` refuses to send a value that is not valid
+    #: JSON. `body_template` still carries the `{"<name>": "{<name>}"}`
+    #: wrapper this replaces, so an absent (optional, unsupplied)
+    #: parameter falls back to the pre-raw-mode behaviour.
+    body_raw_param: str | None = None
+
     #: Per-tool base_url override (0.45.5): the http executor resolves and
     #: SSRF-checks this URL instead of the toolkit base_url when set.
     #: Parsed/validated in the `http` branch of `_tool_fields`-adjacent spec
@@ -582,6 +595,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     path_template: str | None = None
     query_template: dict[str, str] = {}
     body_template: dict[str, Any] | list[Any] | str | None = None
+    body_raw_param: str | None = None
     rpc_method: str | None = None
     params_template: dict[str, str] | None = None
     file_operation: str | None = None
@@ -621,7 +635,18 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         query_template = _str_str_map(spec.get("query"), where, "query")
         raw_body = spec.get("body")
         if raw_body is not None:
-            body_template = _nested_body_map(raw_body, where, "body")
+            body_raw_param = _body_raw_param(raw_body, where, "body")
+            if body_raw_param is not None:
+                # Desugared to the wrapper it replaces: `execute_http.run`
+                # sends the named parameter's value verbatim, but keeping
+                # the `{"<name>": "{<name>}"}` template here means the
+                # placeholder still goes through the same
+                # missing-parameter check and typo guard as any other body,
+                # and an absent value still has a defined meaning (the
+                # plain wrapper) instead of silently becoming no body.
+                body_template = {body_raw_param: "{" + body_raw_param + "}"}
+            else:
+                body_template = _nested_body_map(raw_body, where, "body")
         # Per-tool base_url override (0.45.5). Optional -- absent means the
         # toolkit's base_url is used unchanged. Validated with the same
         # shape check as the toolkit-level field, so a bad value fails at
@@ -771,6 +796,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         path_template=path_template,
         query_template=query_template,
         body_template=body_template,
+        body_raw_param=body_raw_param,
         rpc_method=rpc_method,
         params_template=params_template,
         file_operation=file_operation,
@@ -820,6 +846,35 @@ def _str_str_map(value: Any, where: str, field: str) -> dict[str, str]:
     ):
         raise ConfigError(f"{where}: '{field}' must be a mapping of string to string")
     return dict(value)
+
+
+def _body_raw_param(value: Any, where: str, field: str) -> str | None:
+    """Recognises the raw-JSON-body form ``body: {raw_param: <name>}``.
+
+    Returns the parameter name, or ``None`` when ``value`` is an ordinary
+    (possibly nested) body template -- in which case the caller parses it
+    with ``_nested_body_map`` as before. ``raw_param`` is a mode switch for
+    the whole body, not a field of it: a second key next to it would have
+    no meaning (the raw value *is* the body, so there is no wrapper object
+    left for another field to live in), which is why the mixed shape is
+    rejected at load time rather than silently dropped at call time.
+    """
+    if not isinstance(value, dict) or "raw_param" not in value:
+        return None
+    if len(value) != 1:
+        raise ConfigError(
+            f"{where}: '{field}' with 'raw_param' must have exactly one key -- "
+            f"the raw value is the entire body, so the other keys "
+            f"({sorted(k for k in value if k != 'raw_param')}) could never be "
+            "sent. Move them to 'query' or the path."
+        )
+    name = value["raw_param"]
+    if not isinstance(name, str) or not name:
+        raise ConfigError(
+            f"{where}: '{field}.raw_param' must be the name of a parameter "
+            f"(a non-empty string), not {name!r}"
+        )
+    return name
 
 
 def _nested_body_map(
