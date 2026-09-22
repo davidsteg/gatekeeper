@@ -60,6 +60,10 @@ cannot. It is in every release.
 
 ---
 
+## 0.46.1
+
+Fixed the /ui/tools console crash: tool definitions whose query_template, body_template or params_template carry a plain string no longer abort the tool list with TypeError; non-mapping templates render as no template, mapping behavior unchanged.
+
 ## 0.46.0
 
 Google sign-in happens in the console now: an `oauth2` credential's refresh token arrives from Google directly, instead of through a setup script, a clipboard, and someone's shell history. Plus a pin on what `/mcp` publishes as a parameter's `pattern`.
