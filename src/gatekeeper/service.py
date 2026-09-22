@@ -519,6 +519,12 @@ class Service:
                 method, path, query, body = http_request
                 result = await execute_http.run(
                     method=method, path=path, query=query, body=body,
+                    # Raw JSON body mode, when the tool declares one
+                    # (`body: {raw_param: <name>}`): the executor sends that
+                    # parameter's document verbatim instead of the wrapper
+                    # `build_http_request` resolved. None for every other
+                    # tool, which keeps the wrapper.
+                    raw_param=tool.body_raw_param,
                     toolkit=toolkit, credentials=self.credentials,
                     timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes,
                     idempotent=tool.idempotent, redact=self.audit.redact,
