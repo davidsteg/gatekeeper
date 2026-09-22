@@ -60,6 +60,10 @@ cannot. It is in every release.
 
 ---
 
+## 0.46.2
+
+Added a per-tool raw_param body mode to the http executor: a tool whose body is a free-form JSON string parameter now sends that string verbatim as the request body with Content-Type application/json instead of wrapping it under the parameter name, fixing flat-JSON upstreams like AirTrail flight save and n8n workflow create; invalid JSON errors cleanly and missing params fall back to wrapping.
+
 ## 0.46.1
 
 Fixed the /ui/tools console crash: tool definitions whose query_template, body_template or params_template carry a plain string no longer abort the tool list with TypeError; non-mapping templates render as no template, mapping behavior unchanged.
