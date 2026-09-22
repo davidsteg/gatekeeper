@@ -56,7 +56,7 @@ import re
 import secrets
 import time
 import urllib.parse
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -673,6 +673,20 @@ def _base_tool_id(tool: ToolDef) -> str:
     if tool.destination is None:
         return tool.id
     return tool.id[: -(len(tool.destination) + 1)]
+
+
+def _template_map(value: Any) -> dict[str, Any]:
+    """A template field as a mapping, or empty when it is not one.
+
+    `query_template`/`body_template`/`params_template` come from YAML, and
+    a hand-written entry can carry a plain string (or anything else) where
+    a mapping belongs -- Tier 2 loads it as written. The console only
+    renders these for display, so a non-mapping is shown as "no template"
+    rather than taken as a 500 on the whole tool list.
+    """
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
 
 
 def _icon(name: str, size: int = 16) -> str:
@@ -3098,12 +3112,15 @@ def _view_tools(
             if tk_executor_name == "http":
                 action_label, action_value = "request", f"{tool.http_method} {tool.path_template}"
                 detail_label, detail_value = "query/body", " ".join(
-                    f"{k}={v}" for k, v in {**tool.query_template, **(tool.body_template or {})}.items()
+                    f"{k}={v}" for k, v in {
+                        **_template_map(tool.query_template),
+                        **_template_map(tool.body_template),
+                    }.items()
                 ) or "-"
             elif tk_executor_name == "truenas":
                 action_label, action_value = "rpc method", tool.rpc_method or ""
                 detail_label, detail_value = "params", " ".join(
-                    f"{k}={v}" for k, v in (tool.params_template or {}).items()
+                    f"{k}={v}" for k, v in _template_map(tool.params_template).items()
                 ) or "-"
             elif tk_executor_name == "opencode":
                 # An opencode tool has no binary/argv and no path either:
