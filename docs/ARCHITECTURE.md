@@ -290,13 +290,22 @@ The refresh token in that bundle is obtained by the console itself
 (0.46.0): `GET /ui/oauth/google/authorize` builds Google's consent URL
 from the credential's `client_id`, and `GET /ui/oauth/google/callback`
 exchanges the returned code and writes the refresh token back into the
-same credential (`rotate` when it exists, `create` when it does not).
+same credential (`rotate` when it exists, `create` when it does not),
+together with a `scopes` list — Google's own `scope` field from the token
+response, not the list the consent URL asked for, because an operator may
+clear a checkbox and narrow the grant. That list is what a refresh is
+allowed to ask for: a request covering anything outside the grant is
+answered with `invalid_scope` and the refresh fails as a whole, so it
+travels into the per-call token file and `google_api.py` reads it from
+there instead of guessing.
 Both routes are session-gated and `role: admin`, neither is in
 `server.PUBLIC_PATHS`, and neither renders, logs, or echoes a token, a
 code, or the client secret — the pages say "ok" or "error" (FR-10.2/10.7).
 The scopes asked for are the union of every `google` toolkit's
 `required_scopes` (`Tier1.google_oauth_scopes`), read at request time,
-falling back to a documented default set. What carries the flow across
+falling back to a documented default set (`ui.DEFAULT_GOOGLE_SCOPES`,
+which `google_api.SCOPES` mirrors for token files written before scopes
+were stored). What carries the flow across
 Google's cross-site redirect — which a `SameSite=Strict` session cookie
 does not survive — is a single-use `state` bound to the operator, the
 credential, and the redirect URI (`ui.OAuthStateStore`).

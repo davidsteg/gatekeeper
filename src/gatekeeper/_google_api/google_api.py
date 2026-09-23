@@ -42,15 +42,31 @@ HERMES_HOME = get_hermes_home()
 TOKEN_PATH = HERMES_HOME / "google_token.json"
 CLIENT_SECRET_PATH = HERMES_HOME / "google_client_secret.json"
 
+# Only used when the token file carries no `scopes` of its own (see
+# `_stored_token_scopes`). It is therefore not "what this script can do"
+# but "what was most likely consented to", and it must stay a subset of
+# the real grant: a refresh asking for a scope the grant does not cover
+# is refused by Google with `invalid_scope`, killing every call rather
+# than just the one that wanted the extra scope.
+#
+# So this list is pinned to what gatekeeper's console actually asks for,
+# `ui.DEFAULT_GOOGLE_SCOPES` -- tests/test_google_token_scopes.py asserts
+# the two are the same set, because a token file written before scopes
+# were stored has nothing else to fall back to. It is not the union of
+# every scope Google offers: `calendar`, `documents` and
+# `contacts.readonly` were in this list and in no consent screen, which
+# is what made every refresh fail.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
     "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/contacts.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/contacts",
 ]
 
 
@@ -69,13 +85,19 @@ def _ensure_authenticated():
 
 
 def _stored_token_scopes() -> list[str]:
+    """The scopes a refresh may ask for: the token file's own, if it has any.
+
+    Whoever wrote the token knew what was consented to; this script does
+    not. `SCOPES` is the fallback for a file written before the scopes
+    were recorded, and nothing more.
+    """
     try:
         data = json.loads(TOKEN_PATH.read_text())
     except Exception:
         return list(SCOPES)
     scopes = data.get("scopes")
     if isinstance(scopes, list) and scopes:
-        return scopes
+        return [str(scope) for scope in scopes]
     return list(SCOPES)
 
 

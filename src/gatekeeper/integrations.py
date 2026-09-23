@@ -1161,19 +1161,23 @@ _INTEGRATIONS_LIST: list[Integration] = [
             "    credential: google\n"
             "    # An oauth2 credential: a JSON bundle\n"
             "    # {\"client_id\": ..., \"client_secret\": ..., \"refresh_token\": ...}\n"
-            "    # created via /ui/credentials (kind=oauth2). Never in this file.\n"
+            "    # created via /ui/credentials (kind=oauth2), then completed by\n"
+            "    # Connect Google, which adds the refresh token and the scopes\n"
+            "    # the grant covers. Never in this file.\n"
             "    max_timeout_seconds: 30\n"
             "    max_output_bytes: 131072\n"
         ),
         credential_kind="oauth2",
         notes=(
             "OAuth2: create a credential named 'google' (kind=oauth2) in "
-            "/ui/credentials with a JSON bundle of client_id, client_secret, "
-            "and refresh_token. The refresh token's consent must cover all "
-            "scopes the tools need (gmail.readonly for reads, gmail.send for "
-            "sending, gmail.modify for label changes) -- otherwise the "
-            "write tools fail with 403 insufficient_scope. Google invalidates "
-            "unused refresh tokens after ~6 months; re-authorize if that happens."
+            "/ui/credentials with a JSON bundle of client_id and "
+            "client_secret, then run Connect Google -- it adds the refresh "
+            "token and records which scopes the grant covers. The consent "
+            "must cover all scopes the tools need (gmail.readonly for reads, "
+            "gmail.send for sending, gmail.modify for label changes) -- "
+            "otherwise the write tools fail with 403 insufficient_scope. "
+            "Google invalidates unused refresh tokens after ~6 months; "
+            "re-authorize if that happens."
         ),
         tool_specs=(
             _google_tool(

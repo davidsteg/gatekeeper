@@ -132,10 +132,10 @@ AUDIT_DEFAULT_LIMIT = 200
 # -- Google OAuth sign-in -------------------------------------------------
 #
 # The `google` executor needs an `oauth2` credential holding
-# {client_id, client_secret, refresh_token}. The first two come from a
-# Google Cloud OAuth client and can be typed into the credential form;
-# the third cannot -- it only exists after a human has clicked through a
-# consent screen. Before this, that meant running a setup script outside
+# {client_id, client_secret, refresh_token, scopes}. The first two come
+# from a Google Cloud OAuth client and can be typed into the credential
+# form; the other two cannot -- they only exist after a human has
+# clicked through a consent screen. Before this, that meant running a setup script outside
 # gatekeeper and pasting the resulting token back in, which is exactly
 # the kind of secret handling (clipboard, shell history, a file on
 # someone's laptop) the credential store exists to avoid.
@@ -182,6 +182,12 @@ DEFAULT_GOOGLE_SCOPES = (
     "spreadsheets",
     "contacts",
 )
+
+#: Bounds on the `scope` field of a token response before any of it is
+#: written to the credential store. Google returns ten-ish short URLs;
+#: these are the "this is not a scope list" line, not a real limit.
+MAX_GOOGLE_SCOPES = 64
+MAX_GOOGLE_SCOPE_CHARS = 256
 
 #: How long an issued `state` stays redeemable. Long enough to read a
 #: consent screen, short enough that an abandoned flow does not leave a
@@ -299,14 +305,18 @@ class LoginThrottle:
 class OAuthState:
     """What an issued `state` stands for: who started the flow, for which
 
-    credential, and with which redirect URI. All three are pinned at
-    issue time, so the callback cannot be talked into writing a different
-    credential or into accepting a code minted for a different URI.
+    credential, with which redirect URI, and asking for which scopes. All
+    four are pinned at issue time, so the callback cannot be talked into
+    writing a different credential or into accepting a code minted for a
+    different URI -- and the scopes the consent screen actually asked for
+    are still known when the code comes back, which is what gets stored
+    alongside the refresh token (see `oauth_google_callback`).
     """
 
     identity: str
     credential: str
     redirect_uri: str
+    scopes: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(slots=True)
@@ -333,11 +343,17 @@ class OAuthStateStore:
     ttl: int = OAUTH_STATE_TTL_SECONDS
     _states: dict[str, tuple[OAuthState, float]] = dataclasses.field(default_factory=dict)
 
-    def issue(self, *, identity: str, credential: str, redirect_uri: str) -> str:
+    def issue(
+        self, *, identity: str, credential: str, redirect_uri: str,
+        scopes: Iterable[str] = (),
+    ) -> str:
         self._prune()
         state = secrets.token_urlsafe(32)
         self._states[state] = (
-            OAuthState(identity=identity, credential=credential, redirect_uri=redirect_uri),
+            OAuthState(
+                identity=identity, credential=credential,
+                redirect_uri=redirect_uri, scopes=tuple(scopes),
+            ),
             time.monotonic() + self.ttl,
         )
         return state
@@ -4656,8 +4672,8 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         "ssh_private_key is a PEM private key for the ssh executor; docker_tls "
         "is for a TLS-secured remote Docker destination (FR-8.3g); oauth2 is "
         "a JSON bundle {&quot;client_id&quot;, &quot;client_secret&quot;, "
-        "&quot;refresh_token&quot;} for the google executor, materialized to "
-        "a per-call tempfile at runtime.</div></span>"
+        "&quot;refresh_token&quot;, &quot;scopes&quot;} for the google "
+        "executor, materialized to a per-call tempfile at runtime.</div></span>"
         f'<select name="kind">{kind_options}</select></div>'
         '<div class="field"><span>Header/param name'
         '<div class="hint">Required for kind=api_key_header (the header name, '
@@ -4670,7 +4686,9 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         "<code>{&quot;cert&quot;: ..., &quot;key&quot;: ..., "
         "&quot;ca&quot;: ...}</code> (PEM text, ca optional). For kind=oauth2, "
         "a JSON object: <code>{&quot;client_id&quot;: ..., "
-        "&quot;client_secret&quot;: ..., &quot;refresh_token&quot;: ...}</code>."
+        "&quot;client_secret&quot;: ..., &quot;refresh_token&quot;: ..., "
+        "&quot;scopes&quot;: [...]}</code> -- Connect Google fills in the "
+        "last two."
         "</div></span>"
         '<input type="password" name="value" autocomplete="new-password" required></div>'
         '<div class="field"><span>Probe URL (optional)'
@@ -4756,7 +4774,9 @@ def _credential_fill_confirm(
         "<code>{&quot;cert&quot;: ..., &quot;key&quot;: ..., "
         "&quot;ca&quot;: ...}</code> (PEM text, ca optional). For kind=oauth2, "
         "a JSON object: <code>{&quot;client_id&quot;: ..., "
-        "&quot;client_secret&quot;: ..., &quot;refresh_token&quot;: ...}</code>."
+        "&quot;client_secret&quot;: ..., &quot;refresh_token&quot;: ..., "
+        "&quot;scopes&quot;: [...]}</code> -- Connect Google fills in the "
+        "last two."
         "</div></span>"
         '<input type="password" name="value" autocomplete="new-password" required></div>'
         f'<button type="submit">{_icon("check", 14)}Approve &amp; create</button> '
@@ -5362,9 +5382,10 @@ async def _exchange_google_code(
 
     A module-level function rather than an inline request so a test can
     replace it without a network listener, and so there is exactly one
-    place where the token response exists. The caller reads
-    `refresh_token` out of it and nothing else is kept -- the access
-    token in the same response is deliberately dropped on the floor.
+    place where the token response exists. The caller keeps two fields of
+    it, `refresh_token` and `scope` (see `_granted_google_scopes`) -- the
+    access token in the same response is deliberately dropped on the
+    floor.
     """
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(
@@ -5390,6 +5411,40 @@ async def _exchange_google_code(
     if not isinstance(payload, dict):
         raise OAuthExchangeError("Google's token response was not an object.")
     return payload
+
+
+def _granted_google_scopes(
+    payload: Mapping[str, Any], requested: Iterable[str]
+) -> list[str]:
+    """The scopes this grant actually covers.
+
+    Google's token response carries a space-separated `scope` field, and
+    it is the only authoritative answer: an operator may clear a checkbox
+    on the consent screen, and the grant is then *narrower* than what the
+    consent URL asked for. Storing what we asked for instead of what we
+    got is exactly the bug this function exists to avoid -- a refresh may
+    only ever request a subset of the grant, and Google answers anything
+    wider with `invalid_scope`, refusing the refresh itself.
+
+    The field is external input arriving through a token response, so it
+    is treated like one: split on whitespace, each entry bounded in
+    length, the list bounded in count, anything else dropped. When
+    nothing usable comes back, the scopes the consent screen asked for
+    stand in -- for a grant the operator did not narrow those are the
+    same list, and they are ours, not Google's.
+    """
+    raw = payload.get("scope")
+    granted: list[str] = []
+    if isinstance(raw, str):
+        for scope in raw.split():
+            if len(scope) > MAX_GOOGLE_SCOPE_CHARS or scope in granted:
+                continue
+            granted.append(scope)
+            if len(granted) >= MAX_GOOGLE_SCOPES:
+                break
+    if granted:
+        return granted
+    return list(requested)
 
 
 def _copyable(value: str) -> str:
@@ -6391,6 +6446,7 @@ def build_ui_routes(
         scopes = _oauth_scopes()
         state = oauth_states.issue(
             identity=session.identity, credential=name, redirect_uri=redirect_uri,
+            scopes=scopes,
         )
         # Names and scopes only -- no client id, no code, no token.
         audit.write(
@@ -6561,11 +6617,20 @@ def build_ui_routes(
                 "again. Nothing was changed.",
             )
 
+        # The grant's scopes travel with the refresh token, because a
+        # refresh needs them: google_api.py asks Google to renew *these*
+        # scopes, and a request for anything the operator did not consent
+        # to is answered with `invalid_scope` -- the refresh fails, not
+        # just the one call that needed the extra scope. Google's own
+        # `scope` field is what is stored (see `_granted_google_scopes`);
+        # the consent screen's list is the fallback.
+        scopes = _granted_google_scopes(payload, pending_state.scopes)
         bundle = json.dumps(
             {
                 "client_id": client_id,
                 "client_secret": client_secret,
                 "refresh_token": refresh_token,
+                "scopes": scopes,
             }
         )
         existing = {meta.name for meta in credentials.names()}
@@ -6589,6 +6654,10 @@ def build_ui_routes(
                 "action": "google_callback",
                 "result": "ok",
                 "credential": name,
+                # Scope names, like the authorize record above: no token
+                # material, and the one field that says what this grant
+                # can actually do.
+                "scopes": scopes,
             }
         )
         return _shell(

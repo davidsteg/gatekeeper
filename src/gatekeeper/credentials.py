@@ -56,9 +56,12 @@ from .errors import ConfigError
 #: parameter (named by `header`) directly by execute_http.py, never
 #: through a tool's own query_template.
 #: oauth2's value is a JSON bundle {"client_id", "client_secret",
-#: "refresh_token"} for the `google` executor -- materialized to a
-#: private tempfile (chmod 600) per call by Service, pointed at via HOME
-#: so google_api.py finds its token file, and removed afterwards. Never
+#: "refresh_token"} for the `google` executor, plus an optional "scopes"
+#: list recording what the grant covers (written by the console's
+#: sign-in flow; a refresh that asks for more than the grant is refused
+#: outright with `invalid_scope`) -- materialized to a private tempfile
+#: (chmod 600) per call by Service, pointed at via HOME so google_api.py
+#: finds its token file, and removed afterwards. Never
 #: passed through argv (FR-10.2: a secret never sits in a process
 #: argument list that a `ps` on the host would reveal) or written back
 #: through ui.py.

@@ -339,6 +339,9 @@ async def test_callback_persists_the_refresh_token(oauth_env, monkeypatch):
             "access_token": "ya29.access-token-value",
             "refresh_token": NEW_REFRESH,
             "expires_in": 3599,
+            "scope": " ".join(
+                GOOGLE_SCOPE_PREFIX + name for name in DEFAULT_GOOGLE_SCOPES
+            ),
         }
 
     monkeypatch.setattr("gatekeeper.ui._exchange_google_code", fake_exchange)
@@ -361,6 +364,9 @@ async def test_callback_persists_the_refresh_token(oauth_env, monkeypatch):
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
         "refresh_token": NEW_REFRESH,
+        # The grant travels with the token it belongs to -- see
+        # tests/test_google_token_scopes.py for why a refresh needs it.
+        "scopes": [GOOGLE_SCOPE_PREFIX + name for name in DEFAULT_GOOGLE_SCOPES],
     }
     # Rotated, not re-created: the credential existed.
     meta = next(m for m in oauth_env["credentials"].names() if m.name == "gws")

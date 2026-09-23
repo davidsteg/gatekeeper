@@ -32,9 +32,10 @@ disabled.
 ## Google OAuth sign-in
 
 A `google` toolkit authenticates with an `oauth2` credential holding
-`client_id`, `client_secret` and `refresh_token`. The first two come from
-an OAuth client in the Google Cloud console and are typed into
-`/ui/credentials`; the third is produced by the console itself (0.46.0):
+`client_id`, `client_secret`, `refresh_token` and `scopes`. The first two
+come from an OAuth client in the Google Cloud console and are typed into
+`/ui/credentials`; the other two are produced by the console itself
+(0.46.0):
 
 1. In the Google Cloud console, add this **exact** string to the OAuth
    client's *Authorized redirect URIs*:
@@ -54,8 +55,18 @@ an OAuth client in the Google Cloud console and are typed into
 3. Click **Connect Google** on that credential (or open
    `/ui/oauth/google/authorize?credential=<name>`), work through Google's
    consent screen, and the refresh token is written back into the same
-   credential, encrypted. It is never displayed — the page says only
-   whether it worked.
+   credential, encrypted, together with the scopes the grant actually
+   covers. The token is never displayed — the page says only whether it
+   worked.
+
+   The scopes are stored because a refresh needs them: Google renews a
+   token for a named set of scopes and refuses the refresh outright with
+   `invalid_scope` if that set is not covered by what was consented to.
+   They travel into the per-call token file as its `scopes` field, which
+   is where `google_api.py` reads them. A credential written before the
+   console recorded scopes has none, and falls back to the default set
+   listed below — if such a credential refuses to refresh, run **Connect
+   Google** once more and the exact grant is recorded.
 
 Behind a proxy that rewrites the host, set `GATEKEEPER_BASE_URL` to the
 public origin, otherwise the redirect URI is built from the internal one

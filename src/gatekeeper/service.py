@@ -287,6 +287,20 @@ class Service:
             "client_secret": client_secret,
             "refresh_token": refresh_token,
         }
+        # `scopes` is what the operator consented to, recorded by the
+        # console's sign-in flow (`ui.oauth_google_callback`). It has to
+        # travel with the refresh token: google_api.py renews *these*
+        # scopes, and asking for one the grant does not cover makes
+        # Google refuse the refresh itself with `invalid_scope`. A list
+        # here is also exactly what `Credentials.to_json()` writes back
+        # after a refresh, so the file keeps one shape either way.
+        #
+        # Absent on credentials written before this was stored (or by
+        # hand): the key is then left out rather than guessed at, and
+        # google_api.py falls back to its own SCOPES list.
+        scopes = bundle.get("scopes")
+        if isinstance(scopes, list) and scopes:
+            token["scopes"] = [str(scope) for scope in scopes]
         _write_private_file(
             os.path.join(hermes_dir, "google_token.json"),
             json.dumps(token),
