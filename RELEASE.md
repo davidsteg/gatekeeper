@@ -60,6 +60,10 @@ cannot. It is in every release.
 
 ---
 
+## 0.46.3
+
+Two changes. Google OAuth credentials now persist the scopes the token response granted - the refresh only asks for a subset of the grant, so tokens no longer die with RefreshError invalid_scope when the consent screen did not list every scope the fallback list assumed. Microsoft Outlook mail arrives as the second OAuth provider: a stdlib-only Graph v1.0 executor (mail list/get/folders/send via the existing google-executor shape), /ui/oauth/microsoft/authorize + callback with PKCE, offline_access kept on the stored grant, a shared _oauth_token_env materialization writing microsoft_token.json, and catalog tools outlook_list_messages / outlook_get_message / outlook_list_folders / outlook_send_mail.
+
 ## 0.46.2
 
 Added a per-tool raw_param body mode to the http executor: a tool whose body is a free-form JSON string parameter now sends that string verbatim as the request body with Content-Type application/json instead of wrapping it under the parameter name, fixing flat-JSON upstreams like AirTrail flight save and n8n workflow create; invalid JSON errors cleanly and missing params fall back to wrapping.
