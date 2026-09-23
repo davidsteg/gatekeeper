@@ -95,8 +95,9 @@ item.
   changing shared validation code alongside an integrations-only change.
 - **OAuth2 — done for Google Workspace (0.38.0).** The `google` executor
   runs `google_api.py` as a local subprocess, materializes an `oauth2`
-  credential bundle (client_id/client_secret/refresh_token) to a per-call
-  tempfile, and parses JSON output. Covers Gmail, Calendar, Drive. The
+  credential bundle (client_id/client_secret/refresh_token, plus the
+  scopes the grant covers) to a per-call tempfile, and parses JSON
+  output. Covers Gmail, Calendar, Drive. The
   refresh token is obtained in the console since 0.46.0
   (`/ui/oauth/google/authorize` + `/ui/oauth/google/callback`), so no
   setup script outside gatekeeper handles it. Other OAuth2 providers
