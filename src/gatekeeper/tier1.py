@@ -25,7 +25,18 @@ logger = logging.getLogger("gatekeeper")
 
 #: Executor types implemented.
 KNOWN_EXECUTORS = frozenset(
-    {"docker", "local", "http", "truenas", "ssh", "file", "google", "opencode", "agent"}
+    {
+        "docker",
+        "local",
+        "http",
+        "truenas",
+        "ssh",
+        "file",
+        "google",
+        "opencode",
+        "agent",
+        "microsoft",
+    }
 )
 
 #: FR-8.6: methods an `http` toolkit may allow at all. A toolkit may
@@ -60,6 +71,13 @@ OPENCODE_OPERATIONS = frozenset(
 #: `execute_google` already imports Tier 1 (the other direction would be
 #: circular).
 GOOGLE_FALLBACK_SCRIPT = "/opt/gatekeeper/google/google_api.py"
+
+#: The same arrangement one provider over: the Dockerfile copies
+#: `src/gatekeeper/_microsoft_api/` to `/opt/gatekeeper/microsoft/`, so a
+#: `microsoft` toolkit never has to name a host path. Here rather than in
+#: `execute_microsoft.py` for the reason above -- the startup warning and
+#: the executor's runtime fallback must name the same path.
+MICROSOFT_FALLBACK_SCRIPT = "/opt/gatekeeper/microsoft/microsoft_api.py"
 
 #: The complete vocabulary of the `agent` executor -- the mailbox behind
 #: `messages.py`. Same shelf idea as OPENCODE_OPERATIONS above: a toolkit
@@ -113,6 +131,27 @@ def missing_google_script(toolkit: Toolkit) -> str | None:
     if not toolkit.google_script or os.path.isfile(toolkit.google_script):
         return None
     return toolkit.google_script
+
+
+def missing_microsoft_script(toolkit: Toolkit) -> str | None:
+    """`missing_google_script` for the `microsoft` executor.
+
+    Same shape of problem, same answer: the path is checked for *shape*
+    at load time and never for existence, so a toolkit naming a script
+    this image does not carry parses clean and only reports itself on the
+    first agent call. The executor falls back to
+    MICROSOFT_FALLBACK_SCRIPT, so this is the line that says so while the
+    operator is still looking.
+
+    `microsoft_container` toolkits are skipped: the script lives on
+    another container's filesystem, so testing it against this one would
+    answer a question about the wrong machine.
+    """
+    if toolkit.executor != "microsoft" or toolkit.microsoft_container:
+        return None
+    if not toolkit.microsoft_script or os.path.isfile(toolkit.microsoft_script):
+        return None
+    return toolkit.microsoft_script
 
 
 #: Defaults for the two `agent` ceilings, applied when a toolkit names
@@ -266,6 +305,30 @@ class Toolkit:
     #: Empty (the default) means "no opinion" and leaves the console's
     #: documented default set in place.
     required_scopes: tuple[str, ...] = ()
+
+    # -- `microsoft` executor only -------------------------------------
+    #
+    # The `microsoft` executor is the `google` one with a different
+    # vendored CLI behind it: `microsoft_api.py` run as a local
+    # subprocess (shell=False, argv list), an action-string whitelist
+    # instead of a binary list, and an OAuth credential materialized to a
+    # per-call tempfile rather than passed as a header. The fields below
+    # are deliberately the google ones renamed -- two providers with one
+    # shape is what keeps `service.py` and the console from growing a
+    # second vocabulary for the same idea.
+    #: Absolute path to microsoft_api.py inside the container. Required
+    #: for a `microsoft` toolkit; the binary that runs (python) is fixed
+    #: by the executor, not configured here.
+    microsoft_script: str | None = None
+    #: Optional: runs ``docker exec <container> python <microsoft_script>
+    #: ...`` instead of a local call, for a deployment that keeps the
+    #: script in another container on the same Docker host.
+    microsoft_container: str | None = None
+    #: Whitelist of action strings this toolkit may ever call. "mail
+    #: send" simply never appears in a read-only mailbox toolkit's list
+    #: -- there is no separate permission to deny it, it structurally
+    #: does not exist.
+    allowed_microsoft_actions: tuple[str, ...] = ()
 
     # -- `opencode` executor only --------------------------------------
     #
@@ -433,6 +496,18 @@ class Toolkit:
         """
         return action in self.allowed_google_actions
 
+    # -- `microsoft` executor ---------------------------------------------
+
+    def allows_microsoft_action(self, action: str) -> bool:
+        """The whitelist acts on microsoft_api.py action strings.
+
+        `mail send` simply never appears in a read-only mailbox
+        toolkit's list. Same reasoning as `allows_google_action` above:
+        both are "the finite set of operations this toolkit may ever
+        perform", named differently by their respective CLIs.
+        """
+        return action in self.allowed_microsoft_actions
+
     # -- `opencode` executor ---------------------------------------------
 
     def allows_opencode_operation(self, operation: str) -> bool:
@@ -553,9 +628,29 @@ class Tier1:
         full scope URL. Normalizing them into URLs is the caller's job,
         not Tier 1's.
         """
+        return self._oauth_scopes_for("google")
+
+    def microsoft_oauth_scopes(self) -> tuple[str, ...]:
+        """The union of every `microsoft` toolkit's `required_scopes`.
+
+        `google_oauth_scopes` for the other provider, read at request
+        time by the console's Microsoft sign-in for the same reason: a
+        toolkit added or narrowed by a redeploy changes what the next
+        consent screen asks for, with no second list to keep in step.
+        """
+        return self._oauth_scopes_for("microsoft")
+
+    def _oauth_scopes_for(self, executor: str) -> tuple[str, ...]:
+        """The `required_scopes` union across one executor's toolkits.
+
+        One walk for both providers: the question ("what does this
+        deployment actually need consented?") is the same, only the
+        executor name differs, and two copies would be two places for a
+        toolkit to be forgotten.
+        """
         scopes: list[str] = []
         for toolkit in self.toolkits.values():
-            if toolkit.executor != "google":
+            if toolkit.executor != executor:
                 continue
             for scope in toolkit.required_scopes:
                 if scope not in scopes:
@@ -837,6 +932,9 @@ def load_tier1(path: str) -> Tier1:
         google_script: str | None = None
         google_container: str | None = None
         allowed_google_actions: tuple[str, ...] = ()
+        microsoft_script: str | None = None
+        microsoft_container: str | None = None
+        allowed_microsoft_actions: tuple[str, ...] = ()
         allowed_opencode_operations: tuple[str, ...] = ()
         mailbox_path: str | None = None
         allowed_agent_operations: tuple[str, ...] = ()
@@ -865,19 +963,19 @@ def load_tier1(path: str) -> Tier1:
             except RunAsError as exc:
                 raise ConfigError(f"{where}: {exc}") from None
 
-        # `required_scopes` (google executor only), parsed for every
-        # executor for the same reason as `run_as` above: on any other
-        # toolkit there is no OAuth consent screen to put them on, and a
-        # field that reads as "this toolkit needs these scopes" and is
-        # silently ignored is worse than one that refuses to start.
+        # `required_scopes` (the two OAuth executors only), parsed for
+        # every executor for the same reason as `run_as` above: on any
+        # other toolkit there is no OAuth consent screen to put them on,
+        # and a field that reads as "this toolkit needs these scopes" and
+        # is silently ignored is worse than one that refuses to start.
         required_scopes: tuple[str, ...] = ()
         if spec.get("required_scopes") is not None:
-            if executor != "google":
+            if executor not in ("google", "microsoft"):
                 raise ConfigError(
                     f"{where}: 'required_scopes' is only supported on a 'google' "
-                    f"toolkit, not on {executor!r}. The other executors "
-                    "authenticate with a header, a key, or a socket -- none of "
-                    "them has an OAuth consent screen to ask a scope for."
+                    f"or 'microsoft' toolkit, not on {executor!r}. The other "
+                    "executors authenticate with a header, a key, or a socket -- "
+                    "none of them has an OAuth consent screen to ask a scope for."
                 )
             required_scopes = _str_tuple(spec.get("required_scopes"), where)
 
@@ -982,6 +1080,25 @@ def load_tier1(path: str) -> Tier1:
             )
             if not allowed_google_actions:
                 raise ConfigError(f"{where}: 'allowed_google_actions' must not be empty")
+        elif executor == "microsoft":
+            microsoft_script = str(_require(spec, "microsoft_script", where))
+            if not _is_absolute(microsoft_script):
+                raise ConfigError(
+                    f"{where}: 'microsoft_script' must be an absolute path -- "
+                    "otherwise PATH decides what gets executed"
+                )
+            raw_ms_container = spec.get("microsoft_container")
+            if raw_ms_container is not None:
+                microsoft_container = str(raw_ms_container)
+                if not microsoft_container:
+                    raise ConfigError(f"{where}: 'microsoft_container' must not be empty")
+            allowed_microsoft_actions = _str_tuple(
+                _require(spec, "allowed_microsoft_actions", where), where
+            )
+            if not allowed_microsoft_actions:
+                raise ConfigError(
+                    f"{where}: 'allowed_microsoft_actions' must not be empty"
+                )
         elif executor == "opencode":
             # Same two target fields as `http`, and for the same reasons:
             # `base_url` is the only place a scheme and host may appear
@@ -1092,6 +1209,9 @@ def load_tier1(path: str) -> Tier1:
             google_script=google_script,
             google_container=google_container,
             allowed_google_actions=allowed_google_actions,
+            microsoft_script=microsoft_script,
+            microsoft_container=microsoft_container,
+            allowed_microsoft_actions=allowed_microsoft_actions,
             required_scopes=required_scopes,
             allowed_opencode_operations=allowed_opencode_operations,
             mailbox_path=mailbox_path,
@@ -1155,6 +1275,31 @@ def load_tier1(path: str) -> Tier1:
                     name,
                     absent_script,
                     GOOGLE_FALLBACK_SCRIPT,
+                )
+
+        # And the same for the microsoft executor's vendored script.
+        absent_ms_script = missing_microsoft_script(toolkits[name])
+        if absent_ms_script:
+            if os.path.isfile(MICROSOFT_FALLBACK_SCRIPT):
+                logger.warning(
+                    "Toolkit %r names microsoft_script %s, which does not exist "
+                    "in this container -- calls fall back to the image's own "
+                    "copy at %s. Point microsoft_script at that path in "
+                    "toolkits.yaml to make the configuration say what actually "
+                    "runs.",
+                    name,
+                    absent_ms_script,
+                    MICROSOFT_FALLBACK_SCRIPT,
+                )
+            else:
+                logger.warning(
+                    "Toolkit %r names microsoft_script %s, which does not exist "
+                    "in this container, and the image's own copy at %s is "
+                    "missing too -- every call on this toolkit will fail "
+                    "until one of the two paths exists.",
+                    name,
+                    absent_ms_script,
+                    MICROSOFT_FALLBACK_SCRIPT,
                 )
 
     limits = raw.get("rate_limits") or {}

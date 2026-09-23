@@ -206,6 +206,16 @@ class ToolDef:
     #: structurally produce an additional argument).
     google_args: dict[str, dict[str, Any]] | None = None
 
+    # -- `microsoft` executor ------------------------------------------
+    #: The microsoft_api.py action string, fixed per tool (e.g. "mail
+    #: list", "mail send") -- not agent-suppliable, exactly like
+    #: `google_action` for google.
+    microsoft_action: str | None = None
+    #: Ordered argument map: name -> {flag, positional}, read exactly the
+    #: way `google_args` is. Each entry resolves to one argv element's
+    #: worth of value (FR-5.4).
+    microsoft_args: dict[str, dict[str, Any]] | None = None
+
     # -- `opencode` executor -------------------------------------------
     #: One of `tier1.OPENCODE_OPERATIONS` -- the fixed workflow this tool
     #: performs against the opencode server, not agent-suppliable, exactly
@@ -517,6 +527,24 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
                 except ConfigError as exc:
                     raise Tier1Violation(f"{where}: {exc}") from exc
 
+    elif toolkit.executor == "microsoft":
+        if not toolkit.allows_microsoft_action(tool.microsoft_action or ""):
+            raise Tier1Violation(
+                f"{where}: microsoft action {tool.microsoft_action!r} is not in "
+                f"the allowlist {list(toolkit.allowed_microsoft_actions)} of "
+                f"toolkit {toolkit.name!r}"
+            )
+        # No `path` parameter has a meaning for the mail actions, but a
+        # tool may still declare one, and FR-4.10 applies the same as for
+        # google: a tool may tighten the toolkit's path_roots, never
+        # widen them.
+        for param in tool.parameters.values():
+            if param.must_resolve_under:
+                try:
+                    toolkit.check_path_root(param.must_resolve_under)
+                except ConfigError as exc:
+                    raise Tier1Violation(f"{where}: {exc}") from exc
+
     elif toolkit.executor == "opencode":
         if not toolkit.allows_opencode_operation(tool.opencode_operation or ""):
             raise Tier1Violation(
@@ -601,6 +629,8 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     file_operation: str | None = None
     google_action: str | None = None
     google_args_val: dict[str, dict[str, Any]] | None = None
+    microsoft_action: str | None = None
+    microsoft_args_val: dict[str, dict[str, Any]] | None = None
     opencode_operation: str | None = None
     agent_operation: str | None = None
     #: Per-tool base_url override -- only the `http` branch sets this
@@ -742,6 +772,44 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         # the typo guard below covers them via the `flag` collection
         # above and the parameter existence check in build_google_call.
 
+    elif toolkit.executor == "microsoft":
+        microsoft_action = spec.get("microsoft_action")
+        if not isinstance(microsoft_action, str) or not microsoft_action:
+            raise ConfigError(f"{where}: field 'microsoft_action' is missing")
+        raw_margs = spec.get("microsoft_args") or {}
+        if not isinstance(raw_margs, dict):
+            raise ConfigError(f"{where}: 'microsoft_args' must be a mapping")
+        microsoft_args: dict[str, dict[str, Any]] = {}
+        for arg_name, arg_spec in raw_margs.items():
+            if not isinstance(arg_name, str) or not arg_name:
+                raise ConfigError(
+                    f"{where}: microsoft_args key must be a non-empty string"
+                )
+            if not isinstance(arg_spec, dict):
+                raise ConfigError(
+                    f"{where}: microsoft_args.{arg_name!r} must be a mapping"
+                )
+            flag = arg_spec.get("flag")
+            positional = bool(arg_spec.get("positional", False))
+            if positional and flag is not None:
+                raise ConfigError(
+                    f"{where}: microsoft_args.{arg_name!r} is positional and "
+                    "also sets 'flag' -- pick one"
+                )
+            if not positional and not flag:
+                raise ConfigError(
+                    f"{where}: microsoft_args.{arg_name!r} is not positional "
+                    "and has no 'flag' -- a non-positional arg needs a flag name"
+                )
+            microsoft_args[arg_name] = {
+                "flag": flag,
+                "positional": positional,
+            }
+            # Collected for the placeholder-typo guard below, exactly as
+            # the google branch collects its flags.
+            all_templates.append(flag or "")
+        microsoft_args_val = microsoft_args
+
     elif toolkit.executor == "opencode":
         opencode_operation = spec.get("opencode_operation") or spec.get("operation")
         if not isinstance(opencode_operation, str) or not opencode_operation:
@@ -802,6 +870,8 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         file_operation=file_operation,
         google_action=google_action,
         google_args=google_args_val,
+        microsoft_action=microsoft_action,
+        microsoft_args=microsoft_args_val,
         opencode_operation=opencode_operation,
         agent_operation=agent_operation,
         run_as=tool_run_as,

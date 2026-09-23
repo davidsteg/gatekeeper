@@ -412,6 +412,48 @@ def build_google_call(
     return args
 
 
+def build_microsoft_call(
+    tool: ToolDef, values: dict[str, str], toolkit: Toolkit
+) -> list[str]:
+    """`build_google_call` for the `microsoft` executor.
+
+    Same rules, because the two CLIs take the same argv shape: the action
+    is fixed per tool (so the Tier 1 re-check is an invariant assertion,
+    kept for the reason `build_argv`'s `check_binary` re-check is), and
+    each `microsoft_args` entry emits exactly one argv element's worth of
+    value (FR-5.4) -- a positional arg is the bare value, a flag arg is
+    the pair ``--flag value`` where only the value is agent-controlled.
+    A parameter value therefore cannot structurally produce an additional
+    argument, regardless of its content.
+    """
+    assert tool.microsoft_action is not None
+
+    if not toolkit.allows_microsoft_action(tool.microsoft_action):
+        raise Denied(
+            DenialReason.TIER1_VIOLATION,
+            f"Microsoft action {tool.microsoft_action!r} is not allowed for "
+            "this toolkit.",
+        )
+
+    args: list[str] = []
+    for arg_name, arg_spec in (tool.microsoft_args or {}).items():
+        if arg_name not in values:
+            raise Denied(
+                DenialReason.PARAM_MISSING,
+                f"microsoft_args.{arg_name!r} needs a value.",
+            )
+        value = values[arg_name]
+        if arg_spec.get("positional"):
+            args.append(value)
+        else:
+            flag = arg_spec.get("flag")
+            assert flag is not None  # validated at parse time
+            args.append(flag)
+            args.append(value)
+
+    return args
+
+
 def build_opencode_call(
     tool: ToolDef, values: dict[str, str], toolkit: Toolkit
 ) -> str:

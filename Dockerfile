@@ -119,6 +119,14 @@ COPY RELEASE.md /opt/gatekeeper-docs/RELEASE.md
 # is baked into the image, only the script.
 COPY src/gatekeeper/_google_api/ /opt/gatekeeper/google/
 
+# The same for the `microsoft` executor: microsoft_api.py is baked in at
+# /opt/gatekeeper/microsoft/microsoft_api.py, which is what a toolkit's
+# `microsoft_script` points at. It imports nothing outside the standard
+# library, so it runs under any interpreter in the image, and the OAuth
+# token is materialized to $HOME/.hermes/microsoft_token.json per call
+# by service.py -- no secret is baked into the image, only the script.
+COPY src/gatekeeper/_microsoft_api/ /opt/gatekeeper/microsoft/
+
 # Verify at build time that 'docker compose' actually resolves. Without this
 # check, a missing plugin would only surface on the first agent call.
 RUN docker compose version

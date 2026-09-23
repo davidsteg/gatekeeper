@@ -22,6 +22,7 @@ from . import (
     execute_agent,
     execute_google,
     execute_http,
+    execute_microsoft,
     execute_opencode,
     execute_ssh,
     execute_truenas,
@@ -107,6 +108,12 @@ class Service:
         #: .hermes/google_token.json, for the `google` executor. Cleared
         #: on credential rotation via `invalidate_google_token_cache`.
         self._google_token_dirs: dict[str, str] = {}
+        #: The same, one provider over: credential name -> private temp
+        #: HOME dir holding .hermes/microsoft_token.json for the
+        #: `microsoft` executor. A separate dict rather than a shared one
+        #: keyed by provider, so `invalidate_microsoft_token_cache` means
+        #: exactly what its name says.
+        self._microsoft_token_dirs: dict[str, str] = {}
         #: mailbox path -> the `MessageStore` that owns it, for the `agent`
         #: executor. Keyed on the path, not the toolkit, so two `agent`
         #: toolkits pointed at the same file share one lock instead of
@@ -236,18 +243,62 @@ class Service:
         materialization lives here, immediately before the subprocess
         env is built.
         """
+        return self._oauth_token_env(
+            cred_name,
+            provider="google",
+            token_filename="google_token.json",
+            tmp_prefix="gatekeeper-google-",
+            cache=self._google_token_dirs,
+        )
+
+    def _microsoft_token_env(self, cred_name: str | None) -> dict[str, str]:
+        """`_google_token_env` for the `microsoft` executor.
+
+        microsoft_api.py reads ``~/.hermes/microsoft_token.json`` from
+        HOME, so the only thing that differs is the filename: same
+        bundle fields, same chmod-600 tempfile, same HOME hand-off, same
+        never-through-argv rule (FR-10.2).
+        """
+        return self._oauth_token_env(
+            cred_name,
+            provider="microsoft",
+            token_filename="microsoft_token.json",
+            tmp_prefix="gatekeeper-microsoft-",
+            cache=self._microsoft_token_dirs,
+        )
+
+    def _oauth_token_env(
+        self,
+        cred_name: str | None,
+        *,
+        provider: str,
+        token_filename: str,
+        tmp_prefix: str,
+        cache: dict[str, str],
+    ) -> dict[str, str]:
+        """The materialization both OAuth executors share.
+
+        One function rather than two near-copies: the bundle fields, the
+        0600 tempfile, the HOME hand-off and the `scopes` rule are the
+        same for Google and Microsoft, and a second copy would be a
+        second place for the scopes handling to drift. What the callers
+        supply is the provider's own name (for the messages and the
+        cross-provider check), the token filename its CLI reads, and the
+        cache dict its `invalidate_*_token_cache` clears.
+        """
         if cred_name is None:
             raise Denied(
                 DenialReason.CREDENTIAL_UNAVAILABLE,
-                "This google toolkit needs a credential configured.",
+                f"This {provider} toolkit needs a credential configured.",
             )
-        cached = self._google_token_dirs.get(cred_name)
+        cached = cache.get(cred_name)
         if cached is not None:
             return {"HOME": cached}
         if self.credentials is None:
             raise Denied(
                 DenialReason.CREDENTIAL_UNAVAILABLE,
-                "No credential store is configured, but this google toolkit needs one.",
+                f"No credential store is configured, but this {provider} "
+                "toolkit needs one.",
             )
         resolved = self.credentials._resolve(cred_name)
         if resolved is None:
@@ -267,6 +318,21 @@ class Service:
                 DenialReason.CREDENTIAL_UNAVAILABLE,
                 f"Credential {cred_name!r} is not a valid oauth2 JSON bundle.",
             ) from None
+        # Both providers' bundles are `oauth2` and look alike, so a
+        # toolkit pointed at the other one's credential would otherwise
+        # fail as an unexplained 401 from the wrong API. `provider` is
+        # written by the console's sign-in flow; bundles from before it
+        # existed (and hand-written ones) carry none and are accepted as
+        # whatever the toolkit says they are.
+        stored_provider = bundle.get("provider") if isinstance(bundle, dict) else None
+        if isinstance(stored_provider, str) and stored_provider != provider:
+            raise Denied(
+                DenialReason.CREDENTIAL_UNAVAILABLE,
+                f"Credential {cred_name!r} is a {stored_provider} OAuth "
+                f"credential, but this toolkit is {provider}. Connect the "
+                f"credential from the console's {provider} sign-in, or point "
+                "the toolkit at a different credential.",
+            )
         client_id = bundle.get("client_id")
         client_secret = bundle.get("client_secret")
         refresh_token = bundle.get("refresh_token")
@@ -275,37 +341,38 @@ class Service:
                 DenialReason.CREDENTIAL_UNAVAILABLE,
                 f"Credential {cred_name!r} is missing client_id/client_secret/refresh_token.",
             )
-        tmp_home = tempfile.mkdtemp(prefix="gatekeeper-google-")
+        tmp_home = tempfile.mkdtemp(prefix=tmp_prefix)
         os.chmod(tmp_home, 0o700)
         hermes_dir = os.path.join(tmp_home, ".hermes")
         os.makedirs(hermes_dir, exist_ok=True)
-        # google_api.py reads its token from ~/.hermes/google_token.json.
-        # The bundle is written verbatim -- google_api.py's own format,
-        # not one gatekeeper invented.
+        # The CLI reads its token from ~/.hermes/<token_filename>. The
+        # bundle is written verbatim -- the script's own format, not one
+        # gatekeeper invented.
         token = {
             "client_id": client_id,
             "client_secret": client_secret,
             "refresh_token": refresh_token,
         }
         # `scopes` is what the operator consented to, recorded by the
-        # console's sign-in flow (`ui.oauth_google_callback`). It has to
-        # travel with the refresh token: google_api.py renews *these*
-        # scopes, and asking for one the grant does not cover makes
-        # Google refuse the refresh itself with `invalid_scope`. A list
-        # here is also exactly what `Credentials.to_json()` writes back
+        # console's sign-in flow (`ui.oauth_google_callback` /
+        # `ui.oauth_microsoft_callback`). It has to travel with the
+        # refresh token: the CLI renews *these* scopes, and asking for
+        # one the grant does not cover makes the provider refuse the
+        # refresh itself with `invalid_scope`. A list here is also
+        # exactly what google-auth's `Credentials.to_json()` writes back
         # after a refresh, so the file keeps one shape either way.
         #
         # Absent on credentials written before this was stored (or by
-        # hand): the key is then left out rather than guessed at, and
-        # google_api.py falls back to its own SCOPES list.
+        # hand): the key is then left out rather than guessed at, and the
+        # CLI falls back to its own SCOPES list.
         scopes = bundle.get("scopes")
         if isinstance(scopes, list) and scopes:
             token["scopes"] = [str(scope) for scope in scopes]
         _write_private_file(
-            os.path.join(hermes_dir, "google_token.json"),
+            os.path.join(hermes_dir, token_filename),
             json.dumps(token),
         )
-        self._google_token_dirs[cred_name] = tmp_home
+        cache[cred_name] = tmp_home
         return {"HOME": tmp_home}
 
     def invalidate_google_token_cache(self) -> None:
@@ -314,8 +381,16 @@ class Service:
         on next use instead of a stale refresh token being served from the
         temp-dir cache indefinitely.
         """
-        stale = list(self._google_token_dirs.values())
-        self._google_token_dirs.clear()
+        self._drop_token_dirs(self._google_token_dirs)
+
+    def invalidate_microsoft_token_cache(self) -> None:
+        """`invalidate_google_token_cache` for the `microsoft` executor."""
+        self._drop_token_dirs(self._microsoft_token_dirs)
+
+    @staticmethod
+    def _drop_token_dirs(cache: dict[str, str]) -> None:
+        stale = list(cache.values())
+        cache.clear()
         for tmp_dir in stale:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -445,6 +520,8 @@ class Service:
             rpc_call: tuple[str, dict[str, str]] | None = None
             google_call: tuple[str, list[str]] | None = None
             google_env: dict[str, str] | None = None
+            microsoft_call: tuple[str, list[str]] | None = None
+            microsoft_env: dict[str, str] | None = None
             opencode_operation: str | None = None
             agent_operation: str | None = None
             if toolkit.executor in ("docker", "local", "ssh"):
@@ -468,6 +545,14 @@ class Service:
                 # audited like any other denial, not an exception escaping
                 # call() (FR-10.2). Analogous to `_environment` for docker.
                 google_env = self._google_token_env(toolkit.credential)
+            elif toolkit.executor == "microsoft":
+                microsoft_args = validate.build_microsoft_call(tool, values, toolkit)
+                microsoft_call = (tool.microsoft_action or "", microsoft_args)
+                # Resolved here for the same reason the google branch
+                # resolves its own: a missing/invalid OAuth credential is
+                # a Denied, audited like any other denial, not an
+                # exception escaping call() (FR-10.2).
+                microsoft_env = self._microsoft_token_env(toolkit.credential)
             elif toolkit.executor == "opencode":
                 # No request to build (execute_opencode.py owns the request
                 # shapes) -- but `session_id` and `directory` are checked
@@ -624,6 +709,19 @@ class Service:
                     env=google_env,
                     redact=self.audit.redact,
                 )
+            elif toolkit.executor == "microsoft":
+                assert microsoft_call is not None
+                microsoft_action, microsoft_args = microsoft_call
+                result = await execute_microsoft.run(
+                    microsoft_action=microsoft_action,
+                    args=microsoft_args,
+                    toolkit=toolkit,
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent,
+                    env=microsoft_env,
+                    redact=self.audit.redact,
+                )
             else:
                 assert toolkit.executor == "truenas" and rpc_call is not None
                 rpc_method, params = rpc_call
@@ -724,6 +822,8 @@ class Service:
             return await execute_ssh.probe(toolkit)
         if toolkit.executor == "google":
             return await execute_google.probe(toolkit)
+        if toolkit.executor == "microsoft":
+            return await execute_microsoft.probe(toolkit)
         if toolkit.executor == "opencode":
             return await execute_opencode.probe(toolkit)
         if toolkit.executor == "agent":

@@ -561,6 +561,144 @@ tools:
     timeout_seconds: 30
     max_output_bytes: 8192
 
+  # -- microsoft executor (Outlook / Microsoft Graph, OAuth2) --------------
+  # The google block above, one provider over: 'microsoft_action' is the
+  # fixed action string passed to microsoft_api.py and 'microsoft_args'
+  # maps each parameter to its argv shape -- {"positional": true} for a
+  # bare value, {"flag": "--name"} for a --flag value pair (FR-5.4: one
+  # parameter = one element's worth of value, never more). The executor
+  # runs microsoft_api.py as a local subprocess (shell=False) and parses
+  # its JSON output; Graph is reached with a Bearer access token the
+  # script mints from the credential's refresh token, never from a
+  # parameter.
+  #
+  # Every response here is external_untrusted: a mail body is the
+  # canonical prompt-injection carrier, and the list actions deliberately
+  # return a preview rather than a body for that reason -- outlook.get_message
+  # is the way to full content, one message at a time.
+
+  - id: outlook.list_messages
+    toolkit: outlook
+    version: 1
+    title: List mail
+    description: >-
+      Lists messages in one Outlook folder, newest first. Returns
+      subject, sender, date and a short preview -- not the body. Use
+      outlook.get_message for the full text of one message.
+    category: read
+    idempotent: true
+    enabled: false
+    microsoft_action: mail list
+    microsoft_args:
+      folder:
+        flag: --folder
+      max_results:
+        flag: --max
+    parameters:
+      folder:
+        type: string
+        required: false
+        pattern: "^[A-Za-z0-9=_-]{1,200}$"
+        description: >-
+          Well-known folder name (inbox, sentitems, drafts, archive) or a
+          folder ID from outlook.list_folders. Default inbox.
+      max_results:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 100
+        description: Max messages (default 10).
+    required_scopes: ["Mail.Read"]
+    timeout_seconds: 30
+    max_output_bytes: 131072
+
+  - id: outlook.get_message
+    toolkit: outlook
+    version: 1
+    title: Get message
+    description: Reads one Outlook message, body included, by ID.
+    category: read
+    idempotent: true
+    enabled: false
+    microsoft_action: mail get
+    microsoft_args:
+      message_id:
+        positional: true
+    parameters:
+      message_id:
+        type: string
+        required: true
+        # Graph message IDs are long base64url-ish strings, not the
+        # alphanumeric Gmail ones -- '=', '-' and '_' all occur.
+        pattern: "^[A-Za-z0-9=_-]{1,512}$"
+        description: Microsoft Graph message ID.
+    required_scopes: ["Mail.Read"]
+    timeout_seconds: 30
+    max_output_bytes: 131072
+
+  - id: outlook.list_folders
+    toolkit: outlook
+    version: 1
+    title: List mail folders
+    description: >-
+      Lists the mailbox's folders with their unread and total counts.
+      The folder IDs it returns are what outlook.list_messages takes.
+    category: read
+    idempotent: true
+    enabled: false
+    microsoft_action: mail folders
+    microsoft_args:
+      max_results:
+        flag: --max
+    parameters:
+      max_results:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 100
+        description: Max folders (default 50).
+    required_scopes: ["Mail.Read"]
+    timeout_seconds: 30
+    max_output_bytes: 65536
+
+  - id: outlook.send_mail
+    toolkit: outlook
+    version: 1
+    title: Send mail
+    description: >-
+      Sends an email from the connected mailbox. Externally visible and
+      not undoable -- there is no 'unsend' tool.
+    category: write_external
+    idempotent: false
+    enabled: false
+    microsoft_action: mail send
+    microsoft_args:
+      to:
+        flag: --to
+      subject:
+        flag: --subject
+      body:
+        flag: --body
+    parameters:
+      to:
+        type: string
+        required: true
+        pattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+        description: Recipient email address.
+      subject:
+        type: string
+        required: true
+        pattern: "^.{1,200}$"
+        description: Subject line.
+      body:
+        type: string
+        required: true
+        pattern: "^.{1,30000}$"
+        description: Plain-text body.
+    required_scopes: ["Mail.Send"]
+    timeout_seconds: 30
+    max_output_bytes: 8192
+
   - id: calendar.list
     toolkit: calendar
     version: 1
