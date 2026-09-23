@@ -91,6 +91,7 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 | `http` | LAN/SaaS APIs (Sonarr, Radarr, Home Assistant, pfSense, GitHub, …) | HTTP request; base URL, method, and path prefix come from the toolkit, never a parameter |
 | `truenas` | ZFS, pool status, dataset management | JSON-RPC 2.0 over WebSocket (TrueNAS's REST v2.0 is deprecated) |
 | `ssh` | A remote Linux host's allowlisted binaries | binary + argv (same shape as `docker`/`local`), run over an SSH exec channel |
+| `microsoft` | Outlook mail via Microsoft Graph | local subprocess (`microsoft_api.py`), OAuth2 refresh token materialized to a per-call tempfile; whitelisted by action string |
 | `opencode` | A headless opencode coding-agent server | HTTP; one operation = one fixed multi-request workflow, whitelisted by operation name |
 | `agent` | Other gatekeeper identities | in-process mailbox (`messages.yaml`); no shell, no credential. Network only if the operator sets `GATEKEEPER_NOTIFY_URL` (best-effort delivery webhook, never agent-controllable) |
 
@@ -310,6 +311,30 @@ Google's cross-site redirect — which a `SameSite=Strict` session cookie
 does not survive — is a single-use `state` bound to the operator, the
 credential, and the redirect URI (`ui.OAuthStateStore`).
 
+The `microsoft` executor is the same arrangement for Outlook mail
+(outlook.com/hotmail.com and work accounts alike):
+`GET /ui/oauth/microsoft/authorize` and
+`GET /ui/oauth/microsoft/callback` against
+`login.microsoftonline.com/common/oauth2/v2.0/{authorize,token}`, writing
+the same `oauth2` bundle plus a `provider: microsoft` field, which
+`service._oauth_token_env` uses to refuse a credential from the other
+identity platform rather than let it fail as an unexplained 401.
+`microsoft_api.py` calls Microsoft Graph v1.0 (`/me/mailFolders`,
+`/me/messages`, `/me/sendMail`) with a Bearer token it mints from the
+refresh token; it imports nothing outside the standard library, because
+it runs as a subprocess and may not share gatekeeper's environment.
+Every gate in the two route handlers is shared with the Google pair
+(`ui._oauth_authorize`/`_oauth_callback`, parameterized by
+`ui.OAuthProviderSpec`), including the state binding — a state minted by
+one provider's flow is not redeemable at the other's callback. Two
+things are Microsoft's own: the flow carries PKCE (S256), so an
+intercepted code is not redeemable without a verifier that never left
+this process; and `offline_access` is what makes Microsoft return a
+refresh token at all, yet Microsoft omits it from the token response's
+`scope` field — `ui._granted_microsoft_scopes` adds the reserved scopes
+the consent screen asked for back, or the next refresh would stop asking
+for it and the credential would go quietly read-only.
+
 ## Project structure
 
 ```
@@ -376,6 +401,14 @@ src/gatekeeper/
                        caps, resource locks
   execute_http.py      The `http` executor: SSRF-safe target resolution,
                        no-redirect-follow, credential-as-header injection
+  execute_microsoft.py The `microsoft` executor: the `google` one with
+                       Microsoft Graph behind it -- runs
+                       `_microsoft_api/microsoft_api.py` (stdlib only,
+                       baked into the image at
+                       /opt/gatekeeper/microsoft/) and parses its JSON,
+                       whitelisted by action string. Shares
+                       execute_google's subprocess runner and
+                       execute_http's JSON cap
   execute_opencode.py  The `opencode` executor: one operation = one fixed
                        multi-request workflow against a headless opencode
                        server; reuses execute_http's SSRF/credential/JSON-cap

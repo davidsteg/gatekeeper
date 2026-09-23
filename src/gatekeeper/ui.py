@@ -46,7 +46,9 @@ All output text is English; comments remain German.
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
+import hashlib
 import hmac
 import html
 import json
@@ -186,8 +188,69 @@ DEFAULT_GOOGLE_SCOPES = (
 #: Bounds on the `scope` field of a token response before any of it is
 #: written to the credential store. Google returns ten-ish short URLs;
 #: these are the "this is not a scope list" line, not a real limit.
+#: Applied to Microsoft's `scope` field too (`_granted_scopes`) -- it is
+#: the same OAuth 2.0 field and its scopes are the same shape, so the
+#: same bound answers the same question. Kept under the original name
+#: because it is what the constant has always been called.
 MAX_GOOGLE_SCOPES = 64
 MAX_GOOGLE_SCOPE_CHARS = 256
+
+
+# -- Microsoft OAuth sign-in ----------------------------------------------
+#
+# The `microsoft` executor wants the same `oauth2` credential the google
+# one does, filled the same way: client_id and client_secret typed in
+# from an Azure app registration, refresh token and scopes obtained by a
+# human clicking through a consent screen. So these two routes are the
+# google pair with Microsoft's endpoints behind them, and everything the
+# comment above says about why the console does the exchange itself
+# holds here word for word.
+#
+# Two things differ, both Microsoft's:
+#
+# 1. The flow uses PKCE. The google pair predates it and a confidential
+#    client with a secret does not strictly need it, but Microsoft
+#    accepts a `code_challenge` from a confidential client and an
+#    authorization code that only redeems together with a verifier this
+#    process generated is strictly less useful to anyone who intercepts
+#    it. New flow, so it starts with the better default.
+# 2. `offline_access` is what makes Microsoft return a refresh token --
+#    there is no `access_type=offline`. It is also a scope Microsoft
+#    usually leaves out of the token response's `scope` field, which is
+#    why `_granted_microsoft_scopes` puts it back (see there).
+
+#: Microsoft's identity platform, v2.0. `common` rather than a tenant id:
+#: this is mail for outlook.com/hotmail.com accounts as much as for work
+#: accounts, and `common` is the authority that accepts both. Constants
+#: rather than configuration, for the reason the google pair is.
+MICROSOFT_AUTHORITY = "https://login.microsoftonline.com/common"
+MICROSOFT_AUTH_ENDPOINT = f"{MICROSOFT_AUTHORITY}/oauth2/v2.0/authorize"
+MICROSOFT_TOKEN_ENDPOINT = f"{MICROSOFT_AUTHORITY}/oauth2/v2.0/token"
+#: Bare scope names in a toolkit's `required_scopes` are expanded with
+#: this -- `Mail.Read` and `https://graph.microsoft.com/Mail.Read` are
+#: the same request.
+MICROSOFT_SCOPE_PREFIX = "https://graph.microsoft.com/"
+
+#: The OIDC/OAuth scopes that are *not* Graph resources and must never be
+#: prefixed: `https://graph.microsoft.com/offline_access` is not a scope
+#: and Microsoft rejects the whole request for it.
+MICROSOFT_RESERVED_SCOPES = ("offline_access", "openid", "profile", "email")
+
+MICROSOFT_OAUTH_AUTHORIZE_PATH = f"{UI_PREFIX}/oauth/microsoft/authorize"
+MICROSOFT_OAUTH_CALLBACK_PATH = f"{UI_PREFIX}/oauth/microsoft/callback"
+
+#: What the consent screen asks for when no `microsoft` toolkit declares
+#: `required_scopes`. Minimal on purpose -- read mail, send mail, know
+#: whose mailbox this is, and keep the refresh token alive -- because the
+#: grant is what a compromise of the credential would be worth. A
+#: deployment that wants less says so per toolkit in `toolkits.yaml` and
+#: gets exactly that instead (`Tier1.microsoft_oauth_scopes`).
+DEFAULT_MICROSOFT_SCOPES = (
+    "Mail.Read",
+    "Mail.Send",
+    "User.Read",
+    "offline_access",
+)
 
 #: How long an issued `state` stays redeemable. Long enough to read a
 #: consent screen, short enough that an abandoned flow does not leave a
@@ -317,6 +380,16 @@ class OAuthState:
     credential: str
     redirect_uri: str
     scopes: tuple[str, ...] = ()
+    #: Which sign-in this state belongs to. One store serves both
+    #: providers, and a state issued by the Google flow must not be
+    #: redeemable at the Microsoft callback -- the credential would be
+    #: written with a bundle from the wrong identity platform.
+    provider: str = "google"
+    #: The PKCE verifier, for a provider whose flow uses one. Never
+    #: leaves this process: the challenge goes to the consent screen, the
+    #: verifier goes into the token request, and the two only meet at a
+    #: callback this console issued the state for.
+    code_verifier: str = ""
 
 
 @dataclasses.dataclass(slots=True)
@@ -345,7 +418,8 @@ class OAuthStateStore:
 
     def issue(
         self, *, identity: str, credential: str, redirect_uri: str,
-        scopes: Iterable[str] = (),
+        scopes: Iterable[str] = (), provider: str = "google",
+        code_verifier: str = "",
     ) -> str:
         self._prune()
         state = secrets.token_urlsafe(32)
@@ -353,6 +427,7 @@ class OAuthStateStore:
             OAuthState(
                 identity=identity, credential=credential,
                 redirect_uri=redirect_uri, scopes=tuple(scopes),
+                provider=provider, code_verifier=code_verifier,
             ),
             time.monotonic() + self.ttl,
         )
@@ -3305,20 +3380,48 @@ def _view_credentials(
     # -- see `Tier1.credential_references` for why this walk lives there
     # rather than being written out twice.
     used_by = service.tier1.credential_references()
+
+    def _oauth_providers_for(name: str) -> tuple[OAuthProviderSpec, ...]:
+        """The sign-in flows a credential is actually bound to.
+
+        Empty when no `google`/`microsoft` toolkit names it -- the caller
+        decides what to do with that, rather than having a default
+        guessed for it here.
+        """
+        executors = {
+            toolkit.executor
+            for toolkit in service.tier1.toolkits.values()
+            if toolkit.credential == name
+        }
+        return tuple(
+            provider
+            for provider in (GOOGLE_OAUTH, MICROSOFT_OAUTH)
+            if provider.key in executors
+        )
+
     metas = credentials.names(used_by=used_by)
     parts = []
     for meta in metas:
         ops = ""
         if session.can_write and store is not None:
-            # An oauth2 credential's third field (the refresh token) cannot
-            # be typed in -- it only exists after a consent screen. The
-            # button starts that flow; see `oauth_google_authorize`.
-            connect = (
-                f'<a class="btn" href="{OAUTH_AUTHORIZE_PATH}?credential={_e(meta.name)}">'
-                f'{_icon("link", 14)}Connect Google</a>'
-                if meta.kind == "oauth2"
-                else ""
-            )
+            # An oauth2 credential's refresh token cannot be typed in --
+            # it only exists after a consent screen. The button starts
+            # that flow; see `_oauth_authorize`.
+            #
+            # Which flow depends on who the credential is for, and Tier 1
+            # is what knows: the executor of the toolkit naming it. A
+            # credential no toolkit names yet (created before the
+            # redeploy that adds the toolkit) gets both buttons, because
+            # there is nothing to infer from and guessing one would send
+            # the operator to the wrong identity platform.
+            connect = ""
+            if meta.kind == "oauth2":
+                bound = _oauth_providers_for(meta.name)
+                connect = "".join(
+                    f'<a class="btn" href="{provider.authorize_path}?credential={_e(meta.name)}">'
+                    f'{_icon("link", 14)}Connect {provider.label}</a>'
+                    for provider in (bound or (GOOGLE_OAUTH, MICROSOFT_OAUTH))
+                )
             ops = (
                 connect
                 + f'<a class="btn" href="{UI_PREFIX}/credentials/rotate?name={_e(meta.name)}">'
@@ -4672,8 +4775,9 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         "ssh_private_key is a PEM private key for the ssh executor; docker_tls "
         "is for a TLS-secured remote Docker destination (FR-8.3g); oauth2 is "
         "a JSON bundle {&quot;client_id&quot;, &quot;client_secret&quot;, "
-        "&quot;refresh_token&quot;, &quot;scopes&quot;} for the google "
-        "executor, materialized to a per-call tempfile at runtime.</div></span>"
+        "&quot;refresh_token&quot;, &quot;scopes&quot;} for the google and "
+        "microsoft executors, materialized to a per-call tempfile at "
+        "runtime.</div></span>"
         f'<select name="kind">{kind_options}</select></div>'
         '<div class="field"><span>Header/param name'
         '<div class="hint">Required for kind=api_key_header (the header name, '
@@ -4687,8 +4791,8 @@ def _credential_editor(session: Session, *, rev: str, error: str = "") -> str:
         "&quot;ca&quot;: ...}</code> (PEM text, ca optional). For kind=oauth2, "
         "a JSON object: <code>{&quot;client_id&quot;: ..., "
         "&quot;client_secret&quot;: ..., &quot;refresh_token&quot;: ..., "
-        "&quot;scopes&quot;: [...]}</code> -- Connect Google fills in the "
-        "last two."
+        "&quot;scopes&quot;: [...]}</code> -- Connect Google / Connect "
+        "Microsoft fills in the last two."
         "</div></span>"
         '<input type="password" name="value" autocomplete="new-password" required></div>'
         '<div class="field"><span>Probe URL (optional)'
@@ -4775,8 +4879,8 @@ def _credential_fill_confirm(
         "&quot;ca&quot;: ...}</code> (PEM text, ca optional). For kind=oauth2, "
         "a JSON object: <code>{&quot;client_id&quot;: ..., "
         "&quot;client_secret&quot;: ..., &quot;refresh_token&quot;: ..., "
-        "&quot;scopes&quot;: [...]}</code> -- Connect Google fills in the "
-        "last two."
+        "&quot;scopes&quot;: [...]}</code> -- Connect Google / Connect "
+        "Microsoft fills in the last two."
         "</div></span>"
         '<input type="password" name="value" autocomplete="new-password" required></div>'
         f'<button type="submit">{_icon("check", 14)}Approve &amp; create</button> '
@@ -5413,6 +5517,56 @@ async def _exchange_google_code(
     return payload
 
 
+async def _exchange_microsoft_code(
+    *, code: str, client_id: str, client_secret: str, redirect_uri: str,
+    code_verifier: str,
+) -> dict[str, Any]:
+    """Trades the authorization code for a refresh token.
+
+    A module-level function for the same two reasons
+    `_exchange_google_code` is one: a test can replace it without a
+    network listener, and there is exactly one place where the token
+    response exists. The caller keeps `refresh_token` and `scope` -- the
+    access token in the same response is deliberately dropped on the
+    floor.
+
+    The request is form-encoded and the response is `application/json`,
+    which is not the symmetry the form encoding suggests. `httpx`'s
+    `.json()` does not care what the Content-Type header claims, so a
+    `application/json; charset=utf-8` (which is what Microsoft actually
+    sends) parses the same as a bare one.
+
+    `code_verifier` is the PKCE half kept in the state store: without it
+    Microsoft refuses the exchange, so an intercepted code is not
+    redeemable anywhere but here.
+    """
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            MICROSOFT_TOKEN_ENDPOINT,
+            data={
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+                "code_verifier": code_verifier,
+            },
+        )
+    if response.status_code >= 400:
+        # The body may quote the client_secret back -- the status is the
+        # only part of it that may ever reach a page or the audit log.
+        raise OAuthExchangeError(
+            f"Microsoft refused the code exchange (HTTP {response.status_code})."
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        raise OAuthExchangeError("Microsoft's token response was not JSON.") from None
+    if not isinstance(payload, dict):
+        raise OAuthExchangeError("Microsoft's token response was not an object.")
+    return payload
+
+
 def _granted_google_scopes(
     payload: Mapping[str, Any], requested: Iterable[str]
 ) -> list[str]:
@@ -5433,6 +5587,22 @@ def _granted_google_scopes(
     stand in -- for a grant the operator did not narrow those are the
     same list, and they are ours, not Google's.
     """
+    return _granted_scopes(payload, requested)
+
+
+def _granted_scopes(
+    payload: Mapping[str, Any], requested: Iterable[str]
+) -> list[str]:
+    """The `scope` field of a token response, read as the input it is.
+
+    Split on whitespace, each entry bounded in length, the list bounded
+    in count, duplicates dropped, anything that is not a string dropped
+    whole. When nothing usable comes back the caller's requested list
+    stands in -- it is ours rather than an absent third party's.
+
+    Shared by both providers because the field is the same field: OAuth
+    2.0 spells it this way and Google and Microsoft both send it.
+    """
     raw = payload.get("scope")
     granted: list[str] = []
     if isinstance(raw, str):
@@ -5447,6 +5617,104 @@ def _granted_google_scopes(
     return list(requested)
 
 
+def _granted_microsoft_scopes(
+    payload: Mapping[str, Any], requested: Iterable[str]
+) -> list[str]:
+    """`_granted_google_scopes` for Microsoft, plus one correction.
+
+    Microsoft answers with the *resource* scopes it granted and leaves
+    `offline_access` out of the list -- it is not a Graph permission, it
+    is the instruction that produced the refresh token in the first
+    place. Storing the response verbatim would therefore drop it, the
+    next refresh would not ask for it, and Microsoft would stop returning
+    a rotated refresh token: the credential would go quietly read-only on
+    an expiry nobody scheduled.
+
+    So the reserved OAuth/OIDC scopes the consent screen *asked* for are
+    added back to whatever Microsoft named. They are not resources and
+    cannot widen the grant -- a refresh asking for `offline_access` on a
+    grant that has it is exactly the request Microsoft documents.
+    """
+    requested = list(requested)
+    granted = _granted_scopes(payload, requested)
+    for scope in requested:
+        if scope in MICROSOFT_RESERVED_SCOPES and scope not in granted:
+            granted.append(scope)
+    return granted
+
+
+def _microsoft_scope_urls(scopes: Iterable[str]) -> list[str]:
+    """Bare names become Graph scope URLs; full URLs are left alone.
+
+    `required_scopes: [Mail.Read]` and
+    `required_scopes: [https://graph.microsoft.com/Mail.Read]` are the
+    same request, the way `_google_scope_urls` makes them the same one
+    provider over. `offline_access` and its OIDC siblings are passed
+    through untouched -- they are not Graph resources, and
+    `https://graph.microsoft.com/offline_access` is not a scope at all:
+    Microsoft rejects the whole authorization request for it.
+    """
+    urls: list[str] = []
+    for scope in scopes:
+        scope = scope.strip()
+        if not scope:
+            continue
+        if scope in MICROSOFT_RESERVED_SCOPES or "://" in scope:
+            url = scope
+        else:
+            url = MICROSOFT_SCOPE_PREFIX + scope
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """A PKCE (verifier, S256 challenge) pair, RFC 7636 spelling.
+
+    The verifier is 43-128 unreserved characters -- `token_urlsafe(48)`
+    is 64 of them -- and the challenge is its SHA-256, base64url, without
+    padding. Only the challenge is ever sent to the consent screen; the
+    verifier stays in the state store until the callback redeems it.
+    """
+    verifier = secrets.token_urlsafe(48)
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return verifier, challenge
+
+
+def _microsoft_consent_url(
+    *, client_id: str, redirect_uri: str, scopes: list[str], state: str,
+    code_challenge: str,
+) -> str:
+    """Microsoft's consent screen URL for one flow.
+
+    `offline_access` among the scopes is what makes Microsoft return a
+    *refresh* token -- there is no `access_type=offline` here. `prompt=
+    consent` forces the screen even for an already-granted client, for
+    the same reason the google flow forces it: a re-authorization that
+    silently returns an access token only is useless, because the
+    executor has nothing to renew it with.
+
+    `response_mode=query` keeps the code in the query string where the
+    callback route reads it; the default for a code request is already
+    `query`, and saying so is cheaper than depending on it.
+    """
+    query = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "response_mode": "query",
+            "scope": " ".join(scopes),
+            "state": state,
+            "prompt": "consent",
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
+    )
+    return f"{MICROSOFT_AUTH_ENDPOINT}?{query}"
+
+
 def _copyable(value: str) -> str:
     """A line the operator has to paste somewhere else.
 
@@ -5457,10 +5725,73 @@ def _copyable(value: str) -> str:
     return f'<input class="mono copyline" readonly spellcheck="false" value="{_e(value)}">'
 
 
-def _oauth_google_page(
-    *, credential: str, callback_uri: str, consent_url: str, scopes: list[str],
+@dataclasses.dataclass(frozen=True, slots=True)
+class OAuthProviderSpec:
+    """The parts of a sign-in flow that differ between providers.
+
+    Two providers, one flow: every gate in `_oauth_authorize` and
+    `_oauth_callback` -- session, role, state, single use, re-checked
+    role, audited names only -- is the same question for Google and
+    Microsoft, and only the endpoint, the spelling of a scope and a
+    handful of words on the page are not. Those live here, so adding a
+    third provider is a descriptor and two `if provider.key` arms rather
+    than a third copy of the security-relevant half.
+
+    `key` doubles as the executor name (`toolkit.executor == key` is how
+    a credential is matched to its flow) and as the audit action prefix
+    (`google_authorize`, `microsoft_callback`).
+    """
+
+    key: str
+    label: str
+    authorize_path: str
+    callback_path: str
+    default_scopes: tuple[str, ...]
+    #: Where the operator registers the redirect URI, named the way that
+    #: product names itself -- this is the one line that turns a
+    #: `redirect_uri_mismatch` into an action.
+    registration_console: str
+    #: What that provider calls a redirect URI it does not recognise.
+    mismatch_error: str
+    #: Where an operator revokes an existing grant, when the provider
+    #: returned no refresh token because one already exists.
+    revoke_hint: str
+    #: Whether the authorization request carries a PKCE challenge. The
+    #: google pair predates PKCE and changing a working consent flow is
+    #: not free; the microsoft one starts with it.
+    uses_pkce: bool
+
+
+GOOGLE_OAUTH = OAuthProviderSpec(
+    key="google",
+    label="Google",
+    authorize_path=OAUTH_AUTHORIZE_PATH,
+    callback_path=OAUTH_CALLBACK_PATH,
+    default_scopes=DEFAULT_GOOGLE_SCOPES,
+    registration_console="Google Cloud console",
+    mismatch_error="redirect_uri_mismatch",
+    revoke_hint="third-party connections",
+    uses_pkce=False,
+)
+
+MICROSOFT_OAUTH = OAuthProviderSpec(
+    key="microsoft",
+    label="Microsoft",
+    authorize_path=MICROSOFT_OAUTH_AUTHORIZE_PATH,
+    callback_path=MICROSOFT_OAUTH_CALLBACK_PATH,
+    default_scopes=DEFAULT_MICROSOFT_SCOPES,
+    registration_console="Azure portal (App registrations -> Authentication)",
+    mismatch_error="AADSTS50011",
+    revoke_hint="app permissions at microsoft.com/consent",
+    uses_pkce=True,
+)
+
+
+def _oauth_connect_page(
+    *, provider: OAuthProviderSpec, credential: str, callback_uri: str,
+    consent_url: str, scopes: list[str],
 ) -> str:
-    """The authorize page: what Google must know, then the link to Google."""
+    """The authorize page: what the provider must know, then the link out."""
     scope_rows = "".join(
         f'<div class="row"><div class="row-l">{_icon("lock", 14)}Scope</div>'
         f'<div class="mono">{_e(scope)}</div></div>'
@@ -5469,9 +5800,10 @@ def _oauth_google_page(
     return (
         _note(
             "<strong>Authorized redirect URI</strong> &mdash; this exact "
-            "string has to be registered on the OAuth client in the Google "
-            "Cloud console, or Google refuses the sign-in with "
-            "<code>redirect_uri_mismatch</code>.<br>"
+            "string has to be registered on the OAuth client in the "
+            f"{_e(provider.registration_console)}, or {_e(provider.label)} "
+            "refuses the sign-in with "
+            f"<code>{_e(provider.mismatch_error)}</code>.<br>"
             + _copyable(callback_uri),
             icon="link",
         )
@@ -5481,14 +5813,14 @@ def _oauth_google_page(
         f'<span class="pill">{len(scopes)} scope(s)</span></div>'
         '<div class="rows">'
         f'<div class="row"><div class="row-l">{_icon("key", 14)}Credential</div>'
-        f"<div>The refresh token Google returns is written into "
+        f"<div>The refresh token {_e(provider.label)} returns is written into "
         f"<code>{_e(credential)}</code>, encrypted. It is never shown here, "
         "and the client secret never leaves the store.</div></div>"
         + scope_rows
         + "</div>"
         '<div class="pad">'
         f'<a class="btn primary" href="{_e(consent_url)}" rel="noreferrer">'
-        f'{_icon("link", 14)}Continue to Google</a> '
+        f'{_icon("link", 14)}Continue to {_e(provider.label)}</a> '
         f'<a class="btn" href="{UI_PREFIX}/credentials">{_icon("back", 14)}Cancel</a>'
         "</div></div>"
     )
@@ -6350,39 +6682,43 @@ def build_ui_routes(
     # neither cookie nor state is an unauthenticated request to a console
     # route and goes to the login page, like every other one.
 
-    def _google_credential_names() -> list[str]:
-        """The credential names `google` toolkits point at (Tier 1)."""
+    def _oauth_credential_names(provider: OAuthProviderSpec) -> list[str]:
+        """The credential names this provider's toolkits point at (Tier 1)."""
         names: list[str] = []
         for toolkit in service.tier1.toolkits.values():
-            if toolkit.executor == "google" and toolkit.credential:
+            if toolkit.executor == provider.key and toolkit.credential:
                 if toolkit.credential not in names:
                     names.append(toolkit.credential)
         return sorted(names)
 
-    def _oauth_scopes() -> list[str]:
+    def _oauth_scopes(provider: OAuthProviderSpec) -> list[str]:
         """Read at request time, not at startup: a toolkit added or
         narrowed by a redeploy changes the next consent screen without
         anything here to keep in step.
         """
+        if provider.key == "microsoft":
+            declared = service.tier1.microsoft_oauth_scopes()
+            return _microsoft_scope_urls(declared or provider.default_scopes)
         declared = service.tier1.google_oauth_scopes()
-        return _google_scope_urls(declared or DEFAULT_GOOGLE_SCOPES)
+        return _google_scope_urls(declared or provider.default_scopes)
 
-    def _oauth_client(name: str) -> tuple[str, str]:
+    def _oauth_client(name: str, provider: OAuthProviderSpec) -> tuple[str, str]:
         """client_id/client_secret out of the oauth2 credential.
 
         The one read of a credential value in this file. It never leaves
         this function's callers: the id goes into the consent URL (which
-        is where Google requires it), the secret goes into the token
-        request body and nowhere else -- not into a page, not into the
-        audit log, not into a process argument (FR-10.2/10.7).
+        is where the provider requires it), the secret goes into the
+        token request body and nowhere else -- not into a page, not into
+        the audit log, not into a process argument (FR-10.2/10.7).
         """
         assert credentials is not None
         resolved = credentials._resolve(name)
         if resolved is None:
             raise OAuthExchangeError(
                 f"Credential {name!r} does not exist yet. Create it as kind "
-                "oauth2 with the client_id and client_secret of your Google "
-                "OAuth client first -- this page only adds the refresh token."
+                f"oauth2 with the client_id and client_secret of your "
+                f"{provider.label} OAuth client first -- this page only adds "
+                "the refresh token."
             )
         if resolved.kind != "oauth2":
             raise OAuthExchangeError(
@@ -6403,15 +6739,27 @@ def build_ui_routes(
         return str(client_id), str(client_secret)
 
     def _oauth_error(
-        request: Request, session: Session, message: str, *, status: int = 400,
+        request: Request, session: Session, message: str,
+        *, provider: OAuthProviderSpec, status: int = 400,
     ) -> Response:
         return _shell(
-            request, "Google sign-in",
+            request, f"{provider.label} sign-in",
             _oauth_result_page(ok=False, credential="", message=message),
             session, icon="ban", active="/credentials", status=status,
         )
 
-    async def oauth_google_authorize(request: Request) -> Response:
+    async def _oauth_authorize(
+        request: Request, provider: OAuthProviderSpec
+    ) -> Response:
+        """The consent screen, for either provider.
+
+        One function rather than two: every gate here -- session, write
+        role, which credential, what the redirect URI is, what goes in
+        the audit record -- is the same question for both, and a second
+        copy would be a second place for one of them to be forgotten.
+        What `provider` supplies is the endpoint, the scope spelling, and
+        whether the flow carries a PKCE challenge.
+        """
         session = _current(request)
         if session is None:
             return _to_login()
@@ -6419,63 +6767,81 @@ def build_ui_routes(
             return RedirectResponse(f"{UI_PREFIX}/credentials", status_code=303)
 
         name = request.query_params.get("credential", "").strip()
-        available = _google_credential_names()
+        available = _oauth_credential_names(provider)
         if not name:
             if len(available) == 1:
                 name = available[0]
             elif not available:
                 return _oauth_error(
                     request, session,
-                    "No google toolkit in toolkits.yaml names a credential, so "
-                    "there is nothing to connect. Toolkits are deploy-time only "
-                    "(FR-4.11).",
+                    f"No {provider.key} toolkit in toolkits.yaml names a "
+                    "credential, so there is nothing to connect. Toolkits are "
+                    "deploy-time only (FR-4.11).",
+                    provider=provider,
                 )
             else:
                 return _oauth_error(
                     request, session,
-                    "Several google toolkits name different credentials ("
+                    f"Several {provider.key} toolkits name different credentials ("
                     + ", ".join(available)
                     + "). Add ?credential=<name> to say which one to connect.",
+                    provider=provider,
                 )
         try:
-            client_id, _secret = _oauth_client(name)
+            client_id, _secret = _oauth_client(name, provider)
         except OAuthExchangeError as exc:
-            return _oauth_error(request, session, str(exc))
+            return _oauth_error(request, session, str(exc), provider=provider)
 
-        redirect_uri = _public_base_url(request) + OAUTH_CALLBACK_PATH
-        scopes = _oauth_scopes()
+        redirect_uri = _public_base_url(request) + provider.callback_path
+        scopes = _oauth_scopes(provider)
+        verifier, challenge = _pkce_pair() if provider.uses_pkce else ("", "")
         state = oauth_states.issue(
             identity=session.identity, credential=name, redirect_uri=redirect_uri,
-            scopes=scopes,
+            scopes=scopes, provider=provider.key, code_verifier=verifier,
         )
-        # Names and scopes only -- no client id, no code, no token.
+        if provider.key == "microsoft":
+            consent_url = _microsoft_consent_url(
+                client_id=client_id, redirect_uri=redirect_uri,
+                scopes=scopes, state=state, code_challenge=challenge,
+            )
+        else:
+            consent_url = _google_consent_url(
+                client_id=client_id, redirect_uri=redirect_uri,
+                scopes=scopes, state=state,
+            )
+        # Names and scopes only -- no client id, no code, no token, and
+        # not the PKCE verifier either.
         audit.write(
             {
                 "kind": "ui_oauth",
                 "actor": session.identity,
-                "action": "google_authorize",
+                "action": f"{provider.key}_authorize",
                 "credential": name,
                 "scopes": scopes,
                 "redirect_uri": redirect_uri,
             }
         )
         return _shell(
-            request, "Connect Google",
-            _oauth_google_page(
+            request, f"Connect {provider.label}",
+            _oauth_connect_page(
+                provider=provider,
                 credential=name,
                 callback_uri=redirect_uri,
-                consent_url=_google_consent_url(
-                    client_id=client_id, redirect_uri=redirect_uri,
-                    scopes=scopes, state=state,
-                ),
+                consent_url=consent_url,
                 scopes=scopes,
             ),
             session, icon="lock", active="/credentials",
             subtitle=(
-                "Google returns a refresh token; gatekeeper stores it in the "
-                "credential and never shows it again."
+                f"{provider.label} returns a refresh token; gatekeeper stores "
+                "it in the credential and never shows it again."
             ),
         )
+
+    async def oauth_google_authorize(request: Request) -> Response:
+        return await _oauth_authorize(request, GOOGLE_OAUTH)
+
+    async def oauth_microsoft_authorize(request: Request) -> Response:
+        return await _oauth_authorize(request, MICROSOFT_OAUTH)
 
     def _oauth_session(session: Session | None, identity_id: str) -> Session:
         """The session the result page is rendered for.
@@ -6497,9 +6863,28 @@ def build_ui_routes(
             csrf=secrets.token_urlsafe(24),
         )
 
-    async def oauth_google_callback(request: Request) -> Response:
+    async def _oauth_callback(
+        request: Request, provider: OAuthProviderSpec
+    ) -> Response:
+        """The code exchange and the credential write, for either provider.
+
+        Shared for the reason `_oauth_authorize` is: the gates are the
+        same gates. The three provider-specific steps -- which exchange
+        function runs, how its `scope` field is read, and what extra
+        fields the bundle carries -- are named explicitly below rather
+        than hidden behind a table, because each one is a decision worth
+        reading at the point it is made.
+        """
         session = _current(request)
         pending_state = oauth_states.take(request.query_params.get("state", ""))
+        if pending_state is not None and pending_state.provider != provider.key:
+            # One state store, two flows. A state minted for the other
+            # provider is not a state for this callback -- redeeming it
+            # here would write the credential with a bundle from the
+            # wrong identity platform. It is spent either way (`take`
+            # popped it), which is the right outcome for a state that
+            # arrived somewhere it does not belong.
+            pending_state = None
         if pending_state is None:
             if session is None:
                 # No cookie, no state: an unauthenticated request to a
@@ -6509,7 +6894,7 @@ def build_ui_routes(
                 {
                     "kind": "ui_oauth",
                     "actor": session.identity,
-                    "action": "google_callback",
+                    "action": f"{provider.key}_callback",
                     "result": "state_mismatch",
                 }
             )
@@ -6518,13 +6903,14 @@ def build_ui_routes(
                 "This did not match a sign-in started from this console -- the "
                 "state is missing, expired, or was already used. Start again "
                 "from the credentials page. Nothing was changed.",
+                provider=provider,
             )
         if session is not None and session.identity != pending_state.identity:
             audit.write(
                 {
                     "kind": "ui_oauth",
                     "actor": session.identity,
-                    "action": "google_callback",
+                    "action": f"{provider.key}_callback",
                     "result": "identity_mismatch",
                     "credential": pending_state.credential,
                 }
@@ -6533,6 +6919,7 @@ def build_ui_routes(
                 request, session,
                 "This sign-in was started by a different operator. Nothing "
                 "was changed.",
+                provider=provider,
             )
 
         actor = pending_state.identity
@@ -6543,14 +6930,14 @@ def build_ui_routes(
             record: dict[str, Any] = {
                 "kind": "ui_oauth",
                 "actor": actor,
-                "action": "google_callback",
+                "action": f"{provider.key}_callback",
                 "result": result,
                 "credential": name,
             }
             if detail:
                 record["detail"] = detail
             audit.write(record)
-            return _oauth_error(request, page_session, message)
+            return _oauth_error(request, page_session, message, provider=provider)
 
         # The state was issued to an admin; between then and now that
         # identity could have been demoted or deleted. Writing a
@@ -6565,19 +6952,22 @@ def build_ui_routes(
                 "credentials. Nothing was changed.",
             )
 
-        # Google's own refusal (the operator clicked "Cancel", or the
-        # client is not allowed to ask for these scopes). Truncated: the
-        # value is Google's text arriving through a URL.
+        # The provider's own refusal (the operator clicked "Cancel", or
+        # the client is not allowed to ask for these scopes). Truncated:
+        # the value is their text arriving through a URL.
         denial = request.query_params.get("error", "").strip()[:64]
         if denial:
             return _fail(
                 "denied",
-                f"Google did not grant access ({denial}). Nothing was changed.",
+                f"{provider.label} did not grant access ({denial}). Nothing "
+                "was changed.",
                 detail=denial,
             )
         code = request.query_params.get("code", "")
         if not code:
-            return _fail("no_code", "Google sent no authorization code back.")
+            return _fail(
+                "no_code", f"{provider.label} sent no authorization code back."
+            )
         if store is None or credentials is None:
             return _fail(
                 "read_only",
@@ -6586,53 +6976,75 @@ def build_ui_routes(
             )
 
         try:
-            client_id, client_secret = _oauth_client(name)
+            client_id, client_secret = _oauth_client(name, provider)
         except OAuthExchangeError as exc:
             return _fail("credential_unusable", str(exc))
 
         try:
-            payload = await _exchange_google_code(
-                code=code,
-                client_id=client_id,
-                client_secret=client_secret,
-                redirect_uri=pending_state.redirect_uri,
-            )
+            if provider.key == "microsoft":
+                payload = await _exchange_microsoft_code(
+                    code=code,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    redirect_uri=pending_state.redirect_uri,
+                    code_verifier=pending_state.code_verifier,
+                )
+            else:
+                payload = await _exchange_google_code(
+                    code=code,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    redirect_uri=pending_state.redirect_uri,
+                )
         except OAuthExchangeError as exc:
             return _fail("exchange_failed", str(exc))
         except httpx.HTTPError as exc:
             return _fail(
                 "exchange_failed",
-                f"Google's token endpoint was not reachable ({type(exc).__name__}).",
+                f"{provider.label}'s token endpoint was not reachable "
+                f"({type(exc).__name__}).",
             )
 
         refresh_token = payload.get("refresh_token")
         if not isinstance(refresh_token, str) or not refresh_token:
-            # Google omits it when the client was already granted these
-            # scopes and the request did not force a fresh consent -- the
-            # access token that comes instead is useless here.
+            # Omitted when the client was already granted these scopes
+            # and the request did not force a fresh consent -- the access
+            # token that comes instead is useless here.
             return _fail(
                 "no_refresh_token",
-                "Google returned no refresh token. Remove gatekeeper's access "
-                "under your Google account's third-party connections and try "
-                "again. Nothing was changed.",
+                f"{provider.label} returned no refresh token. Remove "
+                f"gatekeeper's access under your {provider.label} account's "
+                f"{provider.revoke_hint} and try again. Nothing was changed.",
             )
 
         # The grant's scopes travel with the refresh token, because a
-        # refresh needs them: google_api.py asks Google to renew *these*
-        # scopes, and a request for anything the operator did not consent
-        # to is answered with `invalid_scope` -- the refresh fails, not
-        # just the one call that needed the extra scope. Google's own
-        # `scope` field is what is stored (see `_granted_google_scopes`);
-        # the consent screen's list is the fallback.
-        scopes = _granted_google_scopes(payload, pending_state.scopes)
-        bundle = json.dumps(
-            {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "refresh_token": refresh_token,
-                "scopes": scopes,
-            }
-        )
+        # refresh needs them: the executor's CLI asks for *these* scopes
+        # to be renewed, and a request for anything the operator did not
+        # consent to is answered with `invalid_scope` -- the refresh
+        # fails, not just the one call that needed the extra scope. The
+        # provider's own `scope` field is what is stored; the consent
+        # screen's list is the fallback.
+        if provider.key == "microsoft":
+            scopes = _granted_microsoft_scopes(payload, pending_state.scopes)
+        else:
+            scopes = _granted_google_scopes(payload, pending_state.scopes)
+        bundle_fields: dict[str, Any] = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "scopes": scopes,
+        }
+        # `provider` marks which identity platform the bundle came from.
+        # Both providers' bundles are kind `oauth2` and look alike, so
+        # without it a toolkit pointed at the wrong one fails as an
+        # unexplained 401 from an API it never meant to call
+        # (`service._oauth_token_env` is what reads this). Only written
+        # where it was not implied before: a google bundle keeps the four
+        # fields every existing credential has, so nothing already stored
+        # is suddenly the odd shape out.
+        if provider.key != "google":
+            bundle_fields["provider"] = provider.key
+        bundle = json.dumps(bundle_fields)
         existing = {meta.name for meta in credentials.names()}
         try:
             if name in existing:
@@ -6651,7 +7063,7 @@ def build_ui_routes(
             {
                 "kind": "ui_oauth",
                 "actor": actor,
-                "action": "google_callback",
+                "action": f"{provider.key}_callback",
                 "result": "ok",
                 "credential": name,
                 # Scope names, like the authorize record above: no token
@@ -6661,10 +7073,16 @@ def build_ui_routes(
             }
         )
         return _shell(
-            request, "Google sign-in",
+            request, f"{provider.label} sign-in",
             _oauth_result_page(ok=True, credential=name, message=""),
             page_session, icon="lock", active="/credentials",
         )
+
+    async def oauth_google_callback(request: Request) -> Response:
+        return await _oauth_callback(request, GOOGLE_OAUTH)
+
+    async def oauth_microsoft_callback(request: Request) -> Response:
+        return await _oauth_callback(request, MICROSOFT_OAUTH)
 
     # -- Pending (FR-2.8/2.9) --------------------------------------------
     # Approve/reject go through `writer`, exactly like every other admin
@@ -6989,6 +7407,14 @@ def build_ui_routes(
         # the callback writes a credential.
         Route(OAUTH_AUTHORIZE_PATH, oauth_google_authorize, methods=["GET"]),
         Route(OAUTH_CALLBACK_PATH, oauth_google_callback, methods=["GET"]),
+        Route(
+            MICROSOFT_OAUTH_AUTHORIZE_PATH, oauth_microsoft_authorize,
+            methods=["GET"],
+        ),
+        Route(
+            MICROSOFT_OAUTH_CALLBACK_PATH, oauth_microsoft_callback,
+            methods=["GET"],
+        ),
         Route(
             f"{UI_PREFIX}/requests",
             guarded(

@@ -260,6 +260,51 @@ toolkits:
     max_timeout_seconds: 60
     max_output_bytes: 131072
 
+  # FR-8.3a-f counterpart, one provider over: the `microsoft` executor is
+  # the `google` one with Microsoft Graph behind it. microsoft_api.py run
+  # as a local subprocess (shell=False, argv list), an action-string
+  # whitelist (`allowed_microsoft_actions`) instead of a binary list, and
+  # the same oauth2 credential bundle materialized to a per-call
+  # tempfile. Mail for outlook.com/hotmail.com and work accounts alike --
+  # the console signs in against the `common` authority, which takes
+  # both.
+  #
+  # The credential is filled from /ui/credentials: create it as kind
+  # oauth2 holding the client_id/client_secret of an Azure app
+  # registration, then press "Connect Microsoft" -- that flow adds the
+  # refresh token and the scopes Microsoft granted. Never in this file
+  # (FR-10.1).
+  #
+  # `required_scopes` is what the console's consent screen asks for. Bare
+  # Graph names are expanded (`Mail.Read` ->
+  # https://graph.microsoft.com/Mail.Read); `offline_access` is passed
+  # through as-is, and it is what makes Microsoft return a refresh token
+  # at all -- leave it out and the credential stops working in an hour.
+  #
+  # A deployment that wants a mailbox an identity may read but not mail
+  # from copies this block, drops `mail send` and `Mail.Send` from the
+  # copy, and points its tools at that toolkit: the action is then not in
+  # the list, so it structurally does not exist there -- there is no
+  # separate permission to deny. (A toolkit name reaches tool IDs, which
+  # are `<toolkit>.<action>` and lowercase/underscore only, so name the
+  # second one `outlook_read`, not `outlook-read`.)
+  outlook:
+    executor: microsoft
+    microsoft_script: /opt/gatekeeper/microsoft/microsoft_api.py
+    allowed_microsoft_actions:
+      - mail list
+      - mail get
+      - mail folders
+      - mail send
+    required_scopes:
+      - Mail.Read
+      - Mail.Send
+      - User.Read
+      - offline_access
+    credential: microsoft
+    max_timeout_seconds: 30
+    max_output_bytes: 131072
+
   # The `opencode` executor: a headless opencode server on the LAN, driven
   # over its own HTTP API. Same two target fields as an `http` toolkit and
   # for the same reasons -- `base_url` is the only place a scheme and host

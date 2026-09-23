@@ -19,6 +19,14 @@ item.
   into the single command string SSH's exec channel requires
   (`execute_ssh.py`). One toolkit = one host; no destinations support yet
   (see below).
+- `microsoft` executor — Outlook mail over Microsoft Graph
+  (`execute_microsoft.py` + `_microsoft_api/microsoft_api.py`): list
+  messages, get message, list folders, send mail, whitelisted by
+  action string per toolkit. The console signs in at
+  `/ui/oauth/microsoft/authorize` (authorization code + PKCE against
+  the `common` authority, so outlook.com/hotmail.com accounts work)
+  and stores the refresh token and the granted scopes in the same
+  `oauth2` credential kind the `google` executor uses.
 - `opencode` executor — drives a headless opencode coding-agent server
   over its own HTTP API (`execute_opencode.py`). Eight operations
   (`ask`/`run`/`fire`/`check`/`review_changes`/`abort`/`providers`/
