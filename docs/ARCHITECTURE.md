@@ -335,6 +335,99 @@ refresh token at all, yet Microsoft omits it from the token response's
 the consent screen asked for back, or the next refresh would stop asking
 for it and the credential would go quietly read-only.
 
+Three names describe one Outlook operation, and they are not
+interchangeable:
+
+| | Example | Who owns it |
+|---|---|---|
+| **Tool ID** | `outlook.list_messages` | tools.yaml / the console; dotted, lowercase + underscore (catalog.py's `id` rule). What an agent calls. |
+| **Action ID** | `mail list` | `microsoft_action` on the tool, and the toolkit's `allowed_microsoft_actions`. Tier 1 matches the two as an **exact string** — no normalization, at catalog load and again in the executor. |
+| **CLI argv** | `mail list --folder inbox --max 10` | `microsoft_api.py`'s argparse grammar (`mail` + `list`/`get`/`folders`/`send`). Built by `execute_microsoft._build_argv`. |
+
+A deployment may legitimately spell its action IDs after its tool IDs —
+whitelist and `microsoft_action` both reading `list_messages` — which is
+internally consistent, passes every Tier 1 check, and used to reach the
+CLI as `mail list_messages`, i.e. `invalid choice` on every call.
+`execute_microsoft.MICROSOFT_ACTION_ALIASES` is the bridge: a fixed
+four-entry table (`list_messages`→`list`, `get_message`→`get`,
+`list_folders`→`folders`, `send_mail`→`send`) applied when the argv is
+assembled, *after* the whitelist check, so it translates spelling and
+widens nothing — a toolkit listing only the three read actions still
+refuses a send under either name. An action the table has never heard of
+is passed through untouched and fails at the CLI, which is the right
+outcome for a name nobody vetted. The service token (`mail`) is supplied
+by `_service_prefix` when the action does not name one, exactly as
+`execute_google` does for `gmail`/`calendar`/`drive`.
+
+`google_args`/`microsoft_args` map a parameter to its argv shape, and
+both are read by one parser (`catalog._parse_cli_args`) and built by one
+function (`validate._build_cli_args`), because the two CLIs take the
+same argv shape. An entry is exactly one of three:
+
+| Declaration | Argv | Parameter |
+|---|---|---|
+| `{positional: true}` | the bare value | any type |
+| `{flag: --name}` | `--name <value>` | any type |
+| `{switch: --name}` | `--name`, or nothing at all | must be `type: boolean` |
+
+A parameter the tool declares **optional and the agent did not supply is
+left off the argv**, so the CLI's own default applies (`--folder` →
+inbox, `--max` → 10): the MCP input schema lists only `required: true`
+names in its `required` array, so denying those calls would make a tool
+unusable exactly as its own schema documents it. A *positional* with no
+value is still a denial (dropping it would shift the next positional
+into its place), as is a mapping naming a parameter the tool never
+declared.
+
+### Booleans: `switch:`, not `flag:`
+
+A `flag:` entry always emits a value, so a boolean behind one becomes
+`--unread true`. That is not what either bundled CLI takes: `--raw-query`
+(`drive search`), `--unread` (`mail list`) and `--html` (both send
+actions) are argparse `store_true` options, which reject a value and exit
+2 over it. `switch:` is the valueless declaration for exactly that shape:
+
+```yaml
+google_args:
+  query:
+    positional: true
+  raw_query:
+    switch: --raw-query      # emitted when true, absent when false
+parameters:
+  raw_query:
+    type: boolean
+    required: false
+    description: Treat the query as a raw Drive API query.
+```
+
+`true` emits the fixed token **exactly once**; `false` and "not supplied"
+both emit nothing, which is precisely what `store_true`'s own default
+means. The boolean never reaches the argv, so a switch contributes one
+token from the tool definition or none — there is no element an agent
+could put its own text in, and no way to smuggle a second argument
+through one entry.
+
+A switch is validated at **load**, not at call time, because unlike a
+valued entry it has nothing that could be missing — it would emit its
+flag from a declaration nobody could satisfy. `catalog._parse_cli_args`
+rejects a switch that also sets `flag`/`positional`, one whose parameter
+is absent or not `type: boolean`, and one whose flag is not a single
+option token (`SWITCH_RE`: no whitespace, no `=`, no `{placeholder}`).
+`config/examples/tools.yaml` and the `google` integration's
+`drive.search` starter tool carry the worked example.
+
+tests/test_cli_arg_contract.py pins all of this: the argv for both
+providers, the rejected declarations, a census holding every shipped
+boolean to a `switch:`, and the two CLIs' own argparse grammars — run
+in-process with the action handler replaced, so `--raw-query` is checked
+to actually arrive as `raw_query is True`, and `--raw-query true` to
+actually exit 2. The same file runs every shipped google and microsoft
+tool's *minimal* argv — required parameters only, every optional one
+omitted — through the real CLI as a subprocess, with `HERMES_HOME`
+pointed at an empty directory: each call dies at authentication, after
+argparse has accepted the argv and before any request leaves the
+process.
+
 ## Project structure
 
 ```

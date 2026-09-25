@@ -98,6 +98,45 @@ MICROSOFT_SERVICES = ("mail",)
 #: have to displace.
 DEFAULT_MICROSOFT_SERVICE = "mail"
 
+#: Tool-shaped action names, mapped to the CLI action word they mean.
+#:
+#: Three names for one operation meet here, and only the middle one is
+#: this table's business:
+#:
+#: * the **tool ID** an agent calls -- `outlook.list_messages`, dotted,
+#:   lowercase-and-underscore because catalog.py requires that shape;
+#: * the **action ID** in `microsoft_action` and the toolkit's
+#:   `allowed_microsoft_actions` -- matched as an exact string by Tier 1
+#:   (`Toolkit.allows_microsoft_action`);
+#: * the **CLI argv** microsoft_api.py's argparse grammar accepts --
+#:   `mail list`, `mail get`, `mail folders`, `mail send`.
+#:
+#: A deployment that names its actions after its tools -- whitelist and
+#: `microsoft_action` both reading `list_messages` -- is internally
+#: consistent and loads clean, and then every call dies on
+#: ``invalid choice: 'list_messages'`` from a CLI nobody can see from
+#: the console. This table is the explicit bridge: the four action names
+#: the Outlook tools carry, each mapped to the one CLI word it means.
+#:
+#: Deliberately a fixed table of four rather than a rule (strip a
+#: `_messages` suffix, split on `_`): a rule would also rewrite action
+#: names nobody vetted, and this is the head of an argv. Anything not
+#: listed passes through untouched and fails loudly at the CLI, which is
+#: the right outcome for a name this file has never heard of.
+#:
+#: It widens nothing. Tier 1 still matches `microsoft_action` against
+#: `allowed_microsoft_actions` as an exact string, at catalog load and
+#: again in `run()` -- the translation happens afterwards, on an action
+#: that is already allowed. A read-only toolkit that lists only
+#: `list_messages`/`get_message`/`list_folders` therefore still refuses
+#: `send_mail`, under either spelling.
+MICROSOFT_ACTION_ALIASES = {
+    "list_messages": "list",
+    "get_message": "get",
+    "list_folders": "folders",
+    "send_mail": "send",
+}
+
 
 def _service_prefix(toolkit: Toolkit) -> str:
     """The CLI service token this toolkit's actions run under.
@@ -115,19 +154,32 @@ def _service_prefix(toolkit: Toolkit) -> str:
 
 
 def _action_argv(toolkit: Toolkit, microsoft_action: str) -> list[str]:
-    """`microsoft_action` as argv words, with the service token in front.
+    """`microsoft_action` as argv words the CLI actually accepts.
 
-    An action that already names its service (`mail list`, the form
-    config/examples/toolkits.yaml uses) is passed through untouched --
-    prefixing it again would run `mail mail list`. A bare action (`list`,
-    `send`) gets the toolkit's service inserted before it; flags and
-    positional args in `args` are never touched, since only the head of
-    the argv is in question here.
+    Two normalizations, in this order:
+
+    1. A tool-shaped action word is translated to the CLI word it means
+       (`MICROSOFT_ACTION_ALIASES`: `list_messages` -> `list`). Both
+       spellings survive: `list_messages`, `mail list_messages` and
+       `mail list` all end up as ``mail list``.
+    2. An action that already names its service (`mail list`, the form
+       config/examples/toolkits.yaml uses) is passed through -- prefixing
+       it again would run `mail mail list`. A bare action (`list`,
+       `send`) gets the toolkit's service inserted before it.
+
+    Flags and positional args in `args` are never touched: only the head
+    of the argv is in question here.
     """
     parts = microsoft_action.split()
-    if not parts or parts[0] in MICROSOFT_SERVICES:
+    if not parts:
         return parts
-    return [_service_prefix(toolkit), *parts]
+    if parts[0] in MICROSOFT_SERVICES:
+        service, rest = parts[0], parts[1:]
+    else:
+        service, rest = _service_prefix(toolkit), parts
+    if len(rest) == 1 and rest[0] in MICROSOFT_ACTION_ALIASES:
+        rest = [MICROSOFT_ACTION_ALIASES[rest[0]]]
+    return [service, *rest]
 
 
 def _build_argv(toolkit: Toolkit, microsoft_action: str, args: list[str]) -> list[str]:

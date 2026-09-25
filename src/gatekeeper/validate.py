@@ -367,6 +367,87 @@ def build_rpc_call(
     return tool.rpc_method, params
 
 
+def _build_cli_args(
+    arg_specs: dict[str, dict[str, Any]],
+    values: dict[str, str],
+    tool: ToolDef,
+    field: str,
+) -> list[str]:
+    """The argv tail both vendored-CLI executors build (`google`, `microsoft`).
+
+    One function rather than two copies: `google_args` and
+    `microsoft_args` are the same mapping with two names, because
+    google_api.py and microsoft_api.py take the same argv shape --
+    the same direction of reuse as `execute_microsoft`'s import of
+    `execute_google._run_subprocess`.
+
+    Each entry emits exactly one argv element's worth of *value*
+    (FR-5.4): a positional arg is the bare value, a flag arg is the pair
+    ``--flag value`` where only the value is agent-controlled -- the flag
+    name is fixed in the tool definition.
+
+    A ``switch`` entry is the third shape and the one that carries no
+    value at all: its parameter is a boolean (catalog.py checks that at
+    load), `true` emits the declared flag exactly once and `false` emits
+    nothing -- the same argv an omitted optional leaves behind, which is
+    exactly what an argparse `store_true` default means. The boolean
+    never reaches the argv, so a switch entry is one fixed token from
+    the tool definition or nothing: there is no element an agent could
+    put its own text in.
+
+    An **optional parameter the agent did not supply is left off the
+    argv entirely**, so the CLI's own default applies (`--folder` ->
+    inbox, `--max` -> 10). Denying the call instead would contradict the
+    tool's own MCP schema, which lists only `required: true` parameters
+    in its `required` array (catalog.py's `input_schema`): a tool
+    declaring `max_results` optional and then refusing every call that
+    omits it is unusable exactly as documented.
+
+    A *positional* arg with no value is still a denial, even when its
+    parameter is optional: dropping one positional would silently shift
+    the next one into its place, which is an argv shape nobody wrote
+    down. So is an entry naming a parameter the tool does not declare --
+    a configuration error, failed closed rather than passed through as a
+    stray flag.
+    """
+    args: list[str] = []
+    for arg_name, arg_spec in arg_specs.items():
+        if arg_name not in values:
+            param = tool.parameters.get(arg_name)
+            if (
+                param is not None
+                and not param.required
+                and not arg_spec.get("positional")
+            ):
+                continue
+            raise Denied(
+                DenialReason.PARAM_MISSING,
+                f"{field}.{arg_name!r} needs a value.",
+            )
+        value = values[arg_name]
+        switch = arg_spec.get("switch")
+        if switch is not None:
+            # Only `_validate_scalar`'s boolean rendering can get here;
+            # anything else is a programming error upstream, and failing
+            # closed is cheaper than reasoning about what it would mean.
+            if value not in ("true", "false"):
+                raise Denied(
+                    DenialReason.PARAM_INVALID,
+                    f"{field}.{arg_name!r} is a switch and takes a boolean.",
+                )
+            if value == "true":
+                args.append(switch)
+        elif arg_spec.get("positional"):
+            args.append(value)
+        else:
+            flag = arg_spec.get("flag")
+            assert flag is not None  # validated at parse time
+            args.append(flag)
+            args.append(value)
+
+    return args
+
+
 def build_google_call(
     tool: ToolDef, values: dict[str, str], toolkit: Toolkit
 ) -> list[str]:
@@ -393,23 +474,7 @@ def build_google_call(
             f"Google action {tool.google_action!r} is not allowed for this toolkit.",
         )
 
-    args: list[str] = []
-    for arg_name, arg_spec in (tool.google_args or {}).items():
-        if arg_name not in values:
-            raise Denied(
-                DenialReason.PARAM_MISSING,
-                f"google_args.{arg_name!r} needs a value.",
-            )
-        value = values[arg_name]
-        if arg_spec.get("positional"):
-            args.append(value)
-        else:
-            flag = arg_spec.get("flag")
-            assert flag is not None  # validated at parse time
-            args.append(flag)
-            args.append(value)
-
-    return args
+    return _build_cli_args(tool.google_args or {}, values, tool, "google_args")
 
 
 def build_microsoft_call(
@@ -435,23 +500,7 @@ def build_microsoft_call(
             "this toolkit.",
         )
 
-    args: list[str] = []
-    for arg_name, arg_spec in (tool.microsoft_args or {}).items():
-        if arg_name not in values:
-            raise Denied(
-                DenialReason.PARAM_MISSING,
-                f"microsoft_args.{arg_name!r} needs a value.",
-            )
-        value = values[arg_name]
-        if arg_spec.get("positional"):
-            args.append(value)
-        else:
-            flag = arg_spec.get("flag")
-            assert flag is not None  # validated at parse time
-            args.append(flag)
-            args.append(value)
-
-    return args
+    return _build_cli_args(tool.microsoft_args or {}, values, tool, "microsoft_args")
 
 
 def build_opencode_call(

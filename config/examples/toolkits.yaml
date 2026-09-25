@@ -288,6 +288,17 @@ toolkits:
   # separate permission to deny. (A toolkit name reaches tool IDs, which
   # are `<toolkit>.<action>` and lowercase/underscore only, so name the
   # second one `outlook_read`, not `outlook-read`.)
+  #
+  # `allowed_microsoft_actions` holds *action IDs*, and Tier 1 matches
+  # them against a tool's `microsoft_action` as an exact string -- the
+  # tool ID (`outlook.list_messages`) is a third name and is never
+  # compared against this list. The CLI's own spelling (`mail list`) is
+  # what this file uses; the tool-shaped spelling (`list_messages`,
+  # `get_message`, `list_folders`, `send_mail`) also works, as long as
+  # the whitelist and every `microsoft_action` agree on one of the two --
+  # `execute_microsoft.MICROSOFT_ACTION_ALIASES` translates it when the
+  # argv is built, after this whitelist has already had its say. See
+  # docs/ARCHITECTURE.md, "the `microsoft` executor".
   outlook:
     executor: microsoft
     microsoft_script: /opt/gatekeeper/microsoft/microsoft_api.py

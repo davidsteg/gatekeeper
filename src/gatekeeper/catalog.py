@@ -198,12 +198,16 @@ class ToolDef:
     #: Carries the real hyphen names ("create-folder"), not the
     #: underscored tool-id suffix ("create_folder").
     google_action: str | None = None
-    #: Ordered argument map: name -> {flag, positional}. `flag` is the
-    #: ``--name`` to emit (None for positional args); `positional` is
-    #: True when the value goes as a bare argv element, False when it
-    #: goes as a ``--flag value`` pair. Each entry resolves to exactly
-    #: one argv element's worth of value (FR-5.4: a parameter cannot
-    #: structurally produce an additional argument).
+    #: Ordered argument map: name -> {flag, positional, switch}. `flag`
+    #: is the ``--name`` to emit (None for positional args and for
+    #: switches); `positional` is True when the value goes as a bare
+    #: argv element, False when it goes as a ``--flag value`` pair;
+    #: `switch` is the fixed, valueless option a boolean parameter emits
+    #: when it is true (None for every other entry). A valued entry
+    #: resolves to exactly one argv element's worth of value and a
+    #: switch to the one fixed token, so no parameter can structurally
+    #: produce an additional argument (FR-5.4). Parsed by
+    #: `_parse_cli_args`, built by `validate._build_cli_args`.
     google_args: dict[str, dict[str, Any]] | None = None
 
     # -- `microsoft` executor ------------------------------------------
@@ -211,9 +215,9 @@ class ToolDef:
     #: list", "mail send") -- not agent-suppliable, exactly like
     #: `google_action` for google.
     microsoft_action: str | None = None
-    #: Ordered argument map: name -> {flag, positional}, read exactly the
-    #: way `google_args` is. Each entry resolves to one argv element's
-    #: worth of value (FR-5.4).
+    #: Ordered argument map: name -> {flag, positional, switch}, read
+    #: exactly the way `google_args` is -- by the same function, since
+    #: the two CLIs take the same argv shape (FR-5.4).
     microsoft_args: dict[str, dict[str, Any]] | None = None
 
     # -- `opencode` executor -------------------------------------------
@@ -575,6 +579,105 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
     _validate_ceilings(tool, toolkit, where)
 
 
+#: What a `switch:` may be spelled as -- one option-looking token and
+#: nothing else. Whitespace would smuggle a second argument into a single
+#: entry, `=` would let argparse read a value out of the flag, and `{...}`
+#: would be a parameterised flag; flags are fixed per action, never built
+#: from a parameter (FR-5.4).
+SWITCH_RE = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _parse_cli_args(
+    raw: Any,
+    parameters: dict[str, Parameter],
+    where: str,
+    field: str,
+) -> dict[str, dict[str, Any]]:
+    """Parses `google_args`/`microsoft_args` -- one reader, two names.
+
+    The two CLIs take the same argv shape, so they get the same mapping
+    under two field names, read here and built by one function at call
+    time (`validate._build_cli_args`).
+
+    An entry is one of three shapes, and exactly one:
+
+    * ``{positional: true}`` -- the value as a bare argv element;
+    * ``{flag: --name}`` -- the pair ``--name <value>``, where only the
+      value is agent-controlled;
+    * ``{switch: --name}`` -- a *valueless* option. The parameter must be
+      ``type: boolean``; `true` emits ``--name`` exactly once and `false`
+      emits nothing (`validate._build_cli_args`). This is the shape
+      argparse's `store_true` options need -- google_api.py's
+      ``drive search --raw-query``, microsoft_api.py's
+      ``mail list --unread`` -- which reject a value outright, so the
+      ``--name true`` a `flag:` mapping emits is a usage error there.
+
+    A switch is checked here rather than at call time because, unlike a
+    valued entry, it has nothing to be missing: it would emit its flag
+    from a declaration nobody could satisfy. So the parameter must exist
+    and be boolean, and the flag itself must survive `SWITCH_RE` --
+    a declaration that cannot produce a safe argv never reaches a running
+    catalog.
+    """
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: {field!r} must be a mapping")
+
+    parsed: dict[str, dict[str, Any]] = {}
+    for arg_name, arg_spec in raw.items():
+        if not isinstance(arg_name, str) or not arg_name:
+            raise ConfigError(f"{where}: {field} key must be a non-empty string")
+        if not isinstance(arg_spec, dict):
+            raise ConfigError(f"{where}: {field}.{arg_name!r} must be a mapping")
+
+        flag = arg_spec.get("flag")
+        positional = bool(arg_spec.get("positional", False))
+
+        # `in`, not `.get()`: an explicit `switch: null` is a broken
+        # declaration, not an absent one, and is reported as such.
+        if "switch" in arg_spec:
+            switch = arg_spec["switch"]
+            if positional or flag is not None:
+                raise ConfigError(
+                    f"{where}: {field}.{arg_name!r} sets 'switch' and also "
+                    "'flag'/'positional' -- a switch carries no value, pick one"
+                )
+            if not isinstance(switch, str) or not SWITCH_RE.fullmatch(switch):
+                raise ConfigError(
+                    f"{where}: {field}.{arg_name!r} has an unusable 'switch' "
+                    f"name {switch!r} -- it must be a single option token like "
+                    "'--raw-query' (no whitespace, no '=', no placeholder)"
+                )
+            param = parameters.get(arg_name)
+            if param is None:
+                raise ConfigError(
+                    f"{where}: {field}.{arg_name!r} sets 'switch', but the tool "
+                    "declares no parameter of that name"
+                )
+            if param.type != "boolean":
+                raise ConfigError(
+                    f"{where}: {field}.{arg_name!r} sets 'switch', but parameter "
+                    f"{arg_name!r} is type {param.type!r} -- a switch needs a "
+                    "'boolean', which is what decides whether the flag is there"
+                )
+            parsed[arg_name] = {"flag": None, "positional": False, "switch": switch}
+            continue
+
+        if positional and flag is not None:
+            raise ConfigError(
+                f"{where}: {field}.{arg_name!r} is positional and "
+                "also sets 'flag' -- pick one"
+            )
+        if not positional and not flag:
+            raise ConfigError(
+                f"{where}: {field}.{arg_name!r} is not positional "
+                "and has no 'flag' -- a non-positional arg needs a flag name "
+                "(or a 'switch', for a boolean the CLI takes without a value)"
+            )
+        parsed[arg_name] = {"flag": flag, "positional": positional, "switch": None}
+
+    return parsed
+
+
 def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     if not isinstance(spec, dict):
         raise ConfigError("tools.yaml: every entry must be a mapping")
@@ -733,39 +836,17 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         google_action = spec.get("google_action")
         if not isinstance(google_action, str) or not google_action:
             raise ConfigError(f"{where}: field 'google_action' is missing")
-        raw_gargs = spec.get("google_args") or {}
-        if not isinstance(raw_gargs, dict):
-            raise ConfigError(f"{where}: 'google_args' must be a mapping")
-        google_args: dict[str, dict[str, Any]] = {}
-        for arg_name, arg_spec in raw_gargs.items():
-            if not isinstance(arg_name, str) or not arg_name:
-                raise ConfigError(f"{where}: google_args key must be a non-empty string")
-            if not isinstance(arg_spec, dict):
-                raise ConfigError(
-                    f"{where}: google_args.{arg_name!r} must be a mapping"
-                )
-            flag = arg_spec.get("flag")
-            positional = bool(arg_spec.get("positional", False))
-            if positional and flag is not None:
-                raise ConfigError(
-                    f"{where}: google_args.{arg_name!r} is positional and "
-                    "also sets 'flag' -- pick one"
-                )
-            if not positional and not flag:
-                raise ConfigError(
-                    f"{where}: google_args.{arg_name!r} is not positional "
-                    "and has no 'flag' -- a non-positional arg needs a flag name"
-                )
-            google_args[arg_name] = {
-                "flag": flag,
-                "positional": positional,
-            }
-            # The flag template is collected for the placeholder-typo guard
-            # below: a `{param}` in a flag name would be a configuration
-            # error (flags are fixed per action, not parameterised), but
-            # the value side is covered by `google_action`'s param refs.
-            all_templates.append(flag or "")
-        google_args_val = google_args
+        google_args_val = _parse_cli_args(
+            spec.get("google_args") or {}, parameters, where, "google_args"
+        )
+        # The flag templates are collected for the placeholder-typo guard
+        # below: a `{param}` in a flag name would be a configuration error
+        # (flags are fixed per action, not parameterised), but the value
+        # side is covered by `google_action`'s param refs. A `switch` name
+        # cannot carry one at all -- `SWITCH_RE` has already refused it.
+        all_templates.extend(
+            entry["flag"] or "" for entry in google_args_val.values()
+        )
         # google_action may itself contain no placeholders -- it is a
         # fixed action string, not a template. But every google_args
         # entry's value is a parameter name resolved at call time, so
@@ -776,39 +857,14 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         microsoft_action = spec.get("microsoft_action")
         if not isinstance(microsoft_action, str) or not microsoft_action:
             raise ConfigError(f"{where}: field 'microsoft_action' is missing")
-        raw_margs = spec.get("microsoft_args") or {}
-        if not isinstance(raw_margs, dict):
-            raise ConfigError(f"{where}: 'microsoft_args' must be a mapping")
-        microsoft_args: dict[str, dict[str, Any]] = {}
-        for arg_name, arg_spec in raw_margs.items():
-            if not isinstance(arg_name, str) or not arg_name:
-                raise ConfigError(
-                    f"{where}: microsoft_args key must be a non-empty string"
-                )
-            if not isinstance(arg_spec, dict):
-                raise ConfigError(
-                    f"{where}: microsoft_args.{arg_name!r} must be a mapping"
-                )
-            flag = arg_spec.get("flag")
-            positional = bool(arg_spec.get("positional", False))
-            if positional and flag is not None:
-                raise ConfigError(
-                    f"{where}: microsoft_args.{arg_name!r} is positional and "
-                    "also sets 'flag' -- pick one"
-                )
-            if not positional and not flag:
-                raise ConfigError(
-                    f"{where}: microsoft_args.{arg_name!r} is not positional "
-                    "and has no 'flag' -- a non-positional arg needs a flag name"
-                )
-            microsoft_args[arg_name] = {
-                "flag": flag,
-                "positional": positional,
-            }
-            # Collected for the placeholder-typo guard below, exactly as
-            # the google branch collects its flags.
-            all_templates.append(flag or "")
-        microsoft_args_val = microsoft_args
+        microsoft_args_val = _parse_cli_args(
+            spec.get("microsoft_args") or {}, parameters, where, "microsoft_args"
+        )
+        # Collected for the placeholder-typo guard below, exactly as the
+        # google branch collects its flags.
+        all_templates.extend(
+            entry["flag"] or "" for entry in microsoft_args_val.values()
+        )
 
     elif toolkit.executor == "opencode":
         opencode_operation = spec.get("opencode_operation") or spec.get("operation")
