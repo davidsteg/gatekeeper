@@ -205,8 +205,11 @@ def _google_tool(
     `google_action` is the fixed action string (e.g. "gmail search",
     "drive create-folder"); `google_args` maps each parameter name to
     its argv shape -- ``{"positional": True}`` for a bare value,
-    ``{"flag": "--name"}`` for a ``--flag value`` pair. Each entry
-    resolves to exactly one argv element's worth of value (FR-5.4).
+    ``{"flag": "--name"}`` for a ``--flag value`` pair, and
+    ``{"switch": "--name"}`` for a valueless option behind a boolean
+    parameter (`true` emits the flag, `false` emits nothing). A valued
+    entry resolves to exactly one argv element's worth of value, a
+    switch to the one fixed token (FR-5.4).
     """
     return {
         "id": tool_id, "toolkit": toolkit, "version": 1, "title": title,
@@ -1351,12 +1354,24 @@ _INTEGRATIONS_LIST: list[Integration] = [
         tool_specs=(
             _google_tool(
                 "drive.search", toolkit="drive", title="Search files",
-                description="Searches Google Drive by query.",
+                description=(
+                    "Searches Google Drive. By default the query is matched as "
+                    "full text; set raw_query to pass it as a Drive API query."
+                ),
                 google_action="drive search",
-                google_args={"query": {"positional": True}},
+                google_args={
+                    "query": {"positional": True},
+                    # google_api.py's `--raw-query` is an argparse
+                    # `store_true`: present or absent, never valued. A
+                    # `switch:` is the only mapping that can emit it.
+                    "raw_query": {"switch": "--raw-query"},
+                },
                 parameters={
                     "query": {"type": "string", "required": True, "pattern": "^.{1,500}$",
                                "description": "Drive search query."},
+                    "raw_query": {"type": "boolean", "required": False,
+                                   "description": "Treat the query as a raw Drive API "
+                                                  "query instead of a full-text search."},
                 },
                 required_scopes=["drive.metadata.readonly"],
             ),

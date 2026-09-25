@@ -849,3 +849,270 @@ async def test_a_toolkit_naming_a_path_this_image_lacks_falls_back(
     caplog.clear()
     assert await execute_microsoft.probe(tk)
     assert caplog.records == []
+
+
+# -- Three name spaces, one operation ---------------------------------------
+#
+# `outlook.list_messages` is a *tool ID*; `mail list` is the *action ID*
+# Tier 1 whitelists and `microsoft_action` names; `mail list --folder
+# inbox` is the *CLI argv* microsoft_api.py's argparse grammar accepts.
+# A deployment that spells its action IDs after its tool IDs
+# (`list_messages`) is internally consistent, loads clean -- and then
+# every call dies on `invalid choice: 'list_messages'`. These tests pin
+# the bridge: `execute_microsoft.MICROSOFT_ACTION_ALIASES`.
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [
+        # The tool-shaped spelling, bare and with its service named.
+        ("list_messages", ["mail", "list"]),
+        ("mail list_messages", ["mail", "list"]),
+        ("get_message", ["mail", "get"]),
+        ("mail get_message", ["mail", "get"]),
+        ("list_folders", ["mail", "folders"]),
+        ("mail list_folders", ["mail", "folders"]),
+        ("send_mail", ["mail", "send"]),
+        ("mail send_mail", ["mail", "send"]),
+        # The CLI's own spelling, bare and qualified -- unchanged.
+        ("list", ["mail", "list"]),
+        ("mail list", ["mail", "list"]),
+        ("get", ["mail", "get"]),
+        ("mail get", ["mail", "get"]),
+        ("folders", ["mail", "folders"]),
+        ("mail folders", ["mail", "folders"]),
+        ("send", ["mail", "send"]),
+        ("mail send", ["mail", "send"]),
+    ],
+)
+def test_every_spelling_of_the_four_actions_reaches_the_cli_word(
+    toolkit, action, expected
+):
+    tk, _tier1 = toolkit
+    assert execute_microsoft._action_argv(tk, action) == expected
+
+
+def test_an_unknown_action_is_not_rewritten(toolkit):
+    """The table is four entries, not a rule: a name it has never heard
+    of reaches the CLI as written and fails there, loudly."""
+    tk, _tier1 = toolkit
+
+    assert execute_microsoft._action_argv(tk, "archive_message") == [
+        "mail", "archive_message",
+    ]
+    assert execute_microsoft._action_argv(tk, "mail move") == ["mail", "move"]
+    assert execute_microsoft._action_argv(tk, "") == []
+
+
+@pytest.fixture
+def tool_shaped_toolkit(tmp_path, microsoft_script):
+    """A toolkit whose whitelist is spelled in tool IDs, not CLI words.
+
+    The configuration the bug report came from: `allowed_microsoft_actions`
+    and every tool's `microsoft_action` read `list_messages`/`get_message`/
+    `list_folders`/`send_mail`.
+    """
+    path = tmp_path / "toolkits-tool-shaped.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "toolkits": {
+                    "outlook": {
+                        "executor": "microsoft",
+                        "microsoft_script": microsoft_script,
+                        "allowed_microsoft_actions": [
+                            "list_messages", "get_message",
+                            "list_folders", "send_mail",
+                        ],
+                        "credential": "msgraph",
+                        "max_timeout_seconds": 20,
+                        "max_output_bytes": 131072,
+                    }
+                },
+                "audit": {"dir": str(tmp_path / "logs-tool-shaped")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    tier1 = load_tier1(str(path))
+    return tier1.toolkit("outlook"), tier1
+
+
+@pytest.mark.parametrize(
+    ("action", "args", "expected_tail"),
+    [
+        ("list_messages", ["--folder", "inbox", "--max", "10"],
+         ["mail", "list", "--folder", "inbox", "--max", "10"]),
+        ("get_message", ["AAMk-1"], ["mail", "get", "AAMk-1"]),
+        ("list_folders", ["--max", "50"], ["mail", "folders", "--max", "50"]),
+        ("send_mail", ["--to", "a@example.com", "--subject", "s", "--body", "b"],
+         ["mail", "send", "--to", "a@example.com", "--subject", "s",
+          "--body", "b"]),
+    ],
+)
+def test_the_full_argv_for_each_action_of_a_tool_shaped_toolkit(
+    tool_shaped_toolkit, microsoft_script, action, args, expected_tail
+):
+    """All four actions, argv end to end -- nothing is executed here."""
+    tk, _tier1 = tool_shaped_toolkit
+
+    argv = execute_microsoft._build_argv(tk, action, args)
+
+    assert argv[0] == sys.executable
+    assert argv[1] == microsoft_script
+    assert argv[2:] == expected_tail
+
+
+async def test_a_tool_shaped_read_action_actually_runs(
+    tool_shaped_toolkit, token_env
+):
+    """The end the bug report started from: `list_messages` used to reach
+    the CLI as `mail list_messages` and die in argparse."""
+    tk, _tier1 = tool_shaped_toolkit
+
+    result = await execute_microsoft.run(
+        microsoft_action="list_messages",
+        args=["--folder", "inbox"],
+        toolkit=tk,
+        timeout_seconds=10,
+        max_output_bytes=65536,
+        idempotent=True,
+        env=token_env,
+    )
+
+    assert result.outcome == OUTCOME_OK
+    assert json.loads(result.stdout) == [{"id": "AAMk-1", "subject": "hello"}]
+
+
+async def test_the_whitelist_still_gates_sending_under_either_spelling(
+    tmp_path, microsoft_script, token_env
+):
+    """The alias table translates argv; it does not widen Tier 1. A
+    mailbox toolkit that lists only the three read actions refuses to
+    send, whichever of the two names the send is asked for by."""
+    path = tmp_path / "toolkits-read-only.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "toolkits": {
+                    "outlook": {
+                        "executor": "microsoft",
+                        "microsoft_script": microsoft_script,
+                        "allowed_microsoft_actions": [
+                            "list_messages", "get_message", "list_folders",
+                        ],
+                        "credential": "msgraph",
+                        "max_timeout_seconds": 20,
+                        "max_output_bytes": 8192,
+                    }
+                },
+                "audit": {"dir": str(tmp_path / "logs-read-only")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    tk = load_tier1(str(path)).toolkit("outlook")
+
+    for spelling in ("send_mail", "mail send", "send"):
+        result = await execute_microsoft.run(
+            microsoft_action=spelling,
+            args=["--to", "a@example.com"],
+            toolkit=tk,
+            timeout_seconds=5,
+            max_output_bytes=8192,
+            idempotent=False,
+            env=token_env,
+        )
+        assert result.outcome == OUTCOME_FAILED
+        assert "not allowed" in result.stderr
+        assert result.exit_code is None  # nothing was ever started
+
+
+# -- The argv against the real CLI grammar ----------------------------------
+#
+# The tests above assert the argv this executor builds; these assert that
+# microsoft_api.py's own argparse grammar accepts it. Read actions run
+# for real against the loopback Graph server (no credential of any kind
+# is involved -- the token file is the fixture's own fake). `send` is
+# parsed and dispatched with the network function replaced, so the send
+# path is proven to parse without any message being addressed to
+# anything.
+
+
+def _cli_tail(toolkit, action, args):
+    """The argv microsoft_api.py itself would see, without the
+    interpreter and the script path."""
+    tk, _tier1 = toolkit
+    return execute_microsoft._build_argv(tk, action, args)[2:]
+
+
+@pytest.mark.parametrize(
+    ("action", "args", "path", "check"),
+    [
+        (
+            "list_messages",
+            ["--folder", "inbox", "--max", "5"],
+            "/v1.0/me/mailFolders/inbox/messages",
+            lambda request: request["query"]["$top"] == "5",
+        ),
+        (
+            "get_message",
+            ["AAMk-1"],
+            "/v1.0/me/messages/AAMk-1",
+            lambda request: "body" in request["query"]["$select"].split(","),
+        ),
+        (
+            "list_folders",
+            ["--max", "7"],
+            "/v1.0/me/mailFolders",
+            lambda request: request["query"]["$top"] == "7",
+        ),
+    ],
+)
+def test_a_read_actions_argv_parses_and_reaches_the_right_graph_path(
+    tool_shaped_toolkit, api, graph, monkeypatch, capsys, action, args, path, check
+):
+    graph.script[("GET", path)] = (200, {"value": [], "id": "AAMk-1"})
+    tail = _cli_tail(tool_shaped_toolkit, action, args)
+    monkeypatch.setattr(sys, "argv", ["microsoft_api.py", *tail])
+
+    api.main()
+
+    # The CLI accepted the argv and emitted JSON, not a usage error.
+    json.loads(capsys.readouterr().out)
+    request = _graph_requests(graph)[0]
+    assert request["path"] == path
+    assert check(request)
+
+
+def test_the_send_argv_parses_into_the_send_action_without_sending(
+    tool_shaped_toolkit, api, graph, monkeypatch
+):
+    """`send_mail`'s argv is checked against the real grammar with
+    `mail_send` replaced: the parse is proven, no message is composed,
+    addressed or handed to Graph -- not even the loopback one."""
+    seen = {}
+
+    def _recorder(args):
+        seen.update(vars(args))
+        return {"status": "not sent -- test recorder"}
+
+    monkeypatch.setattr(api, "mail_send", _recorder)
+    # set_defaults captured the original function when the parser was
+    # built, so the parser is rebuilt against the patched module.
+    tail = _cli_tail(
+        tool_shaped_toolkit,
+        "send_mail",
+        ["--to", "nobody@example.invalid", "--subject", "s", "--body", "b"],
+    )
+    monkeypatch.setattr(sys, "argv", ["microsoft_api.py", *tail])
+
+    api.main()
+
+    assert seen["func"] is _recorder
+    assert seen["service"] == "mail"
+    assert seen["action"] == "send"
+    assert seen["to"] == "nobody@example.invalid"
+    assert seen["html"] is False
+    # Nothing left the process: no token was minted, no Graph call made.
+    assert graph.requests == []

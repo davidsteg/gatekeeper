@@ -269,11 +269,29 @@ async def test_positional_arg_is_one_argv_element(toolkit):
     assert args == ["from:david is:unread", "--max", "5"]
 
 
-async def test_missing_arg_denied(toolkit):
+async def test_missing_required_arg_denied(toolkit):
+    """A `google_args` entry whose value never arrived fails closed.
+
+    The value here is the *required* `query`: an optional one the agent
+    simply did not send is left off the argv instead, so that the tool's
+    own schema (which lists `max_results` as optional) and the runtime
+    agree -- tests/test_cli_arg_contract.py owns that half.
+    """
     tk, tier1 = toolkit
     tool = _tool(tier1)
     with pytest.raises(Denied):
-        validate.build_google_call(tool, {"query": "is:unread"}, tk)  # max_results missing
+        validate.build_google_call(tool, {"max_results": "5"}, tk)  # query missing
+
+
+async def test_an_omitted_optional_arg_falls_through_to_the_cli_default(toolkit):
+    tk, tier1 = toolkit
+    tool = _tool(tier1)
+
+    # `gmail search` defaults --max to 10 on its own; no --max is the
+    # only way to ask for that.
+    assert validate.build_google_call(tool, {"query": "is:unread"}, tk) == [
+        "is:unread"
+    ]
 
 
 async def test_token_expired_clear_message(toolkit, credentials, google_env):

@@ -468,6 +468,26 @@ tools:
   # (FR-5.4: one parameter = one element's worth of value, never more).
   # The toolkit's executor runs google_api.py as a local subprocess
   # (shell=False) and parses its JSON output.
+  #
+  # The third shape is {"switch": "--name"}, for the CLI's valueless
+  # options (argparse `store_true`): the parameter must be
+  # 'type: boolean', true emits the flag exactly once and false -- like
+  # omitting it -- emits nothing. Drive's raw-query mode is the worked
+  # example; the tool would declare
+  #
+  #   google_args:
+  #     query:
+  #       positional: true
+  #     raw_query:
+  #       switch: --raw-query
+  #     parameters:
+  #       raw_query:
+  #         type: boolean
+  #         required: false
+  #         description: Treat the query as a raw Drive API query.
+  #
+  # Do not reach for {"flag": ...} on a boolean here: it emits
+  # `--raw-query true`, and the CLI exits 2 on the stray value.
 
   - id: gmail.search
     toolkit: gmail
@@ -571,6 +591,23 @@ tools:
   # its JSON output; Graph is reached with a Bearer access token the
   # script mints from the credential's refresh token, never from a
   # parameter.
+  #
+  # Three names, one operation: the tool `id` below
+  # (`outlook.list_messages`) is what an agent calls;
+  # `microsoft_action` is the action ID the toolkit's
+  # `allowed_microsoft_actions` must contain *verbatim*; and `mail list
+  # --folder inbox` is the argv microsoft_api.py parses. They are not
+  # the same string and nothing derives one from another -- the tool ID
+  # is never matched against the whitelist.
+  #
+  # A parameter declared `required: false` and not supplied by the agent
+  # is left off the argv, so the CLI's default applies (--folder ->
+  # inbox, --max -> 10). Do not map a `type: boolean` parameter to a
+  # flag: the mapping emits `--flag true`, and this CLI's boolean
+  # options take no value. `mail list --unread` and `mail send --html`
+  # are such options -- map those with `switch: --unread` instead, which
+  # emits the bare flag on true and nothing on false (see the google
+  # section above for the full shape).
   #
   # Every response here is external_untrusted: a mail body is the
   # canonical prompt-injection carrier, and the list actions deliberately
