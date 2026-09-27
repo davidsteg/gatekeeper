@@ -469,6 +469,15 @@ tools:
   # The toolkit's executor runs google_api.py as a local subprocess
   # (shell=False) and parses its JSON output.
   #
+  # Three names, one operation -- the same three the microsoft block
+  # below spells out: the tool `id` (`drive.create_folder`) is what an
+  # agent calls; 'google_action' is the action ID the toolkit's
+  # `allowed_google_actions` must contain *verbatim*; and `drive
+  # create-folder <name> --parent <id>` is the argv google_api.py parses.
+  # The tool ID is never matched against the whitelist, and this executor
+  # has no alias table -- an action ID must be the CLI's own spelling,
+  # hyphen included (`drive create-folder`, not `drive create_folder`).
+  #
   # The third shape is {"switch": "--name"}, for the CLI's valueless
   # options (argparse `store_true`): the parameter must be
   # 'type: boolean', true emits the flag exactly once and false -- like

@@ -99,6 +99,20 @@ network access outside localhost is needed.
   row use; do not hand-roll a second one, it will forget the
   destination-level `credential:` override (FR-8.3g). A dangling reference is
   a startup warning, not an abort, and shows as a note on `/ui/credentials`.
+- **Three names describe one `google`/`microsoft` operation, and they are
+  not interchangeable.** The public **tool ID** is dotted and
+  underscore-only (`outlook.list_messages`, `drive.create_folder`); the
+  **action ID** is what a tool's `microsoft_action`/`google_action` and
+  its toolkit's `allowed_microsoft_actions`/`allowed_google_actions` must
+  share *verbatim* (`mail list`, `drive create-folder`); the **CLI argv**
+  is what the bundled script's argparse accepts. Nothing derives one from
+  another, and a tool ID is never matched against a whitelist.
+  `execute_microsoft.MICROSOFT_ACTION_ALIASES` bridges the four
+  tool-shaped Outlook action names (`list_messages` → `list`); `google`
+  has no such table, so a `google_action` must be the CLI's own spelling,
+  hyphen included (`drive create-folder`). Release notes name the dotted
+  tool IDs, never a flat `outlook_list_messages`. See
+  docs/ARCHITECTURE.md, "Three names for one operation".
 - **`local` binaries are validated for shape, never for existence — and
   host state is not a binary problem.** Tier 1 checks that a binary path is
   absolute and traversal-free, then loads; it is parsed before anything

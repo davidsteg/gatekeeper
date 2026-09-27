@@ -105,14 +105,17 @@ item.
   runs `google_api.py` as a local subprocess, materializes an `oauth2`
   credential bundle (client_id/client_secret/refresh_token, plus the
   scopes the grant covers) to a per-call tempfile, and parses JSON
-  output. Covers Gmail, Calendar, Drive. The
-  refresh token is obtained in the console since 0.46.0
+  output. Starter tools cover Gmail, Calendar and Drive; the bundled
+  `google_api.py` also dispatches `contacts`, `sheets` and `docs`, which a
+  toolkit may whitelist as action strings although no starter tool ships
+  for them. The refresh token is obtained in the console since 0.46.0
   (`/ui/oauth/google/authorize` + `/ui/oauth/google/callback`), so no
-  setup script outside gatekeeper handles it. Other OAuth2 providers
-  (Microsoft, etc.) would follow the same pattern — a new toolkit on the
-  `google` executor, not a new executor; their consent flow would be a
-  sibling of the Google routes, which are deliberately Google-specific
-  (endpoints and scope prefix are constants, not configuration).
+  setup script outside gatekeeper handles it. Microsoft went the other way
+  (0.46.3): its own `microsoft` executor and its own consent routes, a
+  sibling of the Google pair rather than a toolkit on it, because the
+  Google routes' endpoints and scope prefix are constants rather than
+  configuration — the shared parts are factored into
+  `ui._oauth_authorize`/`_oauth_callback` (see "Implemented" above).
 - **`ssh` destinations** — a `docker`/`http`/`truenas`/`opencode` toolkit
   can declare several named destinations (see below); `ssh` toolkits can't
   yet (`tier1.py` rejects a `destinations:` list on an `ssh` toolkit) — one

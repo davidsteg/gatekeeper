@@ -97,10 +97,19 @@ def _resolve_script(toolkit: Toolkit, *, warn: bool) -> str:
     return GOOGLE_FALLBACK_SCRIPT
 
 
-#: The services the bundled google_api.py CLI dispatches on. Its argv is
-#: ``google_api.py <service> <action> [args]`` -- the service token is not
-#: optional and not inferred by the script, so `gmail labels` is a listing
-#: of labels while a bare `labels` is a usage error.
+#: The service tokens this executor recognizes in -- and can supply from
+#: -- a toolkit name. The CLI's argv is ``google_api.py <service> <action>
+#: [args]``; the service token is not optional and not inferred by the
+#: script, so `gmail labels` is a listing of labels while a bare `labels`
+#: is a usage error.
+#:
+#: Narrower than google_api.py's own grammar, which also dispatches
+#: `contacts`, `sheets` and `docs`: these three are the services the
+#: shipped toolkits and starter integrations are named after. An action on
+#: one of the others has to name its service itself (`sheets get`) on a
+#: toolkit whose name matches none of these three -- `_action_argv` hands
+#: such an action to the CLI unchanged, since `_service_prefix` has no
+#: answer to prepend.
 GOOGLE_SERVICES = ("gmail", "calendar", "drive")
 
 
