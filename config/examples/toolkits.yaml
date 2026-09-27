@@ -214,6 +214,20 @@ toolkits:
   # mount required. If it lives in another container on the same Docker
   # host instead, set `google_container` to that container's name -- the
   # executor then runs `docker exec <container> python <script> ...`.
+  #
+  # `allowed_google_actions` holds *action IDs*, and Tier 1 matches them
+  # against a tool's `google_action` as an exact string -- the tool ID
+  # (`drive.create_folder`) is a third name and is never compared against
+  # this list. Unlike the `microsoft` executor below, this one has no
+  # alias table: an action ID must already be the CLI's own spelling,
+  # hyphen included (`drive create-folder`, never `drive create_folder`,
+  # which argparse rejects as an invalid choice). A bare action (`labels`)
+  # gets its service token from the toolkit name, which resolves for
+  # gmail/calendar/drive only -- an action on google_api.py's `contacts`,
+  # `sheets` or `docs` services must name the service itself (`sheets
+  # get`), on its own toolkit named after that service, the same 1:1
+  # model the three below use. See docs/ARCHITECTURE.md, "Three names for
+  # one operation".
   gmail:
     executor: google
     google_script: /opt/gatekeeper/google/google_api.py

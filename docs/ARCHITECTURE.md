@@ -91,6 +91,7 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 | `http` | LAN/SaaS APIs (Sonarr, Radarr, Home Assistant, pfSense, GitHub, …) | HTTP request; base URL, method, and path prefix come from the toolkit, never a parameter |
 | `truenas` | ZFS, pool status, dataset management | JSON-RPC 2.0 over WebSocket (TrueNAS's REST v2.0 is deprecated) |
 | `ssh` | A remote Linux host's allowlisted binaries | binary + argv (same shape as `docker`/`local`), run over an SSH exec channel |
+| `google` | Gmail, Calendar, Drive (the bundled CLI also carries `contacts`/`sheets`/`docs`) | local subprocess (`google_api.py`), OAuth2 refresh token materialized to a per-call tempfile; whitelisted by action string |
 | `microsoft` | Outlook mail via Microsoft Graph | local subprocess (`microsoft_api.py`), OAuth2 refresh token materialized to a per-call tempfile; whitelisted by action string |
 | `opencode` | A headless opencode coding-agent server | HTTP; one operation = one fixed multi-request workflow, whitelisted by operation name |
 | `agent` | Other gatekeeper identities | in-process mailbox (`messages.yaml`); no shell, no credential. Network only if the operator sets `GATEKEEPER_NOTIFY_URL` (best-effort delivery webhook, never agent-controllable) |
@@ -335,19 +336,28 @@ refresh token at all, yet Microsoft omits it from the token response's
 the consent screen asked for back, or the next refresh would stop asking
 for it and the credential would go quietly read-only.
 
-Three names describe one Outlook operation, and they are not
-interchangeable:
+### Three names for one operation
 
-| | Example | Who owns it |
-|---|---|---|
-| **Tool ID** | `outlook.list_messages` | tools.yaml / the console; dotted, lowercase + underscore (catalog.py's `id` rule). What an agent calls. |
-| **Action ID** | `mail list` | `microsoft_action` on the tool, and the toolkit's `allowed_microsoft_actions`. Tier 1 matches the two as an **exact string** — no normalization, at catalog load and again in the executor. |
-| **CLI argv** | `mail list --folder inbox --max 10` | `microsoft_api.py`'s argparse grammar (`mail` + `list`/`get`/`folders`/`send`). Built by `execute_microsoft._build_argv`. |
+Three names describe one operation on both CLI-backed executors (`google`
+and `microsoft`), and they are not interchangeable:
 
-A deployment may legitimately spell its action IDs after its tool IDs —
-whitelist and `microsoft_action` both reading `list_messages` — which is
-internally consistent, passes every Tier 1 check, and used to reach the
-CLI as `mail list_messages`, i.e. `invalid choice` on every call.
+| | Outlook example | Google example | Who owns it |
+|---|---|---|---|
+| **Tool ID** | `outlook.list_messages` | `drive.create_folder` | tools.yaml / the console; dotted, lowercase + underscore (catalog.py's `id` rule). What an agent calls over `/mcp`. |
+| **Action ID** | `mail list` | `drive create-folder` | `microsoft_action` / `google_action` on the tool, and the toolkit's `allowed_microsoft_actions` / `allowed_google_actions`. Tier 1 matches the two as an **exact string** — no normalization, at catalog load and again in the executor. |
+| **CLI argv** | `mail list --folder inbox --max 10` | `drive create-folder <name> --parent <id>` | the bundled CLI's argparse grammar: `microsoft_api.py` (`mail` + `list`/`get`/`folders`/`send`), `google_api.py` (`gmail`/`calendar`/`drive`/`contacts`/`sheets`/`docs`, each with its own actions). Built by `execute_microsoft._build_argv` / `execute_google._build_argv`. |
+
+The tool ID is never compared against a whitelist, and nothing derives one
+name from another: `drive.create_folder` and `drive create-folder` differ
+in more than the separator, and a `google_action` written as `drive
+create_folder` is an `invalid choice` at the CLI even though the tool ID
+spells it that way.
+
+On the Microsoft side a deployment may legitimately spell its action IDs
+after its tool IDs — whitelist and `microsoft_action` both reading
+`list_messages` — which is internally consistent, passes every Tier 1
+check, and used to reach the CLI as `mail list_messages`, i.e. `invalid
+choice` on every call.
 `execute_microsoft.MICROSOFT_ACTION_ALIASES` is the bridge: a fixed
 four-entry table (`list_messages`→`list`, `get_message`→`get`,
 `list_folders`→`folders`, `send_mail`→`send`) applied when the argv is
@@ -355,9 +365,19 @@ assembled, *after* the whitelist check, so it translates spelling and
 widens nothing — a toolkit listing only the three read actions still
 refuses a send under either name. An action the table has never heard of
 is passed through untouched and fails at the CLI, which is the right
-outcome for a name nobody vetted. The service token (`mail`) is supplied
-by `_service_prefix` when the action does not name one, exactly as
-`execute_google` does for `gmail`/`calendar`/`drive`.
+outcome for a name nobody vetted.
+
+There is no counterpart table on the `google` side: a `google_action` is
+expected to be the CLI's own spelling already, which every shipped google
+tool and starter integration uses. What both executors do supply is the
+*service* token when the action ID omits it (`labels` → `gmail labels`),
+and both take it from the toolkit's name.
+`execute_google._service_prefix` recognizes `gmail`/`calendar`/`drive`
+(`GOOGLE_SERVICES`) and prefixes nothing for a toolkit whose name matches
+none of them, so an action on the CLI's `contacts`, `sheets` or `docs`
+services has to name its service itself (`sheets get`, not `get`).
+`execute_microsoft` has exactly one service (`mail`) and therefore always
+has an answer.
 
 `google_args`/`microsoft_args` map a parameter to its argv shape, and
 both are read by one parser (`catalog._parse_cli_args`) and built by one
