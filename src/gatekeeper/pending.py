@@ -199,11 +199,13 @@ class PendingStore:
     ) -> Any:
         """Approves one item.
 
-        `current_rev` reads the live revision of the file the action
+        `current_rev` reads the live revision of the record the action
         targets; if it no longer matches the proposal's `base_rev`, the
         item is marked `stale` and `apply` is never called (no silent
-        re-basing -- FR "Stale proposals" design decision). Otherwise
-        `apply` performs the actual mutation and its result (or any
+        re-basing -- FR "Stale proposals" design decision). A target that
+        has vanished entirely (`current_rev` returns "") counts as changed
+        for exactly the same reason -- see below. Otherwise `apply`
+        performs the actual mutation and its result (or any
         `WriteRefused`/`ConfigError` it raises) is returned/propagated
         unchanged; on success the item is marked `approved`.
         """
@@ -219,13 +221,28 @@ class PendingStore:
             item = _from_spec(match)
 
             live_rev = current_rev(item)
-            if item.base_rev and live_rev and item.base_rev != live_rev:
+            # An empty `live_rev` means the targeted record is gone (see
+            # `store._fingerprint`: `None` fingerprints as ""), and that is
+            # a stale proposal too -- not a reason to proceed. This gate
+            # used to tolerate it (`... and live_rev and ...`), a leftover
+            # from when it hashed the whole *file*, where "" only meant
+            # "not created yet". Once it became per-record, that tolerance
+            # let an approval fall through to an applier that could do
+            # nothing but raise (`delete_tool` -> "No tool with ID ..."),
+            # so a `tool_delete` whose tool had since been removed could be
+            # neither approved nor closed and stayed `pending` forever.
+            if item.base_rev and item.base_rev != live_rev:
+                vanished = not live_rev
                 match["status"] = "stale"
                 match["decided_by"] = decided_by
                 match["decided_at"] = now_iso()
                 match["reason"] = (
-                    "Configuration changed since this was proposed. "
-                    "Re-propose from the current state."
+                    "What this targeted no longer exists. Nothing to apply."
+                    if vanished
+                    else (
+                        "Configuration changed since this was proposed. "
+                        "Re-propose from the current state."
+                    )
                 )
                 self._write(entries)
                 self.audit.write(
@@ -239,9 +256,14 @@ class PendingStore:
                     }
                 )
                 raise PendingWriteRefused(
-                    f"Pending action {action_id!r} is stale: the configuration "
-                    "changed since it was proposed. It has been marked 'stale' "
-                    "-- re-propose from the current state."
+                    f"Pending action {action_id!r} is stale: "
+                    + (
+                        "what it targeted no longer exists."
+                        if vanished
+                        else "the configuration changed since it was proposed."
+                    )
+                    + " It has been marked 'stale' -- re-propose from the "
+                    "current state."
                 )
 
             result = apply(item)

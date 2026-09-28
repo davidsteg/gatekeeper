@@ -970,6 +970,84 @@ async def test_pending_page_still_flags_a_missing_tool_left_unchanged_in_a_grant
     assert "no such tool in the catalog" in page.text
 
 
+# -- Deciding a proposal whose target is gone ---------------------------------
+
+
+def _remove_tool_entry(admin_env, tool_id):
+    """The state a toolkit restructure leaves behind: the tool's entry is no
+    longer in tools.yaml at all, so `store.tool_revision` fingerprints
+    `None` as "". Distinct from `store.delete_tool`, which tombstones the
+    entry and leaves it in `catalog.raw`.
+    """
+    tools_path = admin_env["tools_path"]
+    specs = yaml.safe_load(tools_path.read_text(encoding="utf-8"))["tools"]
+    tools_path.write_text(
+        yaml.safe_dump({"tools": [s for s in specs if s.get("id") != tool_id]}),
+        encoding="utf-8",
+    )
+    admin_env["service"].catalog = load_catalog(str(tools_path), admin_env["tier1"])
+
+
+async def test_reject_closes_a_tool_delete_whose_tool_is_gone(admin_env):
+    """Refusing is only "do not execute" -- the decision path must not need
+    a live target to record it (the zombie pendings found in production
+    could not be closed at all).
+    """
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(admin_env, "demo.show")
+
+    async with _client(admin_env["app"]) as client:
+        csrf = await _signed_in(client)
+        # The queue still renders -- the missing target is flagged, not fatal.
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+        assert page.status_code == 200
+        assert "missing" in page.text
+        confirm = await client.get(f"{UI_PREFIX}/pending/reject?id={item.id}")
+        assert confirm.status_code == 200
+        r = await client.post(
+            f"{UI_PREFIX}/pending/reject",
+            data={"_csrf": csrf, "id": item.id, "reason": "toolkit restructured"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+
+    decided = pending.get(item.id)
+    assert decided.status == "rejected"
+    assert decided.reason == "toolkit restructured"
+
+
+async def test_approve_of_a_tool_delete_whose_tool_is_gone_goes_stale(admin_env):
+    """It used to stay `pending` forever: the approval fell through the
+    staleness gate to `store.delete_tool`, which could only answer "No tool
+    with ID ...". A decision must always close the item.
+    """
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(admin_env, "demo.show")
+
+    async with _client(admin_env["app"]) as client:
+        csrf = await _signed_in(client)
+        r = await client.post(
+            f"{UI_PREFIX}/pending/approve",
+            data={"_csrf": csrf, "id": item.id},
+            follow_redirects=False,
+        )
+        assert r.status_code == 400
+        assert "stale" in r.text.lower()
+        assert "No tool with ID" not in r.text
+
+    assert pending.get(item.id).status == "stale"
+
+
 # -- Toolkits (plan "Follow-up 2") -------------------------------------------
 
 
