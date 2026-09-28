@@ -280,6 +280,139 @@ def test_approve_role_set_marks_stale_when_identities_moved_since_proposal(
     assert store.identities.identities["bot"].role == "agent"
 
 
+# -- A target that vanished after the proposal ------------------------------
+
+
+def _remove_tool_entry(store, tools_path, tier1, tool_id):
+    """Drops a tool's entry from tools.yaml entirely and reloads the catalog.
+
+    Not the same thing as `store.delete_tool` (which tombstones the entry,
+    leaving it in `catalog.raw` with `deleted: true`): this is the state a
+    toolkit restructure leaves behind, where the record a pending proposal
+    targets is simply no longer there, so `store.tool_revision` fingerprints
+    `None` as "".
+    """
+    specs = yaml.safe_load(tools_path.read_text(encoding="utf-8"))["tools"]
+    tools_path.write_text(
+        yaml.safe_dump({"tools": [s for s in specs if s.get("id") != tool_id]}),
+        encoding="utf-8",
+    )
+    store.service.catalog = load_catalog(str(tools_path), tier1)
+
+
+def test_reject_closes_a_pending_whose_target_tool_vanished(tmp_path, tier1, tool_specs):
+    """Refusing is just "do not execute" -- it must never need a live
+    target. The 14 zombie `tool_delete` items found in production could be
+    neither approved nor closed; a refusal has to be able to end that.
+    """
+    store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(store, tools_path, tier1, "demo.show")
+    assert store.tool_revision("demo.show") == ""
+
+    rejected = pending.reject(item.id, decided_by="root", reason="toolkit restructured")
+    assert rejected.status == "rejected"
+    assert rejected.reason == "toolkit restructured"
+    assert pending.get(item.id).status == "rejected"
+
+
+def test_approve_tool_delete_marks_stale_when_target_tool_vanished(
+    tmp_path, tier1, tool_specs
+):
+    """The bug: a vanished target used to slip past the staleness gate
+    (`live_rev` is "" for a record that no longer exists) and fall through
+    to `store.delete_tool`, which could only raise "No tool with ID ..." --
+    leaving the item `pending` forever. It is a stale proposal, like any
+    other target that moved under it.
+    """
+    store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(store, tools_path, tier1, "demo.show")
+
+    try:
+        apply_pending(store, pending, item.id, decided_by="root")
+        assert False, "expected PendingWriteRefused (stale)"
+    except PendingWriteRefused as exc:
+        assert "stale" in str(exc).lower()
+        assert "no tool with id" not in str(exc).lower()
+
+    marked = pending.get(item.id)
+    assert marked.status == "stale"
+    assert marked.decided_by == "root"
+    assert "no longer exists" in (marked.reason or "")
+
+
+def test_stale_tool_delete_with_vanished_target_cannot_be_approved_again(
+    tmp_path, tier1, tool_specs
+):
+    """Once marked, the item is decided -- a second approval is refused for
+    being already `stale`, not retried against the missing target.
+    """
+    store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(store, tools_path, tier1, "demo.show")
+    try:
+        apply_pending(store, pending, item.id, decided_by="root")
+    except PendingWriteRefused:
+        pass
+    try:
+        apply_pending(store, pending, item.id, decided_by="root")
+        assert False, "expected PendingWriteRefused"
+    except PendingWriteRefused as exc:
+        assert "already" in str(exc).lower()
+
+
+def test_approve_role_set_marks_stale_when_target_identity_vanished(
+    tmp_path, tier1, tool_specs
+):
+    """The guard lives in `PendingStore.approve`, so it covers every
+    target-based kind -- not just `tool_delete`.
+    """
+    store, pending, _tp, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="role_set", actor="hermes",
+        payload={"identity_id": "bot", "role": "viewer", "tools": [], "scopes": []},
+        base_rev=store.identity_revision("bot"),
+    )
+    store.delete_identity("bot", actor="root", rev=store.identities_revision())
+    assert store.identity_revision("bot") == ""
+
+    try:
+        apply_pending(store, pending, item.id, decided_by="root")
+        assert False, "expected PendingWriteRefused (stale)"
+    except PendingWriteRefused as exc:
+        assert "stale" in str(exc).lower()
+    assert pending.get(item.id).status == "stale"
+
+
+def test_approve_still_applies_when_there_was_no_base_rev(tmp_path, tier1, tool_specs):
+    """A proposal captured against a record that did not exist yet has
+    `base_rev` "" -- the vanished-target guard must not turn that into a
+    stale item, or nothing could ever be proposed before it exists.
+    """
+    _store, pending, _tp, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes", payload={"id": "demo.ghost"}, base_rev="",
+    )
+    applied: list[str] = []
+    pending.approve(
+        item.id, decided_by="root",
+        current_rev=lambda _item: "",
+        apply=lambda i: applied.append(i.payload["id"]),
+    )
+    assert applied == ["demo.ghost"]
+    assert pending.get(item.id).status == "approved"
+
+
 # -- Per-record fingerprinting fixes the cross-record false positive --------
 
 
