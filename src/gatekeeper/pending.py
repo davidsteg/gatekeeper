@@ -34,12 +34,23 @@ import yaml
 from ._atomic import atomic_write as _atomic_write
 from ._atomic import dump as _dump
 from ._atomic import revision as _revision
+from ._atomic import writable as _writable
 from .audit import AuditLog
 from .catalog import now_iso
 from .errors import ConfigError
 
 #: What a pending item may be in.
 STATUSES = frozenset({"pending", "approved", "rejected", "stale"})
+
+#: The two reasons an item is marked `stale`, as one vocabulary shared by
+#: every path that can mark one -- `approve`'s gate and
+#: `close_vanished_targets`' sweep -- so a human reading `/ui/requests`
+#: sees the same sentence whichever of the two closed the item.
+STALE_VANISHED_REASON = "What this targeted no longer exists. Nothing to apply."
+STALE_CHANGED_REASON = (
+    "Configuration changed since this was proposed. "
+    "Re-propose from the current state."
+)
 
 
 class PendingWriteRefused(ConfigError):
@@ -189,6 +200,79 @@ class PendingStore:
             )
             return _from_spec(match)
 
+    def close_vanished_targets(
+        self,
+        live_rev: Callable[[PendingAction], str | None],
+        *,
+        decided_by: str = "system",
+    ) -> list[PendingAction]:
+        """Marks `stale` every still-`pending` item whose target record has
+        vanished, and returns the ones it closed.
+
+        The self-healing half of the guard in `approve`: that one can only
+        close an item a human actually clicks Approve on, so an item nobody
+        ever clicks -- there is nothing to gain from approving a delete of a
+        tool that is already gone -- sits in the queue as `pending` forever
+        (14 such items observed in production on 0.46.4). Sweeping on the
+        read path closes them on the next `/ui/requests` visit instead,
+        with the same `STALE_VANISHED_REASON` a clicked approval would have
+        written.
+
+        `live_rev` returns the live per-record revision of what the item
+        targets, or `None` for an item this sweep must not judge: a kind
+        with no target record at all (`cred_propose`, whose `base_rev` is a
+        whole-file revision and whose target is deliberately a credential
+        that does *not* exist yet), or a payload whose target id cannot be
+        read. Only `""` -- the record existed at propose time and is gone
+        now -- closes an item.
+
+        Idempotent by construction: a closed item is no longer `pending`,
+        so a second sweep skips it and writes nothing at all. An item whose
+        target still exists is never touched, whatever else changed about
+        it -- a target that merely *moved* is `approve`'s business, where a
+        human is present to be told about it.
+        """
+        # A read-only `pending.yaml` cannot self-heal; refusing to try is
+        # the difference between a queue that still renders and a GET of
+        # `/ui/requests` that 500s on an `OSError` from the atomic write.
+        if not _writable(self.path):
+            return []
+        with self._lock:
+            entries = self._load()
+            closed: list[PendingAction] = []
+            for entry in entries:
+                if entry.get("status") != "pending":
+                    continue
+                item = _from_spec(entry)
+                # No `base_rev` means the item was proposed against a record
+                # that did not exist yet; "gone" is not a thing it can be.
+                if not item.base_rev:
+                    continue
+                rev = live_rev(item)
+                if rev is None or rev != "":
+                    continue
+                entry["status"] = "stale"
+                entry["decided_by"] = decided_by
+                entry["decided_at"] = now_iso()
+                entry["reason"] = STALE_VANISHED_REASON
+                closed.append(_from_spec(entry))
+            if not closed:
+                return []
+            self._write(entries)
+            for item in closed:
+                self.audit.write(
+                    {
+                        "kind": "admin_change",
+                        "actor": decided_by,
+                        "action": "pending_stale",
+                        "target": item.id,
+                        "proposed_action": item.action,
+                        "original_actor": item.actor,
+                        "reason": STALE_VANISHED_REASON,
+                    }
+                )
+            return closed
+
     def approve(
         self,
         action_id: str,
@@ -237,12 +321,7 @@ class PendingStore:
                 match["decided_by"] = decided_by
                 match["decided_at"] = now_iso()
                 match["reason"] = (
-                    "What this targeted no longer exists. Nothing to apply."
-                    if vanished
-                    else (
-                        "Configuration changed since this was proposed. "
-                        "Re-propose from the current state."
-                    )
+                    STALE_VANISHED_REASON if vanished else STALE_CHANGED_REASON
                 )
                 self._write(entries)
                 self.audit.write(
@@ -285,4 +364,11 @@ class PendingStore:
             return result
 
 
-__all__ = ["PendingAction", "PendingStore", "PendingWriteRefused", "STATUSES"]
+__all__ = [
+    "PendingAction",
+    "PendingStore",
+    "PendingWriteRefused",
+    "STALE_CHANGED_REASON",
+    "STALE_VANISHED_REASON",
+    "STATUSES",
+]

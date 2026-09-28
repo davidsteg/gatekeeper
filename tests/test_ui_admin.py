@@ -24,7 +24,7 @@ from conftest import PYTHON
 from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
 from gatekeeper.identity import generate_token, hash_token, load_identities
-from gatekeeper.pending import PendingStore
+from gatekeeper.pending import STALE_VANISHED_REASON, PendingStore
 from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore, WriteRefused, load_tool_yaml
@@ -992,6 +992,15 @@ async def test_reject_closes_a_tool_delete_whose_tool_is_gone(admin_env):
     """Refusing is only "do not execute" -- the decision path must not need
     a live target to record it (the zombie pendings found in production
     could not be closed at all).
+
+    The refusal is issued *before* the queue is ever rendered: visiting
+    /ui/requests now self-heals a vanished-target item on sight (see
+    `test_visiting_requests_self_heals_a_pending_whose_tool_is_gone`), so
+    reaching this decision path from a page visit is no longer possible.
+    That is the fix, not a gap -- what this test pins is the underlying
+    guarantee that `reject` itself never needs a live target, which is what
+    a direct POST (or a queue swept on a read-only pending.yaml) still
+    relies on.
     """
     pending = admin_env["pending"]
     store = admin_env["store"]
@@ -1003,10 +1012,6 @@ async def test_reject_closes_a_tool_delete_whose_tool_is_gone(admin_env):
 
     async with _client(admin_env["app"]) as client:
         csrf = await _signed_in(client)
-        # The queue still renders -- the missing target is flagged, not fatal.
-        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
-        assert page.status_code == 200
-        assert "missing" in page.text
         confirm = await client.get(f"{UI_PREFIX}/pending/reject?id={item.id}")
         assert confirm.status_code == 200
         r = await client.post(
@@ -1015,10 +1020,71 @@ async def test_reject_closes_a_tool_delete_whose_tool_is_gone(admin_env):
             follow_redirects=False,
         )
         assert r.status_code == 303
+        # The queue still renders the closed item -- the missing target is
+        # flagged, not fatal.
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+        assert page.status_code == 200
+        assert "missing" in page.text
 
     decided = pending.get(item.id)
     assert decided.status == "rejected"
     assert decided.reason == "toolkit restructured"
+
+
+async def test_visiting_requests_self_heals_a_pending_whose_tool_is_gone(admin_env):
+    """The self-healing half: `approve`'s guard can only close an item a
+    human clicks Approve on, and nobody clicks Approve on a delete of a
+    tool that is already deleted -- so the 14 production zombies would have
+    stayed `pending` forever regardless. One visit to /ui/requests closes
+    them, with the vanished-target explanation rather than the
+    "configuration changed, re-propose" one (there is nothing left to
+    re-propose against).
+    """
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(admin_env, "demo.show")
+
+    async with _client(admin_env["app"]) as client:
+        await _signed_in(client)
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+        assert page.status_code == 200
+
+    healed = pending.get(item.id)
+    assert healed.status == "stale"
+    assert healed.reason == STALE_VANISHED_REASON
+    # The card explains the right thing -- its own "Why" row says the
+    # target is gone, rather than the generic "the configuration changed,
+    # re-propose from the current state", which is useless advice for a
+    # target that no longer exists. (A bare negative assertion on the
+    # generic wording would match the release-notes panel this page also
+    # renders, so pin the phrase unique to the vanished case.)
+    assert "removed after the proposal was made" in page.text
+    # ... and the tab badge counts it as decided, so the queue empties.
+    assert "Nothing awaiting review right now." in page.text
+
+
+async def test_visiting_requests_leaves_a_pending_with_a_live_target_alone(admin_env):
+    """The sweep must close only what vanished. A perfectly good proposal
+    is still waiting for a human after any number of page visits.
+    """
+    pending = admin_env["pending"]
+    store = admin_env["store"]
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+
+    async with _client(admin_env["app"]) as client:
+        await _signed_in(client)
+        await client.get(f"{UI_PREFIX}/requests?tab=change")
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+
+    assert pending.get(item.id).status == "pending"
+    assert "awaiting review" in page.text
 
 
 async def test_approve_of_a_tool_delete_whose_tool_is_gone_goes_stale(admin_env):

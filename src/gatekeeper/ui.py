@@ -70,7 +70,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from . import __version__, release_notes
-from .admin_service import apply_pending
+from .admin_service import apply_pending, sweep_vanished_pendings
 from .audit import AuditLog
 from .catalog import ToolDef
 from .credentials import KINDS as CREDENTIAL_KINDS
@@ -85,7 +85,12 @@ from .identity import (
     IdentityStore,
 )
 from .integrations import INTEGRATIONS, Integration, monogram
-from .pending import PendingAction, PendingStore, PendingWriteRefused
+from .pending import (
+    STALE_VANISHED_REASON,
+    PendingAction,
+    PendingStore,
+    PendingWriteRefused,
+)
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
 from .tier1 import Destination, Toolkit
@@ -3693,11 +3698,27 @@ def _stale_row(item: PendingAction) -> str:
     """
     if item.status != "stale":
         return ""
+    # Two different things end up `stale`, and telling a reviewer the wrong
+    # one is worse than telling them nothing: "the configuration changed"
+    # invites a re-propose, which is the right advice for a target that
+    # moved and useless for one that is gone (nothing to re-propose
+    # against). `reason` already distinguishes them -- see pending.py's
+    # STALE_* vocabulary.
+    if item.reason == STALE_VANISHED_REASON:
+        explanation = (
+            "What this proposal targeted no longer exists &mdash; it was "
+            "removed after the proposal was made, so there is nothing left "
+            "to apply it to."
+        )
+    else:
+        explanation = (
+            "The configuration this referred to changed after it was "
+            "proposed &mdash; ask Hermes to re-propose from the current "
+            "state."
+        )
     return (
         '<div class="row"><div class="row-l">Why</div>'
-        "<div>The configuration this referred to changed after it was "
-        "proposed &mdash; ask Hermes to re-propose from the current "
-        "state.</div></div>"
+        f"<div>{explanation}</div></div>"
     )
 
 
@@ -4084,6 +4105,14 @@ def _view_requests(
     tab = request.query_params.get("tab", "change")
     if tab not in ("change", "toolkit"):
         tab = "change"
+    # Self-heal before counting, not after: a proposal whose target record
+    # is gone can never be approved (approve marks it stale) and nobody has
+    # a reason to click it, so without this it sits in the queue -- and in
+    # the badge -- forever. Deliberately here, ahead of both the counts and
+    # the body, so one visit both closes them and renders the closed state,
+    # rather than showing a count that a refresh silently corrects.
+    if store is not None and pending is not None:
+        sweep_vanished_pendings(store, pending)
     change_n, toolkit_n = _request_pending_counts(pending, toolkit_proposals)
     tabs = (
         '<div class="req-tabs">'
