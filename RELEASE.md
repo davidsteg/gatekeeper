@@ -1,3 +1,14 @@
+## 0.46.5
+
+Robustness pass on the pending-request lifecycle: a pending whose target record has disappeared no longer errors or blocks the queue, it is closed as stale wherever it surfaces.
+
+### Fixed
+
+- Approving a target-less pending now closes it as stale instead of erroring, for all target-based pending kinds.
+- `pending_list` and `/ui/requests` sweep still-pending items whose target record has vanished, self-healing zombie entries with the same reason text; the sweep is idempotent and leaves pendings with live targets untouched.
+- `apply_pending` with a missing target id closes the pending as stale instead of returning a 500.
+- The sweep no-ops when `pending.yaml` is read-only.
+
 # Releases
 
 The notes live here, not in a web form. They go through the same review as
