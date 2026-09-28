@@ -8,14 +8,22 @@ exact same `ConfigStore` mutator a human `/ui` write would.
 
 from __future__ import annotations
 
+import json
+import pathlib
+
 import yaml
 
 from conftest import PYTHON
-from gatekeeper.admin_service import apply_pending
+from gatekeeper.admin_service import (
+    _APPLIERS,
+    AdminService,
+    apply_pending,
+    sweep_vanished_pendings,
+)
 from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
 from gatekeeper.identity import IdentityStore, generate_token, hash_token, load_identities
-from gatekeeper.pending import PendingStore, PendingWriteRefused
+from gatekeeper.pending import STALE_VANISHED_REASON, PendingStore, PendingWriteRefused
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore, WriteRefused
 
@@ -537,3 +545,250 @@ def test_approving_last_admin_deletion_still_refused(tmp_path, tier1, tool_specs
             assert "last" in str(exc).lower() or "admin" in str(exc).lower()
     finally:
         del admin_service_mod._APPLIERS["identity_delete"]
+
+
+# -- Self-healing: the read path closes what can never be decided -----------
+
+
+def _sweep(store, pending):
+    """The sweep exactly as `/ui/requests` and `admin.pending_list` run it."""
+    return sweep_vanished_pendings(store, pending)
+
+
+def test_pending_list_marks_a_vanished_target_stale_on_the_first_call(
+    tmp_path, tier1, tool_specs
+):
+    """The other half of the zombie: `approve`'s guard only fires when a
+    human clicks Approve, and nobody ever clicks Approve on a proposal to
+    delete a tool that is already gone -- so it stayed `pending` forever
+    even after that guard existed. Listing the queue closes it.
+    """
+    store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(store, tools_path, tier1, "demo.show")
+    assert pending.get(item.id).status == "pending"
+
+    closed = _sweep(store, pending)
+
+    assert [i.id for i in closed] == [item.id]
+    healed = pending.get(item.id)
+    assert healed.status == "stale"
+    assert healed.reason == STALE_VANISHED_REASON
+    assert healed.decided_at
+
+
+def test_pending_list_self_heal_is_idempotent(tmp_path, tier1, tool_specs):
+    """A second list must change nothing at all -- not re-decide the item,
+    not rewrite pending.yaml, not write a second audit entry.
+    """
+    store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(store, tools_path, tier1, "demo.show")
+    _sweep(store, pending)
+    first = pending.get(item.id)
+    rev_after_first = pending.revision()
+
+    assert _sweep(store, pending) == []
+    assert _sweep(store, pending) == []
+    assert pending.revision() == rev_after_first
+    assert pending.get(item.id).to_spec() == first.to_spec()
+
+
+def test_pending_list_self_heal_leaves_a_live_target_pending(tmp_path, tier1, tool_specs):
+    """The guard closes only what vanished. A proposal whose target still
+    exists -- even one whose target *changed* since, which is `approve`'s
+    business and a human's to hear about -- stays in the queue.
+    """
+    store, pending, _tp, _ip = _env(tmp_path, tier1, tool_specs)
+    untouched = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    moved = pending.propose(
+        action="tool_enable", actor="hermes",
+        payload={"id": "demo.echo"}, base_rev=store.tool_revision("demo.echo"),
+    )
+    store.set_tool_enabled("demo.echo", False, actor="root", rev=store.tools_revision())
+    assert store.tool_revision("demo.echo") != moved.base_rev != ""
+
+    assert _sweep(store, pending) == []
+    assert pending.get(untouched.id).status == "pending"
+    assert pending.get(moved.id).status == "pending"
+
+
+def test_pending_list_self_heal_covers_every_target_based_kind(tmp_path, tier1, tool_specs):
+    """Driven by `_APPLIERS`, not by a hand-written list of kinds -- so a
+    vanished identity closes a `grant_set`/`role_set` exactly as a vanished
+    tool closes a `tool_delete`/`tool_enable`/`tool_update`.
+    """
+    store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    spec = dict(store.service.catalog.flat_spec_of("demo.show"))
+    items = {
+        "tool_delete": pending.propose(
+            action="tool_delete", actor="hermes",
+            payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+        ),
+        "tool_enable": pending.propose(
+            action="tool_enable", actor="hermes",
+            payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+        ),
+        "tool_update": pending.propose(
+            action="tool_update", actor="hermes",
+            payload={"spec": spec, "replaces": "demo.show"},
+            base_rev=store.tool_revision("demo.show"),
+        ),
+        "grant_set": pending.propose(
+            action="grant_set", actor="hermes",
+            payload={
+                "identity_id": "bot", "role": "agent", "tools": [], "scopes": [],
+            },
+            base_rev=store.identity_revision("bot"),
+        ),
+        "role_set": pending.propose(
+            action="role_set", actor="hermes",
+            payload={"identity_id": "bot", "role": "viewer", "tools": [], "scopes": []},
+            base_rev=store.identity_revision("bot"),
+        ),
+    }
+    assert set(items) == set(_APPLIERS), "a registry kind is missing from this test"
+
+    _remove_tool_entry(store, tools_path, tier1, "demo.show")
+    store.delete_identity("bot", actor="root", rev=store.identities_revision())
+
+    closed = {i.action for i in _sweep(store, pending)}
+    assert closed == set(_APPLIERS)
+    for item in items.values():
+        assert pending.get(item.id).status == "stale"
+
+
+def test_pending_list_self_heal_ignores_a_cred_propose(tmp_path, tier1, tool_specs):
+    """`cred_propose` has no applier and no target *record*: its `base_rev`
+    is the credential file's whole-file revision and the slot it proposes
+    must not exist yet. Sweeping it would close every credential proposal
+    ever made on a deployment with no credentials.yaml.
+    """
+    store, pending, _tp, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "bazarr-api-key", "kind": "bearer", "header": None},
+        base_rev="deadbeefdeadbeef",
+    )
+
+    assert _sweep(store, pending) == []
+    assert pending.get(item.id).status == "pending"
+
+
+def test_pending_list_self_heal_skips_an_item_proposed_before_its_target_existed(
+    tmp_path, tier1, tool_specs
+):
+    """`base_rev` "" means the record did not exist at propose time -- which
+    is not the same as "it vanished", and must not be swept (`approve`'s
+    own gate skips it for the same reason).
+    """
+    store, pending, _tp, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes", payload={"id": "demo.ghost"}, base_rev="",
+    )
+
+    assert _sweep(store, pending) == []
+    assert pending.get(item.id).status == "pending"
+
+
+def test_pending_list_self_heal_does_not_reopen_a_decided_item(tmp_path, tier1, tool_specs):
+    """Already approved/rejected items are never touched, whatever happened
+    to their target afterwards -- the sweep only ever closes `pending`.
+    """
+    store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    pending.reject(item.id, decided_by="root", reason="not needed")
+    _remove_tool_entry(store, tools_path, tier1, "demo.show")
+
+    assert _sweep(store, pending) == []
+    decided = pending.get(item.id)
+    assert decided.status == "rejected"
+    assert decided.reason == "not needed"
+
+
+def test_pending_list_self_heal_audits_each_closed_item(tmp_path, tier1, tool_specs):
+    """A status changing without an audit entry is exactly the kind of
+    silent state change this queue exists to avoid.
+    """
+    store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(store, tools_path, tier1, "demo.show")
+    _sweep(store, pending)
+
+    entries = [
+        json.loads(line)
+        for path in sorted(pathlib.Path(str(tmp_path / "logs")).glob("*.jsonl"))
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    stales = [e for e in entries if e.get("action") == "pending_stale"]
+    assert len(stales) == 1
+    assert stales[0]["target"] == item.id
+    assert stales[0]["proposed_action"] == "tool_delete"
+    assert stales[0]["reason"] == STALE_VANISHED_REASON
+
+
+def test_admin_pending_list_self_heals_and_reports_the_healed_state(
+    tmp_path, tier1, tool_specs
+):
+    """The MCP read path is the other place someone looks at the queue, so
+    it heals too -- and reports the result of the heal, not the state it
+    found.
+    """
+    store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_delete", actor="hermes",
+        payload={"id": "demo.show"}, base_rev=store.tool_revision("demo.show"),
+    )
+    _remove_tool_entry(store, tools_path, tier1, "demo.show")
+    # `toolkit_proposals` is a different queue entirely and `pending_list`
+    # never reaches it -- nothing here needs one built.
+    admin = AdminService(store=store, pending=pending, toolkit_proposals=None)
+
+    listed = admin.pending_list("hermes", {})["pending"]
+
+    assert [e["status"] for e in listed if e["id"] == item.id] == ["stale"]
+    assert admin.pending_list("hermes", {"status": "pending"})["pending"] == []
+
+
+# -- Sibling: an unresolvable target id closes, it does not 500 -------------
+
+
+def test_approve_marks_stale_when_the_payload_names_no_target(tmp_path, tier1, tool_specs):
+    """`_APPLIERS` reads a proposal's target id out of its own payload, and
+    a payload missing that field used to raise `KeyError` straight out of
+    the approve route -- a 500, and an item still `pending` afterwards:
+    the same zombie, reached a different way. It is a proposal that can
+    never be applied, so it closes like any other.
+    """
+    store, pending, _tp, _ip = _env(tmp_path, tier1, tool_specs)
+    item = pending.propose(
+        action="tool_update", actor="hermes",
+        # No "replaces" -- `_target_id_tool_update` has nothing to read.
+        payload={"spec": {"id": "demo.show"}},
+        base_rev=store.tool_revision("demo.show"),
+    )
+
+    refusal = ""
+    try:
+        apply_pending(store, pending, item.id, decided_by="root")
+    except PendingWriteRefused as exc:
+        refusal = str(exc)
+    assert "stale" in refusal.lower(), f"expected a stale refusal, got {refusal!r}"
+
+    assert pending.get(item.id).status == "stale"

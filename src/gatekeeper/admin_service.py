@@ -289,6 +289,18 @@ class AdminService:
         }
 
     def pending_list(self, _actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Reads the queue -- and, first, closes what is no longer decidable.
+
+        The sweep is on the read path on purpose: an item whose target
+        record has vanished can only be closed by `approve`'s staleness
+        gate, i.e. by a human clicking Approve on a proposal that can no
+        longer do anything -- which nobody has a reason to do, so it stays
+        `pending` forever instead (see `sweep_vanished_pendings`). Listing
+        is the one moment someone is looking, so it is where these
+        self-heal. Nothing whose target still exists is touched, and a
+        second list is a no-op.
+        """
+        sweep_vanished_pendings(self.store, self.pending)
         status = args.get("status") or None
         items = self.pending.list(status=status)
         return {"pending": [i.to_spec() for i in items]}
@@ -898,6 +910,53 @@ _APPLIERS: dict[
 }
 
 
+def _target_rev(store: ConfigStore, item: PendingAction) -> str | None:
+    """The live per-record revision of what one pending item targets, or
+    `None` if it targets no record this module can resolve.
+
+    The single walk over `_APPLIERS` that both the approval gate
+    (`apply_pending`) and the read-path sweep (`sweep_vanished_pendings`)
+    go through, so a kind added to the registry is covered by both at once
+    and neither can forget one the other knows about.
+
+    `None` is deliberately distinct from `""`: `""` is a real answer ("the
+    record is gone"), `None` means "not a question about a record" -- an
+    action with no applier (`cred_propose`, whose `base_rev` is the
+    credential file's whole-file revision and whose target is a slot that
+    must *not* exist yet), or a payload missing the field naming its own
+    target.
+    """
+    entry = _APPLIERS.get(item.action)
+    if entry is None:
+        return None
+    _applier, kind, target_id_of = entry
+    try:
+        target_id = target_id_of(item.payload)
+    except (KeyError, TypeError):
+        return None
+    if not target_id:
+        return None
+    if kind == "tools":
+        return store.tool_revision(target_id)
+    return store.identity_revision(target_id)
+
+
+def sweep_vanished_pendings(
+    store: ConfigStore, pending: PendingStore, *, decided_by: str = "system"
+) -> list[PendingAction]:
+    """Closes every queued proposal whose target record no longer exists.
+
+    Called from the read paths a human or an agent actually looks at the
+    queue through (`AdminService.pending_list`, `/ui/requests`), so the
+    items `approve`'s guard can only close on a click -- and which nobody
+    has a reason to ever click -- do not accumulate as permanent `pending`
+    rows. Idempotent; see `PendingStore.close_vanished_targets`.
+    """
+    return pending.close_vanished_targets(
+        lambda item: _target_rev(store, item), decided_by=decided_by
+    )
+
+
 def apply_pending(
     store: ConfigStore, pending: PendingStore, action_id: str, *, decided_by: str
 ) -> Any:
@@ -914,13 +973,16 @@ def apply_pending(
     entry = _APPLIERS.get(item.action)
     if entry is None:
         raise WriteRefused(f"Unknown pending action type {item.action!r}.")
-    applier, kind, target_id_of = entry
+    applier, _kind, _target_id_of = entry
 
     def _current_rev(pending_item: PendingAction) -> str:
-        target_id = target_id_of(pending_item.payload)
-        if kind == "tools":
-            return store.tool_revision(target_id)
-        return store.identity_revision(target_id)
+        # `_target_rev` answering `None` here means the payload does not
+        # name a target this registry entry can read (it always should).
+        # Resolving that to "" routes it into the same vanished-target
+        # staleness gate rather than raising `KeyError` out of the approve
+        # route -- an unhandled 500 leaves the item `pending`, which is the
+        # exact zombie shape this whole guard exists to prevent.
+        return _target_rev(store, pending_item) or ""
 
     return pending.approve(
         action_id,
@@ -935,4 +997,5 @@ __all__ = [
     "AdminService",
     "EXPOSED_ACTIONS",
     "apply_pending",
+    "sweep_vanished_pendings",
 ]
