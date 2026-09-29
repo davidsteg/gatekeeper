@@ -75,6 +75,52 @@ async def _connect(toolkit: Toolkit, credential: ResolvedCredential | None, time
     )
 
 
+def _split_args_elements(argv: list[str], tool: Any) -> list[str]:
+    """An `{args}` element is a shell-like token string, not one token.
+
+    FR-5.4's "exactly one argv element per template element" is what
+    `validate.build_argv` guarantees, and it is right for every ordinary
+    parameter -- a value with spaces or metacharacters must stay one
+    literal token (that is what `test_argv_elements_are_shell_quoted`
+    pins). A template element that is *only* `{args}` is the one
+    deliberate exception: its value is a trailing argument *string*
+    (`--oneline -3`), so quoting it whole hands the remote binary a
+    single unrecognised argument, and an empty value hands it a stray
+    empty token (`git status ''` -> "empty string is not a valid
+    pathspec"). Splitting it here, at the one place the remote command
+    string is assembled, gives `shlex.split` semantics: multiple tokens
+    stay multiple tokens, quotes inside the value still group, and an
+    empty/blank value contributes no element at all.
+
+    Only a bare `{args}` element is split -- a template that merely
+    embeds it (`--pretty={args}`) is a single-value element like any
+    other and is left untouched.
+    """
+    templates = list(getattr(tool, "argv", None) or [])
+    # argv is [binary, *one element per template]. Anything else is not
+    # a `build_argv` product (the dispatch test hands `run` a crafted
+    # argv), and there is then no template to attribute an element to.
+    if len(argv) != len(templates) + 1:
+        return argv
+    out = [argv[0]]
+    for template, element in zip(templates, argv[1:], strict=True):
+        if template != "{args}":
+            out.append(element)
+            continue
+        try:
+            args_tokens = shlex.split(element) if element and element.strip() else []
+        except ValueError as exc:
+            # Unbalanced quote: refuse rather than silently fall back to
+            # the old one-token behaviour, which would reach the remote
+            # binary as an unexplainable single argument.
+            raise Denied(
+                DenialReason.PARAM_INVALID,
+                f"args {element!r} is not a parseable argument string: {exc}",
+            ) from exc
+        out.extend(args_tokens)
+    return out
+
+
 async def run(
     argv: list[str],
     *,
@@ -128,6 +174,21 @@ async def run(
                     "or ssh_password credential.",
                 )
             )
+
+    try:
+        argv = _split_args_elements(argv, tool)
+    except Denied as denial:
+        return _denied(denial)
+    # The split can create argv elements Tier 1 never saw (`build_argv`
+    # checked the unsplit `{args}` string), so a denied_args flag hidden
+    # inside it would otherwise become a real flag on the remote side.
+    if denied_arg := toolkit.check_args(argv):
+        return _denied(
+            Denied(
+                DenialReason.TIER1_VIOLATION,
+                f"Argument {denied_arg!r} is denied for this toolkit.",
+            )
+        )
 
     # FR-6.1's guarantee (no shell) cannot hold structurally over SSH (see
     # module docstring) -- shlex.quote is the defense-in-depth substitute:

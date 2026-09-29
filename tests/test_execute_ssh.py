@@ -398,3 +398,109 @@ async def test_dispatch_mode_returns_immediately(toolkit, credentials):
         "ran: setsid nohup 'sleep 30' </dev/null "
         ">>/tmp/gatekeeper-dispatch.log 2>&1 & echo dispatched"
     )
+
+
+async def test_args_string_splits_into_separate_tokens(toolkit, credentials):
+    """A bare `{args}` element is a token *string*, not one argument.
+
+    `git log '--oneline -3'` dies with "unrecognized argument" -- the
+    value has to arrive as two tokens, each quoted on its own.
+    """
+    tk, tier1 = toolkit
+    tool = _tool(
+        tier1, argv=["{args}"],
+        parameters={"args": {"type": "string", "pattern": "^.*$", "required": True}},
+    )
+    argv = validate.build_argv(tool, {"args": "--oneline -3"}, tk)
+    assert argv == ["/usr/bin/uptime", "--oneline -3"]  # build_argv still FR-5.4
+    result = await execute_ssh.run(
+        argv, toolkit=tk, credentials=credentials,
+        timeout_seconds=5, max_output_bytes=65536, idempotent=True, tool=tool,
+    )
+    assert result.outcome == OUTCOME_OK
+    assert result.stdout.rstrip("\n") == "ran: /usr/bin/uptime --oneline -3"
+    # Two tokens, not one quoted blob.
+    assert "'--oneline -3'" not in result.stdout
+
+
+async def test_empty_args_appends_no_element(toolkit, credentials):
+    """`git status ''` means "empty pathspec" -- an empty args must vanish.
+
+    Blank-only is the same case: no element at all, so the command ends
+    right after the preceding argv element.
+    """
+    tk, tier1 = toolkit
+    tool = _tool(
+        tier1, argv=["-p", "{args}"],
+        parameters={"args": {"type": "string", "pattern": "^.*$", "required": True}},
+    )
+    for value in ("", "   "):
+        argv = validate.build_argv(tool, {"args": value}, tk)
+        result = await execute_ssh.run(
+            argv, toolkit=tk, credentials=credentials,
+            timeout_seconds=5, max_output_bytes=65536, idempotent=True, tool=tool,
+        )
+        assert result.outcome == OUTCOME_OK
+        assert result.stdout.rstrip("\n") == "ran: /usr/bin/uptime -p"
+        assert "''" not in result.stdout
+
+
+async def test_args_with_embedded_quotes_round_trips(toolkit, credentials):
+    """Quotes inside args group, and the grouped token is requoted safely.
+
+    `commit -m 'fixed it'` is three tokens, the third containing a space --
+    `shlex.split` groups it, `shlex.quote` re-quotes it for the remote
+    shell, and nothing in between can break out into a second command.
+    """
+    tk, tier1 = toolkit
+    tool = _tool(
+        tier1, argv=["{args}"],
+        parameters={"args": {"type": "string", "pattern": "^.*$", "required": True}},
+    )
+    argv = validate.build_argv(tool, {"args": "commit -m 'fixed it; rm -rf /'"}, tk)
+    result = await execute_ssh.run(
+        argv, toolkit=tk, credentials=credentials,
+        timeout_seconds=5, max_output_bytes=65536, idempotent=True, tool=tool,
+    )
+    assert result.outcome == OUTCOME_OK
+    assert result.stdout.rstrip("\n") == (
+        "ran: /usr/bin/uptime commit -m 'fixed it; rm -rf /'"
+    )
+
+
+async def test_args_with_unbalanced_quote_is_denied(toolkit, credentials):
+    """An unparseable args string fails closed, not as one weird token."""
+    tk, tier1 = toolkit
+    tool = _tool(
+        tier1, argv=["{args}"],
+        parameters={"args": {"type": "string", "pattern": "^.*$", "required": True}},
+    )
+    argv = validate.build_argv(tool, {"args": "commit -m 'oops"}, tk)
+    result = await execute_ssh.run(
+        argv, toolkit=tk, credentials=credentials,
+        timeout_seconds=5, max_output_bytes=65536, idempotent=True, tool=tool,
+    )
+    assert result.outcome == OUTCOME_FAILED
+    assert "not a parseable argument string" in result.stderr
+
+
+async def test_denied_arg_inside_args_string_is_caught_after_split(
+    toolkit, credentials
+):
+    """Splitting must not smuggle a denied flag past Tier 1.
+
+    `build_argv` only ever saw the unsplit string, so the denied_args
+    check has to run again on the tokens that actually get sent.
+    """
+    tk, tier1 = toolkit
+    tool = _tool(
+        tier1, argv=["{args}"],
+        parameters={"args": {"type": "string", "pattern": "^.*$", "required": True}},
+    )
+    argv = validate.build_argv(tool, {"args": "-p --evil"}, tk)
+    result = await execute_ssh.run(
+        argv, toolkit=tk, credentials=credentials,
+        timeout_seconds=5, max_output_bytes=65536, idempotent=True, tool=tool,
+    )
+    assert result.outcome == OUTCOME_FAILED
+    assert "'--evil' is denied" in result.stderr
