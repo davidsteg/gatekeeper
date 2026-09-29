@@ -201,7 +201,16 @@ async def run(
         # sshd session tears down (e.g. the recreated container dies mid
         # `compose up`) the whole process group still takes the SIGKILL.
         # A new session detaches the dispatched process from that group.
-        command = 'setsid nohup ' + command + ' </dev/null >>/tmp/gatekeeper-dispatch.log 2>&1 & echo dispatched'
+        # inner nohup sh -c re-applies SIGHUP immunity; --wait health-gates the beacon
+        if any(part == 'compose' for part in argv):
+            beacon = (shlex.quote(command + ' --wait')
+                      + ' </dev/null >>/tmp/gatekeeper-recreate.log 2>&1; '
+                        'echo EXIT=$? >>/tmp/gatekeeper-recreate.log')
+            command = ('setsid nohup sh -c '
+                       + shlex.quote('nohup sh -c ' + shlex.quote(beacon))
+                       + ' & echo dispatched')
+        else:
+            command = 'setsid nohup ' + command + ' </dev/null >>/tmp/gatekeeper-dispatch.log 2>&1 & echo dispatched'
 
     try:
         async with await _connect(toolkit, credential, timeout_seconds) as conn:
