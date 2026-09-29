@@ -136,7 +136,11 @@ async def run(
     # unavoidably, being parsed by a shell on the other end.
     command = " ".join(shlex.quote(part) for part in argv)
     if getattr(tool, 'ssh_dispatch', False):
-        command = 'nohup ' + command + ' </dev/null >>/tmp/gatekeeper-dispatch.log 2>&1 & echo dispatched'
+        # setsid, not bare nohup: nohup only ignores SIGHUP, so when the
+        # sshd session tears down (e.g. the recreated container dies mid
+        # `compose up`) the whole process group still takes the SIGKILL.
+        # A new session detaches the dispatched process from that group.
+        command = 'setsid nohup ' + command + ' </dev/null >>/tmp/gatekeeper-dispatch.log 2>&1 & echo dispatched'
 
     try:
         async with await _connect(toolkit, credential, timeout_seconds) as conn:
