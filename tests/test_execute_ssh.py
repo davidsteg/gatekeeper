@@ -377,7 +377,7 @@ async def test_dispatch_mode_returns_immediately(toolkit, credentials):
     argv = validate.build_argv(tool, {"arg": "30"}, tk)
     # The toolkit's binary allowlist has no /usr/bin/sleep -- same as the
     # "slow" timeout test above, craft the argv the fake server sees so
-    # the dispatched command is exactly "sleep 30" wrapped in nohup.
+    # the dispatched command is exactly "sleep 30" wrapped in setsid nohup.
     argv = ["sleep 30"]
     before = time.monotonic()
     result = await execute_ssh.run(
@@ -389,5 +389,12 @@ async def test_dispatch_mode_returns_immediately(toolkit, credentials):
     assert result.outcome == OUTCOME_OK
     # The server echoes back the exact command string it received --
     # which doubles as the check on what execute_ssh.py sent.
-    assert result.stdout.startswith("ran: nohup ")
+    assert result.stdout.startswith("ran: setsid nohup ")
     assert result.stdout.rstrip("\n").endswith("echo dispatched")
+    # Pin the whole wrap: setsid (new session, so sshd session teardown
+    # cannot SIGKILL the dispatched process group), the dispatch log
+    # redirect, and the immediate acknowledgement.
+    assert result.stdout.rstrip("\n") == (
+        "ran: setsid nohup 'sleep 30' </dev/null "
+        ">>/tmp/gatekeeper-dispatch.log 2>&1 & echo dispatched"
+    )
