@@ -504,3 +504,22 @@ async def test_denied_arg_inside_args_string_is_caught_after_split(
     )
     assert result.outcome == OUTCOME_FAILED
     assert "'--evil' is denied" in result.stderr
+
+
+
+async def test_recreate_beacon_dispatch_wrap(toolkit, credentials):
+    tk, tier1 = toolkit
+    tool = _tool(tier1, id="demo_ssh.sleep", category="write", idempotent=False,
+                 ssh_dispatch=True)
+    argv = ['compose','up','-d','gatekeeper']
+    result = await execute_ssh.run(
+        argv, toolkit=tk, credentials=credentials,
+        timeout_seconds=25, max_output_bytes=65536, idempotent=False, tool=tool,
+    )
+    assert result.outcome == OUTCOME_OK
+    assert 'setsid nohup sh -c' in result.stdout
+    assert 'nohup sh -c' in result.stdout
+    assert '--wait' in result.stdout
+    assert 'recreate.log' in result.stdout
+    assert 'EXIT=$?' in result.stdout
+    assert result.stdout.rstrip("\n").endswith("& echo dispatched")
