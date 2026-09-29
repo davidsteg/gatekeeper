@@ -1,3 +1,7 @@
+## 0.46.7
+
+SSH argument dispatch now splits via shlex and omits empty elements, fixing multi-token commands such as git log --stat.
+
 ## 0.46.6
 
 Dispatch wrap hardening after a detached recreate half-deploy lost the gatekeeper container.
