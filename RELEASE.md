@@ -1,6 +1,6 @@
-## 0.46.7
+## 0.46.8
 
-SSH argument dispatch now splits via shlex and omits empty elements, fixing multi-token commands such as git log --stat.
+SSH compose recreates now run detached behind nohup sh -c with --wait and append EXIT=$? to /tmp/gatekeeper-recreate.log, so a dying MCP session can no longer half-deploy; the beacon file is the verifiable completion proof.
 
 ## 0.46.6
 
