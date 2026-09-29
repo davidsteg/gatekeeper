@@ -1,3 +1,12 @@
+## 0.46.6
+
+Dispatch wrap hardening after a detached recreate half-deploy lost the gatekeeper container.
+
+### Fixed
+
+- Detached ssh dispatches now run under setsid - a new session immune to sshd teardown when the recreated container dies, so compose up can no longer be killed between stop and start.
+- Exact dispatch-wrap string pinned in tests.
+
 ## 0.46.5
 
 Robustness pass on the pending-request lifecycle: a pending whose target record has disappeared no longer errors or blocks the queue, it is closed as stale wherever it surfaces.
