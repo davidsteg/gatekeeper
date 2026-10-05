@@ -125,7 +125,19 @@ CYTOSCAPE_STYLE_HASH = "'sha256-pgvDUBa4IjFA2yuSJ2cqcyxmNYJMborsd0ORcRv9vw8='"
 #: and produce two `auth_failure` entries -- but the failed attempt is the
 #: most important finding in the audit log, and it is worthless if it sits
 #: among favicon noise. Applies only when the UI is enabled.
-UI_COMPANION_PATHS = frozenset({"/", "/favicon.ico"})
+UI_COMPANION_PATHS = frozenset({
+    "/",
+    "/favicon.ico",
+    #: PWA assets: the same situation one step further. A browser fetches
+    #: the manifest and the service worker on its own, before anyone has
+    #: signed in, and would otherwise do it against the token requirement.
+    #: Public is the point here -- they are static bytes with no data in
+    #: them, and an install prompt that only appears after login is no
+    #: install prompt. Served by the routes in `build_ui_routes`.
+    f"{UI_PREFIX}/manifest.webmanifest",
+    f"{UI_PREFIX}/sw.js",
+    f"{UI_PREFIX}/icon.svg",
+})
 
 SESSION_COOKIE = "gatekeeper_ui"
 SESSION_TTL_SECONDS = 8 * 3600
@@ -579,6 +591,51 @@ _FAVICON = (
     '<path fill="#2f81f7" d="M15 13.2a1 1 0 0 1 2 0V15h-2z"/>'
     "</svg>"
 )
+
+
+#: PWA assets (manifest, service worker, icon). Unlike `_FAVICON` these are
+#: not inline: three files, three content types, and the service worker in
+#: particular has to be served from its own URL for its scope to be `/ui/`.
+#: Candidate order mirrors `_DOCS_DIR_CANDIDATES` -- the package directory
+#: covers a dev checkout and the installed package, `/opt/gatekeeper-pwa` a
+#: Dockerfile COPY, and `mobilefr/60-pwa` the handover directory the files
+#: came from.
+_PWA_DIR_CANDIDATES = (
+    os.path.join(os.path.dirname(__file__), "_pwa"),
+    "/opt/gatekeeper-pwa",
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "mobilefr", "60-pwa",
+    ),
+)
+
+
+def _read_pwa_asset(name: str) -> bytes:
+    """Read one PWA asset as bytes, best-effort. Empty bytes if not found."""
+    for base in _PWA_DIR_CANDIDATES:
+        try:
+            with open(os.path.join(base, name), "rb") as fh:
+                return fh.read()
+        except OSError:
+            continue
+    return b""
+
+
+def _pwa_response(name: str, media_type: str, max_age: int) -> Response:
+    """Serve one PWA asset, or 404 if this build does not carry it.
+
+    404 rather than an empty 200: a zero-byte manifest or service worker
+    is a parse error in the browser console, which says nothing about the
+    cause, while a 404 points straight at the missing file.
+    """
+    data = _read_pwa_asset(name)
+    if not data:
+        return Response(status_code=404)
+    return Response(
+        data,
+        media_type=media_type,
+        headers={"Cache-Control": f"public, max-age={max_age}"},
+    )
 
 #: Line graphics, inline. No external source -- the container has no network,
 #: and the CSP forbids anything foreign anyway.
@@ -1702,6 +1759,157 @@ a.ver:hover { text-decoration: underline; color: var(--accent); }
 .prose hr { border: none; border-top: 1px solid var(--line); margin: 1.4rem 0; }
 .prose a { color: var(--accent); }
 .prose img { max-width: 100%; }
+
+/* MOBILE: Ab hier der Inhalt von mobilefr/40-css-core.css,
+   append-only, unveraendert eingefuegt. */
+/* =====================================================================
+   gatekeeper — Mobile-Fragment (append-only)
+   Anzuhängen ans ENDE von _STYLE in src/gatekeeper/ui.py (vor dem
+   schließenden Docstring-Ende bei ui.py:1705). Kein bestehendes Ruleset wird
+   verändert; spätere Regeln mit gleicher/hoeherer Spezifitaet gewinnen.
+
+   Klassenstand geprüft gegen ui.py @ fa28b63. Es werden ausschliesslich
+   dort vorkommende Selektoren verwendet; neu sind nur die beiden
+   Burger-Hooks .nav-toggle/.nav-burger (siehe 00-README.md).
+   ===================================================================== */
+
+/* -- Mobile-Base ---------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Lange Tokens/Args/YAML dürfen umbrechen statt die Seite zu verbreitern.
+   Deckt .secret, .argv, .pill.mono, .tool-id bereits ab; hier die noch
+   offenen <pre class="mono">-Vorschauen (ui.py:3966/4283/4628) und
+   generisches <code>. */
+pre, code, .mono, .prose pre {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+pre, .prose pre { white-space: pre-wrap; }
+
+/* ---------------------------------------------------------------------
+   Ab hier: mobile Breakpoints. 960px = Nav/Burger-Grenze,
+   640px = Telefon (Karten, Formulare, Modal).
+   --------------------------------------------------------------------- */
+
+/* =====================  max-width: 960px  ============================ */
+@media (max-width: 960px) {
+
+  /* Layout entkoppeln: feste 236px-Spalte aufloesen (ui.py:902). */
+  .app { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .col { height: auto; overflow-y: visible; }
+  .topbar .grow { min-width: 0; }
+  .editor { max-width: 100%; }
+
+  /* ---- Burger-Navigation (reiner Checkbox-Hack, kein JS) -----------
+     Erwartet als Kinder von .side, VOR <nav>:
+       <input type="checkbox" id="nav-toggle" class="nav-toggle">
+       <label for="nav-toggle" class="nav-burger" aria-label="Menu">…</label>
+     `~ nav` ist der Allgemeine-Geschwister-Kombinator: nav muss also
+     hinter input/label liegen (siehe 50-templates/ui.py). */
+  .nav-toggle {
+    position: absolute; width: 1px; height: 1px; opacity: 0;
+    pointer-events: none;
+  }
+  .nav-burger {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 44px; min-height: 44px; margin-left: auto; cursor: pointer;
+    color: var(--bezel-fg); border: 1px solid var(--bezel-line);
+    border-radius: var(--radius-sm); padding: 0 .7rem; font-size: 1.1rem;
+    line-height: 1; user-select: none;
+  }
+  .nav-burger:hover { border-color: var(--bezel-muted); }
+  .nav-toggle:focus-visible + .nav-burger {
+    outline: 2px solid var(--bezel-accent); outline-offset: 1px;
+  }
+
+  /* Eingeklappt: keine horizontale Scroll-Leiste mehr (ersetzt ui.py:985). */
+  .side { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .side nav {
+    display: none;
+    flex: 1 1 100%; flex-direction: column; width: 100%;
+    overflow-x: visible; order: 5; gap: .12rem;
+    margin-top: .4rem; padding-top: .4rem;
+    border-top: 1px solid var(--bezel-line);
+  }
+  .side nav a { white-space: normal; border-left: 2px solid transparent; border-bottom: none; }
+  .side nav a.active { border-left-color: var(--bezel-accent); border-bottom-color: transparent; }
+  .side-foot { margin-left: 0; }
+  .nav-toggle:checked ~ nav { display: flex; }
+
+  /* ---- Touch-Targets: mindestens 44x44px --------------------------- */
+  button, a.btn, .req-tab, .docs-tabs a, .chip-stat, a.reset,
+  .integration-card-foot a.btn {
+    min-height: 44px;
+  }
+  .side nav a { min-height: 44px; }
+  input, select, textarea { min-height: 44px; }
+  /* Formular-Inputs: 16px verhindert den iOS-Zoom-Sprung (ui.py:1563). */
+  input, select, textarea { font-size: 16px; }
+
+  /* Tabellen bleiben in ihrer Scroll-Box, Touch-Scrolling aktiv. */
+  .wrap {
+    overflow-x: auto; max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+  .am-wrap { -webkit-overflow-scrolling: touch; }
+}
+
+/* =====================  max-width: 640px  ============================ */
+@media (max-width: 640px) {
+
+  /* Einspaltig, keine festen Breiten. */
+  .grid, .t-grid, .integration-grid, .checks { grid-template-columns: 1fr; }
+  .split { grid-template-columns: 1fr; }
+  .ov-hero { flex-direction: column; align-items: flex-start; }
+  .topbar, main { padding-left: .8rem; padding-right: .8rem; }
+  .topbar h1 { font-size: 1.12rem; }
+
+  /* ---- Requests-Liste = Card-Stack (CSS-only) ----------------------
+     Entscheidung: KEIN data-label/::before. Die Requests-Karten
+     (_pending_card, ui.py:3757) sind bereits <details class="card"> mit
+     .rows > .row, wobei .row-l das Label und das zweite Kind den Wert
+     traegt (ui.py:1175). Ein Block-Stack mit einspaltigem Grid zeigt
+     Label ueber Wert – ohne Markup-Aenderung und ohne Zellenlabels. */
+  .rows { display: block; }
+  .row {
+    display: block; grid-template-columns: 1fr;
+    padding: .55rem .8rem;
+  }
+  .row > * { min-width: 0; }
+  .row-l { margin-bottom: .2rem; }
+  .row + .row { border-top: 1px solid var(--line); }
+
+  /* Generische Tabellen: .wrap scrollt horizontal (kein Kartenumbau,
+     um Audit/Stats nicht zu verändern). Tool-Matrix ebenso. */
+  .wrap { max-height: none; }
+
+  /* ---- Formulare: volle Breite, Labels stapeln --------------------- */
+  .filter { flex-direction: column; align-items: stretch; }
+  .field, .filter label { width: 100%; }
+  input, select, textarea { width: 100%; }
+  textarea { min-height: 16rem; }
+  /* Checkbox/Radio im .checks-Grid bleiben inline statt 100%. */
+  input[type="checkbox"], input[type="radio"] { width: auto; min-height: 0; }
+  .checks label { min-height: 44px; }
+  .filter-row { flex-wrap: wrap; }
+  .filter-row input[type="text"] { min-width: 0; flex: 1 1 100%; }
+
+  /* ---- Modal als Full-Width-Bottom-Sheet --------------------------- */
+  .modal-box {
+    position: fixed; inset: auto 0 0 0; margin: 0;
+    width: 100%; max-width: none; max-height: 88vh;
+    border-radius: var(--radius) var(--radius) 0 0;
+    padding: 1.1rem 1.1rem calc(1.1rem + env(safe-area-inset-bottom, 0px));
+  }
+  /* Innerer Scroll bleibt am Inhalts-Container (ui.py:1649). */
+  .release-list { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  /* Close immer erreichbar, als 44px-Ziel oben rechts. */
+  .modal-close {
+    position: absolute; top: .55rem; right: .6rem;
+    min-width: 44px; min-height: 44px;
+    display: grid; place-items: center; font-size: 1.5rem;
+  }
+}
 """
 
 #: The console is entirely in English -- comments and docs remain
@@ -1883,9 +2091,19 @@ def _page(
         "<!doctype html>"
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">'
+        # MOBILE: PWA-Kopf (Quelle: mobilefr/60-pwa/head-snippet.html).
+        # Braucht die CSP-Erweiterung in _respond() weiter unten.
+        '<meta name="theme-color" content="#0a0f14">'
+        '<link rel="manifest" href="/ui/manifest.webmanifest">'
+        '<link rel="icon" href="/ui/icon.svg" type="image/svg+xml">'
         f"<title>{_e(title)} - gatekeeper</title>"
         f'<style nonce="{nonce}">{_STYLE}</style></head><body><div class="app">'
         '<aside class="side">'
+        # MOBILE: Burger-Hook. Zwei Zeilen, direkter Nachbar von <nav>,
+        # damit `.nav-toggle:checked ~ nav` im CSS greift.
+        '<input type="checkbox" id="nav-toggle" class="nav-toggle">'
+        '<label for="nav-toggle" class="nav-burger" aria-label="Menu">'
+        "&#9776;</label>"
         f'<div class="brand">{_icon("shield", 20)}'
         f'<span class="name">gatekeeper</span>'
         f'<a href="#release-notes" class="ver" title="Release notes">'
@@ -1921,6 +2139,9 @@ def _page(
         'topbar.classList.toggle("is-scrolled", col.scrollTop > 4);'
         "}, { passive: true });"
         "})();"
+        # MOBILE: SW-Registrierung (nur mit CSP-Erweiterung in _respond).
+        'if("serviceWorker" in navigator)'
+        'navigator.serviceWorker.register("/ui/sw.js");'
         "</script>"
         + "</body></html>"
     )
@@ -2025,6 +2246,12 @@ def _respond(
         "default-src 'none'",
         f"style-src 'nonce-{nonce}'",
         "img-src 'self' data: https://cdn.jsdelivr.net",
+        # MOBILE: minimal noetig fuer PWA. script-src gilt nur fuer den
+        # nonce-tragenden SW-Registrierungs-Block im <head>, nicht fuer
+        # Fremd-Skripte; worker-src/manifest-src sind auf self begrenzt.
+        f"script-src 'nonce-{nonce}'",
+        "manifest-src 'self'",
+        "worker-src 'self'",
         "form-action 'self'",
         "frame-ancestors 'none'",
         "base-uri 'none'",
@@ -4972,6 +5199,10 @@ def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
         "<!doctype html>"
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">'
+        # MOBILE: PWA-Kopf (Quelle: mobilefr/60-pwa/head-snippet.html).
+        '<meta name="theme-color" content="#0a0f14">'
+        '<link rel="manifest" href="/ui/manifest.webmanifest">'
+        '<link rel="icon" href="/ui/icon.svg" type="image/svg+xml">'
         "<title>Sign in - gatekeeper</title>"
         f'<style nonce="{nonce}">{_STYLE}</style></head><body>'
         '<main class="login"><div class="card"><div class="pad">'
@@ -4993,6 +5224,11 @@ def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
         "</p>"
         "</div></div></main>"
         + _release_notes_modal()
+        # MOBILE: SW-Registrierung (nur mit CSP-Erweiterung in _respond).
+        + f'<script nonce="{nonce}">'
+        'if("serviceWorker" in navigator)'
+        'navigator.serviceWorker.register("/ui/sw.js");'
+        "</script>"
         + "</body></html>"
     )
 
@@ -7343,12 +7579,31 @@ def build_ui_routes(
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
+    # PWA assets, same shape as `favicon`: static bytes, no session check
+    # and nothing identity-specific in them. They are listed in
+    # UI_COMPANION_PATHS so the browser can fetch them before login --
+    # a manifest that needs a session makes the console uninstallable.
+
+    async def pwa_manifest(_request: Request) -> Response:
+        return _pwa_response("manifest.webmanifest", "application/manifest+json", 3600)
+
+    async def pwa_service_worker(_request: Request) -> Response:
+        # 1 hour, not a day: the worker is the one file a fix has to be
+        # able to reach, and the browser re-checks it on navigation.
+        return _pwa_response("sw.js", "text/javascript", 3600)
+
+    async def pwa_icon(_request: Request) -> Response:
+        return _pwa_response("icon.svg", "image/svg+xml", 86400)
+
 
 
 
     return [
         Route("/", root, methods=["GET"]),
         Route("/favicon.ico", favicon, methods=["GET"]),
+        Route(f"{UI_PREFIX}/manifest.webmanifest", pwa_manifest, methods=["GET"]),
+        Route(f"{UI_PREFIX}/sw.js", pwa_service_worker, methods=["GET"]),
+        Route(f"{UI_PREFIX}/icon.svg", pwa_icon, methods=["GET"]),
         Route(f"{UI_PREFIX}/login", login_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/login", login_submit, methods=["POST"]),
         Route(f"{UI_PREFIX}/logout", logout, methods=["POST"]),
