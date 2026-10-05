@@ -1,0 +1,12 @@
+<!-- MOBILE: PWA-Kopf. In _page (ui.py:1884) und _login_page (ui.py:4973)
+     direkt nach dem viewport-meta einfügen. {nonce} durch den CSP-Nonce der
+     jeweiligen Response ersetzen (beide Funktionen haben `nonce` bereits).
+     ACHTUNG: Die SW-Registrierung ist ein <script>; sie greift nur, wenn
+     _respond (ui.py:2024) zusätzlich `script-src 'nonce-{nonce}'`,
+     `manifest-src 'self'` und `worker-src 'self'` erlaubt. Ohne diese
+     CSP-Erweiterung das <script> weglassen und nur die zwei <link>/<meta>
+     Zeilen übernehmen (PWA dann ohne Service Worker). -->
+<meta name="theme-color" content="#0a0f14">
+<link rel="manifest" href="/ui/manifest.webmanifest">
+<link rel="icon" href="/ui/icon.svg" type="image/svg+xml">
+<script nonce="{nonce}">if("serviceWorker" in navigator)navigator.serviceWorker.register("/ui/sw.js");</script>

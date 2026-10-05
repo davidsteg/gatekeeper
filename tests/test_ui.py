@@ -29,6 +29,7 @@ from gatekeeper.identity import generate_token, hash_token, load_identities
 from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.ui import (
+    UI_COMPANION_PATHS,
     UI_PREFIX,
     LoginThrottle,
     SessionStore,
@@ -159,11 +160,21 @@ async def test_session_cookie_is_scoped_and_httponly(ui_app, ui_identities):
 
 
 def _guarded_routes(app) -> list[tuple[str, str]]:
-    """(path, method) for everything under /ui except login and logout."""
+    """(path, method) for everything under /ui except login and logout.
+
+    `UI_COMPANION_PATHS` comes out too: those are the handful of paths a
+    browser fetches on its own (manifest, service worker, icon) and that
+    are deliberately public, static bytes. The exemption is not a hole
+    the helper invents -- a route is only skipped if it is named in that
+    frozenset, and `test_pwa_assets_are_public_and_carry_no_data` checks
+    what those routes actually answer with.
+    """
     seen = []
     for route in app.routes:
         path = getattr(route, "path", "")
         if not path.startswith(UI_PREFIX) or path.endswith(("/login", "/logout")):
+            continue
+        if path in UI_COMPANION_PATHS:
             continue
         for method in sorted(getattr(route, "methods", set()) or {"GET"}):
             if method in ("GET", "POST"):
@@ -414,6 +425,34 @@ async def test_browser_noise_does_not_reach_the_audit_log(ui_app, tier1):
         assert icon.headers["content-type"].startswith("image/svg+xml")
 
     assert len(_auth_failures(tier1)) == before
+
+
+async def test_pwa_assets_are_public_and_carry_no_data(ui_app):
+    """Manifest, service worker and icon answer without a session.
+
+    They have to: a browser fetches the manifest before anyone has signed
+    in, and an install prompt that only appears after login never appears.
+    The counter-requirement is that these three files contain nothing but
+    static bytes -- no identity, no tool, no audit data -- which is why
+    they are the only /ui paths exempt from the session check in
+    `_guarded_routes`.
+    """
+    expected = {
+        f"{UI_PREFIX}/manifest.webmanifest": "application/manifest+json",
+        f"{UI_PREFIX}/sw.js": "text/javascript",
+        f"{UI_PREFIX}/icon.svg": "image/svg+xml",
+    }
+    async with _client(ui_app) as client:
+        for path, content_type in expected.items():
+            response = await client.get(path, follow_redirects=False)
+            assert response.status_code == 200, path
+            assert content_type in response.headers["content-type"], path
+            assert response.content, path
+            assert "root" not in response.text, path
+
+        manifest = json.loads((await client.get(f"{UI_PREFIX}/manifest.webmanifest")).text)
+        assert manifest["start_url"] == f"{UI_PREFIX}/"
+        assert manifest["scope"] == f"{UI_PREFIX}/"
 
 
 async def test_root_stays_protected_without_ui(tier1, catalog, ui_identities, tmp_path):
