@@ -35,6 +35,13 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The PWA assets (manifest, service worker, icon) are data files inside the
+# package, not modules -- without this they are dropped from the wheel and
+# /ui/manifest.webmanifest answers 404 in the image while working fine in
+# an editable checkout. Read by ui.py's _read_pwa_asset().
+[tool.setuptools.package-data]
+gatekeeper = ["_pwa/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

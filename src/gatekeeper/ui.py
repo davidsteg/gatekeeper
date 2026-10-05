@@ -2139,9 +2139,6 @@ def _page(
         'topbar.classList.toggle("is-scrolled", col.scrollTop > 4);'
         "}, { passive: true });"
         "})();"
-        # MOBILE: SW-Registrierung (nur mit CSP-Erweiterung in _respond).
-        'if("serviceWorker" in navigator)'
-        'navigator.serviceWorker.register("/ui/sw.js");'
         "</script>"
         + "</body></html>"
     )
@@ -2246,10 +2243,6 @@ def _respond(
         "default-src 'none'",
         f"style-src 'nonce-{nonce}'",
         "img-src 'self' data: https://cdn.jsdelivr.net",
-        # MOBILE: minimal noetig fuer PWA. script-src gilt nur fuer den
-        # nonce-tragenden SW-Registrierungs-Block im <head>, nicht fuer
-        # Fremd-Skripte; worker-src/manifest-src sind auf self begrenzt.
-        f"script-src 'nonce-{nonce}'",
         "manifest-src 'self'",
         "worker-src 'self'",
         "form-action 'self'",
@@ -5224,11 +5217,6 @@ def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
         "</p>"
         "</div></div></main>"
         + _release_notes_modal()
-        # MOBILE: SW-Registrierung (nur mit CSP-Erweiterung in _respond).
-        + f'<script nonce="{nonce}">'
-        'if("serviceWorker" in navigator)'
-        'navigator.serviceWorker.register("/ui/sw.js");'
-        "</script>"
         + "</body></html>"
     )
 
