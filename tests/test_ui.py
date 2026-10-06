@@ -33,6 +33,7 @@ from gatekeeper.ui import (
     UI_PREFIX,
     LoginThrottle,
     SessionStore,
+    _STYLE_PATH,
     _bucket_calls,
     has_admin,
     read_audit,
@@ -534,8 +535,11 @@ async def test_access_matrix_shows_grants(ui_app, ui_identities):
     async with _client(ui_app) as client:
         await _login(client)
         page = await client.get(f"{UI_PREFIX}/access-map")
+        stylesheet = await client.get(_STYLE_PATH)
     assert "am-grant" in page.text
-    assert "am-none" in page.text
+    assert f'href="{_STYLE_PATH}"' in page.text
+    assert stylesheet.status_code == 200
+    assert "am-none" in stylesheet.text
 
 
 async def test_access_map_filter_works(ui_app, ui_identities):
@@ -544,7 +548,10 @@ async def test_access_map_filter_works(ui_app, ui_identities):
     async with _client(ui_app) as client:
         await _login(client)
         page = await client.get(f"{UI_PREFIX}/access-map?q=bot")
-    assert "am-grid" in page.text
+        stylesheet = await client.get(_STYLE_PATH)
+    assert f'href="{_STYLE_PATH}"' in page.text
+    assert stylesheet.status_code == 200
+    assert "am-grid" in stylesheet.text
     assert "bot" in page.text
 
 

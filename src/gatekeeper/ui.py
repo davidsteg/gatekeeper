@@ -65,6 +65,7 @@ from typing import Any
 import httpx
 import yaml
 from starlette.datastructures import FormData
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -1810,9 +1811,10 @@ pre, .prose pre { white-space: pre-wrap; }
     position: absolute; width: 1px; height: 1px; opacity: 0;
     pointer-events: none;
   }
+  /* MOBILE: Burger bleibt am linken Rand. */
   .nav-burger {
     display: inline-flex; align-items: center; justify-content: center;
-    min-width: 44px; min-height: 44px; margin-left: auto; cursor: pointer;
+    min-width: 44px; min-height: 44px; margin-left: 0; cursor: pointer;
     color: var(--bezel-fg); border: 1px solid var(--bezel-line);
     border-radius: var(--radius-sm); padding: 0 .7rem; font-size: 1.1rem;
     line-height: 1; user-select: none;
@@ -1823,7 +1825,13 @@ pre, .prose pre { white-space: pre-wrap; }
   }
 
   /* Eingeklappt: keine horizontale Scroll-Leiste mehr (ersetzt ui.py:985). */
-  .side { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  /* MOBILE: Burger und Marke bilden die kompakte erste Zeile. */
+  .side {
+    flex-direction: row; flex-wrap: wrap; align-items: center;
+    justify-content: flex-start; gap: .4rem; padding: .65rem .8rem;
+    border-right: none; border-bottom: 1px solid var(--bezel-line);
+  }
+  .brand { padding: .2rem .3rem; }
   .side nav {
     display: none;
     flex: 1 1 100%; flex-direction: column; width: 100%;
@@ -1833,7 +1841,10 @@ pre, .prose pre { white-space: pre-wrap; }
   }
   .side nav a { white-space: normal; border-left: 2px solid transparent; border-bottom: none; }
   .side nav a.active { border-left-color: var(--bezel-accent); border-bottom-color: transparent; }
-  .side-foot { margin-left: 0; }
+  /* MOBILE: Kontoaktionen bleiben zusammen in der zweiten Zeile. */
+  .side-foot { flex: 1 0 100%; order: 2; margin-left: 0; }
+  .who { width: 100%; justify-content: space-evenly; gap: 0; }
+  .who b { flex: 0 1 auto; }
   .nav-toggle:checked ~ nav { display: flex; }
 
   /* ---- Touch-Targets: mindestens 44x44px --------------------------- */
@@ -1911,6 +1922,12 @@ pre, .prose pre { white-space: pre-wrap; }
   }
 }
 """
+
+_STYLE_PATH = (
+    f"{UI_PREFIX}/static/gatekeeper."
+    f"{hashlib.sha256(_STYLE.encode('utf-8')).hexdigest()[:16]}.css"
+)
+UI_COMPANION_PATHS = UI_COMPANION_PATHS | frozenset({_STYLE_PATH})
 
 #: The console is entirely in English -- comments and docs remain
 #: German as in the rest of the project.
@@ -2097,7 +2114,8 @@ def _page(
         '<link rel="manifest" href="/ui/manifest.webmanifest">'
         '<link rel="icon" href="/ui/icon.svg" type="image/svg+xml">'
         f"<title>{_e(title)} - gatekeeper</title>"
-        f'<style nonce="{nonce}">{_STYLE}</style></head><body><div class="app">'
+        f'<link rel="stylesheet" href="{_STYLE_PATH}"></head>'
+        '<body><div class="app">'
         '<aside class="side">'
         # MOBILE: Burger-Hook. Zwei Zeilen, direkter Nachbar von <nav>,
         # damit `.nav-toggle:checked ~ nav` im CSS greift.
@@ -2113,7 +2131,6 @@ def _page(
         f'<form class="who" method="post" action="{UI_PREFIX}/logout">'
         f'<input type="hidden" name="_csrf" value="{_e(session.csrf)}">'
         f'{_icon("users", 15)}<b>{_e(session.identity)}</b>'
-        f'<span class="pill">{_e(session.role)}</span>'
         + (
             f'<a class="btn" href="{UI_PREFIX}/account" title="Account">'
             f'{_icon("lock", 14)}</a>'
@@ -2236,12 +2253,11 @@ def _respond(
     request: Request, html_text: str, nonce: str, status: int = 200,
 ) -> Response:
     response = HTMLResponse(html_text, status_code=status)
-    # No scripts and no external sources. The nonce applies only
-    # to the single <style> block. Most pages are inline HTML and
-    # therefore need neither an image source nor code in the browser.
+    # No third-party scripts or styles. The stylesheet is a content-addressed
+    # same-origin asset; the existing nonce allowance stays unchanged.
     directives = [
         "default-src 'none'",
-        f"style-src 'nonce-{nonce}'",
+        f"style-src 'self' 'nonce-{nonce}'",
         "img-src 'self' data: https://cdn.jsdelivr.net",
         "manifest-src 'self'",
         "worker-src 'self'",
@@ -2252,7 +2268,7 @@ def _respond(
     response.headers["Content-Security-Policy"] = "; ".join(directives)
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    # A UI with permission and audit data does not belong in any cache.
+    # HTML shells contain permission and audit data and do not belong in a cache.
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -5197,7 +5213,7 @@ def _login_page(nonce: str, error: str = "", identity: str = "") -> str:
         '<link rel="manifest" href="/ui/manifest.webmanifest">'
         '<link rel="icon" href="/ui/icon.svg" type="image/svg+xml">'
         "<title>Sign in - gatekeeper</title>"
-        f'<style nonce="{nonce}">{_STYLE}</style></head><body>'
+        f'<link rel="stylesheet" href="{_STYLE_PATH}"></head><body>'
         '<main class="login"><div class="card"><div class="pad">'
         f'<div class="mark">{_icon("shield", 24)}</div>'
         f'<h1>gatekeeper <a href="#release-notes" class="ver" '
@@ -7583,15 +7599,20 @@ def build_ui_routes(
     async def pwa_icon(_request: Request) -> Response:
         return _pwa_response("icon.svg", "image/svg+xml", 86400)
 
+    async def stylesheet(_request: Request) -> Response:
+        return Response(
+            _STYLE,
+            media_type="text/css",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
-
-
-    return [
+    routes = [
         Route("/", root, methods=["GET"]),
         Route("/favicon.ico", favicon, methods=["GET"]),
         Route(f"{UI_PREFIX}/manifest.webmanifest", pwa_manifest, methods=["GET"]),
         Route(f"{UI_PREFIX}/sw.js", pwa_service_worker, methods=["GET"]),
         Route(f"{UI_PREFIX}/icon.svg", pwa_icon, methods=["GET"]),
+        Route(_STYLE_PATH, stylesheet, methods=["GET"]),
         Route(f"{UI_PREFIX}/login", login_form, methods=["GET"]),
         Route(f"{UI_PREFIX}/login", login_submit, methods=["POST"]),
         Route(f"{UI_PREFIX}/logout", logout, methods=["POST"]),
@@ -7764,6 +7785,9 @@ def build_ui_routes(
             methods=["GET"],
         ),
     ]
+    for route in routes:
+        route.app = GZipMiddleware(route.app, minimum_size=500)
+    return routes
 
 
 def has_admin(identities: IdentityStore) -> bool:
