@@ -148,6 +148,18 @@ SESSION_TTL_SECONDS = 8 * 3600
 AUDIT_READ_BYTES = 2 * 1024 * 1024
 AUDIT_DEFAULT_LIMIT = 200
 
+#: `read_audit` walks the log backwards in chunks of this size and stops as
+#: soon as it has enough records, so a 200-row page costs one chunk instead
+#: of a full 2 MiB decode. `AUDIT_READ_BYTES` stays the hard floor.
+AUDIT_CHUNK_BYTES = 256 * 1024
+
+#: How many of the newest RELEASE.md sections the popup embeds. The modal is
+#: appended to *every* page, so the full changelog in there was ~290 KB of
+#: HTML per request and grows by one section per release, forever. The
+#: popup shows the newest few; the rest stay one click away under
+#: `/ui/docs?doc=release`, which renders the same file.
+RELEASE_NOTES_MODAL_SECTIONS = 3
+
 
 # -- Google OAuth sign-in -------------------------------------------------
 #
@@ -488,40 +500,73 @@ def read_audit(
     is longer than `AUDIT_READ_BYTES` or because rotation has already occurred. The UI
     points this out so that nobody takes the absence of an entry as
     proof.
+
+    The file is walked **backwards** from EOF in `AUDIT_CHUNK_BYTES` chunks
+    and the walk stops as soon as enough records are in hand -- the page
+    wants the newest 200 of a log that may hold tens of thousands, and
+    decoding the whole 2 MiB window to throw away 98 % of it was the single
+    most expensive thing any console page did. Two details carry the
+    correctness:
+
+    * a chunk boundary cuts a record in half, so the first line of every
+      chunk is held back and prepended to the chunk read next (the one
+      *before* it in the file) -- without that, one record per boundary
+      would vanish silently;
+    * one record more than `limit` is collected, purely so `truncated`
+      still means exactly what it meant before: "more matching entries
+      exist in this window than are shown".
     """
     try:
         size = os.path.getsize(path)
     except OSError:
         return [], False
 
-    start = max(0, size - AUDIT_READ_BYTES)
-    with open(path, "rb") as handle:
-        handle.seek(start)
-        blob = handle.read()
-    if start:
-        # The first line is truncated and therefore not valid JSON.
-        _, _, blob = blob.partition(b"\n")
-
+    floor = max(0, size - AUDIT_READ_BYTES)
+    # One past `limit` is enough to know whether anything is being hidden.
+    wanted = max(1, limit) + 1
     records: list[dict[str, Any]] = []
-    for line in blob.splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(record, dict):
-            continue
-        if identity and record.get("identity") != identity:
-            continue
-        if tool and record.get("tool") != tool:
-            continue
-        if outcome and record.get("outcome") != outcome:
-            continue
-        records.append(record)
+    carry = b""  # Start of the line that straddles the boundary, held back.
+    pos = size
 
-    truncated = start > 0 or len(records) > limit
-    return list(reversed(records[-limit:])), truncated
+    with open(path, "rb") as handle:
+        while pos > floor and len(records) < wanted:
+            chunk_start = max(floor, pos - AUDIT_CHUNK_BYTES)
+            handle.seek(chunk_start)
+            blob = handle.read(pos - chunk_start) + carry
+            pos = chunk_start
+            lines = blob.split(b"\n")
+            if pos > floor:
+                # Incomplete: it continues into the chunk not yet read.
+                carry = lines.pop(0)
+            elif floor > 0:
+                # At the window floor mid-file: the first line was cut by
+                # the window itself and is not valid JSON. Drop it, as the
+                # forward reader did.
+                carry = b""
+                lines.pop(0)
+            else:
+                carry = b""
+            for line in reversed(lines):  # Newest first, within the chunk.
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                if identity and record.get("identity") != identity:
+                    continue
+                if tool and record.get("tool") != tool:
+                    continue
+                if outcome and record.get("outcome") != outcome:
+                    continue
+                records.append(record)
+                if len(records) >= wanted:
+                    break
+
+    truncated = floor > 0 or len(records) > limit
+    return records[:limit], truncated
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -1714,6 +1759,7 @@ a.ver:hover { text-decoration: underline; color: var(--accent); }
 .release-entry p { margin: .4rem 0; font-size: .87rem; color: var(--muted); line-height: 1.5; }
 .release-entry ul { margin: .4rem 0; padding-left: 1.2rem; font-size: .87rem; color: var(--muted); line-height: 1.5; }
 .release-entry code { background: var(--sunken); padding: .05rem .3rem; border-radius: 3px; font-size: .85em; }
+.release-more { margin: 0; font-size: .87rem; line-height: 1.5; }
 
 /* -- Login -- */
 .login { max-width: 390px; margin: 13vh auto; padding: 0 1.15rem; }
@@ -2055,6 +2101,13 @@ def _load_release_notes() -> list[tuple[str, str]]:
 
 
 def _release_notes_modal() -> str:
+    """The popup every page carries -- newest `RELEASE_NOTES_MODAL_SECTIONS`
+    sections only, plus a link to the whole changelog.
+
+    `_load_release_notes()` still parses and caches every section (the
+    cache is per process and paid once); only what is *embedded in each
+    page* is capped here.
+    """
     sections = _load_release_notes()
     if not sections:
         entries = _note(
@@ -2064,10 +2117,19 @@ def _release_notes_modal() -> str:
             tone="bad",
         )
     else:
+        shown = sections[:RELEASE_NOTES_MODAL_SECTIONS]
         entries = "".join(
             f'<section class="release-entry"><h3>{_icon("layers", 13)}'
             f'{_e(version)}</h3>{body}</section>'
-            for version, body in sections
+            for version, body in shown
+        )
+        older = len(sections) - len(shown)
+        entries += (
+            '<p class="muted release-more">'
+            f'<a href="{UI_PREFIX}/docs?doc=release">Full release notes</a>'
+            + (f" &mdash; {older} older {'entry' if older == 1 else 'entries'}"
+               if older else "")
+            + "</p>"
         )
     return (
         '<a href="#" id="release-notes" class="modal-backdrop" '
