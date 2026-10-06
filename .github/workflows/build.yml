@@ -42,6 +42,10 @@ jobs:
 
       - name: Decide whether this is a release
         id: version
+        env:
+          # Der vorherige Stand des Zweigs. Nur bei push gesetzt; bei einem
+          # neu erzeugten Zweig lauter Nullen.
+          BEFORE: ${{ github.event.before }}
         run: |
           version=$(python -c "import tomllib,pathlib; \
             print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
@@ -57,7 +61,45 @@ jobs:
             exit 1
           fi
 
+          released=false
           if git rev-parse "v$version" >/dev/null 2>&1; then
+            released=true
+          fi
+
+          # Jeder Push auf main ist ein Release -- ohne Ausnahme (RELEASE.md,
+          # "Die Regel"). Bis 0.46.8 war der Pfad darunter die Luecke: eine
+          # schon getaggte Version hiess "nur ein dev-Image", der Schritt ging
+          # mit release=false vorzeitig hinaus und uebersprang damit auf main
+          # beides -- die RELEASE.md-Pruefung und den ganzen release-Job. Genau
+          # so kam cf0608f unveroeffentlicht nach main: gruener Lauf, kein Tag,
+          # kein Release. Auf main ist ein fehlender Bump jetzt ein Fehler; auf
+          # jedem anderen Zweig, im Pull Request und bei workflow_dispatch
+          # bleibt es der dev-Bau.
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ] \
+             && [ "$GITHUB_REF_NAME" = main ]; then
+            if [ "$released" = true ]; then
+              echo "::error::pyproject.toml is still at $version, and v$version is already released." \
+                   "Every change on main is a release: bump the version in the same commit as the change" \
+                   "and add a '## <version>' section to RELEASE.md."
+              exit 1
+            fi
+            # Zweite Absicherung fuer den Fall, dass das Tag des Vorgaengers
+            # fehlt (ein abgebrochener Lauf): die Version muss sich gegenueber
+            # dem vorherigen main-Stand bewegt haben.
+            if [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              previous=$(git show "$BEFORE:pyproject.toml" 2>/dev/null | python -c \
+                "import sys,tomllib; print(tomllib.loads(sys.stdin.read())['project']['version'])" \
+                2>/dev/null || true)
+              if [ -n "$previous" ] && [ "$previous" = "$version" ]; then
+                echo "::error::pyproject.toml is unchanged at $version since the previous main commit" \
+                     "($BEFORE). Every change on main is a release: bump the version in the same commit" \
+                     "as the change and add a '## <version>' section to RELEASE.md."
+                exit 1
+              fi
+            fi
+          fi
+
+          if [ "$released" = true ]; then
             echo "v$version is already released -- building a dev image only."
             echo "release=false" >> "$GITHUB_OUTPUT"
             exit 0

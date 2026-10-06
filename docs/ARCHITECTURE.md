@@ -272,7 +272,8 @@ by the same "no embedded bitmap" rule as an external one), and fall back to
 a plain colored-circle monogram. Every fetched SVG has its `style=""`
 attributes and any `<style>` block resolved into plain presentation
 attributes (`fill="#hex"`, not CSS) and its ids/classes namespaced per
-integration: the console's CSP (`style-src 'nonce-...'`) silently drops any
+integration: the console's CSP (`style-src 'self' 'nonce-...'`, which no
+`style` attribute matches) silently drops any
 `style` it doesn't carry the nonce for, and the gallery renders every logo
 on one page at once, so an unnamespaced id or class in one service's SVG
 can collide with another's.
@@ -571,28 +572,35 @@ tests/
 
 ## UI architecture (`ui.py`)
 
-**Script-free by default.** CSP: `default-src 'none'; style-src
-'nonce-...'; img-src 'self' data:; form-action 'self'`. Any per-service logo
+**Script-free, with no exception.** CSP (`_respond`): `default-src 'none';
+style-src 'self' 'nonce-...'; img-src 'self' data: https://cdn.jsdelivr.net;
+manifest-src 'self'; worker-src 'self'; form-action 'self';
+frame-ancestors 'none'; base-uri 'none'`. There is no `script-src`
+directive at all, so `default-src 'none'` covers scripts on every page —
+the invariant `ui.py`'s module docstring states. Any per-service logo
 (integrations) ships as inline SVG in `integrations.py`, never a hotlinked
-image. The **one exception** is the interactive access map: the two routes
-that render it (Overview and `/ui/access-map`) opt into a nonce-scoped
-`script-src`/`connect-src 'self'` (see `_shell`'s `allow_script` param,
-`_respond`) for a small vendored JS file, `access-map.js`
-(`_ACCESS_MAP_JS`) — never widened beyond those two routes; every other
-page still gets no `script-src` at all (enforced by
-`test_access_map_scopes_script_src_to_itself` in `test_ui.py`).
+image.
 
-Most diagrams are still server-rendered SVG or HTML built with no client
-code:
-- **Access map** — `_access_graph_data()` on the server serializes the
-  identity/toolkit/destination/protected-resource graph (plus live call
-  counts from the audit log) to JSON at `/ui/access-map/data`;
-  `access-map.js` fetches it and renders a pannable, zoomable SVG
-  client-side (wheel/drag/pinch, `+`/`−`/Fit controls), groups nodes into
-  clusters past a threshold, and opens a detail side panel on click.
-  Embedded directly on Overview and as a larger dedicated page at
-  `/ui/access-map` (which also offers a dense identity×toolkit table,
-  `_toolkit_access_matrix()`, once past `ACCESS_MAP_TABLE_THRESHOLD` nodes).
+`style-src` carries `'self'` because the stylesheet is no longer inlined
+into each page: `_STYLE` is served once from a content-addressed route,
+`/ui/static/gatekeeper.<sha256-16>.css` (`_STYLE_PATH`, in
+`UI_COMPANION_PATHS`), with `Cache-Control: public, max-age=31536000,
+immutable`. The URL is derived from the stylesheet's own hash, so a changed
+style is a changed URL and no cache outlives an upgrade. The nonce
+allowance stays for the per-page `<style>` blocks. Cache policy splits by
+content: HTML shells keep `no-store` (permission and audit data), the
+stylesheet is immutable. Every `/ui` route is additionally wrapped in
+Starlette's `GZipMiddleware` (`minimum_size=500`) in `build_ui_routes()`.
+
+Diagrams are server-rendered SVG or HTML, built with no client code:
+- **Access map** — `_access_matrix()`: a server-rendered identity×toolkit
+  HTML grid, one row per identity, a heat class per cell from the audit
+  log's call counts (`_view_access_map`, with a `?q=` filter over identity,
+  role, toolkit and executor names). Embedded on Overview and as a
+  dedicated page at `/ui/access-map`. The Cytoscape.js graph and its
+  client-side successor are both gone (0.20.0) — `_access_graph_data()`
+  survives as a JSON view of the same graph with no route of its own, used
+  only by `test_destinations.py`.
 - **Tool matrix** — `_tool_matrix()`: HTML table, one tool per row; the
   `/ui/tools` Cards/Matrix toggle (`?view=matrix`) switches to it in place
   of the per-toolkit tool cards
