@@ -74,6 +74,17 @@ network access outside localhost is needed.
   fails the `tests` job immediately with *"RELEASE.md has no '## X.Y.Z'
   section."* — no image gets built or pushed. Add both files in the same
   commit, always.
+- **A push to `main` without a version bump now fails CI (since 0.46.9).**
+  It used to pass: an already-tagged version meant "build a dev image
+  only", the version step exited early, and both the `RELEASE.md` check and
+  the whole `release` job were skipped — a green run that published
+  nothing, which is how three UI commits sat unreleased on `main` behind
+  0.46.8. On a push to `main` the `tests` job now errors if `v<version>` is
+  already tagged, or if the version is unchanged from the previous `main`
+  tip. Other branches, pull requests and `workflow_dispatch` are
+  unaffected, so a feature branch still builds its dev image. Practical
+  consequence: never push to `main` without the bump + notes — the fix is
+  not "re-run CI", it is a new commit.
 - **Windows dev environment: `gatekeeper serve` crashes on Windows.**
   `cmd_serve` registers a `SIGHUP` handler unconditionally
   (`signal.signal(signal.SIGHUP, ...)`), and `SIGHUP` doesn't exist on

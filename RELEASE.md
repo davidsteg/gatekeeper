@@ -1,3 +1,24 @@
+## 0.46.9
+
+Publishes the console work that landed on `main` after 0.46.8 without a version of its own - the mobile console and the performance pass - and closes the CI hole that let it through unreleased. Nothing in Tier 1, no executor and no credential path is touched; this release is the console and the build.
+
+### Added
+
+- **The console is usable on a phone.** Below the layout breakpoint the sidebar collapses into a header with a burger that toggles the navigation (CSS-only, `.nav-toggle:checked ~ nav` - no script), and interactive controls get a 44x44px minimum touch target.
+- **Web-app manifest, so the console can be added to a home screen.** `/ui/manifest.webmanifest`, `/ui/icon.svg` and `/ui/sw.js` are served from package data (`gatekeeper/_pwa/*`, declared in `pyproject.toml` so the wheel and the image carry them, not just an editable checkout), and the CSP gains `manifest-src 'self'` and `worker-src 'self'`. Added to a home screen it opens in a standalone window; there is no offline mode. The service worker is a passthrough stub with no cache logic that also deletes any cache an earlier version left behind - `/ui` serves audit and permission data, which does not belong on a device - and nothing registers it: the script that did was dropped again with the `script-src` retreat below, so the console stays script-free. It is served so the retreat is reversible, not because it does anything today.
+- The `script-src` retreat: the service-worker registration was the only script on an authenticated page, and rather than widen the CSP for it, it is gone. `script-src` is absent again, so `default-src 'none'` covers scripts on every page - the invariant `ui.py`'s own module docstring states.
+
+### Changed
+
+- The console stylesheet is no longer inlined into every HTML shell. It is served once from a content-addressed route (`/ui/static/gatekeeper.<sha256-16>.css`) with `Cache-Control: public, max-age=31536000, immutable`, and the shells link to it. The hash is derived from the stylesheet itself, so a changed style is a changed URL and no stale cache can survive an upgrade. The CSP keeps its nonce allowance and gains `style-src 'self'` for that same-origin asset; `default-src 'none'` and the absent script sources are unchanged.
+- Cache policy is split by what a response carries: HTML shells stay `no-store` because they hold permission and audit data, the stylesheet is immutable and cacheable. Nothing with identity, grant or audit content became cacheable.
+- Every `/ui` route is wrapped in `GZipMiddleware` (`minimum_size=500`), so the large matrix and audit pages go over the wire compressed.
+- Mobile header polish: the burger sits at the left edge, burger and brand share a compact first row, and the account actions stay together in the second row. The role pill is gone from the sidebar footer - the role is on `/ui/account`, and on a phone it cost the row that the account and logout buttons need.
+
+### Fixed
+
+- **CI now refuses a push to `main` that is not a release.** Until now the version step took `v$version` already being tagged as "build a dev image only" and exited early with `release=false` - on `main` that silently skipped both the RELEASE.md notes check and the whole `release` job, which is exactly how cf0608f reached `main` unpublished. On a push to `main` an already-released version is now a hard error, as is a version identical to the previous `main` tip's, and the notes check is no longer reachable-around. Other branches, pull requests and `workflow_dispatch` keep the old dev-image behavior.
+
 ## 0.46.8
 
 SSH compose recreates now run detached behind nohup sh -c with --wait and append EXIT=$? to /tmp/gatekeeper-recreate.log, so a dying MCP session can no longer half-deploy; the beacon file is the verifiable completion proof.
