@@ -1,3 +1,13 @@
+## 0.47.0
+
+Console page weight and audit rendering latency are substantially reduced without changing the data users see or the cache policy protecting it.
+
+### Changed
+
+- **The release-notes modal now renders only the newest three release sections.** A link to `/ui/docs?doc=release` keeps the full changelog one click away. This cuts every console page from about 290 KB to about 95 KB, and compressed wire bytes from about 90 KB to about 5 KB.
+- **`read_audit` now reads backwards in 256 KiB chunks and stops at the requested limit.** Audit page renders fall from about 80 ms to about 2 ms instead of parsing the full 2 MiB window to display its newest rows.
+- Both optimizations preserve ordering, filtering, the `truncated` flag, and `no-store` behavior.
+
 ## 0.46.9
 
 Publishes the console work that landed on `main` after 0.46.8 without a version of its own - the mobile console and the performance pass - and closes the CI hole that let it through unreleased. Nothing in Tier 1, no executor and no credential path is touched; this release is the console and the build.

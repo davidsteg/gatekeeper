@@ -616,6 +616,14 @@ everything else is escaped). The file ships inside the container image
 (`GATEKEEPER_RELEASE_NOTES`, default `/usr/share/gatekeeper/RELEASE.md`) or
 is found next to `pyproject.toml` in a dev checkout.
 
+The modal embeds only the newest `RELEASE_NOTES_MODAL_SECTIONS` (3)
+entries and links the rest to `/ui/docs?doc=release`, which renders the
+same file in full. The cap is about page weight, not about the parser:
+every page in the console carries this modal, so embedding all of
+`RELEASE.md` put ~290 KB of HTML on every single response and grew by one
+entry per release, forever. `_load_release_notes()` still parses and
+caches every section.
+
 ## Audit log format
 
 JSON Lines, one record per line:
@@ -678,8 +686,12 @@ asyncio event loop rather than using a thread pool or an async file API:
 - `CredentialStore._raw()` (`credentials.py`) re-reads and re-parses
   `credentials.yaml`, and re-runs Fernet decryption, on every credential
   resolution -- there is no in-memory cache of the decrypted value.
-- `ui.py`'s `read_audit` parses up to `AUDIT_READ_BYTES` (2 MB) of the
-  audit log on every render of a page that shows it.
+- `ui.py`'s `read_audit` reads the audit log on every render of a page
+  that shows it. It walks backwards from EOF in `AUDIT_CHUNK_BYTES`
+  (256 KB) chunks and stops once it has the `limit` records the page
+  asks for, so a typical 200-row page decodes one chunk rather than the
+  whole window; `AUDIT_READ_BYTES` (2 MB) remains the floor it will not
+  read past, and reaching it is what sets the `truncated` flag.
 
 This is a deliberate choice, not an oversight: at the scale gatekeeper
 targets (per NFR-5/§14, a handful of agents against a single homelab
