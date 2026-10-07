@@ -1,3 +1,11 @@
+## 0.47.1
+
+Console login no longer stalls unrelated requests while checking a password.
+
+### Changed
+
+- Password verification for `POST /ui/login` now runs on a worker thread instead of blocking the asyncio event loop for the duration of scrypt. The hashing cost, login behavior, and public API are unchanged.
+
 ## 0.47.0
 
 Console page weight and audit rendering latency are substantially reduced without changing the data users see or the cache policy protecting it.
