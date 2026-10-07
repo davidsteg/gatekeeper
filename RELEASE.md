@@ -1,3 +1,13 @@
+## 0.47.2
+
+The `file` executor no longer reports itself unready: `/health/ready` and the readiness gauge now agree with the calls that were succeeding all along.
+
+### Fixed
+
+- **`/health/ready` no longer reports `degraded` with `executors.file=false` on a working `file` toolkit.** The in-process `file` executor never had a branch in the readiness probe, so it fell through to the catch-all result meant for an *unknown* executor and was recorded as not ready on every probe, while `file.read`/`write`/`patch`/`list` calls kept returning `ok`.
+- **`gatekeeper_executor_ready{executor="file"}` now reads 1** for a `file` toolkit with roots, instead of a permanent 0. A `file` toolkit that declares no `path_roots` still reads 0 - it denies every call, so unready is the honest answer. The roots are not stat-ed: a `run_as` toolkit's roots can be unreachable for the server process and perfectly usable for the user its operations run as.
+- No other executor's readiness, the probe's concurrency, the per-destination keys or the metrics format changed.
+
 ## 0.47.1
 
 Console login no longer stalls unrelated requests while checking a password.

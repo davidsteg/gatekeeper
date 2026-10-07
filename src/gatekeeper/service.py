@@ -798,6 +798,21 @@ class Service:
     async def _probe_one(self, toolkit: Toolkit) -> bool:
         if toolkit.executor == "local":
             return all(is_runnable(b) for b in toolkit.binaries)
+        if toolkit.executor == "file":
+            # In-process (FR-4): no socket, no host, no binary to reach, so
+            # there is nothing a probe could fail to connect to. Without
+            # this branch `file` fell through to the catch-all `return
+            # False` below -- the one meant for an unknown executor -- and
+            # /health/ready reported 'degraded' plus a 0 gauge for an
+            # executor whose calls were all succeeding.
+            #
+            # The one configuration that genuinely cannot work is a toolkit
+            # with no roots: `execute_file.validate_path` denies every call
+            # then. Deliberately *not* an `isdir` check on the roots -- a
+            # `run_as` toolkit's roots may be unstattable for the server
+            # process and perfectly usable for the user the operations run
+            # as, which would put us straight back to a false 'degraded'.
+            return bool(toolkit.path_roots)
         if toolkit.executor == "docker":
             try:
                 result = await execute.run(
