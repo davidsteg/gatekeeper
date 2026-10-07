@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 
 import httpx2
@@ -253,6 +254,25 @@ async def test_wrong_password_is_rejected_and_audited(ui_app, tier1):
     with open(path, encoding="utf-8") as handle:
         records = [json.loads(line) for line in handle if line.strip()]
     assert any(r["kind"] == "auth_failure" for r in records)
+
+
+async def test_login_authentication_runs_off_event_loop(ui_app, monkeypatch):
+    event_loop_thread = threading.get_ident()
+    authentication_threads = []
+
+    def authenticate_console(self, identity_id, password):
+        authentication_threads.append(threading.get_ident())
+        return None
+
+    monkeypatch.setattr(
+        "gatekeeper.identity.IdentityStore.authenticate_console",
+        authenticate_console,
+    )
+    async with _client(ui_app) as client:
+        await _login(client, "root", "wrong-password-here")
+
+    assert authentication_threads
+    assert authentication_threads[0] != event_loop_thread
 
 
 async def test_unknown_identity_gets_the_same_answer(ui_app):

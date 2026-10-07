@@ -6370,7 +6370,9 @@ def build_ui_routes(
         supplied = str(form.get("identity") or "").strip()[:64]
         password = str(form.get("password") or "")
         identity = (
-            identities.authenticate_console(supplied, password)
+            await asyncio.to_thread(
+                identities.authenticate_console, supplied, password
+            )
             if supplied and password
             else None
         )
