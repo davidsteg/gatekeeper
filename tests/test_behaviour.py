@@ -414,6 +414,55 @@ async def test_local_executor_probe_does_not_execute(service):
     assert ready == {"local": True}
 
 
+def _file_service(tmp_path, roots):
+    """A Service whose only toolkit is a `file` one, with `roots`."""
+    from gatekeeper.audit import AuditLog
+    from gatekeeper.service import Service
+
+    toolkits_path = tmp_path / "toolkits.yaml"
+    toolkits_path.write_text(
+        yaml.safe_dump(
+            {
+                "toolkits": {
+                    "files": {
+                        "executor": "file",
+                        "path_roots": [str(r) for r in roots],
+                        "protected_resources": [],
+                        "max_timeout_seconds": 10,
+                        "max_output_bytes": 4096,
+                    }
+                },
+                "audit": {"dir": str(tmp_path / "logs")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    file_tier1 = load_tier1(str(toolkits_path))
+    return Service(
+        tier1=file_tier1,
+        catalog=make_catalog(tmp_path, file_tier1, []),
+        audit=AuditLog(str(tmp_path / "logs")),
+    )
+
+
+async def test_file_executor_probe_reports_ready(tmp_path, sandbox):
+    """NFR-9: the in-process `file` executor is ready, not 'degraded'.
+
+    Regression: `file` had no branch in `_probe_one` and fell through to
+    the catch-all `return False` meant for unknown executors, so
+    /health/ready reported degraded and the gauge 0 while every `file`
+    call succeeded.
+    """
+    service = _file_service(tmp_path, [sandbox])
+    assert await service.probe_executors() == {"file": True}
+
+
+async def test_file_executor_probe_without_roots_is_not_ready(tmp_path):
+    """A `file` toolkit with no roots denies every call -- not ready."""
+    service = _file_service(tmp_path, [])
+    assert await service.probe_executors() == {"file": False}
+
+
 # -- init ------------------------------------------------------------------
 
 
