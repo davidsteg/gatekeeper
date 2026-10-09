@@ -4,17 +4,27 @@ A bounded recovery supervisor for stuck Hermes tasks, off by default (`recovery.
 
 ### Added
 
-- **`recovery.py`: incidents per Hermes task.** With the flag on and Hermes sending `_meta.hermes` session/task/turn ids on `tools/call`, Gatekeeper records failed attempts in `recovery.yaml` and classifies them. A permission denial is blocked with one opaque-safe text. A rate limit or a client-reported breaker gets a cooldown and a single later check. An `unknown` outcome gets "check status first". Repeated failures without measurable progress get targeted guidance, or one rescue consultation. Completed, cancelled and superseded tasks are left alone. The installation is derived from the identity, never from the client.
-- **Hold on re-running an UNKNOWN-outcome mutation.** An exact repeat (same task, tool and scopes) is refused with the new audited denial reason `recovery_hold` until a successful read on the same toolkit, or until `uncertain_hold_seconds` pass.
-- **Optional rescue consultation.** OpenAI-compatible, with an explicit `base_url`, `model`, `reasoning_effort`, timeout, token budget and hourly cap, and no default model. The model id is checked against `GET /models` first. No tools are offered, at most one consultation runs per incident, and the answer is passed on as untrusted advice. A failure ends as `blocked:rescue_failed`.
-- **Continuation of the original session.** When a turn stops, the supervisor calls a Hermes-side adapter (`/status`, `/continue`, HMAC V2 signed, with an idempotency key). An incident counts as recovered only once a tool call executes in the new turn.
-- **`POST /recovery/events` and `GET /recovery/incidents`.** Lifecycle events and read access use a plain authenticated route outside the MCP tool surface, so they still work while the client's breaker is open.
-- Structured `gatekeeper.recovery` log lines and `"kind": "recovery"` audit records carry incident, task, consultation and delivery ids.
+- **`recovery.py`: incidents per Hermes task.** When the flag is on and Hermes sends `_meta.hermes` on `tools/call`, Gatekeeper records failed attempts in `recovery.yaml`. Incidents are keyed by installation, board, task and task generation, and ordered by `turn_seq`. The installation is derived from the identity, never taken from the client.
+- **Fixed rules, in order.**
+  - An explicit user stop is never overridden.
+  - Completion or cancellation closes only that task and generation.
+  - A permission denial is blocked with one opaque-safe text.
+  - Rate limits and client-reported cooldowns get a single later check.
+  - An `unknown` outcome gets "check status first".
+  - Repeated failures without progress get targeted guidance, or one rescue consultation.
+- **Hold on re-running an UNKNOWN-outcome mutation.** An exact repeat (same task, tool and scopes) is refused with the new audited denial reason `recovery_hold`. The hold lasts until a successful read on the same toolkit, or until `uncertain_hold_seconds` pass.
+- **Optional rescue consultation.** OpenAI-compatible, configured with an explicit `base_url`, `model` and `reasoning_effort`, a timeout, a token budget and an hourly cap. There is no default model. The model id is checked against `GET /models` first. No tools are offered, at most one consultation runs per incident, and the answer is passed on as untrusted advice. A failure ends as `blocked:rescue_failed`.
+- **Continuation of the original session through a Hermes-side adapter.** Gatekeeper calls `/status`, `/continue` and `/continuation`, HMAC V2 signed. Each continuation carries `expected_turn_seq` and a stable idempotency key. After an ambiguous delivery, Gatekeeper queries the adapter rather than re-sending blindly. A user message that wins the race costs no recovery.
+- **Staged evidence.** An incident moves from accepted to started to active (an executed call that carries the `continuation_id`), then to recovered (the task owner reports progress) and resolved (the task completes), each with its own deadline. Idle incidents are reconciled against `/status`, which covers a Hermes crash that could not emit its own stop.
+- **`POST /recovery/events` and `GET /recovery/incidents`.** Lifecycle events and read access use a plain authenticated route outside the MCP tool surface, so they keep working while the client's breaker is open.
+- **Optional decision-provider interface (`recovery.decision`), off.** It may choose among the actions the fixed rules still allow, in shadow or active mode, with fallback to the deterministic choice. No provider is registered: Jev is unverified, and enabling `recovery.decision` fails at startup.
+- Structured `gatekeeper.recovery` log lines and `"kind": "recovery"` audit records carry incident, task, consultation, continuation and decision ids. They never carry prompts.
 
 ### Notes
 
-- The Hermes-side adapter is **not** part of this release. The contract is in docs/ARCHITECTURE.md. No live round trip has been demonstrated; the tests run against loopback fixtures.
-- Rollback: set `recovery.enabled: false` and SIGHUP.
+- **Coverage (v1).** A turn that stops without a prior Gatekeeper failure is not recovered.
+- **Hermes adapter.** It is **not** part of this release; the contract is `docs/HERMES_ADAPTER.md`. All tests use loopback mocks, and no live round trip has been demonstrated.
+- **Rollback.** Set `recovery.enabled: false` and SIGHUP.
 
 ## 0.47.4
 

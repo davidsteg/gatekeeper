@@ -79,23 +79,32 @@ item.
   `GET /mcp` SSE stream before it (`notifications.py`)
 
 - **Recovery supervisor (`recovery.py`, off by default)** — incidents per
-  Hermes task in `recovery.yaml`, failure classification, cooldown checks,
-  a hold on re-running UNKNOWN-outcome mutations, at most one rescue
-  consultation per incident, continuation through a Hermes adapter, and
-  `POST /recovery/events` / `GET /recovery/incidents`. Covered by
-  `tests/test_recovery.py` against loopback fixtures only
+  `(installation, board, task, generation)` in `recovery.yaml`, failure
+  classification, cooldown checks, a hold on re-running UNKNOWN-outcome
+  mutations, at most one rescue consultation per incident, continuation
+  through a Hermes adapter with `turn_seq` ordering, idempotency keys,
+  ambiguous-delivery queries, and staged accepted → active → recovered →
+  resolved tracking. Exposes `POST /recovery/events` and
+  `GET /recovery/incidents`. Also includes an optional decision-provider
+  interface with no provider registered. Covered by `tests/test_recovery.py`
+  against loopback mocks only
 
 ## Not implemented (by design or not yet)
 
-- **The Hermes side of recovery.** Gatekeeper implements its half and the
-  contract (docs/ARCHITECTURE.md, "Hermes adapter contract"). Hermes still
-  has to send `_meta.hermes` ids on `tools/call`, post lifecycle events,
-  and serve `/status` and `/continue`. `/continue` must resume the original
-  session; a new run or a follow-up Kanban task does not count. Without
-  the `_meta.hermes` ids nothing in recovery activates, even with the flag
-  on. With ids but no adapter, only tool-response guidance and the
-  `recovery_hold` work. No live status → continue → acknowledgement round
-  trip has been demonstrated.
+- **The Hermes side of recovery.** The contract is in
+  [HERMES_ADAPTER.md](HERMES_ADAPTER.md). Hermes still has to send
+  `_meta.hermes` on `tools/call`, post lifecycle events through a durable
+  outbox, and serve `/status`, `/continue` and `/continuation`.
+  `/continue` must resume the original session; a new run or a follow-up
+  Kanban task does not count. Without `_meta.hermes`, nothing in recovery
+  activates, even with the flag on. No live round trip has been
+  demonstrated.
+- **Recovery of a stop without a prior Gatekeeper failure.** This is not
+  covered in v1. Iteration exhaustion with no failed Gatekeeper call is not
+  resumed.
+- **A concrete decision provider (Jev).** Its API, model id, structured
+  output and usage terms through the OpenCode Go access are unverified.
+  Enabling `recovery.decision` therefore fails at startup.
 
 - **Pushing a message into an agent's *running* session.** Not a gap in the
   mailbox above — a protocol limit. An MCP client does not listen for
