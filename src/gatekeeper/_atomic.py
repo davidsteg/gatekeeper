@@ -8,12 +8,21 @@ create a circular import.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 import tempfile
+import threading
 from typing import Any
 
 import yaml
+
+#: libyaml when the PyYAML build has it (the manylinux wheels do) -- about
+#: 8x faster than the pure-Python loader, and just as safe.
+_SafeLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+_cache: dict[str, tuple[str, Any]] = {}
+_cache_lock = threading.Lock()
 
 #: Header of every written file. Anyone who later opens it by hand should
 #: immediately see that a console is co-writing here.
@@ -31,6 +40,35 @@ def revision(path: str) -> str:
             return hashlib.sha256(handle.read()).hexdigest()[:16]
     except OSError:
         return ""
+
+
+def load_cached(path: str) -> Any:
+    """`yaml.safe_load` of `path`, parsed once per distinct file content.
+
+    Every console page counts the pending queues for the sidebar badge,
+    and those files only grow -- decided entries are kept as history. On a
+    deployment with a few hundred of them, re-parsing on every request
+    cost over a second per page. Keyed by content hash, not mtime: hashing
+    is under a millisecond for a megabyte, and it cannot miss a rewrite
+    that lands within the filesystem's mtime granularity.
+
+    Returns a deep copy, because the stores' write paths mutate what they
+    load before writing it back. Missing file -> None.
+    """
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except FileNotFoundError:
+        return None
+    digest = hashlib.sha256(data).hexdigest()
+    key = os.path.abspath(path)
+    with _cache_lock:
+        hit = _cache.get(key)
+    if hit is None or hit[0] != digest:
+        hit = (digest, yaml.load(data.decode("utf-8"), Loader=_SafeLoader))
+        with _cache_lock:
+            _cache[key] = hit
+    return copy.deepcopy(hit[1])
 
 
 def atomic_write(path: str, text: str) -> None:

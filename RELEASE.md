@@ -1,3 +1,12 @@
+## 0.47.3
+
+Every signed-in console page is fast again on a deployment with a long proposal history: `/ui/credentials` and its siblings drop from about 1.5 s to a few milliseconds, `/ui/requests` from about 6 s.
+
+### Fixed
+
+- **`pending.yaml` and `toolkit_proposals.yaml` are no longer re-parsed on every page.** The sidebar's pending-requests badge read both files in full on every console request with PyYAML's pure-Python loader, and decided proposals are kept as history, so the cost grew with every approval - about 1.4 s per page at ~465 entries. Both stores now parse once per distinct file content (keyed by a SHA-256 of the bytes, so a rewrite is seen on the very next read) with libyaml's `CSafeLoader` when available, and hand each caller its own copy.
+- **The `/ui/requests` archive is rendered only when asked for.** Approved, rejected, stale and deployed items used to ship as hundreds of cards inside a collapsed `<details>` - over 1 MB of HTML. The archive is now a single "Archive (N) - Show" row; `?archive=<page>` shows it 25 items a page, newest first.
+
 ## 0.47.2
 
 The `file` executor no longer reports itself unready: `/health/ready` and the readiness gauge now agree with the calls that were succeeding all along.

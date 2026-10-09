@@ -83,6 +83,7 @@ import yaml
 
 from ._atomic import atomic_write as _atomic_write
 from ._atomic import dump as _dump
+from ._atomic import load_cached as _load_cached
 from ._atomic import revision as _revision
 from ._atomic import writable as _writable
 from ._runas import RunAsError, parse_run_as
@@ -249,10 +250,7 @@ class ToolkitProposalStore:
         return _revision(self.path)
 
     def _load(self) -> list[dict[str, Any]]:
-        if not os.path.exists(self.path):
-            return []
-        with open(self.path, encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle.read()) or {}
+        raw = _load_cached(self.path) or {}
         entries = raw.get("proposals")
         if entries is None:
             entries = []

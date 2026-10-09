@@ -4065,23 +4065,55 @@ def _pending_card(
     )
 
 
-def _archive_details(label: str, rows_html: str, count: int) -> str:
-    """One collapsed `<details>` trailing a live list -- resolved items
-    (approved/rejected/stale, or deployed/rejected for toolkits) stay
-    reachable but out of the way, instead of piling up in the queue
-    forever alongside what still needs a decision.
+#: Decided items per archive page on `/ui/requests`.
+_ARCHIVE_PAGE_SIZE = 25
+
+
+def _archive_section(
+    tab: str, items: list[Any], card: Callable[[Any], str], page: int | None,
+) -> str:
+    """Resolved items (approved/rejected/stale, or deployed/rejected for
+    toolkits) trailing the live list -- reachable, but out of the way.
+
+    Rendered only when asked for (`?archive=<page>`), a page at a time,
+    newest first. The archive only ever grows, and a collapsed `<details>`
+    still shipped every card: a few hundred decided proposals made this
+    page a megabyte of HTML that took seconds to build on every visit.
     """
+    count = len(items)
+    if not count:
+        return ""
+    base = f"{UI_PREFIX}/requests?tab={tab}"
+    head = (
+        '<div class="card-head">'
+        f'<span class="name">Archive ({count})</span><span class="spacer"></span>'
+    )
+    if page is None:
+        return (
+            f'<div class="card">{head}'
+            f'<a class="btn" href="{base}&amp;archive=1">{_icon("chevron", 14)}Show</a>'
+            "</div></div>"
+        )
+    pages = -(-count // _ARCHIVE_PAGE_SIZE)
+    page = min(max(page, 1), pages)
+    start = (page - 1) * _ARCHIVE_PAGE_SIZE
+    shown = list(reversed(items))[start : start + _ARCHIVE_PAGE_SIZE]
+    nav = (
+        (f'<a class="btn" href="{base}&amp;archive={page - 1}">Newer</a>' if page > 1 else "")
+        + f'<span class="muted">Page {page} of {pages}</span>'
+        + (f'<a class="btn" href="{base}&amp;archive={page + 1}">Older</a>' if page < pages else "")
+        + f'<a class="btn" href="{base}">Hide</a>'
+    )
     return (
-        '<details class="card"><summary class="card-head">'
-        f'<span class="name">{_e(label)} ({count})</span>'
-        f'<span class="spacer"></span><span class="chev">{_icon("chevron", 14)}</span>'
-        "</summary>"
-        f'<div class="pad">{rows_html}</div>'
-        "</details>"
+        f'<div class="card" id="archive">{head}{nav}</div>'
+        f'<div class="pad">{"".join(card(i) for i in shown)}</div></div>'
     )
 
 
-def _change_tab(session: Session, store: ConfigStore | None, pending: PendingStore | None) -> str:
+def _change_tab(
+    session: Session, store: ConfigStore | None, pending: PendingStore | None,
+    archive_page: int | None = None,
+) -> str:
     if pending is None:
         return _note(
             "<strong>No pending queue configured.</strong> This deployment "
@@ -4121,14 +4153,13 @@ def _change_tab(session: Session, store: ConfigStore | None, pending: PendingSto
         "".join(_pending_card(session, i, store, can_decide=can_decide) for i in reversed(live))
         or '<p class="muted">Nothing pending.</p>'
     )
-    if archived:
-        parts.append(
-            _archive_details(
-                "Archive",
-                "".join(_pending_card(session, i, store, can_decide=False) for i in reversed(archived)),
-                len(archived),
-            )
+    parts.append(
+        _archive_section(
+            "change", archived,
+            lambda i: _pending_card(session, i, store, can_decide=False),
+            archive_page,
         )
+    )
     return "".join(parts)
 
 
@@ -4289,6 +4320,7 @@ def _toolkit_tab(
     service: Service,
     store: ConfigStore | None,
     toolkit_proposals: ToolkitProposalStore | None,
+    archive_page: int | None = None,
 ) -> str:
     """Proposals for a brand-new Tier 1 toolkit that Hermes has drafted via
     `admin.toolkit_propose` -- review/Approve & Deploy/Reject. Live
@@ -4359,19 +4391,15 @@ def _toolkit_tab(
         )
         or '<p class="muted">Nothing pending.</p>'
     )
-    if archived:
-        parts.append(
-            _archive_details(
-                "Archive",
-                "".join(
-                    _toolkit_proposal_card(
-                        session, i, can_decide=False, current=_current_binding(i)
-                    )
-                    for i in reversed(archived)
-                ),
-                len(archived),
-            )
+    parts.append(
+        _archive_section(
+            "toolkit", archived,
+            lambda i: _toolkit_proposal_card(
+                session, i, can_decide=False, current=_current_binding(i)
+            ),
+            archive_page,
         )
+    )
     return "".join(parts)
 
 
@@ -4403,6 +4431,8 @@ def _view_requests(
     tab = request.query_params.get("tab", "change")
     if tab not in ("change", "toolkit"):
         tab = "change"
+    archive = request.query_params.get("archive", "")
+    archive_page = int(archive) if archive.isdigit() else None
     # Self-heal before counting, not after: a proposal whose target record
     # is gone can never be approved (approve marks it stale) and nobody has
     # a reason to click it, so without this it sits in the queue -- and in
@@ -4433,8 +4463,8 @@ def _view_requests(
         banner_text = "Nothing awaiting review right now."
     banner = _note(banner_text, icon="share")
     body = (
-        _change_tab(session, store, pending) if tab == "change"
-        else _toolkit_tab(session, service, store, toolkit_proposals)
+        _change_tab(session, store, pending, archive_page) if tab == "change"
+        else _toolkit_tab(session, service, store, toolkit_proposals, archive_page)
     )
     return tabs + banner + body
 

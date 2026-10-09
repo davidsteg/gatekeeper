@@ -792,3 +792,40 @@ def test_approve_marks_stale_when_the_payload_names_no_target(tmp_path, tier1, t
     assert "stale" in refusal.lower(), f"expected a stale refusal, got {refusal!r}"
 
     assert pending.get(item.id).status == "stale"
+
+
+def test_load_cached_sees_every_rewrite_and_hands_out_copies(tmp_path):
+    """The parse cache behind every page's badge count: a write must be
+    visible on the very next read, and a caller mutating what it got --
+    as every store write path does -- must not leak into the next one."""
+    from gatekeeper._atomic import atomic_write, dump, load_cached
+
+    path = str(tmp_path / "pending.yaml")
+    assert load_cached(path) is None
+    atomic_write(path, dump({"pending": [{"id": "a"}]}))
+    first = load_cached(path)
+    first["pending"].append({"id": "mutated"})
+    assert load_cached(path) == {"pending": [{"id": "a"}]}
+    atomic_write(path, dump({"pending": [{"id": "a"}, {"id": "b"}]}))
+    assert [e["id"] for e in load_cached(path)["pending"]] == ["a", "b"]
+
+
+def test_requests_archive_is_opt_in_and_paged():
+    """Decided items are not rendered until asked for, then 25 a page,
+    newest first -- the page used to ship every one of them."""
+    from gatekeeper.ui import _ARCHIVE_PAGE_SIZE, _archive_section
+
+    items = [f"item-{n:03d}" for n in range(60)]
+    card = lambda i: f"<p>{i}</p>"  # noqa: E731
+
+    hidden = _archive_section("change", items, card, None)
+    assert "Archive (60)" in hidden and "item-" not in hidden
+    assert _archive_section("change", [], card, None) == ""
+
+    first = _archive_section("change", items, card, 1)
+    assert first.count("<p>") == _ARCHIVE_PAGE_SIZE
+    assert "item-059" in first and "item-034" not in first
+    assert "Page 1 of 3" in first and "archive=2" in first
+
+    last = _archive_section("change", items, card, 99)  # clamped
+    assert "Page 3 of 3" in last and "item-000" in last
