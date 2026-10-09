@@ -6277,11 +6277,20 @@ def build_ui_routes(
             session = _current(request)
             if session is None:
                 return _to_login()
-            return _shell(
-                request, title, view(request, session), session, icon=icon,
-                active=active, subtitle=subtitle,
-                actions=actions(session) if actions else "",
-            )
+
+            def render() -> Response:
+                return _shell(
+                    request, title, view(request, session), session, icon=icon,
+                    active=active, subtitle=subtitle,
+                    actions=actions(session) if actions else "",
+                )
+
+            # Off the event loop, like login's scrypt: a view reads files
+            # and builds the page synchronously, and on the loop every
+            # MCP call waited behind it. Safe to run on a thread because
+            # the shared state a view reads -- tier1, catalog, identities
+            # -- is only ever swapped whole, never mutated in place.
+            return await asyncio.to_thread(render)
 
         return handler
 

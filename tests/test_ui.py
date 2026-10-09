@@ -731,3 +731,29 @@ def test_has_admin(ui_identities, identities):
     assert has_admin(store)
     agents_only, _ = identities
     assert not has_admin(agents_only)
+
+
+async def test_page_render_does_not_block_the_event_loop(ui_app, monkeypatch):
+    """A slow view must not stall everything else the server is doing --
+    MCP calls share this event loop. Before the views moved to a thread,
+    one slow console page held up every concurrent request."""
+    import asyncio
+    import time
+
+    from gatekeeper import ui
+
+    def slow_docs(request):
+        time.sleep(0.5)
+        return "<p>slow</p>"
+
+    monkeypatch.setattr(ui, "_view_docs", slow_docs)
+    async with _client(ui_app) as client:
+        await _login(client)
+        page = asyncio.create_task(client.get(f"{UI_PREFIX}/docs"))
+        worst = 0.0
+        for _ in range(20):  # spans the view's 0.5 s sleep
+            started = time.perf_counter()
+            await asyncio.sleep(0.02)
+            worst = max(worst, time.perf_counter() - started)
+        assert worst < 0.25
+        assert "slow" in (await page).text

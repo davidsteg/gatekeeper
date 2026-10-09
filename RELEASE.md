@@ -1,3 +1,11 @@
+## 0.47.4
+
+A slow console page no longer holds up agents' MCP calls.
+
+### Changed
+
+- **Console read pages render on a worker thread instead of the asyncio event loop.** Every page behind the console's session guard (overview, access, tools, identities, credentials, requests, stats, audit, docs) built its HTML synchronously on the loop that also serves `/mcp`, so a slow page stalled every concurrent tool call until it finished. Rendering now runs via `asyncio.to_thread`, the same way console password checks have since 0.47.1. Page output, sessions, CSRF and caching headers are unchanged.
+
 ## 0.47.3
 
 Every signed-in console page is fast again on a deployment with a long proposal history: `/ui/credentials` and its siblings drop from about 1.5 s to a few milliseconds, `/ui/requests` from about 6 s.
