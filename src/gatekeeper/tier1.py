@@ -20,6 +20,8 @@ import yaml
 
 from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, read_config_file
+from .recovery import RecoveryConfig
+from .recovery import parse_config as parse_recovery_config
 
 logger = logging.getLogger("gatekeeper")
 
@@ -579,6 +581,10 @@ class Tier1:
     audit_dir: str
     audit_max_bytes: int
     audit_keep_files: int
+    #: The `recovery:` block (recovery.py). Defaulted so a Tier1 built
+    #: without one -- and every toolkits.yaml written before it existed --
+    #: has recovery disabled.
+    recovery: RecoveryConfig = dataclasses.field(default_factory=RecoveryConfig)
 
     def toolkit(self, name: str) -> Toolkit:
         try:
@@ -612,6 +618,8 @@ class Tier1:
         for dest in self.destinations.values():
             if dest.credential:
                 refs.setdefault(dest.credential, []).append(f"{dest.name} (destination)")
+        for name, labels in self.recovery.credential_references().items():
+            refs.setdefault(name, []).extend(labels)
         return {name: tuple(labels) for name, labels in refs.items()}
 
     def google_oauth_scopes(self) -> tuple[str, ...]:
@@ -1322,4 +1330,5 @@ def load_tier1(path: str) -> Tier1:
         audit_dir=str(audit.get("dir", "/mnt/raid/gatekeeper/logs")),
         audit_max_bytes=int(audit.get("max_bytes", 32 * 1024 * 1024)),
         audit_keep_files=int(audit.get("keep_files", 10)),
+        recovery=parse_recovery_config(raw.get("recovery")),
     )

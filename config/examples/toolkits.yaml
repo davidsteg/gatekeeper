@@ -439,3 +439,31 @@ audit:
   dir: /var/log/gatekeeper
   max_bytes: 33554432
   keep_files: 10
+# Recovery supervisor (recovery.py) - OFF unless enabled. See
+# docs/ARCHITECTURE.md "Recovery supervisor" for the Hermes adapter contract;
+# the adapter must exist on the Hermes side before continuations can work.
+# recovery:
+#   enabled: false
+#   trigger_after: 2              # unsuccessful attempts before assessment
+#   max_recoveries_per_task: 3    # across all incidents of one task
+#   max_cooldown_seconds: 3600
+#   uncertain_hold_seconds: 900   # hold on re-running an UNKNOWN-outcome mutation
+#   ack_timeout_seconds: 300
+#   installations:
+#     homelab:
+#       identities: [hermes-homelab]
+#       adapter_url: http://hermes-homelab:8650/gatekeeper-recovery
+#       credential: hermes-homelab-recovery   # HMAC secret, credential store
+#     personal:
+#       identities: [hermes-personal]
+#       adapter_url: http://hermes-personal:8650/gatekeeper-recovery
+#       credential: hermes-personal-recovery
+#   rescue:
+#     enabled: false
+#     base_url: https://provider.example/v1   # OpenAI-compatible
+#     model: <exact model id>                 # no default; checked via GET /models
+#     reasoning_effort: high                  # optional; only if the model supports it
+#     timeout_seconds: 45
+#     max_tokens: 1200
+#     max_per_hour: 10
+#     credential: rescue-api-key

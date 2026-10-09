@@ -449,6 +449,118 @@ pointed at an empty directory: each call dies at authentication, after
 argparse has accepted the argv and before any request leaves the
 process.
 
+## Recovery supervisor (`recovery.py`)
+
+Off unless `recovery.enabled: true` in toolkits.yaml. Its job is to get a
+stuck Hermes task moving again without a human typing "continue", and
+nothing more.
+
+**Who owns what.** Hermes owns planning, delegation, Kanban tasks, result
+checks and user replies. Gatekeeper owns permissions, execution and
+operation status. The supervisor owns incidents, cooldowns, duplicate
+protection, one rescue consultation and one continuation per incident. It
+never executes a tool, never retries one for the agent, and never plans.
+
+```
+tools/call (+ _meta.hermes ids) ──► Service.call ──► executor
+                                        │ outcome
+                                        ▼
+                               RecoverySupervisor ──► recovery.yaml
+              guidance in the   ◄───────┤   ├──► rescue model (diagnostic, no tools)
+              tool response             │   └──► Hermes adapter: /status, /continue
+POST /recovery/events (turn stopped, ───┘
+task completed/cancelled, cooldown)
+```
+
+**Correlation.** Hermes sends `_meta.hermes = {session_id, task_id,
+turn_id, event_id?, cooldown_until?}` on each `tools/call`. The
+*installation* (homelab, personal) comes from the authenticated identity's
+entry under `recovery.installations`. It is never read from the client, and
+a client that claims another installation is ignored. Incidents are keyed by
+`(installation, task_id)`, and a continuation only goes to that
+installation's own adapter.
+
+**Classification, then action.**
+
+| Failure | What happens |
+|---|---|
+| Permission or policy denial | Blocked at once, no retry. One identical text for every FR-7.7-opaque reason. The precise reason is stored for the operator only. |
+| Rate limit, or client-reported breaker cooldown | Cooldown recorded (capped at `max_cooldown_seconds`). One status check after it ends, then a continuation if the turn has stopped. |
+| `unknown` outcome (timeout) on a non-idempotent tool | "Check status first" guidance. An exact repeat (same task, tool and scopes) is refused with `recovery_hold` until a successful read on the same toolkit, or until `uncertain_hold_seconds` pass. |
+| Invalid arguments, missing dependency | After `trigger_after` failures: targeted correction. |
+| Other repeated failure | After `trigger_after` failures: one rescue consultation, if configured, then "change approach" guidance. |
+| Task completed, cancelled or superseded | Incident suppressed, nothing resumed. |
+
+"Progress" means the adapter's `last_progress_at` advanced. A different
+argv, or an unrelated successful call, does not count. Each task has
+`max_recoveries_per_task` guidance or continuation rounds across all of its
+incidents. After that the incident is `blocked:recovery_budget_exhausted`,
+so error strings that differ only slightly cannot keep a loop alive.
+
+**Two delivery paths, one claim.** While the turn is running, guidance is
+appended to the tool result. Once the turn has stopped (a `turn_stopped`
+event, or the cooldown check), the supervisor calls the adapter's
+`/continue`. Every transition is a compare-and-set on the incident status
+in `recovery.yaml`, and the async halves are serialized per task, so the
+two paths never both start a recovery for the same task. One consequence:
+while a rescue consultation runs (at most `rescue.timeout_seconds`), other
+calls of the *same task* wait for their results to be recorded.
+
+**Rescue.** An OpenAI-compatible `chat/completions` call with no tools. The
+exact `model` is checked against `GET /models` at startup, and consultations
+are disabled if it is not listed. `reasoning_effort` is sent only when
+configured; whether the provider honors it is for the operator to verify,
+and raising it does not select a stronger model. The call is capped by
+`timeout_seconds`, `max_tokens`, one per incident and `max_per_hour`. Its
+input is the objective and acceptance criteria (from the adapter's status),
+the failed attempts, the tool names and the constraints, all scrubbed. Its
+output is labeled untrusted advice. A failed or timed-out rescue ends the
+incident as `blocked:rescue_failed`.
+
+**Acknowledgement.** An accepted `/continue` puts the incident in
+`awaiting_ack`. A status showing a new active turn records `started`.
+`recovered` needs an executed (not denied) tool call that carries the new
+`turn_id`. If no such call arrives within `ack_timeout_seconds`, the outcome
+is `unacknowledged`.
+
+**Why lifecycle events use a plain route.** The breaker that opens on the
+client side guards the MCP *tools*. `POST /recovery/events` (bearer auth,
+agent role) executes nothing, so a stopped turn or a cooldown can still be
+reported while that breaker is open, and the breaker itself is not bypassed.
+`GET /recovery/incidents` lists the caller's own installation's incidents.
+
+### Hermes adapter contract (client side, not part of this repo)
+
+Both endpoints are `POST` with a JSON body. They are signed the same way as
+the mailbox webhook (`X-Webhook-Timestamp` and `X-Webhook-Signature-V2` =
+hex HMAC-SHA256 of `<ts>.<body>`), using the installation's `credential`.
+
+- `{adapter_url}/status` `{session_id, task_id}` →
+  `{turn: active|stopped|exhausted, turn_id, task: open|completed|cancelled|superseded,
+  last_progress_at (epoch s), objective?, acceptance_criteria?, task_state?}`
+- `{adapter_url}/continue` `{session_id, task_id, incident_id,
+  idempotency_key, guidance}` → `{accepted, delivery_id}`. This **must
+  resume the same session** with its task context. Starting a new run or
+  creating a follow-up Kanban task does not satisfy the contract. A repeated
+  `idempotency_key` must return the same `delivery_id` and start nothing new.
+- Hermes also posts to Gatekeeper's `/recovery/events`: `{event_id, type:
+  turn_stopped|task_completed|task_cancelled|task_superseded, session_id,
+  task_id, turn_id, reason: exhausted|breaker_open|error|timeout|final_reply|interrupted,
+  cooldown_until?}`.
+
+**State and logs.** `recovery.yaml` (in the state dir, or `state_file`)
+holds incidents, per-task ledgers, seen event ids, holds and continuation
+idempotency keys. It is written atomically, so restarts keep cooldowns and
+duplicate protection. Every transition is one JSON line on the
+`gatekeeper.recovery` logger, and an audit record with `"kind":
+"recovery"`, carrying `incident_id`, `task_id`, `consultation_id` and
+`delivery_id`.
+
+**Rollback.** Set `recovery.enabled: false` and SIGHUP, or restart. Every
+hook then returns immediately, `/recovery/*` answers 404, and no hold is
+enforced. Removing the block has the same effect. `recovery.yaml` can be
+deleted once the feature is off.
+
 ## Project structure
 
 ```
@@ -553,6 +665,10 @@ src/gatekeeper/
   ui.py                Operations console at /ui -- no JavaScript,
                        CSP-locked, server-rendered SVG diagrams
   errors.py            DenialReason enum, opaque denial for catalog info
+  recovery.py          Recovery supervisor (feature-flagged): incidents in
+                       recovery.yaml, classification, cooldowns, rescue
+                       consultation, Hermes continuation -- see "Recovery
+                       supervisor"
   ratelimit.py         Per-identity, per-category sliding window limiter
 config/
   toolkits.yaml         Tier 1 -- immutable at runtime
