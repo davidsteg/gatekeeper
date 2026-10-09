@@ -1022,7 +1022,7 @@ async def test_reject_closes_a_tool_delete_whose_tool_is_gone(admin_env):
         assert r.status_code == 303
         # The queue still renders the closed item -- the missing target is
         # flagged, not fatal.
-        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change&archive=1")
         assert page.status_code == 200
         assert "missing" in page.text
 
@@ -1050,7 +1050,7 @@ async def test_visiting_requests_self_heals_a_pending_whose_tool_is_gone(admin_e
 
     async with _client(admin_env["app"]) as client:
         await _signed_in(client)
-        page = await client.get(f"{UI_PREFIX}/requests?tab=change")
+        page = await client.get(f"{UI_PREFIX}/requests?tab=change&archive=1")
         assert page.status_code == 200
 
     healed = pending.get(item.id)

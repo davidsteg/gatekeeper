@@ -23,16 +23,14 @@ resulting audit entry and validation are identical either way.
 from __future__ import annotations
 
 import dataclasses
-import os
 import secrets
 import threading
 from collections.abc import Callable
 from typing import Any
 
-import yaml
-
 from ._atomic import atomic_write as _atomic_write
 from ._atomic import dump as _dump
+from ._atomic import load_cached as _load_cached
 from ._atomic import revision as _revision
 from ._atomic import writable as _writable
 from .audit import AuditLog
@@ -113,10 +111,7 @@ class PendingStore:
         return _revision(self.path)
 
     def _load(self) -> list[dict[str, Any]]:
-        if not os.path.exists(self.path):
-            return []
-        with open(self.path, encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle.read()) or {}
+        raw = _load_cached(self.path) or {}
         entries = raw.get("pending")
         if entries is None:
             entries = []
