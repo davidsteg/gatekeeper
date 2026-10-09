@@ -140,6 +140,16 @@ item.
   Simpler and correct for infrequent management calls; a pooled/reconnecting
   connection manager is a valid later optimization that would not change the
   tool definition contract (method + params).
+- **Retention for decided proposals** — `pending.yaml` and
+  `toolkit_proposals.yaml` keep every approved/rejected/stale/deployed item
+  forever (466 on one deployment as of 0.47.4). Page loads no longer pay for
+  that (0.47.3 caches the parse, renders the `/ui/requests` archive on
+  demand), but every propose/decide still re-parses and rewrites the whole
+  file — ~170 ms at that size, growing linearly. Moving items decided more
+  than N days ago into a separate history file would cap it. Deferred: years
+  from mattering at current growth, and the decisions are already in the
+  audit log, so the open questions are where the archive view reads from
+  and when the move runs. Revisit when approving a request feels slow.
 - **API versioning** — MCP is the only interface; no separate HTTP API for
   tools.
 - **Per-destination `allowed_cidrs`/`allowed_methods`/`allowed_path_prefixes`** —
