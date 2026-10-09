@@ -1,3 +1,11 @@
+## 0.47.5
+
+Documentation only: the roadmap now tracks retention for decided proposals as a deferred follow-up.
+
+### Changed
+
+- **`docs/ROADMAP.md` lists "Retention for decided proposals" under "Not implemented".** `pending.yaml` and `toolkit_proposals.yaml` keep every decided item forever; 0.47.3 removed the per-page cost, but each propose/decide still re-parses and rewrites the whole file. The entry records the current cost, why it is deferred, and when to revisit it. No runtime behavior changed.
+
 ## 0.47.4
 
 A slow console page no longer holds up agents' MCP calls.
