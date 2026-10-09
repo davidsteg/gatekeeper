@@ -440,7 +440,7 @@ audit:
   max_bytes: 33554432
   keep_files: 10
 # Recovery supervisor (recovery.py) - OFF unless enabled. See
-# docs/ARCHITECTURE.md "Recovery supervisor" for the Hermes adapter contract;
+# docs/HERMES_ADAPTER.md for the Hermes adapter contract;
 # the adapter must exist on the Hermes side before continuations can work.
 # recovery:
 #   enabled: false
@@ -448,10 +448,13 @@ audit:
 #   max_recoveries_per_task: 3    # across all incidents of one task
 #   max_cooldown_seconds: 3600
 #   uncertain_hold_seconds: 900   # hold on re-running an UNKNOWN-outcome mutation
-#   ack_timeout_seconds: 300
+#   ack_timeout_seconds: 300      # accepted -> executed call with continuation_id
+#   progress_timeout_seconds: 1800  # activity -> task owner reports progress
+#   reconcile_after_seconds: 600  # idle open incident -> check /status
 #   installations:
 #     homelab:
 #       identities: [hermes-homelab]
+#       profiles: [orchestrator]
 #       adapter_url: http://hermes-homelab:8650/gatekeeper-recovery
 #       credential: hermes-homelab-recovery   # HMAC secret, credential store
 #     personal:
@@ -467,3 +470,6 @@ audit:
 #     max_tokens: 1200
 #     max_per_hour: 10
 #     credential: rescue-api-key
+#   decision:                     # optional decision provider; none implemented yet
+#     enabled: false
+#     mode: shadow

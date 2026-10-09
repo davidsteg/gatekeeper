@@ -280,14 +280,19 @@ recovery:
   installations:
     homelab:
       identities: [hermes-homelab]
+      profiles: [orchestrator]          # optional; when set, _meta must name one
       adapter_url: http://hermes-homelab:8650/gatekeeper-recovery
       credential: hermes-homelab-recovery
     personal:
       identities: [hermes-personal]
       adapter_url: http://hermes-personal:8650/gatekeeper-recovery
       credential: hermes-personal-recovery
+    # more installations (media, the Gatekeeper bot) the same way, each with
+    # its own restricted identities and secret
   rescue:
     enabled: false        # until a model id is verified against the provider
+  decision:
+    enabled: false        # no provider is implemented yet; enabling fails startup
 ```
 
 An identity may belong to only one installation; startup refuses a config
@@ -295,8 +300,9 @@ that lists one twice. Rescue cannot be enabled without `base_url`, `model`
 and `credential`, and a model the provider does not list under `GET /models`
 is never consulted. Look for `recovery.rescue_availability` in the log.
 
-Without the Hermes-side adapter and `_meta.hermes` ids (see the contract in
-`docs/ARCHITECTURE.md`), enabling the flag changes nothing.
+Without the Hermes-side adapter and `_meta.hermes` ids (see
+[HERMES_ADAPTER.md](HERMES_ADAPTER.md)), enabling the flag changes nothing.
+A stop with no prior Gatekeeper failure is not recovered in v1.
 
 **Watching it:** `grep '"kind": "recovery"' audit.jsonl`. Each line names
 `incident_id`, `task_id`, and `consultation_id` and `delivery_id` where they

@@ -34,12 +34,13 @@ No shell injection. No command confusion. No hidden side effects.
   `agent.read_messages` collects your own. The sender is your authenticated
   identity, never an argument; delivery is on the recipient's next call, because
   MCP has no way to push into a running session
-- **Stuck agents can be recovered (opt-in)** — a feature-flagged recovery
-  supervisor tracks repeated failures per Hermes task, honors cooldowns, holds
-  back re-runs of operations with an unknown outcome, can consult a configured
-  rescue model once, and asks Hermes to continue the *same* session. It never
-  executes anything itself; see
-  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#recovery-supervisor-recoverypy)
+- **Recovery after repeated Gatekeeper failures (opt-in, Gatekeeper side
+  only)** — a feature-flagged supervisor tracks failures per Hermes task,
+  honors cooldowns and user stops, holds back re-runs of operations with an
+  unknown outcome, can consult a configured rescue model once, and can ask a
+  Hermes adapter to continue the *same* session. It never executes anything
+  itself. The Hermes adapter is specified in
+  [docs/HERMES_ADAPTER.md](docs/HERMES_ADAPTER.md) but not built yet
 
 ---
 

@@ -451,115 +451,107 @@ process.
 
 ## Recovery supervisor (`recovery.py`)
 
-Off unless `recovery.enabled: true` in toolkits.yaml. Its job is to get a
-stuck Hermes task moving again without a human typing "continue", and
-nothing more.
+The supervisor is off unless `recovery.enabled: true` is set in toolkits.yaml.
+Its job is to get a stuck Hermes task moving again without a human typing
+"continue", and nothing more. The Hermes side is specified in
+[HERMES_ADAPTER.md](HERMES_ADAPTER.md) and does not exist yet.
 
-**Who owns what.** Hermes owns planning, delegation, Kanban tasks, result
-checks and user replies. Gatekeeper owns permissions, execution and
-operation status. The supervisor owns incidents, cooldowns, duplicate
-protection, one rescue consultation and one continuation per incident. It
-never executes a tool, never retries one for the agent, and never plans.
+**Who owns what.** Hermes owns planning, delegation, Kanban tasks, result checks
+and user replies. Gatekeeper owns permissions, execution and operation status.
+The supervisor owns incidents, cooldowns, duplicate protection, one rescue
+consultation, and one continuation key per incident. It never executes a tool,
+never retries one for the agent, and never plans.
 
 ```
-tools/call (+ _meta.hermes ids) ──► Service.call ──► executor
-                                        │ outcome
-                                        ▼
-                               RecoverySupervisor ──► recovery.yaml
-              guidance in the   ◄───────┤   ├──► rescue model (diagnostic, no tools)
-              tool response             │   └──► Hermes adapter: /status, /continue
-POST /recovery/events (turn stopped, ───┘
-task completed/cancelled, cooldown)
+tools/call (+ _meta.hermes) ──► Service.call ──► executor
+                                    │ outcome
+                                    ▼
+                           RecoverySupervisor ──► recovery.yaml
+          guidance in the   ◄───────┤   ├──► rescue model (diagnostic, no tools)
+          tool response             │   ├──► decision provider (optional, off)
+                                    │   └──► Hermes adapter: /status /continue /continuation
+POST /recovery/events ──────────────┘
 ```
 
-**Correlation.** Hermes sends `_meta.hermes = {session_id, task_id,
-turn_id, event_id?, cooldown_until?}` on each `tools/call`. The
-*installation* (homelab, personal) comes from the authenticated identity's
-entry under `recovery.installations`. It is never read from the client, and
-a client that claims another installation is ignored. Incidents are keyed by
-`(installation, task_id)`, and a continuation only goes to that
-installation's own adapter.
+**Keys and ordering.** Incidents are keyed by `(installation, board_id, task_id)`
+plus a `task_generation`. The installation comes from the identity. A
+client-supplied installation, or a profile outside the installation's list,
+drops the correlation on a tool call and gets a 403 on an event. Ordering uses
+the integer `turn_seq`, never the opaque `turn_id`. Every correlated call and
+event needs an `event_id`, and duplicates are dropped across restarts.
 
-**Classification, then action.**
+**Fixed rules, in order.**
 
-| Failure | What happens |
+| Failure or event | What happens |
 |---|---|
-| Permission or policy denial | Blocked at once, no retry. One identical text for every FR-7.7-opaque reason. The precise reason is stored for the operator only. |
-| Rate limit, or client-reported breaker cooldown | Cooldown recorded (capped at `max_cooldown_seconds`). One status check after it ends, then a continuation if the turn has stopped. |
-| `unknown` outcome (timeout) on a non-idempotent tool | "Check status first" guidance. An exact repeat (same task, tool and scopes) is refused with `recovery_hold` until a successful read on the same toolkit, or until `uncertain_hold_seconds` pass. |
+| Explicit user stop | Incident suppressed, cooldown or not. Never overridden. |
+| Task completed, cancelled or superseded | Only that task and generation is closed. A worker's completion never closes its parent. A higher generation starts a fresh lifecycle. |
+| Permission or policy denial | Blocked at once. One identical text for every FR-7.7-opaque reason. |
+| Rate limit, or client-reported breaker cooldown | One status check when the cooldown ends, then a continuation if the turn is stopped. |
+| `unknown` outcome on a non-idempotent tool | "Check status first". An exact repeat is refused with `recovery_hold` until a successful read on the same toolkit. |
 | Invalid arguments, missing dependency | After `trigger_after` failures: targeted correction. |
-| Other repeated failure | After `trigger_after` failures: one rescue consultation, if configured, then "change approach" guidance. |
-| Task completed, cancelled or superseded | Incident suppressed, nothing resumed. |
+| Other repeated failure | After `trigger_after` failures: the optional decision provider may choose among the actions the rules still allow. Otherwise one rescue consultation (if configured), then "change approach". |
 
-"Progress" means the adapter's `last_progress_at` advanced. A different
-argv, or an unrelated successful call, does not count. Each task has
-`max_recoveries_per_task` guidance or continuation rounds across all of its
-incidents. After that the incident is `blocked:recovery_budget_exhausted`,
-so error strings that differ only slightly cannot keep a loop alive.
+`max_recoveries_per_task` bounds guidance and continuation rounds across all
+of a task's incidents.
 
-**Two delivery paths, one claim.** While the turn is running, guidance is
-appended to the tool result. Once the turn has stopped (a `turn_stopped`
-event, or the cooldown check), the supervisor calls the adapter's
-`/continue`. Every transition is a compare-and-set on the incident status
-in `recovery.yaml`, and the async halves are serialized per task, so the
-two paths never both start a recovery for the same task. One consequence:
-while a rescue consultation runs (at most `rescue.timeout_seconds`), other
-calls of the *same task* wait for their results to be recorded.
+**Continuation.** `/continue` carries `expected_turn_seq` and a stable
+`idempotency_key`. The adapter validates ownership, that no turn is active, and
+the sequence number atomically. A rejection because a user message won the race
+(`turn_active`, `superseded`, `turn_seq_mismatch`) costs no recovery. An
+ambiguous delivery (a timeout, a 5xx, or Gatekeeper crashing after it recorded
+"sending") is resolved through `/continuation`, never by blind re-sending. At
+most one re-send is made, with the same key.
+
+**Delivery is not recovery.** The incident moves through four stages:
+
+1. `accepted`: the adapter returned a `continuation_id`.
+2. Started: `/status` shows that id on an active turn.
+3. `active`: an executed tool call carries that id.
+4. `recovered`: `last_progress_at` moved past acceptance.
+
+`task_completed` then marks the incident `resolved`. If no activity arrives
+within `ack_timeout_seconds`, the outcome is `unacknowledged`. If no progress
+follows activity within `progress_timeout_seconds`, it is
+`blocked:no_progress_after_continuation`.
+
+**Crash coverage.** Hermes emits `interrupted` on startup for turns that were
+active when it went down. Independently, an open incident with no traffic for
+`reconcile_after_seconds` is checked against `/status`, at most `max_reconciles`
+times.
+
+**v1 limit.** A turn that stops without any prior Gatekeeper failure has no
+incident and is not resumed.
 
 **Rescue.** An OpenAI-compatible `chat/completions` call with no tools. The
-exact `model` is checked against `GET /models` at startup, and consultations
-are disabled if it is not listed. `reasoning_effort` is sent only when
-configured; whether the provider honors it is for the operator to verify,
-and raising it does not select a stronger model. The call is capped by
-`timeout_seconds`, `max_tokens`, one per incident and `max_per_hour`. Its
-input is the objective and acceptance criteria (from the adapter's status),
-the failed attempts, the tool names and the constraints, all scrubbed. Its
-output is labeled untrusted advice. A failed or timed-out rescue ends the
-incident as `blocked:rescue_failed`.
+exact `model` is checked against `GET /models` before first use. Calls are
+capped by `timeout_seconds`, `max_tokens`, one per incident and `max_per_hour`.
+The advice is labeled untrusted. A failure ends as `blocked:rescue_failed`.
 
-**Acknowledgement.** An accepted `/continue` puts the incident in
-`awaiting_ack`. A status showing a new active turn records `started`.
-`recovered` needs an executed (not denied) tool call that carries the new
-`turn_id`. If no such call arrives within `ack_timeout_seconds`, the outcome
-is `unacknowledged`.
+**Decision provider (optional, off).** A small interface: the input is redacted
+attempts, status, remaining budget and `allowed_actions`; the output is a
+validated `{action, rationale, evidence}` from a fixed enum. It is consulted
+only at the "other repeated failure" step, after every fixed rule has run.
+Anything else (a disallowed action, invalid output, a timeout, an unavailable
+provider) falls back to the deterministic choice. Shadow mode logs the proposal
+but applies the deterministic choice. No concrete provider is registered, so
+enabling it is a startup error until a provider (for example Jev) is verified.
+See HERMES_ADAPTER.md §7.
 
-**Why lifecycle events use a plain route.** The breaker that opens on the
-client side guards the MCP *tools*. `POST /recovery/events` (bearer auth,
-agent role) executes nothing, so a stopped turn or a cooldown can still be
-reported while that breaker is open, and the breaker itself is not bypassed.
-`GET /recovery/incidents` lists the caller's own installation's incidents.
+**Lifecycle route.** `POST /recovery/events` (bearer auth, agent role) executes
+nothing, so it can be used while Hermes's breaker around the tools is open.
+`GET /recovery/incidents` is read-only, scoped to the caller's installation.
 
-### Hermes adapter contract (client side, not part of this repo)
+**State and logs.** `recovery.yaml` is written atomically and holds incidents,
+task ledgers, seen event ids, holds, and continuation keys. Every transition is
+a JSON line on the `gatekeeper.recovery` logger and a `"kind": "recovery"` audit
+record. Those carry the incident, task, consultation and continuation ids; for
+decisions, they also carry the provider, model, proposed and accepted action.
+They never carry prompts.
 
-Both endpoints are `POST` with a JSON body. They are signed the same way as
-the mailbox webhook (`X-Webhook-Timestamp` and `X-Webhook-Signature-V2` =
-hex HMAC-SHA256 of `<ts>.<body>`), using the installation's `credential`.
-
-- `{adapter_url}/status` `{session_id, task_id}` →
-  `{turn: active|stopped|exhausted, turn_id, task: open|completed|cancelled|superseded,
-  last_progress_at (epoch s), objective?, acceptance_criteria?, task_state?}`
-- `{adapter_url}/continue` `{session_id, task_id, incident_id,
-  idempotency_key, guidance}` → `{accepted, delivery_id}`. This **must
-  resume the same session** with its task context. Starting a new run or
-  creating a follow-up Kanban task does not satisfy the contract. A repeated
-  `idempotency_key` must return the same `delivery_id` and start nothing new.
-- Hermes also posts to Gatekeeper's `/recovery/events`: `{event_id, type:
-  turn_stopped|task_completed|task_cancelled|task_superseded, session_id,
-  task_id, turn_id, reason: exhausted|breaker_open|error|timeout|final_reply|interrupted,
-  cooldown_until?}`.
-
-**State and logs.** `recovery.yaml` (in the state dir, or `state_file`)
-holds incidents, per-task ledgers, seen event ids, holds and continuation
-idempotency keys. It is written atomically, so restarts keep cooldowns and
-duplicate protection. Every transition is one JSON line on the
-`gatekeeper.recovery` logger, and an audit record with `"kind":
-"recovery"`, carrying `incident_id`, `task_id`, `consultation_id` and
-`delivery_id`.
-
-**Rollback.** Set `recovery.enabled: false` and SIGHUP, or restart. Every
-hook then returns immediately, `/recovery/*` answers 404, and no hold is
-enforced. Removing the block has the same effect. `recovery.yaml` can be
-deleted once the feature is off.
+**Rollback.** Set `recovery.enabled: false` and SIGHUP. Every hook returns
+immediately, `/recovery/*` answers 404, and no hold is enforced.
+`recovery.yaml` can be deleted afterwards.
 
 ## Project structure
 
