@@ -34,3 +34,12 @@ class RateLimiter:
             return False
         window.append(now)
         return True
+
+    def retry_after(self, identity: str, category: str) -> float | None:
+        """Seconds until the oldest call in the window ages out -- the
+        cooldown the recovery supervisor schedules after a RATE_LIMITED."""
+        limit = self._limits.get(category)
+        window = self._events.get((identity, category))
+        if limit is None or not window:
+            return None
+        return max(0.0, window[0] + limit.window_seconds - time.monotonic())

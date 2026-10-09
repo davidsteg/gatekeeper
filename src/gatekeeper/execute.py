@@ -38,6 +38,10 @@ class Result:
     #: injection, and the agent-facing rendering must say so rather than
     #: present it as if it were as trustworthy as a docker/local result.
     external_untrusted: bool = False
+    #: Structured guidance from the recovery supervisor (recovery.py),
+    #: appended to the agent-facing rendering. None when recovery is off
+    #: or has nothing to say about this call.
+    recovery_note: str | None = None
 
 
 class ResourceLocks:

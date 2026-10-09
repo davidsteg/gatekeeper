@@ -266,6 +266,59 @@ small script instead of going through `cmd_serve`/the CLI, and run it with
 project's development history. This is a dev-environment workaround only; the
 container image runs on Linux and is unaffected.
 
+## Recovery supervisor (feature flag)
+
+Off by default. To enable it, add a `recovery:` block to `toolkits.yaml`
+(a commented example sits at the end of `config/examples/toolkits.yaml`),
+store the HMAC secrets and the rescue API key in the credential store under
+the names the block uses, and SIGHUP or restart. State goes to
+`<GATEKEEPER_STATE_DIR>/recovery.yaml` unless `state_file` says otherwise.
+
+```yaml
+recovery:
+  enabled: true
+  installations:
+    homelab:
+      identities: [hermes-homelab]
+      adapter_url: http://hermes-homelab:8650/gatekeeper-recovery
+      credential: hermes-homelab-recovery
+    personal:
+      identities: [hermes-personal]
+      adapter_url: http://hermes-personal:8650/gatekeeper-recovery
+      credential: hermes-personal-recovery
+  rescue:
+    enabled: false        # until a model id is verified against the provider
+```
+
+An identity may belong to only one installation; startup refuses a config
+that lists one twice. Rescue cannot be enabled without `base_url`, `model`
+and `credential`, and a model the provider does not list under `GET /models`
+is never consulted. Look for `recovery.rescue_availability` in the log.
+
+Without the Hermes-side adapter and `_meta.hermes` ids (see the contract in
+`docs/ARCHITECTURE.md`), enabling the flag changes nothing.
+
+**Watching it:** `grep '"kind": "recovery"' audit.jsonl`. Each line names
+`incident_id`, `task_id`, and `consultation_id` and `delivery_id` where they
+apply. An agent token can read its own installation's incidents at
+`GET /recovery/incidents?task_id=…`.
+
+**Before a live acceptance test:**
+- The test session needs a real delivery path: the adapter must map
+  `(session_id, task_id)` to that session, and the session needs a wake
+  subscription. A Kanban `unblock` alone does not guarantee delivery to it.
+- Run the restart case (cooldowns and dedup surviving a restart) in a
+  separate test instance. A test board inside the production `personal`
+  container is only logically isolated.
+- Configure any file access the adapter needs explicitly. Running
+  `docker exec --user hermes` does not grant access to a `700 root`
+  directory.
+
+**Rollback:** set `enabled: false` (or delete the block) and
+`docker kill -s HUP gatekeeper`. Every hook stops at once, `/recovery/*`
+returns 404, and no hold is enforced any more. `recovery.yaml` can be
+removed afterwards.
+
 ## Behind a reverse proxy
 
 `gatekeeper serve` runs directly under uvicorn, which by default trusts

@@ -36,6 +36,7 @@ from .identity import Identity, IdentityStore, load_identities
 from .messages import MessageStore
 from .notifications import CatalogNotifier
 from .ratelimit import RateLimiter
+from .recovery import Correlation, RecoverySupervisor
 from .tier1 import Tier1, Toolkit, is_runnable, load_tier1
 
 
@@ -119,6 +120,10 @@ class Service:
         #: toolkits pointed at the same file share one lock instead of
         #: racing each other's writes.
         self._mailboxes: dict[str, MessageStore] = {}
+        #: The recovery supervisor (recovery.py), attached by `__main__.py`
+        #: once the state directory is known. None in a bare `Service` --
+        #: then `call` behaves exactly as it did before recovery existed.
+        self.recovery: RecoverySupervisor | None = None
 
     # -- Registry ---------------------------------------------------------
 
@@ -470,7 +475,12 @@ class Service:
         return frozenset(self.identities.identities)
 
     async def call(
-        self, identity: Identity, tool_id: str, arguments: dict[str, Any]
+        self,
+        identity: Identity,
+        tool_id: str,
+        arguments: dict[str, Any],
+        *,
+        correlation: Correlation | None = None,
     ) -> execute.Result:
         tool: ToolDef | None = None
         scopes: list[str] = []
@@ -571,6 +581,14 @@ class Service:
                 )
             elif toolkit.executor == "file":
                 pass  # parameters resolved directly into the call below
+
+            # Last check before anything runs, so a held repeat is an
+            # ordinary audited denial: an exact re-run of a mutation whose
+            # previous outcome is UNKNOWN waits for a status check.
+            if correlation is not None and self.recovery is not None:
+                held = self.recovery.hold(correlation, tool_id=tool.id, scopes=scopes)
+                if held:
+                    raise Denied(DenialReason.RECOVERY_HOLD, held)
         except Denied as denial:
             self.metrics[(tool_id, identity.id, "denied")] += 1
             self.audit.call(
@@ -584,6 +602,21 @@ class Service:
                 detail=denial.detail,
                 credential_names=credential_names,
             )
+            if correlation is not None and self.recovery is not None:
+                retry_after = None
+                if denial.reason is DenialReason.RATE_LIMITED and tool is not None:
+                    retry_after = self.limiter.retry_after(identity.id, tool.category)
+                denial.recovery_note = await self.recovery.observe(  # type: ignore[attr-defined]
+                    correlation,
+                    tool_id=tool_id,
+                    toolkit=tool.toolkit if tool else None,
+                    idempotent=tool.idempotent if tool else True,
+                    scopes=scopes,
+                    outcome="denied",
+                    denial_reason=denial.reason.value,
+                    agent_text=denial.agent_message,
+                    retry_after=retry_after,
+                )
             raise
 
         timeout_seconds = min(tool.timeout_seconds, toolkit.max_timeout_seconds)
@@ -745,6 +778,17 @@ class Service:
             truncated=result.truncated,
             credential_names=credential_names,
         )
+        if correlation is not None and self.recovery is not None:
+            result.recovery_note = await self.recovery.observe(
+                correlation,
+                tool_id=tool.id,
+                toolkit=tool.toolkit,
+                idempotent=tool.idempotent,
+                scopes=scopes,
+                outcome=result.outcome,
+                agent_text=(result.stderr or result.stdout)[-600:],
+                exit_code=result.exit_code,
+            )
         return result
 
     # -- Operation ---------------------------------------------------------
