@@ -693,6 +693,14 @@ asyncio event loop rather than using a thread pool or an async file API:
   whole window; `AUDIT_READ_BYTES` (2 MB) remains the floor it will not
   read past, and reaching it is what sets the `truncated` flag.
 
+The console's read pages are the exception: every view behind `guarded`
+renders on a worker thread (`asyncio.to_thread`), because a page's cost
+grows with data the operator does not control -- a few hundred decided
+proposals once made each page take seconds, with every MCP call queued
+behind it. `pending.yaml` and `toolkit_proposals.yaml` are additionally
+parsed once per distinct content (`_atomic.load_cached`), since every page
+counts their pending entries for the sidebar badge.
+
 This is a deliberate choice, not an oversight: at the scale gatekeeper
 targets (per NFR-5/§14, a handful of agents against a single homelab
 instance), the cost of each is a few milliseconds against local disk, and
