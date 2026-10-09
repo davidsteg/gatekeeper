@@ -25,6 +25,13 @@ A bounded recovery supervisor for stuck Hermes tasks, off by default (`recovery.
 - **Coverage (v1).** A turn that stops without a prior Gatekeeper failure is not recovered.
 - **Hermes adapter.** It is **not** part of this release; the contract is `docs/HERMES_ADAPTER.md`. All tests use loopback mocks, and no live round trip has been demonstrated.
 - **Rollback.** Set `recovery.enabled: false` and SIGHUP.
+## 0.47.5
+
+Documentation only: the roadmap now tracks retention for decided proposals as a deferred follow-up.
+
+### Changed
+
+- **`docs/ROADMAP.md` lists "Retention for decided proposals" under "Not implemented".** `pending.yaml` and `toolkit_proposals.yaml` keep every decided item forever; 0.47.3 removed the per-page cost, but each propose/decide still re-parses and rewrites the whole file. The entry records the current cost, why it is deferred, and when to revisit it. No runtime behavior changed.
 
 ## 0.47.4
 
