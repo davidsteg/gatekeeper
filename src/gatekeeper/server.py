@@ -37,6 +37,7 @@ from .errors import DenialReason, Denied
 from .execute import OUTCOME_OK, OUTCOME_UNKNOWN
 from .identity import ADMIN_ROLE, IdentityStore
 from .notifications import SESSION_ID_HEADER, CatalogNotifier
+from .oauth import OAuthStateStore
 from .service import Service
 from .ui import UI_COMPANION_PATHS, UI_PREFIX, build_ui_routes
 
@@ -525,12 +526,15 @@ def build_app(
         # budget whichever login form they hit.
         sessions = SessionStore()
         throttle = LoginThrottle()
+        # And one store of OAuth flows in flight: a flow started from
+        # `/app` returns through the callback route `build_ui_routes` owns.
+        oauth_states = OAuthStateStore()
         routes.extend(
             build_ui_routes(
                 service=service, identities=identities, audit=audit, store=store,
                 credentials=credentials, pending=pending,
                 toolkit_proposals=toolkit_proposals,
-                sessions=sessions, throttle=throttle,
+                sessions=sessions, throttle=throttle, oauth_states=oauth_states,
             )
         )
         routes.extend(build_web_routes())
@@ -542,7 +546,7 @@ def build_app(
                         service=service, identities=identities, audit=audit,
                         sessions=sessions, throttle=throttle, store=store,
                         credentials=credentials, pending=pending,
-                        toolkit_proposals=toolkit_proposals,
+                        toolkit_proposals=toolkit_proposals, oauth_states=oauth_states,
                     )
                 ),
             )

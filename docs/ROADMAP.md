@@ -9,9 +9,10 @@ item.
 - Console JSON API at `/api/v1` (read-only, phase 1 of the console
   migration): session sign-in with the console password, CSRF, ETag /
   If-Match, viewer/admin roles, bearer tokens refused; overview, tools,
-  integrations, identities, credential metadata, toolkits, requests, audit
-  and release notes (`api/`)
-- React console at `/app`, read-only (phase 2): Vite + React + TypeScript,
+  integrations, identities, credential metadata, toolkits, requests, audit,
+  stats, bundled docs and release notes, plus every console write and
+  OAuth sign-in (`api/`)
+- React console at `/app`, with every page `/ui` has (phases 2-3b, 0.57.0): Vite + React + TypeScript,
   types generated from the API schema, served by gatekeeper under a
   `script-src 'self'` + Trusted Types CSP, built in a Node-only Dockerfile
   stage, with its own CI job (`frontend/`)
@@ -99,7 +100,8 @@ item.
 
 - **React console cutover (phase 4).** Phases 1 (JSON API, 0.53.0), 2
   (read-only SPA at `/app`, 0.54.0), 3a (tool, identity, credential and
-  password writes, 0.55.0) and 3b (request decisions, 0.56.0) are done.
+  password writes, 0.55.0), 3b (request decisions, 0.56.0) and the parity
+  release (Stats, Docs and OAuth sign-in at `/app`, 0.57.0) are done.
   Still to come: the
   1.0.0 cutover that redirects `/ui` to `/app`, deletes `ui.py`'s HTML
   views and makes FR-11.9's `script-src 'self'` policy the only console

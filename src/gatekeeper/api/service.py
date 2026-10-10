@@ -905,3 +905,227 @@ def drop_sessions_after_identity_update(
     if locked_out or password_set:
         keep = current_sid if (not locked_out and replaces == actor) else None
         sessions.drop_identity(replaces, keep=keep)
+
+
+# -- Stats and docs (moved out of `ui.py`) ------------------------------------------
+
+#: `src/gatekeeper`, the directory `ui.py` lives in -- the doc lookup below
+#: was written relative to it.
+_PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+_ADMIN_VERBS = {
+    "tool_create": "created tool",
+    "tool_update": "updated tool",
+    "tool_delete": "deleted tool",
+    "tool_enable": "enabled tool",
+    "tool_disable": "disabled tool",
+    "identity_create": "created identity",
+    "identity_update": "updated identity",
+    "identity_delete": "deleted identity",
+    "token_rotate": "rotated the API token of",
+    "password_set": "set the console password of",
+}
+
+def _bucket_calls_by_day(
+    records: list[dict[str, Any]], days: int = 7, *, now: datetime | None = None,
+) -> list[tuple[int, int]]:
+    """Calls per day slot as ``(succeeded, not succeeded)``.
+
+    Same shape and rounding-down-before-diffing approach as ``_bucket_calls``,
+    but day-granularity for the 7d/30d chart on the Stats page.
+    """
+    current = (now or _local_now()).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    buckets = [(0, 0) for _ in range(days)]
+    for record in records:
+        if record.get("kind") != "call":
+            continue
+        stamp = _parse_ts(record.get("ts"))
+        if stamp is None:
+            continue
+        day = _to_local(stamp).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+        age = int((current - day).total_seconds() // 86400)
+        if 0 <= age < days:
+            slot = days - 1 - age
+            ok, bad = buckets[slot]
+            if record.get("outcome") == "ok":
+                buckets[slot] = (ok + 1, bad)
+            else:
+                buckets[slot] = (ok, bad + 1)
+    return buckets
+
+
+
+def _admin_action_stats(records: list[dict[str, Any]]) -> dict[str, int]:
+    """Counts ``admin_change`` records by action, using ``_ADMIN_VERBS`` labels."""
+    stats: dict[str, int] = {}
+    for record in records:
+        if record.get("kind") != "admin_change":
+            continue
+        action = record.get("action", "")
+        label = _ADMIN_VERBS.get(action, action or "admin_change")
+        stats[label] = stats.get(label, 0) + 1
+    return dict(sorted(stats.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+
+def _duration_stats(
+    records: list[dict[str, Any]], tools_by_kit: dict[str, set[str]] | None = None,
+) -> dict[str, dict[str, float]]:
+    """Average and p95 duration per toolkit, plus overall."""
+    tool_to_kit: dict[str, str] = {}
+    if tools_by_kit:
+        for kit, tool_ids in tools_by_kit.items():
+            for tid in tool_ids:
+                tool_to_kit[tid] = kit
+    per_kit: dict[str, list[int]] = {}
+    all_durations: list[int] = []
+    for record in records:
+        if record.get("kind") != "call":
+            continue
+        dur = record.get("duration_ms")
+        if dur is None:
+            continue
+        try:
+            dur = int(dur)
+        except (TypeError, ValueError):
+            continue
+        all_durations.append(dur)
+        kit = tool_to_kit.get(record.get("tool") or "", "_unknown")
+        per_kit.setdefault(kit, []).append(dur)
+
+    def _pct(values: list[int], pct: float) -> float:
+        if not values:
+            return 0.0
+        s = sorted(values)
+        idx = max(0, min(len(s) - 1, int(len(s) * pct) - 1))
+        return float(s[idx])
+
+    result: dict[str, dict[str, float]] = {}
+    for kit, durations in per_kit.items():
+        result[kit] = {
+            "avg": sum(durations) / len(durations) if durations else 0.0,
+            "p95": _pct(durations, 0.95),
+            "count": float(len(durations)),
+        }
+    result["_overall"] = {
+        "avg": sum(all_durations) / len(all_durations) if all_durations else 0.0,
+        "p95": _pct(all_durations, 0.95),
+        "count": float(len(all_durations)),
+    }
+    return result
+
+
+
+_DOCS_DIR_CANDIDATES = (
+    "/opt/gatekeeper-docs",
+    os.path.join(_PACKAGE_DIR, "..", ".."),
+    "/opt/data/gatekeeper",
+    ".",
+)
+
+
+def _read_doc_file(name: str) -> str:
+    """Read a doc file from the repo root, best-effort.
+
+    The source tree lives next to the package; in the container the docs
+    are bundled at /opt/gatekeeper-docs by the Dockerfile.  Returns empty
+    string if not found.
+    """
+    for base in _DOCS_DIR_CANDIDATES:
+        candidate = os.path.join(base, name)
+        try:
+            with open(candidate, encoding="utf-8") as fh:
+                return fh.read()
+        except (OSError, FileNotFoundError):
+            continue
+    return ""
+
+
+
+_DOC_FILES = (
+    ("readme", "README", "README.md"),
+    ("requirements", "Requirements", "REQUIREMENTS.md"),
+    ("agents", "AGENTS", "AGENTS.md"),
+    ("release", "Release Notes", "RELEASE.md"),
+)
+
+
+_STATS_WINDOWS = (("24h", "Last 24 hours", 24, 200), ("7d", "Last 7 days", 7, 1000), ("30d", "Last 30 days", 30, 2000))
+
+
+def stats_view(service: Any, window: str) -> dict[str, Any]:
+    """The Stats page as data: tiles, an activity series (hourly for 24 h,
+    daily otherwise), and per-toolkit, per-identity, latency and admin
+    tables. Best-effort over the tail of the current audit log, like
+    `/ui/stats`."""
+    spec = next((w for w in _STATS_WINDOWS if w[0] == window), _STATS_WINDOWS[0])
+    key, label, span, limit = spec
+    records, truncated = read_audit(audit_path(service), limit=limit)
+    tools_by_kit: dict[str, set[str]] = {name: set() for name in service.tier1.toolkits}
+    for tool in service.catalog.tools.values():
+        tools_by_kit.setdefault(tool.toolkit, set()).add(tool.id)
+    totals = _outcome_totals(records)
+    idents = _call_stats(records)
+    kits = _tool_call_stats(records, tools_by_kit)
+    admin = _admin_action_stats(records)
+    durations = _duration_stats(records, tools_by_kit)
+    if key == "24h":
+        now = _local_now().replace(minute=0, second=0, microsecond=0)
+        series = [
+            {"start": (now - timedelta(hours=span - 1 - i)).isoformat(), "ok": ok, "not_ok": bad}
+            for i, (ok, bad) in enumerate(_bucket_calls(records, hours=span))
+        ]
+    else:
+        today = _local_now().replace(hour=0, minute=0, second=0, microsecond=0)
+        series = [
+            {"start": (today - timedelta(days=span - 1 - i)).isoformat(), "ok": ok, "not_ok": bad}
+            for i, (ok, bad) in enumerate(_bucket_calls_by_day(records, days=span))
+        ]
+
+    def _rows(stats: dict[str, dict[str, int]]) -> list[dict[str, Any]]:
+        return [
+            {"name": name, **{k: v[k] for k in ("total", "ok", "denied", "failed")}}
+            for name, v in sorted(stats.items(), key=lambda kv: (-kv[1]["total"], kv[0]))
+            if v["total"] > 0
+        ]
+
+    return {
+        "window": key,
+        "label": label,
+        "windows": [{"key": w[0], "label": w[1]} for w in _STATS_WINDOWS],
+        "truncated": truncated,
+        "totals": {k: totals[k] for k in ("ok", "denied", "failed", "total", "error_rate")},
+        "success_rate": int(totals["ok"] / totals["total"] * 100) if totals["total"] else 0,
+        "active_identities": len(idents),
+        "active_toolkits": sum(1 for k, v in kits.items() if v["total"] > 0 and k != "_unknown"),
+        "admin_total": sum(admin.values()),
+        "series": series,
+        "toolkits": _rows(kits),
+        "identities": _rows(idents),
+        "admin": [{"action": a, "count": n} for a, n in admin.items()],
+        "latency": [
+            {"toolkit": kit, "avg_ms": int(v["avg"]), "p95_ms": int(v["p95"]), "count": int(v["count"])}
+            for kit, v in sorted(durations.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+            if v["count"] > 0
+        ],
+    }
+
+
+def docs_index() -> list[dict[str, Any]]:
+    return [
+        {"slug": slug, "label": label, "available": bool(_read_doc_file(filename))}
+        for slug, label, filename in _DOC_FILES
+    ]
+
+
+def doc_text(slug: str) -> dict[str, str] | None:
+    """One bundled document as Markdown source. The slug picks from a
+    fixed list, so no path from a request ever reaches the filesystem."""
+    for known, label, filename in _DOC_FILES:
+        if known == slug:
+            return {"slug": slug, "label": label, "text": _read_doc_file(filename)}
+    return None
