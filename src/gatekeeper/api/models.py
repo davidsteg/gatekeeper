@@ -451,6 +451,97 @@ class Decided(_Model):
     status: str
 
 
+# -- Stats, docs, OAuth -------------------------------------------------------------------
+
+
+class StatsWindow(_Model):
+    key: str
+    label: str
+
+
+class StatsPoint(_Model):
+    #: Start of the hour (24 h) or day, ISO 8601 with offset.
+    start: str
+    ok: int
+    not_ok: int
+
+
+class StatsTotals(CallCounts):
+    error_rate: int
+
+
+class StatsRow(CallCounts):
+    name: str
+
+
+class AdminCount(_Model):
+    action: str
+    count: int
+
+
+class Latency(_Model):
+    toolkit: str
+    avg_ms: int
+    p95_ms: int
+    count: int
+
+
+class Stats(_Model):
+    window: str
+    label: str
+    windows: list[StatsWindow]
+    truncated: bool
+    totals: StatsTotals
+    success_rate: int
+    active_identities: int
+    active_toolkits: int
+    admin_total: int
+    series: list[StatsPoint]
+    toolkits: list[StatsRow]
+    identities: list[StatsRow]
+    admin: list[AdminCount]
+    latency: list[Latency]
+
+
+class DocEntry(_Model):
+    slug: str
+    label: str
+    available: bool
+
+
+class Doc(_Model):
+    slug: str
+    label: str
+    #: Markdown source; the console renders it as elements, never as HTML.
+    text: str
+
+
+class OAuthProvider(_Model):
+    key: str
+    label: str
+    #: The credentials this provider's toolkits name (Tier 1).
+    credentials: list[str]
+    callback_path: str
+
+
+class OAuthStartBody(_Body):
+    #: Which credential to fill; may be empty when the toolkits name one.
+    credential: str = Field("", max_length=128)
+
+
+class OAuthStart(_Model):
+    """Everything the connect page shows. No client secret, no token."""
+
+    provider: str
+    label: str
+    credential: str
+    consent_url: str
+    callback_uri: str
+    scopes: list[str]
+    registration_console: str
+    mismatch_error: str
+
+
 # -- Audit / release notes -----------------------------------------------------------------
 
 

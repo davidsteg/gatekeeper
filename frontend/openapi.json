@@ -76,6 +76,24 @@
         "title": "ActivityBucket",
         "type": "object"
       },
+      "AdminCount": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "count"
+        ],
+        "title": "AdminCount",
+        "type": "object"
+      },
       "ApproveAll": {
         "additionalProperties": false,
         "properties": {
@@ -440,6 +458,52 @@
         "title": "DeployBody",
         "type": "object"
       },
+      "Doc": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "label",
+          "text"
+        ],
+        "title": "Doc",
+        "type": "object"
+      },
+      "DocEntry": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "label",
+          "available"
+        ],
+        "title": "DocEntry",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -623,6 +687,34 @@
         "title": "IntegrationTool",
         "type": "object"
       },
+      "Latency": {
+        "properties": {
+          "avg_ms": {
+            "title": "Avg Ms",
+            "type": "integer"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "p95_ms": {
+            "title": "P95 Ms",
+            "type": "integer"
+          },
+          "toolkit": {
+            "title": "Toolkit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "toolkit",
+          "avg_ms",
+          "p95_ms",
+          "count"
+        ],
+        "title": "Latency",
+        "type": "object"
+      },
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -760,6 +852,102 @@
           "empty_catalog"
         ],
         "title": "Notices",
+        "type": "object"
+      },
+      "OAuthProvider": {
+        "properties": {
+          "callback_path": {
+            "title": "Callback Path",
+            "type": "string"
+          },
+          "credentials": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Credentials",
+            "type": "array"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "credentials",
+          "callback_path"
+        ],
+        "title": "OAuthProvider",
+        "type": "object"
+      },
+      "OAuthStart": {
+        "description": "Everything the connect page shows. No client secret, no token.",
+        "properties": {
+          "callback_uri": {
+            "title": "Callback Uri",
+            "type": "string"
+          },
+          "consent_url": {
+            "title": "Consent Url",
+            "type": "string"
+          },
+          "credential": {
+            "title": "Credential",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "mismatch_error": {
+            "title": "Mismatch Error",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "registration_console": {
+            "title": "Registration Console",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "provider",
+          "label",
+          "credential",
+          "consent_url",
+          "callback_uri",
+          "scopes",
+          "registration_console",
+          "mismatch_error"
+        ],
+        "title": "OAuthStart",
+        "type": "object"
+      },
+      "OAuthStartBody": {
+        "additionalProperties": false,
+        "properties": {
+          "credential": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Credential",
+            "type": "string"
+          }
+        },
+        "title": "OAuthStartBody",
         "type": "object"
       },
       "Outcomes": {
@@ -1204,6 +1392,208 @@
           "version"
         ],
         "title": "SessionInfo",
+        "type": "object"
+      },
+      "Stats": {
+        "properties": {
+          "active_identities": {
+            "title": "Active Identities",
+            "type": "integer"
+          },
+          "active_toolkits": {
+            "title": "Active Toolkits",
+            "type": "integer"
+          },
+          "admin": {
+            "items": {
+              "$ref": "#/components/schemas/AdminCount"
+            },
+            "title": "Admin",
+            "type": "array"
+          },
+          "admin_total": {
+            "title": "Admin Total",
+            "type": "integer"
+          },
+          "identities": {
+            "items": {
+              "$ref": "#/components/schemas/StatsRow"
+            },
+            "title": "Identities",
+            "type": "array"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "latency": {
+            "items": {
+              "$ref": "#/components/schemas/Latency"
+            },
+            "title": "Latency",
+            "type": "array"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/StatsPoint"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "success_rate": {
+            "title": "Success Rate",
+            "type": "integer"
+          },
+          "toolkits": {
+            "items": {
+              "$ref": "#/components/schemas/StatsRow"
+            },
+            "title": "Toolkits",
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/StatsTotals"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window": {
+            "title": "Window",
+            "type": "string"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/StatsWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "window",
+          "label",
+          "windows",
+          "truncated",
+          "totals",
+          "success_rate",
+          "active_identities",
+          "active_toolkits",
+          "admin_total",
+          "series",
+          "toolkits",
+          "identities",
+          "admin",
+          "latency"
+        ],
+        "title": "Stats",
+        "type": "object"
+      },
+      "StatsPoint": {
+        "properties": {
+          "not_ok": {
+            "title": "Not Ok",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "integer"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "ok",
+          "not_ok"
+        ],
+        "title": "StatsPoint",
+        "type": "object"
+      },
+      "StatsRow": {
+        "properties": {
+          "denied": {
+            "default": 0,
+            "title": "Denied",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "default": 0,
+            "title": "Ok",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "StatsRow",
+        "type": "object"
+      },
+      "StatsTotals": {
+        "properties": {
+          "denied": {
+            "default": 0,
+            "title": "Denied",
+            "type": "integer"
+          },
+          "error_rate": {
+            "title": "Error Rate",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "ok": {
+            "default": 0,
+            "title": "Ok",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error_rate"
+        ],
+        "title": "StatsTotals",
+        "type": "object"
+      },
+      "StatsWindow": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "StatsWindow",
         "type": "object"
       },
       "TokenIssued": {
@@ -2612,6 +3002,123 @@
         ]
       }
     },
+    "/documents": {
+      "get": {
+        "operationId": "docs_documents_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DocEntry"
+                  },
+                  "title": "Response Docs Documents Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not signed in, or a bearer token was sent."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Role, CSRF or read-only refusal."
+          }
+        },
+        "summary": "Docs",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/documents/{slug}": {
+      "get": {
+        "operationId": "doc_documents__slug__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Doc"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not signed in, or a bearer token was sent."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Role, CSRF or read-only refusal."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Doc",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
     "/identities": {
       "get": {
         "operationId": "identities_identities_get",
@@ -3215,6 +3722,154 @@
         "summary": "Integration Logo",
         "tags": [
           "tools"
+        ]
+      }
+    },
+    "/oauth/providers": {
+      "get": {
+        "description": "Providers some toolkit uses, with the credentials it names.",
+        "operationId": "oauth_providers_oauth_providers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OAuthProvider"
+                  },
+                  "title": "Response Oauth Providers Oauth Providers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not signed in, or a bearer token was sent."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Role, CSRF or read-only refusal."
+          }
+        },
+        "summary": "Oauth Providers",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/oauth/{provider}/authorize": {
+      "post": {
+        "operationId": "oauth_authorize_oauth__provider__authorize_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthStartBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthStart"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not signed in, or a bearer token was sent."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Role, CSRF or read-only refusal."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Oauth Authorize",
+        "tags": [
+          "oauth"
         ]
       }
     },
@@ -4377,6 +5032,70 @@
         "summary": "Session Create",
         "tags": [
           "session"
+        ]
+      }
+    },
+    "/stats": {
+      "get": {
+        "operationId": "stats_stats_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "24h",
+              "pattern": "^(24h|7d|30d)$",
+              "title": "Window",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Stats"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not signed in, or a bearer token was sent."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Role, CSRF or read-only refusal."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stats",
+        "tags": [
+          "stats"
         ]
       }
     },

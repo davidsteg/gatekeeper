@@ -1,3 +1,24 @@
+## 0.57.0
+
+The React console at `/app` now has the last three things only `/ui` had: Stats, Docs and OAuth sign-in. Nothing is lost when `/ui` goes away in 1.0.0.
+
+### Added
+
+- **Stats page** (`/app/stats`) with 24 h, 7 d and 30 d windows: call totals, success rate, an activity chart, calls per toolkit and per identity, latency (avg and p95) and admin actions. API: `GET /api/v1/stats?window=`.
+- **Docs page** (`/app/docs`) showing the bundled README, Requirements, AGENTS and Release Notes. The console's Markdown renderer now also handles `#`/`##` headings, numbered lists, fenced code, tables and links, still as React elements. API: `GET /api/v1/documents` and `GET /api/v1/documents/{slug}`.
+- **Sign in with Google or Microsoft from `/app/credentials`.** For each oauth2 credential a toolkit names, a Connect button starts the flow, shows the redirect URI and scopes, and links to the provider's consent page. You come back to the Credentials page with a banner saying whether it worked. API: `GET /api/v1/oauth/providers` and `POST /api/v1/oauth/{provider}/authorize`.
+
+### Changed
+
+- The OAuth callback paths are unchanged (`/ui/oauth/google/callback`, `/ui/oauth/microsoft/callback`), so redirect URIs already registered with Google or Microsoft keep working. A flow started from `/app` returns to `/app`; one started from `/ui` still returns to `/ui`.
+- The provider code moved from `ui.py` to `oauth.py`, and the stats and docs helpers moved to `api/service.py`; `ui.py` imports them from there. Both consoles share one sign-in state store.
+- The Overview's pending-requests notice links to `/app/requests` instead of `/ui/requests`.
+
+### Security
+
+- `POST /oauth/{provider}/authorize` needs a console session, role `admin` and `X-CSRF-Token`, and writes the same audit record as `/ui`. Its answer has the consent URL (which must carry the client ID), never the client secret or a token. The callback's redirect back to `/app` carries only a result code and two names; the page shows its own text for the code, so nothing the provider sent is reflected.
+- `/documents/{slug}` picks from a fixed list; no part of the request reaches a file path.
+
 ## 0.56.0
 
 Phase 3b of the console migration: agent requests are decided in the React console at `/app`. Everything `/ui` does is now possible there too.

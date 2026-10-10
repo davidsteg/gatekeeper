@@ -53,6 +53,7 @@ class ApiContext:
     credentials: CredentialStore | None = None
     pending: PendingStore | None = None
     toolkit_proposals: ToolkitProposalStore | None = None
+    oauth_states: Any = None  # oauth.OAuthStateStore, shared with the callback route
 
     @property
     def read_only(self) -> bool:

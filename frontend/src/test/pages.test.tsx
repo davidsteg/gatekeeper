@@ -302,3 +302,89 @@ describe("requests", () => {
     await waitFor(() => expect(body).toEqual({ confirm: true }));
   });
 });
+
+const STATS = {
+  window: "7d", label: "Last 7 days", truncated: false,
+  windows: [{ key: "24h", label: "Last 24 hours" }, { key: "7d", label: "Last 7 days" }, { key: "30d", label: "Last 30 days" }],
+  totals: { ok: 3, denied: 1, failed: 0, total: 4, error_rate: 25 },
+  success_rate: 75, active_identities: 1, active_toolkits: 1, admin_total: 2,
+  series: [{ start: "2026-10-10T00:00:00+00:00", ok: 3, not_ok: 1 }],
+  toolkits: [{ name: "demo", ok: 3, denied: 1, failed: 0, total: 4 }],
+  identities: [{ name: "bot", ok: 3, denied: 1, failed: 0, total: 4 }],
+  admin: [{ action: "tool saved", count: 2 }],
+  latency: [{ toolkit: "demo", avg_ms: 12, p95_ms: 40, count: 3 }],
+};
+
+describe("stats and docs", () => {
+  it("asks for the window in the URL and shows its tables", async () => {
+    const asked: string[] = [];
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.includes("/stats")) { asked.push(url); return json(200, STATS); }
+      return json(200, []);
+    });
+    renderAt("/stats?window=7d");
+    expect(await screen.findByText("p95")).toBeInTheDocument();
+    expect(asked[0]).toContain("window=7d");
+    expect(screen.getByRole("link", { name: "bot" })).toHaveAttribute("href", "/audit?identity=bot");
+    expect(screen.getByText("tool saved")).toBeInTheDocument();
+  });
+
+  it("renders a bundled document as elements", async () => {
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.endsWith("/documents")) return json(200, [{ slug: "readme", label: "README", available: true }]);
+      if (url.endsWith("/documents/readme")) {
+        return json(200, { slug: "readme", label: "README", text: "# gatekeeper\n\n<script>alert(1)</script>" });
+      }
+      return json(200, []);
+    });
+    renderAt("/docs");
+    expect(await screen.findByRole("heading", { name: "gatekeeper" })).toBeInTheDocument();
+    expect(screen.getByText("<script>alert(1)</script>")).toBeInTheDocument();
+  });
+});
+
+describe("oauth", () => {
+  const CREDS = { configured: true, dangling: [], credentials: [] };
+
+  it("starts a flow and links to the provider's consent page", async () => {
+    let body: unknown;
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/credentials")) return json(200, CREDS, { ETag: '"1"' });
+      if (url.endsWith("/oauth/providers")) {
+        return json(200, [{ key: "google", label: "Google", credentials: ["gmail"], callback_path: "/ui/oauth/google/callback" }]);
+      }
+      if (url.endsWith("/oauth/google/authorize") && init.method === "POST") {
+        body = JSON.parse(String(init.body));
+        return json(200, {
+          provider: "google", label: "Google", credential: "gmail",
+          consent_url: "https://accounts.google.com/o/oauth2/v2/auth?state=s",
+          callback_uri: "https://gk.example/ui/oauth/google/callback",
+          scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+          registration_console: "Google Cloud console", mismatch_error: "redirect_uri_mismatch",
+        });
+      }
+      return json(200, []);
+    });
+    renderAt("/credentials");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /Connect Google/ }));
+    const go = await screen.findByRole("link", { name: /Continue to Google/ });
+    expect(body).toEqual({ credential: "gmail" });
+    expect(go).toHaveAttribute("href", "https://accounts.google.com/o/oauth2/v2/auth?state=s");
+    expect(screen.getByText("https://gk.example/ui/oauth/google/callback")).toBeInTheDocument();
+  });
+
+  it("shows the console's own text for a result code, never the URL's", async () => {
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.endsWith("/credentials")) return json(200, CREDS);
+      return json(200, []);
+    });
+    renderAt("/credentials?oauth=%3Cb%3Eevil%3C%2Fb%3E&provider=google&credential=gmail");
+    expect(await screen.findByText(/The sign-in did not complete/)).toBeInTheDocument();
+    expect(screen.queryByText(/evil/)).toBeNull();
+  });
+});

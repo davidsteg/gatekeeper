@@ -42,7 +42,10 @@ def _get_paths() -> list[str]:
     paths = []
     for path, ops in schema["paths"].items():
         if "get" in ops:
-            paths.append(path.replace("{tool_id}", "demo.show").replace("{key}", "sonarr"))
+            paths.append(
+                path.replace("{tool_id}", "demo.show").replace("{key}", "sonarr")
+                .replace("{slug}", "readme")
+            )
     return sorted(paths)
 
 
@@ -53,7 +56,8 @@ def test_the_schema_lists_the_phase_one_reads():
         "/session", "/account", "/overview", "/tools", "/tools/demo.show",
         "/integrations", "/identities", "/credentials", "/toolkits",
         "/toolkits/reference", "/requests/pending", "/requests/toolkits",
-        "/audit", "/release-notes",
+        "/audit", "/release-notes", "/stats", "/documents", "/documents/readme",
+        "/oauth/providers",
     }
 
 
