@@ -4,6 +4,13 @@ This is the Hermes side of Gatekeeper's recovery contract **v1.1**. It is
 **not deployed to production**, and production recovery stays disabled until
 acceptance.
 
+**Telegram support:** safe automatic continuation of an existing Telegram
+session is **not supported** by the verified, unchanged official Hermes
+v0.21.6 interfaces. Automatic Telegram recovery stays disabled. The API-run
+test evidence below does not establish Telegram delivery. No Hermes source
+patch, custom image, monkeypatch or CLI-resume workaround is permitted. See
+[the supported-interface assessment](../../docs/HERMES_TELEGRAM_SUPPORT.md).
+
 ## Pins
 
 The adapter lives in the Gatekeeper repository. It is bound to whichever

@@ -419,10 +419,15 @@ not part of the contract.
   `session_id` and an `Idempotency-Key` header. Hermes reserves that key
   durably, and session turn leases serialize concurrent writers. It continues
   API-server sessions. A session that originated on a push platform such as
-  Telegram would answer to the API caller rather than the original chat; that
-  needs Hermes's in-process wake path (`gateway/wake.py`), which is reachable
-  only through private gateway internals. **This remains open for push-platform
-  orchestrators.**
+  Telegram would answer to the API caller rather than the original chat.
+  The supported plugin `ctx.inject_message(..., session_key=...)` can route
+  normal conversational input through the original Gateway chat/thread,
+  but does not expose atomic recovery admission for expected sequence,
+  task/generation ownership and persistent continuation idempotency.
+  **Safe automatic Telegram recovery is not supported in unchanged official
+  Hermes v0.21.6 and remains disabled.** Hermes patches/custom images,
+  monkeypatches, private bridges and CLI-resume substitutes are excluded.
+  See [HERMES_TELEGRAM_SUPPORT.md](HERMES_TELEGRAM_SUPPORT.md) for evidence.
 - **Worker recovery:** `agent/kanban_turn_recovery.py` applies to
   dispatcher-owned worker turns that failed retryably. It makes 3 attempts with
   15/45/90 s backoff, in place. See §3.
