@@ -118,6 +118,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Docs */
+        get: operations["docs_documents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Doc */
+        get: operations["doc_documents__slug__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/identities": {
         parameters: {
             query?: never;
@@ -222,6 +256,43 @@ export interface paths {
         get: operations["integration_logo_integrations__key__logo_svg_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oauth/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Providers
+         * @description Providers some toolkit uses, with the credentials it names.
+         */
+        get: operations["oauth_providers_oauth_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oauth/{provider}/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Oauth Authorize */
+        post: operations["oauth_authorize_oauth__provider__authorize_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -444,6 +515,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stats */
+        get: operations["stats_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tool-scaffold": {
         parameters: {
             query?: never;
@@ -593,6 +681,13 @@ export interface components {
             /** Ok */
             ok: number;
         };
+        /** AdminCount */
+        AdminCount: {
+            /** Action */
+            action: string;
+            /** Count */
+            count: number;
+        };
         /** ApproveAll */
         ApproveAll: {
             /** Ids */
@@ -725,6 +820,24 @@ export interface components {
              */
             confirm: true;
         };
+        /** Doc */
+        Doc: {
+            /** Label */
+            label: string;
+            /** Slug */
+            slug: string;
+            /** Text */
+            text: string;
+        };
+        /** DocEntry */
+        DocEntry: {
+            /** Available */
+            available: boolean;
+            /** Label */
+            label: string;
+            /** Slug */
+            slug: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -796,6 +909,17 @@ export interface components {
             /** Yaml */
             yaml: string;
         };
+        /** Latency */
+        Latency: {
+            /** Avg Ms */
+            avg_ms: number;
+            /** Count */
+            count: number;
+            /** P95 Ms */
+            p95_ms: number;
+            /** Toolkit */
+            toolkit: string;
+        };
         /** LoginRequest */
         LoginRequest: {
             /** Identity */
@@ -843,6 +967,47 @@ export interface components {
             pending_toolkits: number;
             /** Unwritable */
             unwritable: string[];
+        };
+        /** OAuthProvider */
+        OAuthProvider: {
+            /** Callback Path */
+            callback_path: string;
+            /** Credentials */
+            credentials: string[];
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+        };
+        /**
+         * OAuthStart
+         * @description Everything the connect page shows. No client secret, no token.
+         */
+        OAuthStart: {
+            /** Callback Uri */
+            callback_uri: string;
+            /** Consent Url */
+            consent_url: string;
+            /** Credential */
+            credential: string;
+            /** Label */
+            label: string;
+            /** Mismatch Error */
+            mismatch_error: string;
+            /** Provider */
+            provider: string;
+            /** Registration Console */
+            registration_console: string;
+            /** Scopes */
+            scopes: string[];
+        };
+        /** OAuthStartBody */
+        OAuthStartBody: {
+            /**
+             * Credential
+             * @default
+             */
+            credential: string;
         };
         /** Outcomes */
         Outcomes: {
@@ -1023,6 +1188,102 @@ export interface components {
             role: string;
             /** Version */
             version: string;
+        };
+        /** Stats */
+        Stats: {
+            /** Active Identities */
+            active_identities: number;
+            /** Active Toolkits */
+            active_toolkits: number;
+            /** Admin */
+            admin: components["schemas"]["AdminCount"][];
+            /** Admin Total */
+            admin_total: number;
+            /** Identities */
+            identities: components["schemas"]["StatsRow"][];
+            /** Label */
+            label: string;
+            /** Latency */
+            latency: components["schemas"]["Latency"][];
+            /** Series */
+            series: components["schemas"]["StatsPoint"][];
+            /** Success Rate */
+            success_rate: number;
+            /** Toolkits */
+            toolkits: components["schemas"]["StatsRow"][];
+            totals: components["schemas"]["StatsTotals"];
+            /** Truncated */
+            truncated: boolean;
+            /** Window */
+            window: string;
+            /** Windows */
+            windows: components["schemas"]["StatsWindow"][];
+        };
+        /** StatsPoint */
+        StatsPoint: {
+            /** Not Ok */
+            not_ok: number;
+            /** Ok */
+            ok: number;
+            /** Start */
+            start: string;
+        };
+        /** StatsRow */
+        StatsRow: {
+            /**
+             * Denied
+             * @default 0
+             */
+            denied: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /** Name */
+            name: string;
+            /**
+             * Ok
+             * @default 0
+             */
+            ok: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        };
+        /** StatsTotals */
+        StatsTotals: {
+            /**
+             * Denied
+             * @default 0
+             */
+            denied: number;
+            /** Error Rate */
+            error_rate: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /**
+             * Ok
+             * @default 0
+             */
+            ok: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        };
+        /** StatsWindow */
+        StatsWindow: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
         };
         /**
          * TokenIssued
@@ -1782,6 +2043,102 @@ export interface operations {
             };
         };
     };
+    docs_documents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocEntry"][];
+                };
+            };
+            /** @description Not signed in, or a bearer token was sent. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Role, CSRF or read-only refusal. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    doc_documents__slug__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Doc"];
+                };
+            };
+            /** @description Not signed in, or a bearer token was sent. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Role, CSRF or read-only refusal. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     identities_identities_get: {
         parameters: {
             query?: never;
@@ -2271,6 +2628,124 @@ export interface operations {
             };
             /** @description Role, CSRF or read-only refusal. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_providers_oauth_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthProvider"][];
+                };
+            };
+            /** @description Not signed in, or a bearer token was sent. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Role, CSRF or read-only refusal. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    oauth_authorize_oauth__provider__authorize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthStartBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthStart"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not signed in, or a bearer token was sent. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Role, CSRF or read-only refusal. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3197,6 +3672,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    stats_stats_get: {
+        parameters: {
+            query?: {
+                window?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stats"];
+                };
+            };
+            /** @description Not signed in, or a bearer token was sent. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Role, CSRF or read-only refusal. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

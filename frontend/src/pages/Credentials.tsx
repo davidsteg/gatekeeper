@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { ExternalLink, Plus } from "lucide-react";
 import { apiGet, apiSend, type Schemas } from "@/api/client";
 import { useCanWrite } from "@/auth";
 import { ConfirmButton, useWrite, WriteError } from "@/components/forms";
@@ -44,6 +45,8 @@ export function Credentials() {
           <Button size="sm" onClick={() => setCreating(true)}><Plus className="size-3.5" /> New credential</Button>
         )}
       />
+      <OAuthResult />
+      {writable && <OAuthConnect />}
       {creating && (
         <CredentialForm
           dangling={query.data?.dangling ?? []}
@@ -200,5 +203,95 @@ function CredentialActions({ meta, onReload }: { meta: Schemas["CredentialMeta"]
       )}
       <WriteError error={rotate.error ?? remove.error} onReload={onReload} />
     </div>
+  );
+}
+
+/** The text for each result code the OAuth callback sends back. Only the
+ * code travels in the URL, so nothing a provider sent is ever shown. */
+const OAUTH_RESULT: Record<string, { tone: "good" | "bad"; text: string }> = {
+  ok: { tone: "good", text: "Connected. The refresh token is stored in the credential; nothing else changed." },
+  denied: { tone: "bad", text: "The provider did not grant access (cancelled, or the client may not ask for these scopes). Nothing was changed." },
+  no_code: { tone: "bad", text: "The provider sent no authorization code back. Nothing was changed." },
+  no_refresh_token: {
+    tone: "bad",
+    text: "The provider returned no refresh token. Remove gatekeeper's access in your account's app permissions and connect again. Nothing was changed.",
+  },
+  exchange_failed: { tone: "bad", text: "Exchanging the code for a token failed. Check the client ID, secret and redirect URI. Nothing was changed." },
+  credential_unusable: { tone: "bad", text: "The credential does not hold a usable client_id/client_secret bundle. Nothing was changed." },
+  role_required: { tone: "bad", text: "The account that started this sign-in can no longer write credentials. Nothing was changed." },
+  read_only: { tone: "bad", text: "This console cannot write credentials. Nothing was changed." },
+  write_refused: { tone: "bad", text: "The credential store refused the write. Nothing was changed." },
+};
+
+function OAuthResult() {
+  const [params, setParams] = useSearchParams();
+  const code = params.get("oauth");
+  if (!code) return null;
+  const result = OAUTH_RESULT[code] ?? { tone: "bad" as const, text: "The sign-in did not complete. Nothing was changed." };
+  const credential = params.get("credential");
+  const provider = params.get("provider");
+  return (
+    <Notice tone={result.tone}>
+      <div className="flex items-start gap-2">
+        <span className="flex-1">
+          {provider && credential && <strong className="font-mono">{credential} ({provider}): </strong>}
+          {result.text}
+        </span>
+        <Button size="sm" variant="ghost" onClick={() => setParams({}, { replace: true })}>Dismiss</Button>
+      </div>
+    </Notice>
+  );
+}
+
+function OAuthConnect() {
+  const providers = useQuery({ queryKey: ["oauth-providers"], queryFn: () => apiGet("/oauth/providers") });
+  const [started, setStarted] = useState<Schemas["OAuthStart"] | null>(null);
+  const start = useWrite(
+    ({ provider, credential }: { provider: string; credential: string }) =>
+      apiSend<Schemas["OAuthStart"]>("POST", `/oauth/${provider}/authorize`, { body: { credential } }),
+    [],
+    setStarted,
+  );
+  if (!providers.data?.length) return null;
+  return (
+    <Card>
+      <CardHeader title="Sign in with a provider" />
+      <CardBody className="space-y-3 text-sm">
+        <p className="text-muted-foreground">
+          Adds a refresh token to an oauth2 credential that already holds your OAuth client&apos;s
+          client_id and client_secret.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {providers.data.flatMap((p) => p.credentials.map((name) => (
+            <Button
+              key={`${p.key}/${name}`} size="sm" variant="outline" disabled={start.isPending}
+              onClick={() => { setStarted(null); start.mutate({ provider: p.key, credential: name }); }}
+            >
+              Connect {p.label}: <span className="font-mono">{name}</span>
+            </Button>
+          )))}
+        </div>
+        <WriteError error={start.error} />
+        {started && (
+          <div className="space-y-2 rounded-md border border-border p-3">
+            <Row label="Credential"><code>{started.credential}</code></Row>
+            <Row label="Redirect URI">
+              <code className="break-all">{started.callback_uri}</code>
+              <p className="text-xs text-muted-foreground">
+                Must be registered exactly like this in the {started.registration_console}, or {started.label} refuses
+                with {started.mismatch_error}.
+              </p>
+            </Row>
+            <Row label="Scopes"><Pills values={started.scopes} tone="accent" /></Row>
+            <a
+              href={started.consent_url}
+              className="inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
+            >
+              Continue to {started.label} <ExternalLink className="size-3.5" aria-hidden />
+            </a>
+          </div>
+        )}
+      </CardBody>
+    </Card>
   );
 }

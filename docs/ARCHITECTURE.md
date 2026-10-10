@@ -751,9 +751,30 @@ side on the same stores.
   `grant_set` diffed against its `prev_tools`, and why a stale item cannot
   apply) and `spec_yaml` on each toolkit proposal.
 
+- **Stats, documents, OAuth sign-in (`api/extras.py`, 0.57.0).** `GET
+  /stats?window=24h|7d|30d` is `/ui/stats` as data (`service.stats_view`:
+  tiles, an hourly or daily series, per-toolkit, per-identity, latency
+  and admin-action tables, over the same audit tail). `GET /documents`
+  and `GET /documents/{slug}` serve the bundled README, REQUIREMENTS,
+  AGENTS and RELEASE as Markdown source; the slug picks from a fixed
+  list, so no request path reaches the filesystem. (`/docs` stays
+  unrouted: it is FastAPI's Swagger path, which is not served.) `GET
+  /oauth/providers` lists the providers some toolkit uses with the
+  credentials it names, and `POST /oauth/{provider}/authorize` (admin,
+  CSRF) starts a Google or Microsoft sign-in exactly as
+  `/ui/oauth/<provider>/authorize` does -- the provider code moved to
+  `oauth.py`, shared by both surfaces, and `build_app` creates one
+  `OAuthStateStore` for both -- and answers the consent URL, redirect URI
+  and scopes as data. The state records `return_to="app"`, so the
+  unchanged callback path (still the redirect URI registered with the
+  provider) redirects to `/app/credentials?oauth=<code>&provider=&credential=`
+  instead of rendering a page. Only a result code travels; the console
+  shows its own text for it.
+
 Phase 1 (0.53.0) added session handling plus every read; phases 3a
-(0.55.0) and 3b (0.56.0) every write the console has. The cutover follows
-as its own release.
+(0.55.0) and 3b (0.56.0) every write the console has, and 0.57.0 the last
+`/ui` pages (Stats, Docs, OAuth sign-in). The cutover follows as its own
+release.
 
 ## Console SPA (`frontend/`, `/app`)
 
@@ -785,7 +806,9 @@ gatekeeper itself at `/app` (`api/web.py`). It is a pure client of
   dependency loads anything from a third-party origin, and eslint forbids
   `dangerouslySetInnerHTML`, `innerHTML` and `eval`. Agent-supplied audit
   values and RELEASE.md are rendered as text nodes; the release-notes
-  Markdown subset is built as React elements (`pages/markdown.tsx`).
+  Markdown subset (headings, lists, fenced code, tables, and links, which
+  become `<a>` only for `http(s)://` and `#` targets) is built as React
+  elements (`pages/markdown.tsx`) for release notes and the Docs page.
   Integration logos are `<img src="/api/v1/integrations/<key>/logo.svg">`.
 - **Serving.** `index.html` is `no-store`; hashed files under
   `/app/assets/` are `immutable`; any other `/app/...` path without a file

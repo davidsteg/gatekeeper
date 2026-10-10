@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from "react-router";
 import {
-  Activity, BookOpen, Boxes, Gauge, Inbox, KeyRound, Lock, LogOut, ScrollText, SlidersHorizontal, UserRound,
+  Activity, BarChart3, BookOpen, Boxes, FileText, Gauge, Inbox, KeyRound, Lock, LogOut, ScrollText, SlidersHorizontal, UserRound,
 } from "lucide-react";
 import { useAuth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +14,9 @@ const NAV = [
   { to: "/credentials", label: "Credentials", icon: Lock },
   { to: "/toolkits", label: "Toolkits", icon: Boxes },
   { to: "/requests", label: "Requests", icon: Inbox },
+  { to: "/stats", label: "Stats", icon: BarChart3 },
   { to: "/audit", label: "Audit log", icon: Activity },
+  { to: "/docs", label: "Docs", icon: FileText },
   { to: "/release-notes", label: "Release notes", icon: BookOpen },
   { to: "/account", label: "Account", icon: UserRound },
 ] as const;

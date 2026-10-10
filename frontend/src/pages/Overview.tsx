@@ -45,7 +45,7 @@ export function Overview() {
       {pending > 0 && (
         <Notice>
           <strong>{pending}</strong> request{pending === 1 ? "" : "s"} awaiting a decision. Review them
-          in the classic console under <a className="underline" href="/ui/requests">Requests</a>.
+          under <Link className="underline" to="/requests">Requests</Link>.
         </Notice>
       )}
       {data.notices.no_toolkits && (

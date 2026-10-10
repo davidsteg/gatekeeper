@@ -5,11 +5,13 @@ import { Loading } from "@/components/ui/notice";
 import { Account } from "@/pages/Account";
 import { Audit } from "@/pages/Audit";
 import { Credentials } from "@/pages/Credentials";
+import { Docs } from "@/pages/Docs";
 import { Identities } from "@/pages/Identities";
 import { Login } from "@/pages/Login";
 import { Overview } from "@/pages/Overview";
 import { ReleaseNotes } from "@/pages/ReleaseNotes";
 import { Requests } from "@/pages/Requests";
+import { Stats } from "@/pages/Stats";
 import { ToolkitReference, Toolkits } from "@/pages/Toolkits";
 import { Integrations, ToolDetail, ToolEditor, Tools } from "@/pages/Tools";
 
@@ -37,7 +39,10 @@ export function App() {
           <Route path="toolkits" element={<Toolkits />} />
           <Route path="toolkits/reference" element={<ToolkitReference />} />
           <Route path="requests" element={<Requests />} />
+          <Route path="stats" element={<Stats />} />
           <Route path="audit" element={<Audit />} />
+          <Route path="docs" element={<Docs />} />
+          <Route path="docs/:slug" element={<Docs />} />
           <Route path="release-notes" element={<ReleaseNotes />} />
           <Route path="account" element={<Account />} />
           <Route path="*" element={<Navigate to="/" replace />} />
