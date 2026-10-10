@@ -71,6 +71,8 @@ class FakeHermes:
         self.continue_delay = 0.0
         #: Simulates a user message landing between /status and /continue.
         self.user_turn_on_continue = False
+        self.echo_override: dict = {}
+        self.internal_recovery_until = None
         self.lock = threading.Lock()
 
     def session(self, session_id, task_id, board=BOARD, **state):
@@ -102,7 +104,8 @@ class FakeHermes:
                 self.status_calls.append(payload)
                 if state is None:
                     return 404, {"error": "session does not own this task"}
-                return 200, dict(state)
+                return 200, {**state, "session_id": key[0], "board_id": key[1],
+                             "task_id": key[2], **self.echo_override}
             if path.endswith("/continuation"):
                 self.query_calls.append(payload)
                 found = self.deliveries.get(payload["idempotency_key"])
@@ -111,6 +114,9 @@ class FakeHermes:
             if state is None:
                 return 404, {"error": "session does not own this task"}
             idem = payload["idempotency_key"]
+            if self.internal_recovery_until and idem not in self.deliveries:
+                return 200, {"accepted": False, "reason": "internal_recovery",
+                             "retry_after_until": self.internal_recovery_until}
             if idem not in self.deliveries:
                 if self.user_turn_on_continue:
                     state.update(turn="active", turn_seq=state["turn_seq"] + 1)
@@ -1231,3 +1237,124 @@ async def test_continuation_query_reporting_started_counts_as_started(env, herme
     await service.recovery.tick()
     cont = _incidents(service)[0]["continuation"]
     assert _incidents(service)[0]["status"] == "accepted" and cont["started_at"]
+
+
+# -- Integrity and recovery ownership (contract v1.1) ----------------------------------
+
+
+async def _mcp_call_meta(app, token, tool, args, meta=None):
+    base = "http://gatekeeper.test"
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url=base,
+                                  headers={"Authorization": f"Bearer {token}"}, timeout=30) as http:
+        async with Client(streamable_http_client(f"{base}/mcp", http_client=http)) as client:
+            return await client.call_tool(tool, args, meta=meta)
+
+
+async def test_conflicting_carriers_give_no_recovery_but_the_call_still_runs(env, hermes):
+    service, identities, tokens = env(rescue_enabled=False)
+    hermes["homelab"].session("sess-1", "task-1", turn="active")
+    app = build_app(service=service, identities=identities, audit=service.audit)
+    async with app.router.lifespan_context(app):
+        for _ in range(2):
+            meta = _meta("homelab-agent")
+            other = dict(meta["hermes"], session_id="sess-other")
+            result = await _mcp_call_meta(app, tokens["homelab-agent"], "demo.fail",
+                                          {"target": "nas", recovery.RESERVED_ARGUMENT: other}, meta)
+    assert "[gatekeeper recovery]" not in result.content[0].text
+    assert "connection refused" in result.content[0].text  # executed normally
+    assert _incidents(service) == []
+
+
+async def test_identical_carriers_are_accepted(env, hermes):
+    service, identities, tokens = env(rescue_enabled=False)
+    hermes["homelab"].session("sess-1", "task-1", turn="active")
+    app = build_app(service=service, identities=identities, audit=service.audit)
+    async with app.router.lifespan_context(app):
+        for _ in range(2):
+            meta = _meta("homelab-agent")
+            result = await _mcp_call_meta(app, tokens["homelab-agent"], "demo.fail",
+                                          {"target": "nas", recovery.RESERVED_ARGUMENT: meta["hermes"]},
+                                          meta)
+    assert '"action": "change_approach"' in result.content[0].text
+
+
+def test_null_reserved_value_is_no_correlation(env):
+    service, _, _ = env()
+    assert service.recovery.correlate_call("homelab-agent", None, None) is None
+    meta = _meta("homelab-agent")
+    assert service.recovery.correlate_call("homelab-agent", None, meta["hermes"]) is not None
+
+
+async def test_open_incident_is_pinned_to_its_session(env, hermes):
+    service, identities, _ = env(rescue_enabled=False)
+    hermes["homelab"].session("sess-1", "task-1", turn="active")
+    await _fail(service, identities, 1)
+    assert await _fail(service, identities, 3, session="sess-intruder") is None
+    [incident] = _incidents(service)
+    assert len(incident["attempts"]) == 1 and incident["session_id"] == "sess-1"
+
+
+async def test_mapping_failure_at_threshold_blocks_recovery(env, hermes):
+    service, identities, _ = env(rescue_enabled=False)
+    # No adapter session: /status answers 404 for this reference.
+    note = await _fail(service, identities, 2)
+    assert _note(note)["action"] == "blocked"
+    assert _incidents(service)[0]["outcome"] == "blocked:session_mapping_failed"
+
+
+async def test_status_echo_mismatch_is_a_mapping_failure(env, hermes):
+    service, identities, _ = env(rescue_enabled=False)
+    hermes["homelab"].session("sess-1", "task-1", turn="active")
+    hermes["homelab"].echo_override = {"task_id": "task-other"}
+    await _fail(service, identities, 2)
+    assert _incidents(service)[0]["outcome"] == "blocked:session_mapping_failed"
+
+
+async def test_hermes_internal_recovery_defers_the_continuation(env, hermes):
+    clock = Clock()
+    service, identities, _ = env(rescue_enabled=False, clock=clock)
+    fake = hermes["homelab"]
+    fake.session("sess-1", "task-1", turn="active")
+    await _fail(service, identities, 2)
+    fake.state().update(turn="exhausted", recovery_owner="hermes",
+                        recovery_until=clock.now + 45)
+    _, resp = await service.recovery.handle_event("homelab-agent", _stopped())
+    assert resp["action"] == "internal_recovery"
+    assert fake.continue_calls == []
+    ledger = service.recovery.store.read(lambda d: list(d["tasks"].values()))[0]
+    assert ledger["recoveries"] == 1  # the guidance only
+    clock.now += 20
+    await service.recovery.tick()
+    assert fake.continue_calls == []  # still inside Hermes's backoff
+    fake.state().update(recovery_owner=None, recovery_until=None)
+    clock.now += 30
+    await service.recovery.tick()
+    assert len(fake.continue_calls) == 1
+
+
+async def test_continue_rejected_for_internal_recovery_waits_it_out(env, hermes):
+    clock = Clock()
+    service, identities, _ = env(rescue_enabled=False, clock=clock)
+    fake = hermes["homelab"]
+    fake.session("sess-1", "task-1", turn="active")
+    await _fail(service, identities, 2)
+    fake.state().update(turn="exhausted")
+    fake.internal_recovery_until = clock.now + 90
+    _, resp = await service.recovery.handle_event("homelab-agent", _stopped())
+    assert resp["action"] == "internal_recovery"
+    assert _incidents(service)[0]["status"] == "cooling"
+    fake.internal_recovery_until = None
+    clock.now += 91
+    await service.recovery.tick()
+    assert _incidents(service)[0]["status"] == "accepted"
+
+
+async def test_hermes_owned_session_without_deadline_is_left_to_hermes(env, hermes):
+    service, identities, _ = env(rescue_enabled=False)
+    fake = hermes["homelab"]
+    fake.session("sess-1", "task-1", turn="active")
+    await _fail(service, identities, 2)
+    fake.state().update(turn="exhausted", recovery_owner="hermes")
+    await service.recovery.handle_event("homelab-agent", _stopped())
+    assert _incidents(service)[0]["outcome"] == "suppressed:hermes_recovery_owner"
+    assert fake.continue_calls == []

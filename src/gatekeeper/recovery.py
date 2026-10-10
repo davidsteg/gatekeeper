@@ -118,7 +118,9 @@ TERMINAL_EVENTS = {
 }
 #: Adapter rejections that mean "someone else is already driving this
 #: session" -- not a failure of recovery, so no recovery is spent.
-BENIGN_REJECTIONS = frozenset({"turn_active", "superseded", "turn_seq_mismatch"})
+BENIGN_REJECTIONS = frozenset({
+    "turn_active", "superseded", "turn_seq_mismatch", "internal_recovery",
+})
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -828,6 +830,30 @@ class RecoverySupervisor:
             cooldown_until=cooldown_until, **ids,  # type: ignore[arg-type]
         )
 
+    def correlate_call(self, identity_id: str, meta: Any, reserved: Any) -> Correlation | None:
+        """Correlation for one `tools/call`, from either carrier.
+
+        `_meta.hermes` and the reserved argument may both be present only if
+        they are identical. Two different records for one call cannot both
+        be true, so neither is trusted and the call gets no recovery at all
+        (it still runs through the normal pipeline). A reserved value of
+        `null` -- what the client plugin sends for a turn with no bound
+        task -- is "no correlation", never an error.
+        """
+        hermes = meta.get("hermes") if isinstance(meta, dict) else None
+        has_meta = isinstance(hermes, dict)
+        has_reserved = isinstance(reserved, dict)
+        if has_meta and has_reserved and hermes != reserved:
+            if self.enabled:
+                self._log("correlation_rejected", identity=identity_id,
+                          reason="conflicting _meta.hermes and _hermes_recovery")
+            return None
+        if has_meta:
+            return self.correlate(identity_id, {"hermes": hermes})
+        if has_reserved:
+            return self.correlate(identity_id, {"hermes": reserved})
+        return None
+
     @staticmethod
     def _mismatch(installation: Installation, fields: dict[str, Any]) -> str | None:
         claimed = fields.get("installation")
@@ -959,6 +985,14 @@ class RecoverySupervisor:
             incident = data["incidents"].get(task["open_incident"] or "")
             if incident is not None and incident["status"] not in OPEN_STATUSES:
                 task["open_incident"] = incident = None
+            if incident is not None and (
+                corr.session_id != incident["session_id"]
+                or (incident.get("profile") or None) != (corr.profile or None)
+            ):
+                # The open incident belongs to another session or profile.
+                # A call claiming the same task from elsewhere neither feeds
+                # nor steers it.
+                return {"stale": "different session or profile"}
 
             # Activity: only an *executed* call in the turn the adapter
             # started for this continuation counts -- matched by its
@@ -1123,8 +1157,17 @@ class RecoverySupervisor:
         if not self.store.claim(inc_id, {"open", "guided", "cooling", "active"}, "guided"):
             return None
 
-        # Authoritative task state before spending a recovery.
-        status_info = await self._adapter_status(incident)
+        # Authoritative task state -- and session/task mapping -- before
+        # spending a recovery. A mapping failure is final; an unreachable
+        # adapter only means no status (guidance still reaches the caller,
+        # a continuation would need a successful /status anyway).
+        try:
+            status_info = await self._adapter_status(incident, strict=True)
+        except AdapterError as exc:
+            self._finish(incident, "blocked", "blocked:session_mapping_failed", blocker=str(exc))
+            return self._render(incident, "blocked",
+                                "Recovery cannot confirm that this session owns this task. "
+                                "Stop retrying and report the blocker below to the user.")
         if status_info is not None:
             task_state = status_info.get("task")
             if task_state in ("completed", "cancelled", "superseded"):
@@ -1352,6 +1395,7 @@ class RecoverySupervisor:
             return "blocked"
         try:
             status = await adapter.status(self._ref(incident))
+            self._check_echo(incident, status)
         except AdapterError as exc:
             outcome = "blocked:session_mapping_failed" if exc.status in (404, 409) \
                 else "blocked:adapter_unreachable"
@@ -1364,6 +1408,8 @@ class RecoverySupervisor:
         if status.get("stop_reason") == USER_STOP:
             self._suppress(incident, USER_STOP)
             return "suppressed"
+        if status.get("recovery_owner") == "hermes":
+            return self._defer_to_hermes(incident, status.get("recovery_until"))
         status_seq = _int(status.get("turn_seq"))
         if status.get("turn") == "active" or (
             status_seq is not None and status_seq > incident["last_turn_seq"]
@@ -1421,6 +1467,8 @@ class RecoverySupervisor:
         continuation_id = _id(response.get("continuation_id"))
         if not response.get("accepted"):
             reason = str(response.get("reason") or "adapter declined")[:300]
+            if reason == "internal_recovery":
+                return self._defer_to_hermes(incident, response.get("retry_after_until"))
             if reason in BENIGN_REJECTIONS:
                 # A user message (or the agent itself) won the race: nothing
                 # to recover, and no recovery spent.
@@ -1459,6 +1507,26 @@ class RecoverySupervisor:
                   continuation_id=continuation_id,
                   idempotency_key=incident["continuation"]["idempotency_key"])
         return "continued"
+
+    def _defer_to_hermes(self, incident: dict[str, Any], until: Any) -> str:
+        """Hermes's own recovery owns the session (an in-place attempt or its
+        backoff, or a dispatcher-owned worker). Never continue on top of it:
+        wait for the reported deadline like a cooldown, once, at no recovery
+        cost -- or, with no deadline, leave the incident to Hermes."""
+        now = self._clock()
+        inc_id = incident["id"]
+        deferrals = int(incident.get("deferrals") or 0)
+        if isinstance(until, (int, float)) and not isinstance(until, bool) and until > now                 and deferrals < 3:
+            until = min(until, now + self.config.max_cooldown_seconds)
+            self._update(inc_id, status="cooling", cooldown_until=until, check_done=False,
+                         deferrals=deferrals + 1,
+                         continuation={**incident["continuation"], "status": "deferred",
+                                       "reason": "internal_recovery"})
+            self._log("deferred_to_hermes_recovery", incident_id=inc_id,
+                      task_id=incident["task_id"], until=_iso(until))
+            return "internal_recovery"
+        self._suppress(incident, "hermes_recovery_owner")
+        return "internal_recovery"
 
     async def _resolve_uncertain(self, incident: dict[str, Any]) -> None:
         """An ambiguous /continue (timeout, or a crash after 'sending' was
@@ -1670,16 +1738,34 @@ class RecoverySupervisor:
             return None
         return HermesAdapter(installation, secret, self.config.adapter_timeout_seconds)
 
-    async def _adapter_status(self, incident: dict[str, Any]) -> dict[str, Any] | None:
+    async def _adapter_status(self, incident: dict[str, Any], *,
+                              strict: bool = False) -> dict[str, Any] | None:
+        """`/status` for the incident's reference, echo-checked.
+
+        `strict`: a mapping failure (404/409, or an echo that names another
+        session/board/task) raises instead of returning None.
+        """
         adapter = self._adapter(self.config.installations.get(incident["installation"]))
         if adapter is None:
             return None
         try:
-            return await adapter.status(self._ref(incident))
+            status = await adapter.status(self._ref(incident))
+            self._check_echo(incident, status)
+            return status
         except AdapterError as exc:
             self._log("adapter_status_failed", incident_id=incident["id"],
                       task_id=incident["task_id"], error=str(exc))
+            if strict and exc.status in (404, 409):
+                raise
             return None
+
+    def _check_echo(self, incident: dict[str, Any], status: dict[str, Any]) -> None:
+        """The adapter must echo the reference it validated (contract v1.1)."""
+        ref = self._ref(incident)
+        for field in ("session_id", "board_id", "task_id"):
+            if status.get(field) != ref[field]:
+                raise AdapterError(f"status: echoed {field} does not match the reference",
+                                   status=409)
 
     def _rescue_client(self) -> RescueClient | None:
         rescue = self.config.rescue

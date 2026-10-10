@@ -1,10 +1,13 @@
 ## 0.49.0
 
-Recovery contract v1.1: correlation for MCP clients that cannot send per-call `_meta`, and durable proof that a continuation started. Recovery stays off by default.
+Recovery contract v1.1: correlation for MCP clients without per-call `_meta`, integrity checks on every link that can lead to a continuation, Hermes recovery ownership, and durable proof that a continuation started. Recovery stays off by default.
 
 ### Added
 
 - **Reserved argument `_hermes_recovery`.** It carries the same correlation object as `_meta.hermes`, for clients whose MCP stack has no per-call `_meta` (Hermes v0.21.6). `server.on_call_tool` strips it from every call before validation, also while recovery is off, so it is never validated, executed or audited as a parameter. A tool that declares a parameter of that name is refused at catalog load.
+- **Conflicting correlation carriers are refused.** When `_meta.hermes` and `_hermes_recovery` are both present and differ, the call gets no recovery at all and is logged as `correlation_rejected`; the call itself still runs through every normal check.
+- **Integrity checks before anything is continued.** An open incident is pinned to the session and profile that opened it, so calls claiming the same task from elsewhere are ignored. Before a recovery is spent, the adapter's `/status` must confirm the session/task mapping and echo the reference; a 404/409 or a mismatched echo blocks the incident as `blocked:session_mapping_failed`.
+- **Hermes recovery ownership.** A `/status` with `recovery_owner: "hermes"` and `recovery_until`, or a `/continue` rejected with `internal_recovery`, defers the continuation until that deadline at no recovery cost, at most 3 times per incident. Hermes ownership without a deadline suppresses the incident.
 - **Durable "started" evidence.** The supervisor accepts the adapter's `/status.last_continuation` record (and `/continuation` states `started`/`finished`) as proof that the resumed turn started, even if that turn ended before the next poll. `/continuation` state `lost` is handled like `rejected`.
 
 ### Changed
