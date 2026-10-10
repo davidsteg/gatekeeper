@@ -266,70 +266,56 @@ small script instead of going through `cmd_serve`/the CLI, and run it with
 project's development history. This is a dev-environment workaround only; the
 container image runs on Linux and is unaffected.
 
-## Recovery supervisor (feature flag)
+## Removed: recovery supervisor
 
-Off by default. To enable it, add a `recovery:` block to `toolkits.yaml`
-(a commented example sits at the end of `config/examples/toolkits.yaml`),
-store the HMAC secrets and the rescue API key in the credential store under
-the names the block uses, and SIGHUP or restart. State goes to
-`<GATEKEEPER_STATE_DIR>/recovery.yaml` unless `state_file` says otherwise.
+Gatekeeper 1.0.0 removes the recovery supervisor (0.48.0–0.51.0) together
+with its Hermes recovery adapter. Gatekeeper no longer tracks incidents,
+holds repeats (`recovery_hold`), consults a rescue or decision model, or
+continues a Hermes session; `POST /recovery/events` and
+`GET /recovery/incidents` answer 404; `_meta.hermes` is ignored and
+`_hermes_recovery` is an ordinary unknown argument. Deployments use
+unchanged official Hermes images and their native orchestration.
 
-```yaml
-recovery:
-  enabled: true
-  installations:
-    homelab:
-      identities: [hermes-homelab]
-      profiles: [orchestrator]          # optional; when set, _meta must name one
-      adapter_url: http://hermes-homelab:8650/gatekeeper-recovery
-      credential: hermes-homelab-recovery
-    personal:
-      identities: [hermes-personal]
-      adapter_url: http://hermes-personal:8650/gatekeeper-recovery
-      credential: hermes-personal-recovery
-    # more installations (media, the Gatekeeper bot) the same way, each with
-    # its own restricted identities and secret
-  rescue:
-    enabled: false        # until a model id is verified against the provider
-  decision:
-    enabled: false        # no provider is implemented yet; enabling fails startup
-```
+**What an upgrade does with old configuration:**
 
-An identity may belong to only one installation; startup refuses a config
-that lists one twice. Rescue cannot be enabled without `base_url`, `model`
-and `credential`, and a model the provider does not list under `GET /models`
-is never consulted. Look for `recovery.rescue_availability` in the log.
+| Left in place | 1.0.0 behavior |
+|---|---|
+| `recovery:` block that enables anything (`enabled: true` at any level, e.g. `rescue.enabled`, `decision.enabled`) | Refused at load (`gatekeeper check`, start, SIGHUP): *"'recovery' enables a feature that no longer exists …"*. A failed SIGHUP keeps the running config. |
+| `recovery:` block with everything disabled | Loads, logs *"the 'recovery:' block is ignored"* with the same hint. |
+| `artifact` toolkit with `allowed_artifacts: [hermes-adapter-contract, hermes-recovery-adapter]` | Loads, logs that the image no longer builds them. Its tools answer "unknown artifact"; `/health/ready` reports the toolkit `false` (degraded) while it serves nothing. |
+| Scopes `artifact:hermes-…`, grants on `artifact.*` tools | Inert; remove them with the toolkit. |
 
-Without the Hermes-side adapter and `_meta.hermes` ids (see
-[HERMES_ADAPTER.md](HERMES_ADAPTER.md)), enabling the flag changes nothing.
-A stop with no prior Gatekeeper failure is not recovered in v1.
+**Migration:**
 
-**Watching it:** `grep '"kind": "recovery"' audit.jsonl`. Each line names
-`incident_id`, `task_id`, and `consultation_id` and `delivery_id` where they
-apply. An agent token can read its own installation's incidents at
-`GET /recovery/incidents?task_id=…`.
+1. Delete the `recovery:` block from `toolkits.yaml`.
+2. If an `artifact` toolkit only allowed the two removed artifacts, delete
+   it, its `artifact.*` tools, the tool grants and the `artifact:` scopes
+   of the identities that used them. Change nothing else.
+3. `gatekeeper check`, then deploy the new image.
 
-**Before a live acceptance test:**
-- The test session needs a real delivery path: the adapter must map
-  `(session_id, task_id)` to that session, and the session needs a wake
-  subscription. A Kanban `unblock` alone does not guarantee delivery to it.
-- Run the restart case (cooldowns and dedup surviving a restart) in a
-  separate test instance. A test board inside the production `personal`
-  container is only logically isolated.
-- Configure any file access the adapter needs explicitly. Running
-  `docker exec --user hermes` does not grant access to a `700 root`
-  directory.
+**Left on disk on purpose (archive or delete later, by hand).** The upgrade
+reads none of these and deletes none of them:
 
-**Rollback:** set `enabled: false` (or delete the block) and
-`docker kill -s HUP gatekeeper`. Every hook stops at once, `/recovery/*`
-returns 404, and no hold is enforced any more. `recovery.yaml` can be
-removed afterwards.
+- `<GATEKEEPER_STATE_DIR>/recovery.yaml` (or the old `recovery.state_file`)
+  and its atomic-write leftovers next to it.
+- Audit lines with `"kind": "recovery"` in `audit.jsonl` and its rotations
+  — history, keep with the audit log.
+- Credential-store entries the `recovery:` block named (adapter HMAC
+  secrets such as `hermes-homelab-recovery`, a rescue API key). The
+  console shows them without a "Used by" row once the block is gone.
+- The former `handover_dir` (e.g. `/mnt/raid/agent/recovery-adapter-handover`)
+  with transferred adapter archives, its mount in compose, and any adapter
+  journals, backups or NAS test data on the Hermes side.
 
-## Release-bound artifacts (contract and adapter)
+## Release-bound artifacts
 
-The image carries the Hermes adapter contract and the adapter package of its
-own release under `/opt/gatekeeper/artifacts/`, bound to the release commit.
-To hand them to an agent, mount the handover directory and add a toolkit:
+The image carries the files listed in `artifacts.SOURCES` under
+`/opt/gatekeeper/artifacts/`, bound to the release commit by
+`manifest.json`. **1.0.0 declares no sources** (the Hermes recovery
+adapter, the only artifact so far, was removed), so the manifest is empty
+and an `artifact` toolkit has nothing to serve until a source is added. The
+mechanism is unchanged. To hand artifacts to an agent, mount the handover
+directory and add a toolkit:
 
 ```yaml
 # toolkits.yaml (Tier 1)
@@ -337,8 +323,8 @@ toolkits:
   artifact:
     executor: artifact
     allowed_artifact_operations: [list, info, read, transfer]
-    allowed_artifacts: [hermes-adapter-contract, hermes-recovery-adapter]
-    handover_dir: /mnt/raid/agent/recovery-adapter-handover   # must be mounted read-write
+    allowed_artifacts: [<artifact id>]
+    handover_dir: /mnt/raid/agent/artifact-handover   # must be mounted read-write
 ```
 
 ```yaml
@@ -362,8 +348,8 @@ Grant the tools to the identity, and give it the scope `artifact:*` (or
 download:
 
 ```bash
-curl -fsS -H "Authorization: Bearer $TOKEN" -D - -o adapter.tar.gz \
-  https://gatekeeper.example/artifacts/hermes-recovery-adapter
+curl -fsS -H "Authorization: Bearer $TOKEN" -D - -O -J \
+  https://gatekeeper.example/artifacts/<artifact id>
 ```
 
 The `X-Artifact-SHA256` and `X-Artifact-Commit` headers name what was sent.

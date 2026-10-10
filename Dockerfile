@@ -20,15 +20,15 @@ RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip install --upgrade pip \
  && /opt/venv/bin/pip install . -c constraints.txt
 
-# Release-bound artifacts (artifacts.py): the Hermes adapter contract and
-# the adapter, built from exactly these sources and stamped with the commit
-# CI passes in. The release job copies these exact files out of the
-# published image for the GitHub release -- one build, one set of bytes.
-# Without a commit (a local
-# `docker build`), the manifest says "unknown" and versioned downloads 404.
+# Release-bound artifacts (artifacts.py): every path in artifacts.SOURCES,
+# built from exactly these sources and stamped with the commit CI passes
+# in. The release job copies these exact files out of the published image
+# for the GitHub release -- one build, one set of bytes. SOURCES is empty
+# since 1.0.0 (the Hermes recovery adapter was removed), so this writes a
+# commit-bound manifest with no artifacts; a future source must also be
+# COPY'd here. Without a commit (a local `docker build`), the manifest
+# says "unknown" and versioned downloads 404.
 ARG GATEKEEPER_COMMIT=unknown
-COPY docs/HERMES_ADAPTER.md ./docs/HERMES_ADAPTER.md
-COPY contrib ./contrib
 RUN /opt/venv/bin/python -m gatekeeper.artifacts --root . --out /opt/artifacts \
       --commit "$GATEKEEPER_COMMIT" \
       --release "$(/opt/venv/bin/python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"

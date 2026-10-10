@@ -34,18 +34,17 @@ No shell injection. No command confusion. No hidden side effects.
   `agent.read_messages` collects your own. The sender is your authenticated
   identity, never an argument; delivery is on the recipient's next call, because
   MCP has no way to push into a running session
-- **Release-bound artifacts** — the Hermes adapter contract and adapter
-  package ship inside the image, bound to the release commit. They are
-  available over MCP (`artifact.list`/`info`/`read`/`transfer` into a fixed
-  handover directory, sha256-verified) and over an authenticated download; see
-  [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
-- **Recovery after repeated Gatekeeper failures (opt-in, Gatekeeper side
-  only)** — a feature-flagged supervisor tracks failures per Hermes task,
-  honors cooldowns and user stops, holds back re-runs of operations with an
-  unknown outcome, can consult a configured rescue model once, and can ask a
-  Hermes adapter to continue the *same* session. It never executes anything
-  itself. The Hermes adapter is specified in
-  [docs/HERMES_ADAPTER.md](docs/HERMES_ADAPTER.md) but not built yet
+- **Release-bound artifacts** — files built from fixed repository paths ship
+  inside the image, bound to the release commit and listed in a sha256
+  manifest. They are available over MCP (`artifact.list`/`info`/`read`/
+  `transfer` into a fixed handover directory, sha256-verified) and over an
+  authenticated download; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). The
+  current release declares no artifact sources
+- **No session recovery.** Gatekeeper executes tools, enforces permissions,
+  audits and serves artifacts. It never continues an agent session: the
+  recovery supervisor and its Hermes adapter were removed in 1.0.0, and
+  Hermes's own orchestration handles results, wakes and follow-ups (migration:
+  [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#removed-recovery-supervisor))
 
 ---
 

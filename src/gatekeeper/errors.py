@@ -34,9 +34,6 @@ class DenialReason(str, enum.Enum):
     SSRF_BLOCKED = "ssrf_blocked"
     RPC_METHOD_DENIED = "rpc_method_denied"
     CREDENTIAL_UNAVAILABLE = "credential_unavailable"
-    #: The recovery supervisor holds back an exact repeat of a mutation
-    #: whose previous run ended with an UNKNOWN outcome (recovery.py).
-    RECOVERY_HOLD = "recovery_hold"
 
 
 #: Uniform response for everything the agent should not know (FR-7.7).

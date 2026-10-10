@@ -7,7 +7,6 @@ streaming responses of the Streamable HTTP transport.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import logging
@@ -33,7 +32,6 @@ from .errors import DenialReason, Denied
 from .execute import OUTCOME_OK, OUTCOME_UNKNOWN
 from .identity import ADMIN_ROLE, IdentityStore
 from .notifications import SESSION_ID_HEADER, CatalogNotifier
-from .recovery import split_reserved
 from .service import Service
 from .ui import UI_COMPANION_PATHS, UI_PREFIX, build_ui_routes
 
@@ -264,27 +262,11 @@ def build_mcp_server(service: Service, notifier: CatalogNotifier) -> Server[None
         ctx: Any, params: types.CallToolRequestParams
     ) -> types.CallToolResult:
         identity = _identity_from(ctx)
-        # The correlation arrives as `_meta.hermes`, or -- from a client
-        # whose MCP stack cannot send per-call `_meta` -- as the reserved
-        # argument. The argument is removed from every call before the
-        # pipeline sees it, so it is never validated, executed or audited
-        # as a parameter. The supervisor derives the installation from the
-        # identity itself and ignores both while recovery is disabled.
-        arguments, reserved = split_reserved(params.arguments)
-        correlation = (
-            service.recovery.correlate_call(identity.id, params.meta, reserved)
-            if service.recovery is not None
-            else None
-        )
         try:
-            result = await service.call(
-                identity, params.name, arguments, correlation=correlation
-            )
+            result = await service.call(identity, params.name, params.arguments or {})
         except Denied as denial:
-            note = getattr(denial, "recovery_note", None)
-            text = f"{denial.agent_message}\n\n{note}" if note else denial.agent_message
             return types.CallToolResult(
-                content=[types.TextContent(type="text", text=text)],
+                content=[types.TextContent(type="text", text=denial.agent_message)],
                 isError=True,
             )
 
@@ -333,9 +315,7 @@ def _render(result: Any) -> str:
         parts.append("[output truncated]")
     header = " ".join(parts)
     body = "\n".join(filter(None, [result.stdout.rstrip(), result.stderr.rstrip()]))
-    text = f"{header}\n{body}".strip() if header else body or "(no output)"
-    note = getattr(result, "recovery_note", None)
-    return f"{text}\n\n{note}" if note else text
+    return f"{header}\n{body}".strip() if header else body or "(no output)"
 
 
 def _no_release_notes(wants_markdown: bool) -> Response:
@@ -470,39 +450,6 @@ def build_app(
             }
         )
 
-    async def recovery_events(request: Request) -> Response:
-        """Hermes lifecycle events for the recovery supervisor.
-
-        A plain authenticated route rather than an MCP tool: a stopped turn
-        or a client-side breaker cooldown must be reportable while the
-        client's breaker around the MCP *tools* is open. It executes
-        nothing -- it only updates incident state.
-        """
-        identity = request.scope.get(SCOPE_IDENTITY)
-        if service.recovery is None or identity is None or identity.role == ADMIN_ROLE:
-            return JSONResponse({"error": "not found"}, 404)
-        try:
-            payload = await request.json()
-        except ValueError:
-            return JSONResponse({"error": "body must be JSON"}, 400)
-        status, body = await service.recovery.handle_event(identity.id, payload)
-        return JSONResponse(body, status)
-
-    async def recovery_incidents(request: Request) -> Response:
-        """The caller's own installation's incidents, read-only."""
-        identity = request.scope.get(SCOPE_IDENTITY)
-        if (
-            service.recovery is None
-            or not service.recovery.enabled
-            or identity is None
-            or identity.role == ADMIN_ROLE
-        ):
-            return JSONResponse({"error": "not found"}, 404)
-        task_id = request.query_params.get("task_id") or None
-        return JSONResponse(
-            {"incidents": service.recovery.incidents_for(identity.id, task_id)}
-        )
-
     async def artifact_download(request: Request) -> Response:
         """Authenticated download of a release-bound artifact (artifacts.py).
 
@@ -555,10 +502,8 @@ def build_app(
         Route("/health/startup", health_startup, methods=["GET"]),
         Route("/metrics", metrics, methods=["GET"]),
         Route("/release", release, methods=["GET"]),
-        Route("/recovery/events", recovery_events, methods=["POST"]),
         Route("/artifacts/{artifact_id}", artifact_download, methods=["GET"]),
         Route("/artifacts/{artifact_id}/{version}", artifact_download, methods=["GET"]),
-        Route("/recovery/incidents", recovery_incidents, methods=["GET"]),
     ]
     if ui:
         routes.extend(
@@ -639,27 +584,10 @@ def build_app(
         # from the console's own (synchronous) request handling -- the
         # notifier needs to know which loop to hand the send to.
         notifier.bind_loop()
-        # The recovery scheduler runs on this loop, independent of every
-        # executor and resource lock -- cooldown checks and continuations
-        # keep working while a tool keeps failing.
-        stop = asyncio.Event()
-        scheduler = (
-            asyncio.create_task(service.recovery.run_scheduler(stop))
-            if service.recovery is not None
-            else None
-        )
-        try:
-            async with contextlib.AsyncExitStack() as stack:
-                for sub_app in sub_apps:
-                    await stack.enter_async_context(sub_app.router.lifespan_context(sub_app))
-                yield
-        finally:
-            if scheduler is not None:
-                stop.set()
-                try:
-                    await asyncio.wait_for(scheduler, timeout=5)
-                except (TimeoutError, asyncio.CancelledError):
-                    scheduler.cancel()
+        async with contextlib.AsyncExitStack() as stack:
+            for sub_app in sub_apps:
+                await stack.enter_async_context(sub_app.router.lifespan_context(sub_app))
+            yield
 
     app = Starlette(routes=all_routes, lifespan=combined_lifespan)
     app.add_middleware(SessionReaper, notifier=notifier)

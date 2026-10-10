@@ -20,8 +20,6 @@ import yaml
 
 from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, read_config_file
-from .recovery import RecoveryConfig
-from .recovery import parse_config as parse_recovery_config
 
 logger = logging.getLogger("gatekeeper")
 
@@ -94,6 +92,41 @@ AGENT_OPERATIONS = frozenset({"send_message", "read_messages", "mailbox_status"}
 #: The `artifact` executor's vocabulary (execute_artifact.py). `transfer`
 #: is the only one that writes, and only into the toolkit's `handover_dir`.
 ARTIFACT_OPERATIONS = frozenset({"list", "info", "read", "transfer"})
+
+#: The recovery supervisor and its Hermes adapter were removed (RELEASE.md
+#: 1.0.0). Hermes orchestrates its own tasks; Gatekeeper never continues a
+#: session. What is left of that feature in an existing toolkits.yaml must
+#: not look as if it still did something -- see `_check_removed_recovery`.
+REMOVED_ARTIFACTS = frozenset({"hermes-adapter-contract", "hermes-recovery-adapter"})
+RECOVERY_MIGRATION = (
+    "The recovery supervisor was removed from Gatekeeper in 1.0.0; Hermes "
+    "orchestrates and recovers its own tasks. Delete the 'recovery:' block "
+    "from toolkits.yaml -- see docs/DEPLOYMENT.md, 'Removed: recovery "
+    "supervisor'. recovery.yaml and the credentials it named are no longer "
+    "read and can be archived."
+)
+
+
+def _check_removed_recovery(block: Any, where: str) -> None:
+    """A leftover `recovery:` block: refused when it still enables
+    anything, a warning when it is inert.
+
+    Unknown top-level keys are otherwise ignored, so without this an
+    operator who had `recovery.enabled: true` would get a clean start and
+    no recovery at all -- the one outcome that must not be silent. A block
+    that enables nothing was inert before the removal too; refusing it
+    would stop a deployment for no gain.
+    """
+
+    def enables(node: Any) -> bool:
+        if isinstance(node, dict):
+            return node.get("enabled") is True or any(enables(v) for v in node.values())
+        return False
+
+    if enables(block):
+        raise ConfigError(f"{where}: 'recovery' enables a feature that no longer exists. "
+                          + RECOVERY_MIGRATION)
+    logger.warning("%s: the 'recovery:' block is ignored. %s", where, RECOVERY_MIGRATION)
 
 
 def missing_agent_operations(toolkit: Toolkit) -> tuple[str, ...]:
@@ -598,10 +631,6 @@ class Tier1:
     audit_dir: str
     audit_max_bytes: int
     audit_keep_files: int
-    #: The `recovery:` block (recovery.py). Defaulted so a Tier1 built
-    #: without one -- and every toolkits.yaml written before it existed --
-    #: has recovery disabled.
-    recovery: RecoveryConfig = dataclasses.field(default_factory=RecoveryConfig)
 
     def toolkit(self, name: str) -> Toolkit:
         try:
@@ -635,8 +664,6 @@ class Tier1:
         for dest in self.destinations.values():
             if dest.credential:
                 refs.setdefault(dest.credential, []).append(f"{dest.name} (destination)")
-        for name, labels in self.recovery.credential_references().items():
-            refs.setdefault(name, []).extend(labels)
         return {name: tuple(labels) for name, labels in refs.items()}
 
     def google_oauth_scopes(self) -> tuple[str, ...]:
@@ -1228,6 +1255,17 @@ def load_tier1(path: str) -> Tier1:
             allowed_artifacts = _str_tuple(_require(spec, "allowed_artifacts", where), where)
             if not allowed_artifacts:
                 raise ConfigError(f"{where}: 'allowed_artifacts' must not be empty")
+            removed_artifacts = sorted(set(allowed_artifacts) & REMOVED_ARTIFACTS)
+            if removed_artifacts:
+                # Not an error: the toolkit still loads, its tools answer
+                # "unknown artifact", and /health/ready reports it degraded
+                # when nothing else it allows is served.
+                logger.warning(
+                    "%s: allowed_artifacts names %s, which this image no longer "
+                    "builds (the Hermes recovery adapter was removed in 1.0.0). "
+                    "Remove them; drop the toolkit, its tools and the matching "
+                    "'artifact:' scopes if nothing else is left.",
+                    where, removed_artifacts)
             if "transfer" in allowed_artifact_operations:
                 handover_dir = str(_require(spec, "handover_dir", where))
                 if not _is_absolute(handover_dir) or ".." in PurePosixPath(handover_dir).parts:
@@ -1371,6 +1409,9 @@ def load_tier1(path: str) -> Tier1:
     for category in ("read", "write", "write_external"):
         rate_limits.setdefault(category, RateLimit(count=60, window_seconds=60))
 
+    if "recovery" in raw:
+        _check_removed_recovery(raw["recovery"], f"{path}: recovery")
+
     audit = raw.get("audit") or {}
     return Tier1(
         toolkits=toolkits,
@@ -1380,5 +1421,4 @@ def load_tier1(path: str) -> Tier1:
         audit_dir=str(audit.get("dir", "/mnt/raid/gatekeeper/logs")),
         audit_max_bytes=int(audit.get("max_bytes", 32 * 1024 * 1024)),
         audit_keep_files=int(audit.get("keep_files", 10)),
-        recovery=parse_recovery_config(raw.get("recovery")),
     )

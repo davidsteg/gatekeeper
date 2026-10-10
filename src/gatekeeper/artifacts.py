@@ -1,8 +1,8 @@
 """Release-bound artifacts: built from this repository, served read-only.
 
 **Single source of truth: the git commit.** Artifacts are never uploaded.
-`build()` packages fixed repository paths (the Hermes adapter contract and
-the adapter itself) into a directory with a `manifest.json` that records
+`build()` packages fixed repository paths (`SOURCES`) into a directory
+with a `manifest.json` that records
 the commit, the release version, and each file's SHA-256. The image build
 runs it once (Dockerfile); the release job copies those exact files out of
 the published image for the GitHub release instead of rebuilding them (gzip
@@ -32,7 +32,7 @@ import logging
 import os
 import re
 import tarfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 logger = logging.getLogger("gatekeeper")
@@ -46,13 +46,17 @@ VERSION_RE = re.compile(r"^[0-9a-f]{7,40}$")
 CHUNK = 64 * 1024
 
 #: What gets built, from where. Fixed here, not configurable: an artifact
-#: is a repository path at a commit, nothing else.
-SOURCES: tuple[dict[str, Any], ...] = (
-    {"id": "hermes-adapter-contract", "kind": "file", "path": "docs/HERMES_ADAPTER.md",
-     "file": "HERMES_ADAPTER.md", "media_type": "text/markdown; charset=utf-8", "text": True},
-    {"id": "hermes-recovery-adapter", "kind": "tree", "path": "contrib/hermes-recovery-adapter",
-     "file": "hermes-recovery-adapter.tar.gz", "media_type": "application/gzip", "text": False},
-)
+#: is a repository path at a commit, nothing else. An entry is either a
+#: single file (`"kind": "file"`) or a directory packaged as a
+#: deterministic tar.gz (`"kind": "tree"`), e.g.
+#:
+#:   {"id": "example-doc", "kind": "file", "path": "docs/EXAMPLE.md",
+#:    "file": "EXAMPLE.md", "media_type": "text/markdown; charset=utf-8", "text": True}
+#:
+#: Empty since 1.0.0: the Hermes recovery adapter and its contract, the
+#: only artifacts so far, were removed with the recovery supervisor. The
+#: image still carries a commit-bound (empty) manifest.
+SOURCES: tuple[dict[str, Any], ...] = ()
 _EXCLUDE_PARTS = {"__pycache__", ".pytest_cache", "out"}
 
 
@@ -87,11 +91,15 @@ def _deterministic_tar(root: str, rel: str, prefix: str) -> bytes:
     return out.getvalue()
 
 
-def build(root: str, out: str, *, commit: str, release: str) -> dict[str, Any]:
-    """Build every artifact in SOURCES from the checkout at `root` into `out`."""
+def build(
+    root: str, out: str, *, commit: str, release: str,
+    sources: Sequence[dict[str, Any]] = SOURCES,
+) -> dict[str, Any]:
+    """Build every artifact in `sources` (default: SOURCES) from the
+    checkout at `root` into `out`."""
     os.makedirs(out, exist_ok=True)
     artifacts = []
-    for src in SOURCES:
+    for src in sources:
         if src["kind"] == "file":
             data = open(os.path.join(root, src["path"]), "rb").read().replace(b"\r\n", b"\n")
         else:

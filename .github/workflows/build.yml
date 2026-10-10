@@ -413,6 +413,4 @@ jobs:
             --verify-tag \
             $prerelease \
             "gatekeeper-$VERSION-deploy.tar.gz" \
-            "gatekeeper-$VERSION-artifacts.json" \
-            artifacts/HERMES_ADAPTER.md \
-            artifacts/hermes-recovery-adapter.tar.gz
+            "gatekeeper-$VERSION-artifacts.json"
