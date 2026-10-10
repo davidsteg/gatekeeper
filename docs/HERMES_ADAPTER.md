@@ -20,6 +20,8 @@ against a mock adapter; no live round trip has been demonstrated yet.
   a Hermes-internal recovery attempt or its backoff is pending (§3).
 - Continuation acceptance and idempotency are journaled durably before the
   turn starts, with defined crash handling (§4).
+- A newer turn that did not attempt Gatekeeper supersedes the incident; a
+  user message during a cooldown is never continued over (§2).
 - "Started" is durable and stays provable after the turn ended (§4, §5). The
   continuation marker counts only together with a matching journal row and a
   validated binding; the text alone does nothing (§5).
@@ -97,8 +99,16 @@ any blocked tool running.
 ```json
 {"event_id": "stop-sess_a1-7", "type": "turn_stopped", "profile": "orchestrator",
  "session_id": "…", "board_id": "…", "task_id": "…", "task_generation": 0,
- "turn_seq": 7, "reason": "exhausted", "cooldown_until": null}
+ "turn_seq": 7, "reason": "exhausted", "cooldown_until": null, "gatekeeper_attempts": 3}
 ```
+
+- **`gatekeeper_attempts`** (on `turn_stopped`, optional, default 0) is the
+  number of Gatekeeper tool calls the stopped turn **attempted**. That count
+  includes calls Hermes blocked client-side, for example while its breaker
+  for Gatekeeper is open; such calls never reach Gatekeeper.
+- **`cooldown_until`** carries the pause of Hermes's own breaker for
+  Gatekeeper, when it is open. Continuing before that time would run
+  straight into it.
 
 - **`type`** is one of `turn_stopped`, `task_completed`, `task_cancelled` or
   `task_superseded`. A terminal event affects only that exact
@@ -116,6 +126,12 @@ any blocked tool running.
 - **Ordering.** Gatekeeper ignores a stop whose `turn_seq` is lower than the
   incident's latest, a stop for a different session or profile, and an event
   from an older `task_generation`.
+- **The session moved on.** Gatekeeper never advances an incident's turn from
+  an event alone. Take a stop for a turn **newer** than the incident's latest
+  Gatekeeper-observed turn, which Gatekeeper did not start and which reports
+  `gatekeeper_attempts: 0`, for example the user's own next message: there the
+  session has moved on. The incident is suppressed
+  (`superseded_by_newer_turn`), and any scheduled continuation is withdrawn.
 - **Responses.** `200 {accepted, action, reason?, duplicate?}`, `400` for a
   malformed body or an unknown reason, `403` for an installation or profile
   mismatch, and `404` while the flag is off.
