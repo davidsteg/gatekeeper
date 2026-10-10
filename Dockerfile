@@ -1,5 +1,20 @@
 # syntax=docker/dockerfile:1
 
+# --- Console build (React SPA at /app) --------------------------------------
+# Node exists only in this stage: the built files are copied into the Python
+# package as data (gatekeeper/_web/), and the runtime image stays Node-free.
+# Pinned by digest, like a lockfile for the toolchain that builds the one
+# part of gatekeeper that runs in a browser. `--ignore-scripts`: no
+# dependency's install hook runs during the build (package-lock.json pins
+# every package by integrity hash).
+FROM node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94 AS web
+
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
 # --- Build ----------------------------------------------------------------
 FROM python:3.12-slim AS build
 
@@ -9,6 +24,8 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 WORKDIR /build
 COPY pyproject.toml constraints.txt ./
 COPY src ./src
+# The console build, as package data (see [tool.setuptools.package-data]).
+COPY --from=web /web/dist ./src/gatekeeper/_web
 
 # constraints.txt pins the direct dependencies to the exact versions this
 # project is tested against, so two builds of the same commit resolve the

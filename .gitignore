@@ -16,3 +16,6 @@ dist/
 # Oberflaeche geschrieben. Gehoert auf den Host, nicht ins Repo.
 config/identities.yaml
 uv.lock
+
+# Console build output, copied into the package by the Dockerfile
+src/gatekeeper/_web/

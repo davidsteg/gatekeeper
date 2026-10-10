@@ -398,10 +398,13 @@ needs to change. Only name proxies gatekeeper actually shares a network
 with; `*` trusts any peer and should stay reserved for a network gatekeeper
 does not share with anything untrusted.
 
-The console API lives under `/api/v1` on the same port as `/ui`. A proxy
-that only forwards `/ui` and `/mcp` must forward `/api/v1` too once the new
-console is in use. It needs no extra headers and no CORS: the API is
-same-origin only and refuses `Authorization` headers.
+The new console lives at `/app` and talks to `/api/v1`, both on the same
+port as `/ui`. A proxy that only forwards `/ui` and `/mcp` must forward
+`/app` and `/api/v1` too. They need no extra headers and no CORS: the API is
+same-origin only and refuses `Authorization` headers. Do not let the proxy
+rewrite or drop gatekeeper's `Content-Security-Policy` header. `/app`
+depends on it (REQUIREMENTS.md FR-11.9), and a proxy that adds its own CSP
+must not loosen it.
 
 ## Deploy (example container)
 

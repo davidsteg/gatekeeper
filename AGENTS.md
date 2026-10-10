@@ -18,7 +18,7 @@ not, see [docs/ROADMAP.md](docs/ROADMAP.md).
 | **Repo** | `davidsteg/gatekeeper` |
 | **Language** | Python 3.12+ |
 | **Runtime deps** | `mcp`, `pyyaml`, `uvicorn`, `httpx`, `websockets`, `cryptography`, `asyncssh`, `fastapi`, `pydantic` — see `pyproject.toml` |
-| **Tests** | `python -m pytest -q` — all must pass before push |
+| **Tests** | `python -m pytest -q`, plus `npm test`, `tsc` and lint in `frontend/` — all must pass before push |
 
 Check the current version in `pyproject.toml`, not here — it changes every
 release and a hardcoded number in this file would just go stale.
@@ -159,6 +159,34 @@ network access outside localhost is needed.
   credentials are console-writable. `/ui/toolkits/reference` prints
   copy-pasteable YAML for a human to paste in by hand, it does not write
   the file.
+
+## Frontend dev loop (`frontend/`, the console at `/app`)
+
+```bash
+cd frontend
+npm ci --ignore-scripts        # never without --ignore-scripts
+npm run dev                    # Vite on :5173, proxies /api to 127.0.0.1:8080
+npm test && npx tsc --noEmit && npm run lint && npm run build
+```
+
+`npm run dev` needs a gatekeeper on `127.0.0.1:8080` (override with
+`GATEKEEPER_DEV_BACKEND`). Start it with `gatekeeper serve --ui`, or on
+Windows build it yourself (`server.build_app(...)` + `uvicorn.run(...)`,
+see the SIGHUP pitfall above). Open `http://localhost:5173/app/`. A built
+console (`npm run build`) is also served by that gatekeeper itself at
+`/app`, because `api/web.py` falls back to `frontend/dist` in a checkout.
+
+**After any API change, regenerate the client types**, or both CI and
+`tests/test_api_web.py` fail:
+
+```bash
+python -m gatekeeper.api > frontend/openapi.json
+(cd frontend && npm run gen:api)
+```
+
+Console code must not use `dangerouslySetInnerHTML`, `innerHTML` or `eval`.
+eslint refuses them, and the `/app` CSP enforces Trusted Types, so they
+would fail in the browser anyway. Render agent-supplied data as text.
 
 ## CLI reference (agent-relevant subset)
 
