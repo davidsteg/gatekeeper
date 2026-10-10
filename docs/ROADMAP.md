@@ -113,7 +113,9 @@ item.
   **not supported** by the verified unchanged official Hermes v0.21.6
   interfaces and remains disabled. Only unchanged official Hermes images
   are permitted; no patch/custom-image/CLI workaround is planned. See
-  [HERMES_TELEGRAM_SUPPORT.md](HERMES_TELEGRAM_SUPPORT.md).
+  [HERMES_TELEGRAM_SUPPORT.md](HERMES_TELEGRAM_SUPPORT.md). The adapter's
+  reduced **wake mode** (0.52.0) is implemented and tested against the
+  unmodified Hermes source; its live Telegram acceptance is pending.
 - **Recovery of a stop without a prior Gatekeeper failure.** This is not
   covered in v1. Iteration exhaustion with no failed Gatekeeper call is not
   resumed.

@@ -10,6 +10,8 @@ v0.21.6 interfaces. Automatic Telegram recovery stays disabled. The API-run
 test evidence below does not establish Telegram delivery. No Hermes source
 patch, custom image, monkeypatch or CLI-resume workaround is permitted. See
 [the supported-interface assessment](../../docs/HERMES_TELEGRAM_SUPPORT.md).
+The reduced **wake mode** (below) is for isolated testing only. Its
+guarantees and limits are in that document.
 
 ## Pins
 
@@ -56,6 +58,28 @@ from a checkout (`test/gk_serve.py`).
   WAL and `synchronous=FULL`, in the adapter's own file, never in Hermes's
   databases.
 
+## Wake mode (Telegram and other chat platforms)
+
+In this mode a continuation is delivered as one ordinary queued message in
+the session's own chat, through the documented `ctx.inject_message`, instead
+of through the Runs API. A turn the plugin cannot match to a live
+continuation runs *inert*: every tool is blocked and the reply is replaced
+by a fixed notice. That covers a superseded, stopped, duplicate or late
+wake. It is a reduced contract, not the atomic one. See
+[HERMES_TELEGRAM_SUPPORT.md](../../docs/HERMES_TELEGRAM_SUPPORT.md#wake-mode-the-reduced-contract-adapter-since-0520).
+
+| Where | Setting |
+|---|---|
+| Hermes gateway container env | `GATEKEEPER_RECOVERY_DELIVERY=wake` (optional: `GATEKEEPER_RECOVERY_WAKE_GRACE`, default 180 s) |
+| Hermes profile `config.yaml` | `plugins.enabled: [gatekeeper-recovery]` and `plugins.entries.gatekeeper-recovery.allow_gateway_injection: true` |
+| Sidecar env | `ADAPTER_DELIVERY=wake`. `HERMES_API_KEY` is then not needed. |
+
+The plugin directory must be exactly `plugin/gatekeeper-recovery/` from one
+commit, at `<HERMES_HOME>/plugins/gatekeeper-recovery/`. Plugin isolation
+must stay `in_process`, the default. The gateway log line
+`gatekeeper-recovery plugin loaded (id gatekeeper-recovery, delivery wake, …)`
+confirms what loaded.
+
 ## Live acceptance (isolated instance, mock-free on both sides)
 
 Hermes and Gatekeeper are both real. The model is a scripted
@@ -83,19 +107,26 @@ Hermes's real `tool_call` bridge. Evidence files are in `test/out/`.
 
 ## Limitations
 
-- Continuation goes through the Runs API, so a turn resumed for a
-  **push-platform** session (for example Telegram) answers the API caller, not
-  the original chat. Push platforms need Hermes's in-process wake path, which
-  is only reachable through private gateway internals.
-- A user stop is observed only through `agent_loop_stopped` (gateway
-  `/stop`). Other interruptions are reported as `unmapped` (not continued).
-  `interrupted` is used only after a gateway restart.
+- In runs mode, continuation goes through the Runs API, so a turn resumed for
+  a **push-platform** session (for example Telegram) answers the API caller,
+  not the original chat. Wake mode covers chat sessions with the reduced
+  contract; its Telegram delivery is not live-proven yet.
+- A user stop is observed through `agent_loop_stopped` (gateway `/stop` of a
+  running turn) and, in wake mode, through `/stop` while idle
+  (`pre_gateway_dispatch`). Other interruptions are reported as `unmapped`
+  (not continued). `interrupted` is used only after a gateway restart.
 - The breaker mirror and the exit mapping are tied to Hermes v0.21.x. A new
   Hermes version needs its mapping checked.
 - `tests/test_adapter.py` holds 25 regression tests for the exit mapping, the
   breaker mirror and the continuation journal: the plugin hooks, sidecar
-  `/continue` idempotency and ownership checks, and reconciliation. They run
-  without Hermes or Gatekeeper.
+  `/continue` idempotency and ownership checks, and reconciliation.
+  `tests/test_wake_mode.py` holds 18 more for wake mode. All of them run
+  without Hermes or Gatekeeper. `tests/test_hermes_integration.py` (4 tests)
+  runs the plugin against the unmodified Hermes source and is skipped
+  without it.
+- Since 0.52.0, a continuation marker without a startable journal row makes
+  the turn inert in both modes (tools blocked, reply replaced). Before, it
+  ran as an ordinary turn.
 - Gatekeeper's full suite on this Windows box is **not green**: 1213 passed,
   11 failed and 33 errors, all pre-existing Windows environment failures that
   were identical before the recovery work. See

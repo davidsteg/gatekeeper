@@ -6,6 +6,11 @@ Serves the signed adapter endpoints Gatekeeper calls (/status, /continue,
 started. Talks to Hermes only through its documented Runs API
 (`POST /v1/runs` with `session_id` + `Idempotency-Key`, `GET /v1/runs/{id}`).
 
+In wake mode (ADAPTER_DELIVERY=wake) the sidecar only journals the
+accepted continuation; the plugin inside the gateway delivers it through
+`ctx.inject_message`, so the turn answers in the session's own chat. The
+Runs API is not used and HERMES_API_KEY is not needed.
+
 Standard library only. Configuration (env):
   ADAPTER_LISTEN        host:port to serve on            (default 0.0.0.0:8650)
   ADAPTER_INSTALLATION  Gatekeeper installation name     (required)
@@ -13,7 +18,8 @@ Standard library only. Configuration (env):
   GATEKEEPER_URL        e.g. http://host.docker.internal:18780 (required)
   GATEKEEPER_TOKEN      the installation identity's bearer token (required)
   HERMES_API_URL        default http://127.0.0.1:8642
-  HERMES_API_KEY        Hermes API_SERVER_KEY (required)
+  HERMES_API_KEY        Hermes API_SERVER_KEY (required in runs mode)
+  ADAPTER_DELIVERY      runs (default) | wake
   GATEKEEPER_RECOVERY_JOURNAL  journal path (shared with the plugin)
 """
 
@@ -45,7 +51,10 @@ GK_URL = os.environ.get("GATEKEEPER_URL", "").rstrip("/")
 GK_TOKEN = os.environ.get("GATEKEEPER_TOKEN", "")
 HERMES_URL = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642").rstrip("/")
 HERMES_KEY = os.environ.get("HERMES_API_KEY", "")
+DELIVERY = os.environ.get("ADAPTER_DELIVERY", "runs").strip().lower()
 MARKER = "[gatekeeper-continuation {cid}]"
+#: Wake-mode delivery states, reported to Gatekeeper as 'accepted'.
+WAKE_PENDING = ("injecting", "injected")
 MAX_DELIVERIES = 2
 OUTBOX_GIVE_UP_SECONDS = 24 * 3600
 
@@ -134,8 +143,11 @@ def _status(conn, s: dict) -> dict:
 def _continuation_view(c: dict | None) -> dict:
     if c is None:
         return {"state": "none"}
-    return {k: c[k] for k in ("state", "continuation_id", "reason", "started_at", "started_turn_seq",
+    view = {k: c[k] for k in ("state", "continuation_id", "reason", "started_at", "started_turn_seq",
                               "ended_at", "exit_reason")}
+    if c["state"] in WAKE_PENDING:
+        view.update(state="accepted", delivery_state=c["state"])
+    return view
 
 
 # -- /continue ------------------------------------------------------------------
@@ -162,20 +174,32 @@ def handle_continue(req: dict) -> tuple[int, dict]:
                 reason = "turn_active"
             elif s["turn_seq"] != int(req.get("expected_turn_seq", -1)):
                 reason = "turn_seq_mismatch"
+            elif DELIVERY == "wake":
+                if s["stop_requested_at"]:
+                    reason = "user_stopped"
+                elif not s["session_key"]:
+                    reason = "no_gateway_route"
+                elif journal.row(conn, "SELECT 1 AS x FROM continuations WHERE session_id=? AND state IN "
+                                 "('accepted','admitted','injecting','injected','started')", s["session_id"]):
+                    reason = "superseded"  # one open continuation per session
             cid = "cont-" + uuid.uuid4().hex[:16]
             # Acceptance (or the rejection) is durable before anything starts.
             conn.execute(
                 "INSERT INTO continuations (idempotency_key, continuation_id, incident_id, session_id, "
-                "board_id, task_id, task_generation, expected_turn_seq, guidance, state, reason, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "board_id, task_id, task_generation, expected_turn_seq, guidance, state, reason, created_at, mode) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (key, cid, str(req.get("incident_id") or ""), s["session_id"], s["board_id"], s["task_id"],
                  s["task_generation"], int(req.get("expected_turn_seq", -1)),
                  str(req.get("guidance") or "")[:4000], "rejected" if reason else "accepted", reason,
-                 time.time()))
+                 time.time(), "wake" if DELIVERY == "wake" else "runs"))
         log_event("continue_journaled", continuation_id=cid, session_id=s["session_id"],
                   idempotency_key=key, state="rejected" if reason else "accepted", reason=reason)
         if reason:
             return 200, {"accepted": False, "reason": reason}
+        if DELIVERY == "wake":
+            # The plugin in the gateway injects it (wake_once); nothing to start here.
+            with journal.connect() as conn:
+                return 200, _answer(journal.row(conn, "SELECT * FROM continuations WHERE idempotency_key=?", key))
         _deliver(key)
         with journal.connect() as conn:
             return 200, _answer(journal.row(conn, "SELECT * FROM continuations WHERE idempotency_key=?", key))
@@ -207,7 +231,7 @@ def _deliver(key: str) -> None:
 def reconcile_once() -> None:
     with journal.connect() as conn:
         rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM continuations WHERE state IN ('accepted','admitted')").fetchall()]
+            "SELECT * FROM continuations WHERE state IN ('accepted','admitted') AND mode='runs'").fetchall()]
     for c in rows:
         if c["state"] == "accepted":
             # Admission never confirmed: retry the SAME delivery (same Hermes key).
@@ -325,15 +349,20 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", stream=sys.stdout)
-    missing = [n for n, v in (("ADAPTER_INSTALLATION", INSTALLATION), ("ADAPTER_SECRET", SECRET),
-                              ("GATEKEEPER_URL", GK_URL), ("GATEKEEPER_TOKEN", GK_TOKEN),
-                              ("HERMES_API_KEY", HERMES_KEY)) if not v]
+    if DELIVERY not in ("runs", "wake"):
+        sys.exit(f"ADAPTER_DELIVERY must be runs or wake, not {DELIVERY!r}")
+    required = [("ADAPTER_INSTALLATION", INSTALLATION), ("ADAPTER_SECRET", SECRET),
+                ("GATEKEEPER_URL", GK_URL), ("GATEKEEPER_TOKEN", GK_TOKEN)]
+    if DELIVERY == "runs":
+        required.append(("HERMES_API_KEY", HERMES_KEY))
+    missing = [n for n, v in required if not v]
     if missing:
         sys.exit(f"missing config: {', '.join(missing)}")
     host, _, port = os.environ.get("ADAPTER_LISTEN", "0.0.0.0:8650").rpartition(":")
     threading.Thread(target=loop, args=(outbox_once, 2.0), daemon=True).start()
     threading.Thread(target=loop, args=(reconcile_once, 5.0), daemon=True).start()
-    log_event("sidecar_started", listen=f"{host}:{port}", installation=INSTALLATION, journal=journal.path())
+    log_event("sidecar_started", listen=f"{host}:{port}", installation=INSTALLATION, journal=journal.path(),
+              delivery=DELIVERY)
     ThreadingHTTPServer((host, int(port)), Handler).serve_forever()
 
 

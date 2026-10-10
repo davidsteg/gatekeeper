@@ -17,6 +17,15 @@ What it does:
   mapping layer) and enqueue `turn_stopped`; finish a continuation record.
 * `kanban_task_completed`: enqueue `task_completed` for exactly that task.
 * tool `gatekeeper_recovery_bind_task`: the explicit task binding.
+
+Wake mode (GATEKEEPER_RECOVERY_DELIVERY=wake) delivers an accepted
+continuation as an ordinary queued message through the documented
+`ctx.inject_message(session_key=...)`, so the turn runs in the session's own
+gateway chat/thread. Hermes cannot refuse a turn once it is queued, so the
+plugin makes every turn it cannot match to a live continuation *inert*
+instead: `pre_tool_call` blocks every tool in that turn and
+`transform_llm_output` replaces its reply with a fixed notice. This covers a
+superseded, stopped, duplicate or timed-out wake (docs/HERMES_TELEGRAM_SUPPORT.md).
 """
 
 from __future__ import annotations
@@ -26,6 +35,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from typing import Any
 
@@ -47,6 +57,60 @@ KANBAN_PROGRESS_TOOLS = frozenset({
     "kanban_attach_url", "kanban_request_review",
 })
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:@-]{1,128}$")
+
+#: "runs" (sidecar -> POST /v1/runs) or "wake" (this plugin -> ctx.inject_message).
+DELIVERY = os.environ.get("GATEKEEPER_RECOVERY_DELIVERY", "runs").strip().lower()
+#: An injected wake that has not started after this long while its session is
+#: idle is given up as `lost`; it is never injected a second time.
+WAKE_START_GRACE = float(os.environ.get("GATEKEEPER_RECOVERY_WAKE_GRACE", "180"))
+WAKE_POLL_SECONDS = 2.0
+WAKE_TEXT = (
+    "{marker}\n"
+    "Für diesen noch offenen Auftrag liegt ein Recovery-Hinweis vor. Lies den aktuellen "
+    "Task-/Operationszustand und entscheide, ob und wie weitergearbeitet werden darf. "
+    "Wiederhole keine Aktion, deren Ergebnis unbekannt ist, bevor der Zustand geprüft ist.\n\n"
+    "{guidance}"
+)
+#: States in which a continuation's marker may start its turn, per delivery mode.
+STARTABLE = {"runs": ("accepted", "admitted"), "wake": ("injecting", "injected")}
+OPEN_WAKE = ("accepted", "injecting", "injected")
+INERT_REPLY = ("[gatekeeper-recovery] Recovery-Hinweis verworfen ({reason}). "
+               "In diesem Turn wurde nichts ausgeführt.")
+
+#: Turns that must not act: session_id -> (turn_id, reason). In memory on
+#: purpose: a turn never outlives the gateway process.
+_inert: dict[str, tuple[str, str]] = {}
+_inert_lock = threading.Lock()
+
+
+def _set_inert(session_id: str, turn_id: Any, reason: str) -> None:
+    with _inert_lock:
+        _inert[session_id] = (str(turn_id or ""), reason)
+
+
+def _inert_reason(session_id: str, turn_id: Any) -> str | None:
+    with _inert_lock:
+        entry = _inert.get(session_id)
+    if entry is None:
+        return None
+    marked, reason = entry
+    return reason if not marked or not turn_id or marked == str(turn_id) else None
+
+
+def _gateway_route() -> dict[str, str] | None:
+    """The messaging-chat route of the turn running in this thread, or None
+    outside a gateway chat (CLI, API server, Kanban worker). Read-only use of
+    Hermes's session context variables."""
+    try:
+        from gateway.session_context import NON_MESSAGING_SESSION_SURFACES, get_session_env
+    except Exception:
+        return None
+    key = get_session_env("HERMES_SESSION_KEY", "")
+    if not key or get_session_env("HERMES_SESSION_PLATFORM", "") in NON_MESSAGING_SESSION_SURFACES:
+        return None
+    return {"session_key": key, "origin_platform": get_session_env("HERMES_SESSION_PLATFORM", ""),
+            "origin_chat_id": get_session_env("HERMES_SESSION_CHAT_ID", ""),
+            "origin_thread_id": get_session_env("HERMES_SESSION_THREAD_ID", "")}
 
 
 # -- Versioned mapping layer: Hermes exit -> contract reason (§2.1) -----------------
@@ -117,6 +181,10 @@ def _correlation(conn, session_id: str, tool_call_id: Any, turn_id: Any) -> dict
 
 def pre_tool_call(tool_name: str = "", args: Any = None, session_id: str = "",
                   tool_call_id: Any = None, turn_id: Any = None, **_: Any) -> Any:
+    reason = _inert_reason(session_id, turn_id) if session_id else None
+    if reason is not None:
+        # Any tool, not only Gatekeeper's: this turn must not act at all.
+        return {"action": "block", "message": INERT_REPLY.format(reason=reason)}
     if not str(tool_name).startswith(GATEKEEPER_PREFIX):
         return None
     try:
@@ -138,42 +206,78 @@ def pre_llm_call(session_id: str = "", turn_id: Any = None, user_message: Any = 
         return None
     text = user_message if isinstance(user_message, str) else json.dumps(user_message, default=str)
     match = MARKER_RE.search(text or "")
+    with _inert_lock:
+        _inert.pop(session_id, None)
     now = time.time()
-    note = None
+    route = _gateway_route()
+    inert = None
     with journal.connect(immediate=True) as conn:
         s = journal.row(conn, "SELECT * FROM sessions WHERE session_id = ?", session_id)
         if s is None:
             if match:
+                # A marker can only be ours in a bound session.
                 logger.warning("gatekeeper-recovery: continuation marker in unbound session %s", session_id)
+                inert = "unbound_session"
+            if inert:
+                _set_inert(session_id, turn_id, inert)
+                return {"context": _inert_note(inert)}
             return None
         seq = s["turn_seq"] + 1
         cid = None
+        stop_at = s["stop_requested_at"]
         if match:
             c = journal.row(conn, "SELECT * FROM continuations WHERE continuation_id = ? AND session_id = ?",
                             match.group(1), session_id)
             bound = c is not None and (c["board_id"], c["task_id"], c["task_generation"]) == (
                 s["board_id"], s["task_id"], s["task_generation"])
+            mode = (c["mode"] if c is not None else None) or "runs"
             if c is None or not bound:
                 # The text marker alone proves nothing (§5): no matching
-                # journal row for this session and binding -> ordinary turn.
-                logger.warning("gatekeeper-recovery: ignoring continuation marker %s in session %s "
-                               "(no matching journal row)", match.group(1), session_id)
-            elif c["state"] in ("accepted", "admitted"):
-                if seq == c["expected_turn_seq"] + 1:
-                    cid = c["continuation_id"]
-                    conn.execute(
-                        "UPDATE continuations SET state='started', started_at=?, started_turn_seq=?, turn_id=? "
-                        "WHERE continuation_id = ?", (now, seq, str(turn_id or "")[:128], cid))
-                else:
-                    conn.execute("UPDATE continuations SET state='lost', reason='superseded' "
-                                 "WHERE continuation_id = ?", (c["continuation_id"],))
-                    note = ("[gatekeeper-recovery] This recovery continuation was superseded by newer "
-                            "input in this session. Do not act on it; reply only: superseded.")
+                # journal row for this session and binding.
+                logger.warning("gatekeeper-recovery: continuation marker %s in session %s has no matching "
+                               "journal row; turn is inert", match.group(1), session_id)
+                inert = "no_journal_row"
+            elif c["state"] not in STARTABLE.get(mode, ()):
+                inert = f"state_{c['state']}"
+            elif seq != c["expected_turn_seq"] + 1:
+                inert = "superseded"
+            elif stop_at and stop_at >= c["created_at"]:
+                inert = "user_stopped"
+            else:
+                cid = c["continuation_id"]
+                conn.execute(
+                    "UPDATE continuations SET state='started', started_at=?, started_turn_seq=?, turn_id=? "
+                    "WHERE continuation_id = ?", (now, seq, str(turn_id or "")[:128], cid))
+            if inert and bound and c["state"] in STARTABLE.get(mode, ()) + ("accepted",):
+                conn.execute("UPDATE continuations SET state='lost', reason=? WHERE continuation_id = ?",
+                             (inert, c["continuation_id"]))
+        else:
+            # An ordinary turn: the user is driving the session again.
+            stop_at = None
         conn.execute(
             "UPDATE sessions SET turn_seq=?, active=1, active_turn_id=?, active_continuation_id=?, "
-            "stop_reason=NULL, turn_gk_attempts=0, updated_at=? WHERE session_id=?",
-            (seq, str(turn_id or f"t{seq}")[:128], cid, now, session_id))
-    return {"context": note} if note else None
+            "stop_reason=NULL, turn_gk_attempts=0, stop_requested_at=?, updated_at=? WHERE session_id=?",
+            (seq, str(turn_id or f"t{seq}")[:128], cid, stop_at, now, session_id))
+        if route is not None:
+            conn.execute(
+                "UPDATE sessions SET session_key=?, origin_platform=?, origin_chat_id=?, origin_thread_id=? "
+                "WHERE session_id=?", (route["session_key"], route["origin_platform"],
+                                       route["origin_chat_id"], route["origin_thread_id"], session_id))
+    if inert:
+        _set_inert(session_id, turn_id, inert)
+        return {"context": _inert_note(inert)}
+    return None
+
+
+def _inert_note(reason: str) -> str:
+    return (f"[gatekeeper-recovery] This recovery message is not valid ({reason}). Do not act on it: "
+            "every tool call in this turn is blocked. Reply only: superseded.")
+
+
+def transform_llm_output(response_text: str = "", session_id: str = "", turn_id: Any = None,
+                         **_: Any) -> Any:
+    reason = _inert_reason(session_id, turn_id) if session_id else None
+    return INERT_REPLY.format(reason=reason) if reason is not None else None
 
 
 def post_tool_call(tool_name: str = "", args: Any = None, session_id: str = "",
@@ -209,6 +313,36 @@ def agent_loop_stopped(session_key: Any = None, reason: Any = None, **_: Any) ->
     """Gateway `/stop` and TUI interrupts: an observed, user-initiated stop."""
     if session_key:
         _user_stops.add(str(session_key))
+        _record_user_stop("session_key=?", (str(session_key),))
+
+
+def _record_user_stop(where: str, args: tuple) -> None:
+    """Durable: no open wake of these sessions may start after the stop."""
+    now = time.time()
+    with journal.connect(immediate=True) as conn:
+        for s in conn.execute(f"SELECT session_id FROM sessions WHERE {where}", args).fetchall():
+            conn.execute("UPDATE sessions SET stop_requested_at=? WHERE session_id=?", (now, s["session_id"]))
+            conn.execute("UPDATE continuations SET state='lost', reason='user_stopped' WHERE session_id=? "
+                         f"AND mode='wake' AND state IN {OPEN_WAKE!r}", (s["session_id"],))
+
+
+def pre_gateway_dispatch(event: Any = None, **_: Any) -> None:
+    """Observe a `/stop` typed while no turn runs (the running-turn `/stop`
+    reaches agent_loop_stopped instead). Never alters the event."""
+    try:
+        command = event.get_command() if hasattr(event, "get_command") else None
+        if command is None:
+            text = str(getattr(event, "text", "") or "").strip()
+            command = text[1:].split()[0].split("@")[0] if text.startswith("/") and len(text) > 1 else None
+        if str(command or "").lower() != "stop":
+            return None
+        src = event.source
+        platform = getattr(getattr(src, "platform", None), "value", None) or str(getattr(src, "platform", ""))
+        _record_user_stop("origin_platform=? AND origin_chat_id=? AND COALESCE(origin_thread_id,'')=?",
+                          (platform, str(src.chat_id or ""), str(getattr(src, "thread_id", None) or "")))
+    except Exception:
+        logger.exception("gatekeeper-recovery: could not record /stop")
+    return None
 
 
 def on_session_end(session_id: str = "", turn_id: Any = None, completed: Any = False,
@@ -216,14 +350,15 @@ def on_session_end(session_id: str = "", turn_id: Any = None, completed: Any = F
                    **_: Any) -> None:
     if not session_id or turn_exit_reason is None and completed is False and failed is False:
         return  # reduced CLI exit shapes: nothing canonical to report
-    reason = map_exit_v0_21(completed=bool(completed), failed=bool(failed), interrupted=bool(interrupted),
-                            turn_exit_reason=turn_exit_reason,
-                            user_stop_observed=any(session_id in k for k in _user_stops))
     now = time.time()
     with journal.connect(immediate=True) as conn:
         s = journal.row(conn, "SELECT * FROM sessions WHERE session_id = ?", session_id)
         if s is None:
             return
+        reason = map_exit_v0_21(completed=bool(completed), failed=bool(failed), interrupted=bool(interrupted),
+                                turn_exit_reason=turn_exit_reason,
+                                user_stop_observed=(s["session_key"] in _user_stops
+                                                    or any(session_id in k for k in _user_stops)))
         if s["active_continuation_id"]:
             conn.execute("UPDATE continuations SET state='finished', ended_at=?, exit_reason=? "
                          "WHERE continuation_id=? AND state='started'",
@@ -292,6 +427,12 @@ def bind_task(args: dict, session_id: str = "", **_: Any) -> str:
                 "INSERT INTO sessions (session_id, profile, board_id, task_id, objective, turn_seq, "
                 "active, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1, ?)",
                 (session_id, PROFILE, board, task, str(args.get("objective") or "")[:300], now))
+        route = _gateway_route()
+        if route is not None:
+            conn.execute(
+                "UPDATE sessions SET session_key=?, origin_platform=?, origin_chat_id=?, origin_thread_id=? "
+                "WHERE session_id=?", (route["session_key"], route["origin_platform"],
+                                       route["origin_chat_id"], route["origin_thread_id"], session_id))
     return json.dumps({"success": True, "session_id": session_id, "board_id": board, "task_id": task})
 
 
@@ -302,6 +443,10 @@ def _startup_reconcile() -> None:
     with journal.connect(immediate=True) as conn:
         # Hermes's breaker state is per process: a new gateway starts closed.
         conn.execute("DELETE FROM breaker")
+        # A wake handed to the previous gateway died with its in-memory queue,
+        # or ran and was recorded 'started'. Either way: never inject again.
+        conn.execute("UPDATE continuations SET state='lost', reason='gateway_restart' "
+                     "WHERE mode='wake' AND state IN ('injecting', 'injected')")
         for s in conn.execute("SELECT * FROM sessions WHERE active=1").fetchall():
             conn.execute("UPDATE continuations SET state='finished', ended_at=?, exit_reason='interrupted' "
                          "WHERE continuation_id=? AND state='started'", (now, s["active_continuation_id"]))
@@ -315,12 +460,80 @@ def _startup_reconcile() -> None:
             })
 
 
+# -- Wake delivery (GATEKEEPER_RECOVERY_DELIVERY=wake) ----------------------------
+
+def wake_once(ctx: Any) -> None:
+    """Inject each accepted wake at most once, and give up injected wakes
+    that never started. A wake whose state is no longer startable when its
+    turn begins runs inert (pre_llm_call), so every race here fails closed."""
+    now = time.time()
+    with journal.connect(immediate=True) as conn:
+        conn.execute(
+            "UPDATE continuations SET state='lost', reason='not_started' WHERE mode='wake' "
+            "AND state IN ('injecting','injected') AND COALESCE(injected_at, created_at) < ? AND session_id IN "
+            "(SELECT session_id FROM sessions WHERE active=0)", (now - WAKE_START_GRACE,))
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM continuations WHERE mode='wake' AND state='accepted' ORDER BY created_at").fetchall()]
+    for c in rows:
+        with journal.connect(immediate=True) as conn:
+            fresh = journal.row(conn, "SELECT * FROM continuations WHERE continuation_id=?", c["continuation_id"])
+            s = journal.row(conn, "SELECT * FROM sessions WHERE session_id=?", c["session_id"])
+            if fresh is None or fresh["state"] != "accepted" or s is None:
+                continue
+            reason = None
+            if not s["session_key"]:
+                reason = "no_gateway_route"
+            elif s["stop_requested_at"] and s["stop_requested_at"] >= c["created_at"]:
+                reason = "user_stopped"
+            elif s["turn_seq"] != c["expected_turn_seq"]:
+                reason = "superseded"
+            elif s["active"]:
+                continue  # wait for idle: a wake queued behind a turn would survive its /stop
+            if reason:
+                conn.execute("UPDATE continuations SET state='lost', reason=? WHERE continuation_id=?",
+                             (reason, c["continuation_id"]))
+                continue
+            # Durable before the call: a crash from here on is never re-injected.
+            conn.execute("UPDATE continuations SET state='injecting', deliveries=deliveries+1 "
+                         "WHERE continuation_id=?", (c["continuation_id"],))
+            session_key = s["session_key"]
+        text = WAKE_TEXT.format(marker=f"[gatekeeper-continuation {c['continuation_id']}]",
+                                guidance=c["guidance"])
+        try:
+            ok = bool(ctx.inject_message(text, role="user", session_key=session_key))
+        except Exception:
+            logger.exception("gatekeeper-recovery: inject_message raised; wake %s left unconfirmed",
+                             c["continuation_id"])
+            continue
+        with journal.connect(immediate=True) as conn:
+            if ok:
+                conn.execute("UPDATE continuations SET state='injected', injected_at=? "
+                             "WHERE continuation_id=? AND state='injecting'", (time.time(), c["continuation_id"]))
+            else:
+                # False: no host accepted it, nothing was scheduled.
+                conn.execute("UPDATE continuations SET state='lost', reason='not_scheduled' "
+                             "WHERE continuation_id=? AND state='injecting'", (c["continuation_id"],))
+        logger.info("gatekeeper-recovery: wake %s session_key=%s scheduled=%s",
+                    c["continuation_id"], session_key, ok)
+
+
+def _wake_loop(ctx: Any) -> None:
+    while True:
+        try:
+            wake_once(ctx)
+        except Exception:
+            logger.exception("gatekeeper-recovery: wake pass failed")
+        time.sleep(WAKE_POLL_SECONDS)
+
+
 def register(ctx: Any) -> None:
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("pre_llm_call", pre_llm_call)
     ctx.register_hook("post_tool_call", post_tool_call)
     ctx.register_hook("on_session_end", on_session_end)
     ctx.register_hook("agent_loop_stopped", agent_loop_stopped)
+    ctx.register_hook("pre_gateway_dispatch", pre_gateway_dispatch)
+    ctx.register_hook("transform_llm_output", transform_llm_output)
     ctx.register_hook("kanban_task_completed", kanban_task_completed)
     ctx.register_tool(name="gatekeeper_recovery_bind_task", toolset="gatekeeper_recovery",
                       schema=BIND_SCHEMA, handler=bind_task)
@@ -329,4 +542,8 @@ def register(ctx: Any) -> None:
             _startup_reconcile()
         except Exception:
             logger.exception("gatekeeper-recovery: startup reconcile failed")
-    logger.info("gatekeeper-recovery plugin loaded (journal %s, prefix %s)", journal.path(), GATEKEEPER_PREFIX)
+        if DELIVERY == "wake":
+            threading.Thread(target=_wake_loop, args=(ctx,), name="gatekeeper-recovery-wake",
+                             daemon=True).start()
+    logger.info("gatekeeper-recovery plugin loaded (id %s, delivery %s, journal %s, prefix %s)",
+                getattr(ctx, "plugin_id", "?"), DELIVERY, journal.path(), GATEKEEPER_PREFIX)

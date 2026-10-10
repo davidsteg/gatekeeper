@@ -77,6 +77,25 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 """
 
+#: Columns added after the first schema; existing journals are migrated in place.
+_ADDED_COLUMNS = {
+    "sessions": (
+        ("turn_gk_attempts", "INTEGER NOT NULL DEFAULT 0"),
+        # Wake mode: the gateway route of the session, captured from the
+        # session's own turn, and the last explicit user stop.
+        ("session_key", "TEXT"),
+        ("origin_platform", "TEXT"),
+        ("origin_chat_id", "TEXT"),
+        ("origin_thread_id", "TEXT"),
+        ("stop_requested_at", "REAL"),
+    ),
+    "continuations": (
+        # 'runs' (POST /v1/runs) or 'wake' (plugin inject_message).
+        ("mode", "TEXT NOT NULL DEFAULT 'runs'"),
+        ("injected_at", "REAL"),
+    ),
+}
+
 _init_lock = threading.Lock()
 _initialized: set[str] = set()
 
@@ -102,10 +121,11 @@ def connect(immediate: bool = False) -> Iterator[sqlite3.Connection]:
                     try:
                         conn.execute("PRAGMA journal_mode=WAL")
                         conn.executescript(SCHEMA)
-                        cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
-                        if "turn_gk_attempts" not in cols:
-                            conn.execute("ALTER TABLE sessions ADD COLUMN turn_gk_attempts "
-                                         "INTEGER NOT NULL DEFAULT 0")
+                        for table, columns in _ADDED_COLUMNS.items():
+                            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+                            for name, decl in columns:
+                                if name not in cols:
+                                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
                         break
                     except sqlite3.OperationalError:
                         if attempt == 49:

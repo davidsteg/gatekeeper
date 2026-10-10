@@ -1,3 +1,16 @@
+## 0.52.0
+
+Hermes recovery adapter: a separately configured **wake mode** that continues a chat-platform session (such as Telegram) in its own chat, with a reduced, explicitly documented contract. Automatic Telegram recovery stays disabled, and Gatekeeper itself is unchanged.
+
+### Added
+
+- **Adapter wake mode** (`GATEKEEPER_RECOVERY_DELIVERY=wake` in the gateway, `ADAPTER_DELIVERY=wake` in the sidecar). An accepted continuation is injected once, through the documented `ctx.inject_message(session_key=...)`, and only into an idle session at the expected turn. A turn the plugin cannot match to a live continuation, whether superseded, stopped, duplicate, late or forged, runs inert: `pre_tool_call` blocks every tool and `transform_llm_output` replaces the reply with a fixed notice. A user `/stop`, running or idle, cancels open wakes and rejects new ones until the user's next ordinary turn. Guarantees, model-dependent parts and limits are in `docs/HERMES_TELEGRAM_SUPPORT.md`.
+- **Tests:** 18 wake-mode adapter tests, plus 4 integration tests against the unmodified Hermes v0.21.6 source (real plugin manager, hook dispatch, tool veto and gateway runner). The integration tests are skipped when that source is not installed.
+
+### Changed
+
+- A continuation marker without a startable journal row now makes its turn inert in runs mode too, instead of running as an ordinary turn.
+
 ## 0.51.0
 
 Documents the supported Telegram message-injection interfaces and recovery limits of unchanged official Hermes v0.21.6. Automatic Telegram recovery remains disabled; Gatekeeper and the Artifact Store remain available.

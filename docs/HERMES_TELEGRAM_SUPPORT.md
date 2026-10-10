@@ -3,6 +3,9 @@
 **Automatic recovery of an existing Telegram session with Gatekeeper's
 atomic continuation contract is not supported by the verified, unchanged
 Hermes v0.21.6 interfaces. Automatic Telegram recovery remains disabled.**
+A reduced, separately configured *wake mode* is implemented in the adapter
+for isolated testing only. See
+[Wake mode](#wake-mode-the-reduced-contract-adapter-since-0520).
 Gatekeeper and its release-bound Artifact Store remain available.
 
 Only unchanged official Hermes images are permitted. No Gateway patch,
@@ -116,6 +119,93 @@ mutating tools. A live feasibility run must be isolated and restrict tool
 permissions to read-only operations, and must report actual Telegram
 delivery separately from source findings. Access to an isolated test bot
 and original test session has been requested through David.
+
+## Wake mode: the reduced contract (adapter, since 0.52.0)
+
+The adapter has a second, separately configured delivery mode,
+`wake`. It does **not** supply the atomic admission above. It takes the
+narrower route: an accepted continuation becomes one ordinary queued message
+in the session's own chat, and the plugin makes every turn it cannot match to
+a live continuation *inert*. Hermes cannot refuse a queued turn, but the
+plugin can make it unable to act:
+
+- `pre_tool_call` returns `block` for **every** tool in that turn, not only
+  Gatekeeper's. Hermes resolves this veto at all three tool dispatch sites
+  (`model_tools.py`, `agent/tool_executor.py`,
+  `agent/agent_runtime_helpers.py`).
+- `transform_llm_output` replaces the turn's reply with a fixed notice:
+  "Recovery-Hinweis verworfen (…). In diesem Turn wurde nichts ausgeführt."
+
+What the wake message says ("Lies den aktuellen Task-/Operationszustand und
+entscheide, ob und wie weitergearbeitet werden darf") is guidance to the
+model, not a safety mechanism. All mechanisms are listed below.
+
+### Delivery
+
+1. Gatekeeper calls the sidecar's `/continue` as before. In wake mode the
+   sidecar only journals the decision. It also rejects a session without a
+   gateway chat route (`no_gateway_route`), one with a recorded user stop
+   (`user_stopped`), and a second open continuation for the same session
+   (`superseded`).
+2. The plugin, in the gateway process, picks the row up. If the session is
+   idle and still at the expected `turn_seq`, it writes `injecting` durably
+   and then calls `ctx.inject_message(text, session_key=…)` **once**. `True`
+   becomes `injected`. `False` means nothing was scheduled and becomes
+   `lost/not_scheduled`. An exception leaves `injecting` (outcome unknown),
+   and the row is never injected again.
+3. The `session_key` and chat route come from the session's own turn,
+   captured read-only from Hermes's session context
+   (`gateway.session_context.get_session_env`) when it binds the task.
+   Sessions from the API server, CLI and Kanban workers have no route, so
+   they are never woken. That function is public but not part of the plugin
+   documentation. A future Hermes may move it, and a missing route then
+   fails closed (`no_gateway_route`).
+4. The turn starts only if `pre_llm_call` finds the marker's row in a
+   startable state, in this session and binding, at `expected_turn_seq + 1`,
+   with no stop recorded after its acceptance. Otherwise the turn is inert
+   and the row is marked `lost` with the reason.
+5. A wake still `injected` after 180 s while its session is idle becomes
+   `lost/not_started`. A gateway restart turns `injecting`/`injected` into
+   `lost/gateway_restart`. If such a wake starts late anyway, it runs inert.
+
+### The six requirements
+
+| # | Requirement | Mechanical (adapter / unchanged gateway) | Model behaviour | Live-only |
+|---|---|---|---|---|
+| 1 | Wake processed in the original session after an exhausted turn | Gateway: the stored route and session are reused, and a strict session-id pin drops the wake if the session rotated (`gateway/run_turn.py`). Adapter: at most one injection per incident. | Whether the model makes progress | That a real Telegram session reaches it |
+| 2 | Reply reaches the original chat/thread | Gateway: the reply goes to the restored `SessionSource`, i.e. the stored chat and thread | — | **Delivery to Telegram itself is not yet proven** |
+| 3 | No parallel execution with a concurrent user message | Gateway: the session guard serializes, and an internal event is always queued, never interrupting or steering (`run_busy.py`). Adapter: it injects only into an idle session, and a user turn ahead of the wake makes it inert (`superseded`). | — | A real race trace |
+| 4 | A user stop does not resume the stopped task | Hermes keeps a queued internal wake across `/stop` and restarts it (`run_agent_cache.py`). The adapter records the stop (`agent_loop_stopped`, and `/stop` while idle via `pre_gateway_dispatch`), so the restarted wake runs **inert**, and later `/continue` calls are rejected until the user's next ordinary turn. | — | Telegram `/stop` path |
+| 5 | Duplicate recovery messages cause no duplicate actions | `/continue` idempotency key, one open continuation per session, a single durable `injecting` step before the call, and a replayed or late marker runs inert. | — | — |
+| 6 | Unknown mutation result: check state first | Gatekeeper's existing hold refuses an exact repeat (same task, tool and scopes) of a non-idempotent call with an unknown outcome until a successful read on the same toolkit (`recovery.py` `hold`). The wake itself is delivered at most once. | Choosing *which* read to make, and not reaching the same effect through a different tool | — |
+
+### Remaining limits, stated plainly
+
+- **Not the atomic contract.** A wake that loses a race is not refused. It
+  runs as one inert turn: one model call, no tools, and a fixed notice in
+  the chat.
+- **Mutations outside Gatekeeper** (Hermes's own terminal and file tools, or
+  other MCP servers) get no unknown-outcome hold. In a *valid* wake turn the
+  model can use them like in any turn.
+- The hold catches an **exact** repeat only, and only for as long as
+  `uncertain_hold_seconds`.
+- `pre_llm_call`/`on_session_end` do not fire for agents with
+  `_persist_disabled`. Gateway chat turns persist, so this does not affect
+  them.
+- Context compression that rotates the `session_id` under the same key
+  makes the pinned wake drop (gateway) or run inert (adapter). It is not
+  carried over.
+- Plugin isolation mode must stay `in_process` (the default). Out of
+  process, `pre_gateway_dispatch` receives placeholders and the session
+  context is not available.
+
+Evidence: `contrib/hermes-recovery-adapter/tests/test_wake_mode.py`
+(adapter mechanics) and `tests/test_hermes_integration.py`. The latter runs
+the plugin against the unmodified Hermes source at `818c13be`: a real
+`PluginManager`, hook dispatch, tool veto, `GatewayRunner` and
+`BasePlatformAdapter`, including `/stop` keeping and restarting the queued
+wake. Telegram itself and the model are absent there. It is skipped unless
+that source is importable (Python 3.14).
 
 ## Status and preserved experiments
 
