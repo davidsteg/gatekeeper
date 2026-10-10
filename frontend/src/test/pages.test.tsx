@@ -116,3 +116,128 @@ describe("role display", () => {
     expect(await screen.findByText(/deployment is read-only/)).toBeInTheDocument();
   });
 });
+
+const ADMIN = { ...SESSION, identity: "root", role: "admin", can_write: true, csrf: "tok" };
+
+const TOOL = {
+  id: "demo.show", toolkit: "demo", destination: null, version: 1, title: "Show", description: "d",
+  category: "read", idempotent: true, enabled: true, required_scopes: [], timeout_seconds: 5,
+  max_output_bytes: 100, parameters: [], grantees: ["bot"],
+};
+const DETAIL = {
+  id: "demo.show", enabled: true, current_version: 1, versions: [], spec: {}, yaml: "id: demo.show\n",
+  tools: [TOOL],
+};
+
+describe("writes", () => {
+  it("hides every write control from a viewer", async () => {
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.endsWith("/tools/demo.show")) return json(200, DETAIL, { ETag: '"r1"' });
+      return undefined;
+    });
+    renderAt("/tools/demo.show");
+    expect(await screen.findByText("Definition (YAML)")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /edit|delete|disable/i })).toBeNull();
+  });
+
+  it("saves a tool with CSRF and the ETag it read, and shows a conflict on 412", async () => {
+    const sent: { method?: string; headers: Record<string, string>; body: unknown }[] = [];
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/tools/demo.show") && !init.method) return json(200, DETAIL, { ETag: '"r1"' });
+      if (url.endsWith("/tools/demo.show") && init.method === "PUT") {
+        sent.push({ method: init.method, headers: init.headers as Record<string, string>, body: JSON.parse(String(init.body)) });
+        return json(412, { error: "The resource changed since you loaded it." });
+      }
+      return undefined;
+    });
+    renderAt("/tools/demo.show/edit");
+    const user = userEvent.setup();
+    const editor = await screen.findByLabelText("Definition (YAML)");
+    await user.clear(editor);
+    await user.type(editor, "id: demo.show{enter}title: New");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Changed elsewhere.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    const [put] = sent;
+    expect(sent).toHaveLength(1);
+    expect(put?.headers["X-CSRF-Token"]).toBe("tok");
+    expect(put?.headers["If-Match"]).toBe('"r1"');
+    expect(put?.body).toEqual({ yaml: "id: demo.show\ntitle: New" });
+  });
+
+  it("asks before deleting, and shows who keeps a dangling grant", async () => {
+    let deleted = false;
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/tools/demo.show") && !init.method) return json(200, DETAIL, { ETag: '"r1"' });
+      if (url.endsWith("/tools/demo.show") && init.method === "DELETE") {
+        deleted = true;
+        return json(200, { revision: "r2" }, { ETag: '"r2"' });
+      }
+      if (url.endsWith("/tools")) return json(200, { tools: [], rejected: [], disabled_by_tier1: [], toolkits: [] });
+      return undefined;
+    });
+    renderAt("/tools/demo.show");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(deleted).toBe(false);
+    expect(screen.getByText(/dangling grant: bot/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Yes, delete" }));
+    await waitFor(() => expect(deleted).toBe(true));
+    expect(await screen.findByText("No toolkits configured.")).toBeInTheDocument();
+  });
+
+  it("shows a new identity's token once, as text", async () => {
+    let created: unknown;
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/identities") && !init.method) return json(200, [], { ETag: '"i1"' });
+      if (url.endsWith("/identities") && init.method === "POST") {
+        created = JSON.parse(String(init.body));
+        expect((init.headers as Record<string, string>)["If-Match"]).toBe('"i1"');
+        return json(201, { identity: "newbot", token: "gk_<b>secret</b>", revision: "i2" }, { ETag: '"i2"' });
+      }
+      if (url.endsWith("/tools")) return json(200, { tools: [TOOL], rejected: [], disabled_by_tier1: [], toolkits: [] });
+      return undefined;
+    });
+    renderAt("/identities");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New identity" }));
+    await user.type(screen.getByLabelText("ID"), "newbot");
+    await user.click(await screen.findByRole("checkbox"));
+    await user.type(screen.getByLabelText("Scopes, one per line"), "stack:a{enter}{enter}stack:b");
+    await user.click(screen.getByRole("button", { name: "Create and issue token" }));
+    expect(await screen.findByTestId("one-time-secret")).toHaveTextContent("gk_<b>secret</b>");
+    expect(created).toEqual({
+      id: "newbot", role: "agent", tools: ["demo.show"], scopes: ["stack:a", "stack:b"], password: "",
+    });
+  });
+
+  it("takes a credential value in a password field and never renders it", async () => {
+    let body: Record<string, unknown> = {};
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/credentials") && !init.method) {
+        return json(200, { configured: true, dangling: [], credentials: [] }, { ETag: '"0"' });
+      }
+      if (url.endsWith("/credentials") && init.method === "POST") {
+        body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return json(201, { revision: "c1" }, { ETag: '"c1"' });
+      }
+      return undefined;
+    });
+    renderAt("/credentials");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New credential" }));
+    await user.type(screen.getByLabelText("Name"), "demo-key");
+    const value = screen.getByLabelText(/^Value/);
+    expect(value).toHaveAttribute("type", "password");
+    await user.type(value, "sk-123");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(body.value).toBe("sk-123"));
+    expect(body).toMatchObject({ name: "demo-key", kind: "bearer", header: null, probe_url: null });
+    expect(screen.queryByText("sk-123")).toBeNull();
+  });
+});

@@ -15,6 +15,7 @@ listing, exactly like `/ui/requests` and `admin.pending_list` do (see
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -678,6 +679,7 @@ def audit_page(
 
 def integrations_view(service: Any) -> list[dict[str, Any]]:
     from ..integrations import INTEGRATIONS
+    from ..store import tool_to_yaml
 
     configured = set(service.tier1.toolkits)
     return [
@@ -693,6 +695,7 @@ def integrations_view(service: Any) -> list[dict[str, Any]]:
                     "category": str(spec.get("category", "")),
                     "description": str(spec.get("description", "")),
                     "exists": service.catalog.raw_of(spec["id"]) is not None,
+                    "yaml": tool_to_yaml(spec),
                 }
                 for spec in it.tool_specs
             ],
@@ -713,3 +716,80 @@ def toolkit_reference_view() -> list[dict[str, Any]]:
         }
         for it in sorted(INTEGRATIONS.values(), key=lambda i: i.display_name)
     ]
+
+
+# -- Shared by the write paths of /ui and /api/v1 ------------------------------------
+
+
+def _tool_scaffold(service: Any) -> str:
+    """Scaffold for a new definition, built from the real Tier 1.
+
+    This used to contain a finished Docker tool with foreign paths. That was
+    doubly wrong: it looked like an integration, and on a system
+    without this toolkit it could not even be saved. The scaffold now
+    takes the first configured toolkit and its actual values -- it
+    is thus a valid starting point on every deployment.
+    """
+    name, toolkit = next(iter(sorted(service.tier1.toolkits.items())))
+    binary = toolkit.binaries[0]
+    lines = [
+        f"id: {name}.CHANGEME",
+        f"toolkit: {name}",
+        f"binary: {binary}",
+        "version: 1",
+        "title: CHANGEME",
+        "description: What this does, in one sentence for the agent.",
+        "category: read            # read | write | write_external",
+        "idempotent: true",
+        "enabled: true",
+        "",
+        "# Every element becomes exactly one argument. A parameter value can",
+        "# never produce a second one (FR-5.4).",
+        'argv: ["--help"]',
+        "",
+        "# Every string parameter needs a pattern -- unvalidated free text is",
+        "# not permitted (FR-5.7). Paths are derived by the server, never",
+        "# supplied by the agent.",
+        "parameters: {}",
+        "",
+        "required_scopes: []",
+        f"timeout_seconds: {min(30, toolkit.max_timeout_seconds)}",
+        f"max_output_bytes: {min(65536, toolkit.max_output_bytes)}",
+    ]
+    if toolkit.path_roots:
+        lines.insert(
+            -3,
+            "# This toolkit allows derived paths under: "
+            + ", ".join(toolkit.path_roots),
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _schedule_credential_probe(credentials: Any, name: str) -> None:
+    async def _run() -> None:
+        try:
+            await credentials.probe_credential(name)
+        except Exception:
+            # A probe is detection-only and save is fail-open; the credential
+            # has already been written and must not be rolled back by metadata.
+            pass
+
+    asyncio.create_task(_run())
+
+
+def drop_sessions_after_identity_update(
+    sessions: Any, *, replaces: str, new_id: str, role: str, password_set: bool,
+    actor: str, current_sid: str | None,
+) -> None:
+    """Which console sessions survive an identity edit -- one rule for both
+    console surfaces (moved out of `ui.identity_update`).
+
+    Renamed, or moved to a role without console access: every session of
+    the old identity ends. A new password ends them too -- a taken-over
+    session must not stay open exactly when an admin is closing it -- except
+    the editor's own session when they set their own password.
+    """
+    locked_out = new_id != replaces or role not in UI_ROLES
+    if locked_out or password_set:
+        keep = current_sid if (not locked_out and replaces == actor) else None
+        sessions.drop_identity(replaces, keep=keep)

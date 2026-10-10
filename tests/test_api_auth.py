@@ -268,8 +268,8 @@ async def test_api_is_absent_without_the_console(env, tier1):
 
 # -- The write dependencies, on a test-only route ---------------------------------
 #
-# Phase 1 ships no write endpoint, but the dependencies every write will
-# use are the security-relevant part and are pinned here already.
+# The dependencies every write uses, pinned in isolation. The real write
+# routes get the same checks end to end in `test_api_write.py`.
 
 
 def _write_app(env: dict, *, read_only: bool = False) -> tuple[FastAPI, SessionStore]:

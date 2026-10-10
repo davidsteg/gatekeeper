@@ -145,6 +145,10 @@ export async function apiSend<T = unknown>(
     body,
   });
   if (!response.ok) throw await failure(response);
+  // The write's own ETag is the next write's If-Match: two edits in a row
+  // on one page must not need a reload in between.
+  const etag = response.headers.get("ETag");
+  if (etag && options.ifMatchOf) etags.set(options.ifMatchOf, etag);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
