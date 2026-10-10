@@ -3387,7 +3387,7 @@
         ]
       },
       "put": {
-        "description": "Role, grants, scopes, and optionally a new console password or ID.\n\nSessions end by the same rule as in `/ui`\n(`service.drop_sessions_after_identity_update`).",
+        "description": "Role, grants, scopes, and optionally a new console password or ID.\n\nSessions end by one shared rule\n(`service.drop_sessions_after_identity_update`).",
         "operationId": "identity_update_identities__identity_id__put",
         "parameters": [
           {

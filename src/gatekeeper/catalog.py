@@ -1344,7 +1344,7 @@ class Catalog:
 
     def flat_spec_of(self, tool_id: str) -> dict[str, Any] | None:
         """The effective, editable flat spec for `tool_id` -- the shape
-        `parse_tool_spec`/the `/ui` YAML editor/`admin.tool_update` all
+        `parse_tool_spec`/the console's YAML editor/`admin.tool_update` all
         expect, regardless of whether the raw entry on disk is today's
         legacy flat shape or the nested `versions:` shape (FR-3.3). `None`
         for an unknown id, a deleted tool, or a versioned entry whose

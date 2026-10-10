@@ -12,7 +12,7 @@ drift-check has one fewer place to accidentally expose `deploy`/`reject`
 from `/admin/mcp`.
 
 Four proposal ``kind``s share this one queue and one review surface
-(`/ui/requests`, Toolkit tab), because all four change Tier 1 and none may
+(`/app/requests`, Toolkit tab), because all four change Tier 1 and none may
 ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
 
 - ``"create"`` (`admin.toolkit_propose`) -- drafts a brand-new toolkit.
@@ -40,7 +40,7 @@ ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
   precisely so an admin agent cannot redirect a toolkit at a credential of
   its choosing; what this kind relaxes is the *redeploy*, not the
   human -- the agent may only ever queue the name pair here, and only a
-  human clicking Approve & Deploy at `/ui/requests` writes it, exactly as
+  human clicking Approve & Deploy at `/app/requests` writes it, exactly as
   `"update"` relaxed the redeploy for an executor swap. The value side
   (FR-10.2/10.8) is untouched: no secret material passes through this
   queue in either direction.
@@ -536,7 +536,7 @@ class ToolkitProposalStore:
                 # can see it, not about the credential store having a value
                 # for it: a name with no value is a dangling reference,
                 # which keeps its existing contract of a startup warning
-                # and a note on /ui/credentials, never an abort (FR-8.3g).
+                # and a note on /app/credentials, never an abort (FR-8.3g).
                 credential = item.spec[BIND_FIELD]
                 bound = validated.toolkits.get(item.name)
                 if bound is None or bound.credential != credential:

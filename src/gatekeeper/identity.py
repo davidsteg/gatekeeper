@@ -5,7 +5,7 @@ intentional (FR-11.5):
 
 * **Token** -- for the API. Goes as `Authorization: ***` to `/mcp` and
   belongs in an agent's configuration, not in a browser.
-* **Password** -- for the console at `/ui`. Only `viewer` and `admin`
+* **Password** -- for the console at `/app`. Only `viewer` and `admin`
   have one; an agent gets none, because it never logs in anywhere.
 
 The reason for two credentials instead of one: a token typed into a
@@ -266,7 +266,7 @@ class IdentityStore:
         return found
 
     def authenticate_console(self, identity_id: str, password: str) -> Identity | None:
-        """Checks ID and password for sign-in at `/ui`.
+        """Checks ID and password for sign-in to the console (`/app`).
 
         Unlike with the token, a lookup happens first and then exactly
         one hash is checked -- the ID is in the form after all. For every

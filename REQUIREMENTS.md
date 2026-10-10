@@ -87,7 +87,7 @@ The new heart. The admin agent manages the tool catalog via MCP tools in the `ad
   | `admin.tool_delete` | Retire a definition (soft delete, history preserved) |
   | `admin.tool_validate` | Validate a definition **without** saving it |
   | `admin.grant_list` / `admin.grant_set` | Permission profiles per identity |
-  | `admin.cred_propose` | Implemented as of §17's bootstrap question below — proposes a credential's name/kind/header, deliberately with no `value` argument at all. A human types the actual value in `/ui/requests` at approval time; this is the only step of the original `admin.cred_set` idea that is reachable from `/admin/mcp`. `admin.cred_list`/`cred_delete`/`cred_pubkey` remain unimplemented. |
+  | `admin.cred_propose` | Implemented as of §17's bootstrap question below — proposes a credential's name/kind/header, deliberately with no `value` argument at all. A human types the actual value in `/app/requests` at approval time; this is the only step of the original `admin.cred_set` idea that is reachable from `/admin/mcp`. `admin.cred_list`/`cred_delete`/`cred_pubkey` remain unimplemented. |
   | `admin.audit_query` | Search the audit log |
 
 - **FR-3.2** **New definitions are inactive after `create`.** Activation is a separate, separately audited call. Prevents a typo or a half-finished agent run from immediately going live.
@@ -470,7 +470,7 @@ In v2, an **agent** writes the tool catalog. The approval from FR-3.2 is thus th
 - **FR-11.6** The UI hangs on the admin endpoint and inherits its network restriction (FR-2.10). Not publicly reachable.
 - **FR-11.7** The UI is the place where a newly generated plaintext token is displayed **exactly once** — better than output in a logfile (cf. FR-2.6).
 - **FR-11.8** Optional and disableable. gatekeeper remains fully functional without a UI; the UI is delivered as a separate container or as a disableable route.
-- **FR-11.9** **No script that did not ship with gatekeeper.** The audit log shows agent-supplied values, so an injected `<script>` must never run, even if escaping fails. The legacy console at `/ui` meets this by having no `script-src` at all. The React console at `/app` runs code, so it meets it with a stricter-than-usual policy: `script-src 'self'` with no inline script, no `eval`, no CDN or third-party origin, and `require-trusted-types-for 'script'` so no string can reach an HTML or script sink. The full policy is `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; manifest-src 'self'; worker-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'`. Every byte the page loads is built from this repository and served by gatekeeper itself. Data comes from `/api/v1` as JSON and is rendered as text, never as markup. When `/ui` is removed, this is the only console policy.
+- **FR-11.9** **No script that did not ship with gatekeeper.** The audit log shows agent-supplied values, so an injected `<script>` must never run, even if escaping fails. The console at `/app` runs code, so it meets this with a stricter-than-usual policy: `script-src 'self'` with no inline script, no `eval`, no CDN or third-party origin, and `require-trusted-types-for 'script'` so no string can reach an HTML or script sink. The full policy is `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; manifest-src 'self'; worker-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'`. Every byte the page loads is built from this repository and served by gatekeeper itself. Data comes from `/api/v1` as JSON and is rendered as text, never as markup. `/api/v1` responses themselves carry `default-src 'none'; frame-ancestors 'none'; base-uri 'none'`. Since 1.0.0 this is the only console policy: the server-rendered pre-1.0 console at `/ui`, which met this requirement by having no `script-src` at all, was removed, and what remains under `/ui` (redirects and the OAuth callbacks) serves no page.
 
 **Cheaper Alternative, If the UI Is Not Built:** Grafana/Loki on the JSON Lines logs for the audit view, plus the admin agent in chat for catalog and permission queries. Costs no additional code, but loses the approval view from FR-11.4 — i.e. exactly the part that establishes human control.
 
@@ -499,9 +499,10 @@ In v2, an **agent** writes the tool catalog. The approval from FR-3.2 is thus th
   carrying a value) was never built; a one-time mounted file was never built
   either. Instead: `admin.cred_propose` lets an agent name a credential slot
   (name/kind/header, structurally no value), and a human always types the
-  actual secret in `/ui/requests` at approval time (`admin_service.py`'s
-  `cred_propose`, `ui.py`'s `/ui/pending/credential-fill`). The very first
-  key on a fresh deployment still has to go in by hand at `/ui/credentials`
+  actual secret in `/app/requests` at approval time (`admin_service.py`'s
+  `cred_propose`, then `POST /api/v1/requests/pending/<id>/credential` from
+  an admin console session). The very first
+  key on a fresh deployment still has to go in by hand at `/app/credentials`
   — nothing bootstraps it automatically, on purpose (FR-10.3).
 - [ ] **Hermes Transport:** Does the deployed version support Streamable HTTP, or is the deprecated SSE transport additionally needed?
 - [ ] **Admin Interface:** MCP tools on `/admin/mcp` (recommendation, because the admin agent speaks MCP natively) or a separate REST API?

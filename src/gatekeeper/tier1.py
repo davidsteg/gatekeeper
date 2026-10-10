@@ -669,7 +669,7 @@ class Tier1:
     def google_oauth_scopes(self) -> tuple[str, ...]:
         """The union of every `google` toolkit's `required_scopes`.
 
-        Read at request time by the console's Google sign-in (`ui.py`), so
+        Read at request time by the console's Google sign-in (`oauth.py`), so
         a toolkit added or narrowed by a redeploy changes what the next
         consent screen asks for without a second list to keep in step.
         Empty when no google toolkit declares any -- the caller supplies

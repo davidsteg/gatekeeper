@@ -1,10 +1,9 @@
 """Write routes of `/api/v1`: tools, identities, credentials, own password.
 
-Phase 3a of the console migration (docs/ROADMAP.md). Every route here does
-exactly what the matching `/ui` form handler does -- the same store call,
-the same audit record, the same sessions ended -- and adds nothing a form
-could not do. In particular there is still no route that writes a toolkit
-(FR-4.11).
+Every route here is a thin wrapper around the store call that owns the
+change -- the store validates, writes the audit record and decides which
+sessions end. In particular there is no route that writes a toolkit
+directly (FR-4.11); only deploying a reviewed proposal does.
 
 Request decisions (phase 3b) follow at the end: approving, rejecting and
 filling in the proposals an admin-role agent filed on `/admin/mcp`, and
@@ -108,6 +107,16 @@ def register_write_routes(app: FastAPI) -> None:
             raise ApiError(409, "No toolkit is configured, so there is nothing a tool could build on.")
         return {"yaml": rm._tool_scaffold(context.service)}
 
+    def _definition_id(context: ApiContext, tool_id: str) -> str:
+        """The ID a write targets. A toolkit with destinations fans one
+        definition out into `<id>@<destination>` tools in memory only
+        (FR-8.3h); `GET /tools` lists those, but the entry on disk -- what
+        the store edits -- keeps the bare ID, so either spelling edits it."""
+        tool = context.service.catalog.tools.get(tool_id)
+        if tool is None or tool.destination is None:
+            return tool_id
+        return tool_id[: -(len(tool.destination) + 1)]
+
     @app.post("/tools", response_model=models.ToolSaved, status_code=201, tags=["tools"],
               responses=_WRITE_ERRORS)
     async def tool_create(
@@ -136,7 +145,8 @@ def register_write_routes(app: FastAPI) -> None:
         except (WriteRefused, ConfigError) as exc:
             raise _refused(exc) from None
         new_id = await _call(
-            context.store.save_tool, spec, actor=session.identity, rev=rev, replaces=tool_id
+            context.store.save_tool, spec, actor=session.identity, rev=rev,
+            replaces=_definition_id(context, tool_id),
         )
         return {"id": new_id, **_written(response, context.store.tools_revision())}
 
@@ -148,7 +158,7 @@ def register_write_routes(app: FastAPI) -> None:
     ) -> Any:
         rev = _tools_rev(request, context)
         await _call(
-            context.store.set_tool_enabled, tool_id, body.enabled,
+            context.store.set_tool_enabled, _definition_id(context, tool_id), body.enabled,
             actor=session.identity, rev=rev,
         )
         return _written(response, context.store.tools_revision())
@@ -162,7 +172,10 @@ def register_write_routes(app: FastAPI) -> None:
         """The full definition goes to the audit log, so it can be restored
         from there. Grants on it stay and dangle, as with the form."""
         rev = _tools_rev(request, context)
-        await _call(context.store.delete_tool, tool_id, actor=session.identity, rev=rev)
+        await _call(
+            context.store.delete_tool, _definition_id(context, tool_id),
+            actor=session.identity, rev=rev,
+        )
         return _written(response, context.store.tools_revision())
 
     # -- Identities ---------------------------------------------------------------
@@ -205,7 +218,7 @@ def register_write_routes(app: FastAPI) -> None:
     ) -> Any:
         """Role, grants, scopes, and optionally a new console password or ID.
 
-        Sessions end by the same rule as in `/ui`
+        Sessions end by one shared rule
         (`service.drop_sessions_after_identity_update`)."""
         rev = _identities_rev(request, context)
         values = _clean(body)
@@ -329,7 +342,7 @@ def register_write_routes(app: FastAPI) -> None:
             )
         except (WriteRefused, ConfigError) as exc:
             # A wrong current password is a failed attempt and belongs in
-            # the log, as in `/ui`.
+            # the log.
             context.audit.auth_failure(
                 reason="ui_password_change_failed",
                 detail=f"identity={session.identity!r}: {exc}",

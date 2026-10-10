@@ -11,7 +11,8 @@ What the routes guarantee:
 * **CSP on every `/app` response** (`APP_CSP`): scripts and styles only
   from this origin, no inline script, no eval, Trusted Types enforced for
   script sinks, nothing framed, no third-party anything. This is the
-  console's new invariant, replacing `/ui`'s "no script at all" (see
+  console's invariant, replacing the removed HTML console's "no script at
+  all" (see
   REQUIREMENTS.md, FR-11.9).
 * **Caching by content.** Hashed files under `/app/assets/` are
   `immutable`; `index.html` is `no-store`, so a deploy is picked up on the
@@ -51,6 +52,10 @@ _HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
 }
+
+#: Not in every platform's mime table; a manifest served as
+#: application/octet-stream is ignored by the browser.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 WEB_DIR_ENV = "GATEKEEPER_WEB_DIR"
 

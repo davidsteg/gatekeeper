@@ -485,50 +485,95 @@ def test_docker_tls_env_no_credential_name_denied(tmp_path):
         service._docker_tls_env(None)
 
 
-# -- UI rendering (smoke) ------------------------------------------------------
+# -- Console API (smoke): destination-qualified ids are what it shows -------
 
 
-def test_ui_renders_destination_pills_and_third_tier(tmp_path):
-    from gatekeeper import ui
-    from gatekeeper.identity import IdentityStore
+@pytest.fixture
+def destination_api(tmp_path):
+    """`/api/v1` over the two-destination docker toolkit, with `bot`
+    granted the nas1 copy only."""
+    from api_env import make_env
 
-    tier1 = _docker_tier1(tmp_path)
-    catalog = make_catalog(tmp_path, tier1, [_compose_up_spec()])
-    audit = AuditLog(str(tmp_path / "logs"))
-    service = Service(tier1=tier1, catalog=catalog, audit=audit)
-    identities = IdentityStore(identities={"agent1": _identity("docker.compose_up@nas1")})
-
-    data = ui._access_graph_data(service, identities)
-    assert data["meta"]["has_destinations"] is True
-    dest_ids = {n["id"] for n in data["nodes"] if n["kind"] == "destination"}
-    assert dest_ids == {"destination:nas1", "destination:nas2"}
-
-    matrix = ui._tool_matrix(service, identities)
-    assert "@nas1" in matrix and "@nas2" in matrix
-
-    class _Session:
-        can_write = False
-
-    tools_html = ui._view_tools(service, identities, _Session(), None)
-    assert "nas1" in tools_html and "nas2" in tools_html
+    env = make_env(tmp_path, _docker_tier1(tmp_path), [_compose_up_spec()])
+    store = env["store"]
+    store.save_identity(
+        identity_id="bot", role="agent", tools=["docker.compose_up@nas1"], scopes=[],
+        actor="root", rev=store.identities_revision(), replaces="bot",
+    )
+    return env
 
 
-# -- Admin-UI write path: edit/toggle/delete must target the raw, --------
-# -- un-expanded definition, not a destination-qualified id --------------
+async def test_api_lists_destination_qualified_tools(destination_api):
+    from api_env import API, client, login
+
+    async with client(destination_api["app"]) as c:
+        await login(c, "eye")
+        tools = (await c.get(f"{API}/tools")).json()["tools"]
+        detail = (await c.get(f"{API}/tools/docker.compose_up")).json()
+        overview = (await c.get(f"{API}/overview")).json()
+        toolkits = (await c.get(f"{API}/toolkits")).json()["toolkits"]
+    assert [(t["id"], t["destination"]) for t in tools] == [
+        ("docker.compose_up@nas1", "nas1"), ("docker.compose_up@nas2", "nas2"),
+    ]
+    assert next(t for t in tools if t["destination"] == "nas1")["grantees"] == ["bot"]
+    assert next(t for t in tools if t["destination"] == "nas2")["grantees"] == []
+    # The editor works on the one raw definition both copies came from.
+    assert detail["id"] == "docker.compose_up"
+    assert [t["id"] for t in detail["tools"]] == ["docker.compose_up@nas1", "docker.compose_up@nas2"]
+    (row,) = overview["access"]["rows"]
+    assert row["identity"] == "bot"
+    assert row["cells"] == [{
+        "toolkit": "docker", "granted": ["docker.compose_up@nas1"],
+        "calls": {"ok": 0, "denied": 0, "failed": 0, "total": 0},
+    }]
+    (docker,) = toolkits
+    assert docker["destinations"] == ["nas1", "nas2"]
 
 
-def test_base_tool_id_strips_destination_suffix(tmp_path):
-    from gatekeeper.ui import _base_tool_id
+# -- Console API write path: toggle/delete target the raw, un-expanded ------
+# -- definition (the base id), as `ui._base_tool_id` mapped it for /ui ----
 
-    tier1 = _docker_tier1(tmp_path)
-    catalog = make_catalog(tmp_path, tier1, [_compose_up_spec()])
-    nas1_tool = catalog.tools["docker.compose_up@nas1"]
-    assert _base_tool_id(nas1_tool) == "docker.compose_up"
 
-    tier1_bare = _docker_tier1(tmp_path, destinations=())
-    catalog_bare = make_catalog(tmp_path, tier1_bare, [_compose_up_spec()])
-    bare_tool = catalog_bare.tools["docker.compose_up"]
-    assert _base_tool_id(bare_tool) == "docker.compose_up"
+async def test_api_writes_a_destination_tool_by_its_base_id(destination_api):
+    """A destination fans one definition out into `@nas1`/`@nas2` tools in
+    memory (FR-8.3h); the entry on disk keeps the bare ID. A write may name
+    either: a qualified ID edits the definition it came from -- every
+    destination at once, which is what that one entry means -- and is
+    never a silent no-op."""
+    from api_env import API, client, login
+
+    env = destination_api
+    catalog = lambda: env["service"].catalog  # noqa: E731
+    async with client(env["app"]) as c:
+        admin = await login(c, "root")
+        csrf = {"X-CSRF-Token": admin["csrf"]}
+        etag = (await c.get(f"{API}/tools")).headers["etag"]
+
+        off = await c.put(
+            f"{API}/tools/docker.compose_up@nas1/enabled", json={"enabled": False},
+            headers={**csrf, "If-Match": etag},
+        )
+        assert off.status_code == 200, off.text
+        assert not catalog().tools["docker.compose_up@nas1"].enabled
+        assert not catalog().tools["docker.compose_up@nas2"].enabled
+
+        on = await c.put(
+            f"{API}/tools/docker.compose_up/enabled", json={"enabled": True},
+            headers={**csrf, "If-Match": off.headers["etag"]},
+        )
+        assert on.status_code == 200, on.text
+        assert catalog().tools["docker.compose_up@nas2"].enabled
+
+        gone = await c.delete(
+            f"{API}/tools/docker.compose_up@nas2", headers={**csrf, "If-Match": on.headers["etag"]}
+        )
+        assert gone.status_code == 200, gone.text
+    assert not any(t.startswith("docker.compose_up") for t in catalog().tools)
+    dangling = [
+        r for r in (json.loads(line) for line in _read_audit_lines(env["audit"]))
+        if r.get("action") == "dangling_grant"
+    ]
+    assert dangling and "bot" in dangling[-1]["identities"]
 
 
 def test_identity_holds_definition_matches_destination_grants():

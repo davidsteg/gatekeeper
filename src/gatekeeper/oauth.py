@@ -180,10 +180,6 @@ class OAuthState:
     #: verifier goes into the token request, and the two only meet at a
     #: callback this console issued the state for.
     code_verifier: str = ""
-    #: Where the callback sends the browser: "" renders the result page
-    #: on `/ui`, "app" redirects to the React console's credentials page
-    #: with the outcome as a result code (never a token, never a value).
-    return_to: str = ""
 
 
 @dataclasses.dataclass(slots=True)
@@ -202,9 +198,9 @@ class OAuthStateStore:
     the proof that this callback belongs to a flow an authenticated
     operator started: 32 random bytes, handed out only to a signed-in
     admin, usable exactly once, expiring in
-    `OAUTH_STATE_TTL_SECONDS`. Where a session *is* present it must be
-    the same operator's -- a state redeemed under someone else's session
-    is refused rather than silently accepted.
+    `OAUTH_STATE_TTL_SECONDS`. The write is made as the operator the state
+    was issued to, and only while that operator is still an admin; the
+    console's session cookie (path `/api/v1`) never reaches the callback.
     """
 
     ttl: int = OAUTH_STATE_TTL_SECONDS
@@ -213,7 +209,7 @@ class OAuthStateStore:
     def issue(
         self, *, identity: str, credential: str, redirect_uri: str,
         scopes: Iterable[str] = (), provider: str = "google",
-        code_verifier: str = "", return_to: str = "",
+        code_verifier: str = "",
     ) -> str:
         self._prune()
         state = secrets.token_urlsafe(32)
@@ -221,7 +217,7 @@ class OAuthStateStore:
             OAuthState(
                 identity=identity, credential=credential,
                 redirect_uri=redirect_uri, scopes=tuple(scopes),
-                provider=provider, code_verifier=code_verifier, return_to=return_to,
+                provider=provider, code_verifier=code_verifier,
             ),
             time.monotonic() + self.ttl,
         )
@@ -680,3 +676,148 @@ def app_result_url(*, result: str, provider: str, credential: str) -> str:
         {"oauth": result, "provider": provider, "credential": credential}
     )
     return f"{APP_RESULT_PATH}?{query}"
+
+
+# -- The callback (the one `/ui` path that outlives the HTML console) ---------
+
+
+def build_callback_routes(
+    *, identities: Any, audit: Any, store: Any, credentials: Any,
+    states: OAuthStateStore,
+) -> list[Any]:
+    """`/ui/oauth/{google,microsoft}/callback`.
+
+    The paths stay where 0.x registered them, because they are the
+    redirect URIs operators entered at Google and Microsoft; moving them
+    would break every OAuth client already set up. Everything else about
+    the route is the console API's: the flow is started by `POST
+    /api/v1/oauth/<provider>/authorize`, the state carries who started it
+    (the API's session cookie is scoped to `/api/v1` and never reaches
+    this path), and the answer is always a redirect to
+    `/app/credentials` with a result code -- never a page, never anything
+    the provider sent.
+    """
+    from starlette.responses import RedirectResponse, Response
+    from starlette.routing import Route
+
+    from .credentials import WriteRefused as CredentialWriteRefused
+    from .errors import ConfigError
+    from .identity import ADMIN_ROLE
+
+    async def callback(request: Request, provider: OAuthProviderSpec) -> Response:
+        pending_state = states.take(request.query_params.get("state", ""))
+        if pending_state is not None and pending_state.provider != provider.key:
+            # One state store, two flows: a state minted for the other
+            # provider is spent here (`take` popped it) and redeems nothing.
+            pending_state = None
+        if pending_state is None:
+            audit.write({
+                "kind": "ui_oauth", "actor": "",
+                "action": f"{provider.key}_callback", "result": "state_mismatch",
+            })
+            return RedirectResponse(
+                app_result_url(result="state_mismatch", provider=provider.key, credential=""),
+                status_code=303,
+            )
+
+        actor = pending_state.identity
+        name = pending_state.credential
+
+        def _fail(result: str, *, detail: str = "") -> Response:
+            record: dict[str, Any] = {
+                "kind": "ui_oauth", "actor": actor,
+                "action": f"{provider.key}_callback", "result": result, "credential": name,
+            }
+            if detail:
+                record["detail"] = detail
+            audit.write(record)
+            return RedirectResponse(
+                app_result_url(result=result, provider=provider.key, credential=name),
+                status_code=303,
+            )
+
+        # The state was issued to an admin; between then and now that
+        # identity could have been demoted or deleted.
+        current = identities.identities.get(actor)
+        if current is None or current.role != ADMIN_ROLE:
+            return _fail("role_required")
+        # The provider's own refusal, truncated: their text arriving
+        # through a URL goes to the audit log only, never back to the page.
+        denial = request.query_params.get("error", "").strip()[:64]
+        if denial:
+            return _fail("denied", detail=denial)
+        code = request.query_params.get("code", "")
+        if not code:
+            return _fail("no_code")
+        if store is None or credentials is None:
+            return _fail("read_only")
+        try:
+            client_id, client_secret = oauth_client(credentials, name, provider)
+        except OAuthExchangeError:
+            return _fail("credential_unusable")
+        try:
+            if provider.key == "microsoft":
+                payload = await _exchange_microsoft_code(
+                    code=code, client_id=client_id, client_secret=client_secret,
+                    redirect_uri=pending_state.redirect_uri,
+                    code_verifier=pending_state.code_verifier,
+                )
+            else:
+                payload = await _exchange_google_code(
+                    code=code, client_id=client_id, client_secret=client_secret,
+                    redirect_uri=pending_state.redirect_uri,
+                )
+        except (OAuthExchangeError, httpx.HTTPError):
+            return _fail("exchange_failed")
+
+        refresh_token = payload.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            # Omitted when the client was already granted these scopes and
+            # the request did not force a fresh consent.
+            return _fail("no_refresh_token")
+
+        # The grant's scopes travel with the refresh token, because a
+        # refresh asks for exactly these again (tests/test_google_token_scopes.py).
+        if provider.key == "microsoft":
+            scopes = _granted_microsoft_scopes(payload, pending_state.scopes)
+        else:
+            scopes = _granted_google_scopes(payload, pending_state.scopes)
+        bundle_fields: dict[str, Any] = {
+            "client_id": client_id, "client_secret": client_secret,
+            "refresh_token": refresh_token, "scopes": scopes,
+        }
+        # `provider` marks a non-Google bundle, so a toolkit pointed at the
+        # wrong platform fails with a reason (`service._oauth_token_env`).
+        if provider.key != "google":
+            bundle_fields["provider"] = provider.key
+        bundle = json.dumps(bundle_fields)
+        existing = {meta.name for meta in credentials.names()}
+        try:
+            if name in existing:
+                credentials.rotate(name, value=bundle, actor=actor, rev=credentials.revision())
+            else:
+                credentials.create(
+                    name, kind="oauth2", value=bundle, actor=actor, rev=credentials.revision(),
+                )
+        except (CredentialWriteRefused, ConfigError):
+            return _fail("write_refused")
+
+        # Scope names only: no token material.
+        audit.write({
+            "kind": "ui_oauth", "actor": actor, "action": f"{provider.key}_callback",
+            "result": "ok", "credential": name, "scopes": scopes,
+        })
+        return RedirectResponse(
+            app_result_url(result="ok", provider=provider.key, credential=name), status_code=303,
+        )
+
+    async def google(request: Request) -> Response:
+        return await callback(request, GOOGLE_OAUTH)
+
+    async def microsoft(request: Request) -> Response:
+        return await callback(request, MICROSOFT_OAUTH)
+
+    return [
+        Route(GOOGLE_OAUTH.callback_path, google, methods=["GET"]),
+        Route(MICROSOFT_OAUTH.callback_path, microsoft, methods=["GET"]),
+    ]

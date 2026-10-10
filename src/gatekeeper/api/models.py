@@ -7,7 +7,7 @@ credential model with no value field cannot emit a value, an identity
 model with no hash field cannot emit a hash, however the dict feeding it
 was built (FR-10.2, FR-11.5).
 
-Free-form `dict[str, Any]` appears only where the legacy console already
+Free-form `dict[str, Any]` appears only where the console deliberately
 shows the data verbatim to a viewer: audit records (redacted at write
 time by `audit.Redactor`), a pending item's payload, a tool's spec.
 """

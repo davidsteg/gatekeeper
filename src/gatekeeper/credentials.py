@@ -39,7 +39,7 @@ from .errors import ConfigError
 #: all -- `execute_http.py`'s `_credential_headers` returns {} for it.
 #: docker_tls's value is a JSON bundle {"cert", "key", "ca"} of PEM material
 #: for a TLS-secured remote Docker daemon (FR-8.3g) -- materialized to a
-#: private temp dir by Service, never written back through ui.py.
+#: private temp dir by Service, never written back through the console API.
 #: ssh_private_key's value is PEM-format private key text (optionally
 #: passphrase-free -- gatekeeper has no prompt to type one into) for the
 #: `ssh` executor; the matching public key must already be in the remote
@@ -67,7 +67,7 @@ from .errors import ConfigError
 #: / microsoft_api.py finds its token file, and removed afterwards. Never
 #: passed through argv (FR-10.2: a secret never sits in a process
 #: argument list that a `ps` on the host would reveal) or written back
-#: through ui.py.
+#: through the console API.
 KINDS = frozenset(
     {
         "api_key_header", "bearer", "basic", "ws_api_key", "url_path",
@@ -152,7 +152,7 @@ class CredentialMeta:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class ResolvedCredential:
-    """Internal only. Never constructed by, or returned to, `ui.py`/`store.py`."""
+    """Internal only. Never constructed by, or returned to, `api/`/`store.py`."""
 
     name: str
     kind: str
@@ -473,14 +473,16 @@ class CredentialStore:
     def _resolve(self, name: str) -> ResolvedCredential | None:
         """Used only by `execute_http.py` / `execute_ssh.py` /
 
-        `execute_truenas.py`, by `service.py`'s docker TLS and google
-        token materialization, and -- since 0.46.0 -- by `ui.py`'s Google
-        OAuth sign-in, which needs the `client_id` for the consent URL
-        and the `client_secret` for the token request. That one is the
-        single route handler allowed to call this, and it is still not a
-        read path: neither value reaches a response, a page, or the audit
-        log (FR-10.2/10.7). Nothing else in `ui.py` or `store.py` may
-        call it.
+        `execute_truenas.py` / `execute_opencode.py`, by `service.py`'s
+        docker TLS and google token materialization, by this class's own
+        `probe_credential`, and by `oauth.oauth_client` for the
+        Google/Microsoft OAuth sign-in, which needs the `client_id` for
+        the consent URL (`api/extras.py`'s authorize route) and the
+        `client_secret` for the token request (the `/ui/oauth/...`
+        callback). That is the single console path allowed to call this,
+        and it is still not a read path: neither value reaches a response,
+        a page, or the audit log (FR-10.2/10.7). Nothing in `api/` or
+        `store.py` may call it directly.
         """
         spec = self._raw().get(name)
         if spec is None:

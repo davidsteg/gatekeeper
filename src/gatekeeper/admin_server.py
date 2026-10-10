@@ -9,7 +9,8 @@ rejected here outright.
 
 `approve` and `reject` are not on `_TOOLS` and have no handler here --
 `admin_service.apply_pending` (the only function that turns a pending item
-into a live change) is called exclusively from `ui.py`. There is no code
+into a live change) is called only from the console API's request-decision
+routes (`api/writes.py`: human session + `admin` + CSRF). There is no code
 path from this file that reaches it.
 """
 
@@ -86,7 +87,7 @@ _TOOLS: list[types.Tool] = [
             "overwrites -- old versions remain fetchable via admin.tool_get). "
             "Applies immediately if the resulting category is 'read'; "
             "otherwise it is written to the pending queue for a human to "
-            "approve at /ui/requests (Change tab)."
+            "approve at /app/requests (Change tab)."
         ),
         inputSchema={
             "type": "object",
@@ -101,7 +102,7 @@ _TOOLS: list[types.Tool] = [
         description=(
             "Enables a tool. Applies immediately if its category is 'read'; "
             "otherwise it is written to the pending queue for a human to "
-            "approve at /ui/requests (Change tab)."
+            "approve at /app/requests (Change tab)."
         ),
         inputSchema=_ID_ONLY,
     ),
@@ -208,7 +209,7 @@ _TOOLS: list[types.Tool] = [
         description=(
             "Lists proposals in the pending queue, optionally filtered by "
             "status (pending/approved/rejected/stale). Read-only -- approving "
-            "or rejecting a proposal is only possible through /ui/requests (Change tab), "
+            "or rejecting a proposal is only possible through /app/requests (Change tab), "
             "never from here."
         ),
         inputSchema={
@@ -313,7 +314,7 @@ _TOOLS: list[types.Tool] = [
             "never stored or ignored quietly: no operation on /admin/mcp "
             "ever carries a secret (FR-10.2/10.8), not even to create one. "
             "Always written to the pending queue and never auto-applies -- "
-            "a human reviews the proposed name/kind/header at /ui/requests "
+            "a human reviews the proposed name/kind/header at /app/requests "
             "and, if they approve, types the actual secret value there "
             "themselves; the value never exists anywhere an agent could "
             "have written it."
@@ -345,7 +346,7 @@ _TOOLS: list[types.Tool] = [
             "itself is Tier 1 (FR-10.4), so it is always written to the "
             "toolkit-proposal queue and never applies on its own, not even "
             "when both names already exist. A human reviews it at "
-            "/ui/requests (Toolkit tab) and, if they approve, gatekeeper "
+            "/app/requests (Toolkit tab) and, if they approve, gatekeeper "
             "writes 'credential: <name>' under that toolkit in "
             "toolkits.yaml, re-validates it, and reloads it into the "
             "running process -- no redeploy needed, but also no way for "
@@ -384,7 +385,7 @@ _TOOLS: list[types.Tool] = [
             "to the toolkit-proposal queue -- never applies, not even for a "
             "read-only-looking toolkit -- since this changes what is "
             "possible at all (REQUIREMENTS.md §6), not just who can do "
-            "what. A human reviews it at /ui/toolkits and, if they approve, "
+            "what. A human reviews it at /app/requests (Toolkit tab) and, if they approve, "
             "gatekeeper validates, writes toolkits.yaml, and reloads it "
             "into the running process itself -- no redeploy needed, but "
             "also no way for this call to make it live on its own. Editing "
@@ -411,7 +412,7 @@ _TOOLS: list[types.Tool] = [
             "admin.toolkit_propose, this changes Tier 1 -- what is possible "
             "at all, not just who can do what -- so it is always written to "
             "the toolkit-proposal queue and never applies on its own. A "
-            "human reviews it at /ui/requests (Toolkit tab) and, if they "
+            "human reviews it at /app/requests (Toolkit tab) and, if they "
             "approve, gatekeeper validates, writes toolkits.yaml, and "
             "reloads it into the running process itself -- no redeploy "
             "needed, but also no way for this call to make it live by "
@@ -468,7 +469,7 @@ _TOOLS: list[types.Tool] = [
             "toolkit_update, this changes Tier 1 -- what is possible at "
             "all, not just who can do what -- so it is always written to "
             "the toolkit-proposal queue and never applies on its own. A "
-            "human reviews it at /ui/requests (Toolkit tab) and, if they "
+            "human reviews it at /app/requests (Toolkit tab) and, if they "
             "approve, gatekeeper removes it from toolkits.yaml and reloads "
             "it into the running process itself -- no restart needed, but "
             "also no way for this call to make it take effect by itself."
@@ -536,7 +537,7 @@ def build_admin_mcp_server(admin_service: AdminService) -> Server[None]:
             "tool) apply immediately. Anything that expands what an agent "
             "can do -- enabling/updating a write tool, deleting a tool, "
             "granting access -- is written to a pending queue and takes "
-            "effect only once a human approves it at /ui/requests (Change tab). There is "
+            "effect only once a human approves it at /app/requests (Change tab). There is "
             "no way to approve your own proposal from this endpoint."
         ),
         on_list_tools=on_list_tools,
