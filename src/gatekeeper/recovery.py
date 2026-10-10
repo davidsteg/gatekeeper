@@ -91,6 +91,20 @@ logger = logging.getLogger("gatekeeper.recovery")
 #: the parts of a task key.
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:@-]{1,128}$")
 
+#: The tool argument that carries the correlation when the client cannot
+#: send per-call `_meta` (Hermes v0.21.6's MCP client cannot). Same fields
+#: as `_meta.hermes`. `server.on_call_tool` strips it from every call before
+#: anything else sees the arguments -- also with recovery off, so a client
+#: plugin left enabled after a rollback never turns into PARAM_UNKNOWN
+#: denials -- and `catalog.py` refuses a tool parameter of this name.
+RESERVED_ARGUMENT = "_hermes_recovery"
+
+
+def split_reserved(arguments: dict[str, Any] | None) -> tuple[dict[str, Any], Any]:
+    """`(arguments without the reserved key, its value or None)`."""
+    args = dict(arguments or {})
+    return args, args.pop(RESERVED_ARGUMENT, None)
+
 #: Turn stop reasons that mean "stuck". `interrupted` is a *technical*
 #: interruption (process restart, lost connection); an explicit stop by the
 #: user is `user_stopped` and is never overridden.
@@ -1468,10 +1482,13 @@ class RecoverySupervisor:
             return  # try again next tick, bounded by `queries`
         self._log("continuation_queried", incident_id=inc_id, task_id=incident["task_id"],
                   state=found.get("state"))
-        if found.get("state") in ("accepted", "started"):
+        if found.get("state") in ("accepted", "started", "finished"):
             fresh = self.store.read(lambda d: d["incidents"][inc_id])
             self._apply_continue_response(fresh, {"accepted": True, **found})
-        elif found.get("state") == "rejected":
+            if found.get("started_at"):
+                cont_now = self.store.read(lambda d: d["incidents"][inc_id]["continuation"])
+                self._update(inc_id, continuation={**cont_now, "started_at": self._clock()})
+        elif found.get("state") in ("rejected", "lost"):
             fresh = self.store.read(lambda d: d["incidents"][inc_id])
             self._apply_continue_response(fresh, {"accepted": False, **found})
         elif found.get("state") == "none" and cont.get("resends", 0) < 1:
@@ -1533,8 +1550,7 @@ class RecoverySupervisor:
             if status.get("task") in ("cancelled", "superseded") or status.get("stop_reason") == USER_STOP:
                 self._suppress(incident, str(status.get("task") or USER_STOP))
                 return
-            if not cont.get("started_at") and status.get("continuation_id") == cont.get("continuation_id") \
-                    and status.get("turn") == "active":
+            if not cont.get("started_at") and self._started_evidence(status, cont):
                 cont = {**cont, "started_at": now}
                 self._update(inc_id, continuation=cont)
                 self._log("continuation_started", incident_id=inc_id, task_id=incident["task_id"],
@@ -1559,6 +1575,23 @@ class RecoverySupervisor:
             self._finish(fresh, "blocked", "blocked:no_progress_after_continuation",
                          blocker="the resumed turn was active but the task owner reported "
                                  "no progress before the deadline")
+
+    @staticmethod
+    def _started_evidence(status: dict[str, Any], cont: dict[str, Any]) -> bool:
+        """Did the turn for this continuation start?
+
+        Durable evidence first: the adapter's `last_continuation` record
+        names the continuation and a `started_at`, which stays true after
+        the turn has already ended between two polls. The live view (an
+        active turn carrying the continuation_id) is the fallback.
+        """
+        cid = cont.get("continuation_id")
+        if not cid:
+            return False
+        last = status.get("last_continuation")
+        if isinstance(last, dict) and last.get("continuation_id") == cid and last.get("started_at"):
+            return True
+        return status.get("continuation_id") == cid and status.get("turn") == "active"
 
     async def _reconcile(self, incident: dict[str, Any]) -> None:
         """No traffic for a while: ask the authoritative source. Covers a
@@ -1939,6 +1972,8 @@ class RecoverySupervisor:
 
 
 __all__ = [
+    "RESERVED_ARGUMENT",
+    "split_reserved",
     "DECISION_ACTIONS",
     "DECISION_PROVIDERS",
     "Correlation",

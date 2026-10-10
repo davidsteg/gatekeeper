@@ -33,6 +33,7 @@ from .errors import DenialReason, Denied
 from .execute import OUTCOME_OK, OUTCOME_UNKNOWN
 from .identity import ADMIN_ROLE, IdentityStore
 from .notifications import SESSION_ID_HEADER, CatalogNotifier
+from .recovery import split_reserved
 from .service import Service
 from .ui import UI_COMPANION_PATHS, UI_PREFIX, build_ui_routes
 
@@ -263,17 +264,23 @@ def build_mcp_server(service: Service, notifier: CatalogNotifier) -> Server[None
         ctx: Any, params: types.CallToolRequestParams
     ) -> types.CallToolResult:
         identity = _identity_from(ctx)
-        # `_meta.hermes` carries the client's session/task/turn ids; the
-        # supervisor derives the installation from the identity itself
-        # and ignores the call entirely while recovery is disabled.
-        correlation = (
-            service.recovery.correlate(identity.id, params.meta)
-            if service.recovery is not None
-            else None
-        )
+        # The correlation arrives as `_meta.hermes`, or -- from a client
+        # whose MCP stack cannot send per-call `_meta` -- as the reserved
+        # argument. The argument is removed from every call before the
+        # pipeline sees it, so it is never validated, executed or audited
+        # as a parameter. The supervisor derives the installation from the
+        # identity itself and ignores both while recovery is disabled.
+        arguments, reserved = split_reserved(params.arguments)
+        correlation = None
+        if service.recovery is not None:
+            meta = params.meta
+            if not (isinstance(meta, dict) and isinstance(meta.get("hermes"), dict)) \
+                    and isinstance(reserved, dict):
+                meta = {"hermes": reserved}
+            correlation = service.recovery.correlate(identity.id, meta)
         try:
             result = await service.call(
-                identity, params.name, params.arguments or {}, correlation=correlation
+                identity, params.name, arguments, correlation=correlation
             )
         except Denied as denial:
             note = getattr(denial, "recovery_note", None)

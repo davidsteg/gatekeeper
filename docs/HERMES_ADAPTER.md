@@ -1,6 +1,12 @@
-# Hermes recovery adapter — contract v1
+# Hermes recovery adapter — contract v1.1
 
-Gatekeeper 0.48.0 implements its half of recovery (`src/gatekeeper/recovery.py`,
+**Changes in v1.1** (Gatekeeper 0.49.0):
+
+- Correlation may travel as the reserved tool argument `_hermes_recovery`, because the Hermes v0.21.6 MCP client cannot send per-call `_meta` (§1).
+- Continuation acceptance and idempotency are journaled durably before the turn starts, with defined crash handling (§3).
+- "Started" is recorded durably, so it stays provable after the turn has ended (§3, §4).
+
+Gatekeeper 0.49.0 implements its half of recovery (`src/gatekeeper/recovery.py`,
 off by default). This file is the contract the **Hermes side** must meet. Nothing
 here exists in Hermes yet, and no live round trip has been demonstrated. Every
 test in `tests/test_recovery.py` runs against a mock adapter.
@@ -17,7 +23,18 @@ Gatekeeper call is **not** recovered in v1. Gatekeeper answers such a stop with
 
 ## 1. Correlation on every `tools/call`
 
-The adapter attaches `params._meta.hermes`:
+The adapter attaches the correlation object as `params._meta.hermes`. A client
+whose MCP stack cannot send per-call `_meta` sends the same object as the
+reserved tool argument **`_hermes_recovery`** instead. With Hermes v0.21.6,
+that is a `pre_tool_call` hook returning `{"action": "modify", "args": {...}}`
+for Gatekeeper tools only.
+
+Gatekeeper removes `_hermes_recovery` from **every** call before validation,
+even with recovery off. It is never validated, executed or audited as a
+parameter, and no tool may declare a parameter of that name. When both are
+present, `_meta.hermes` wins.
+
+The object's fields:
 
 | Field | Req. | Rule |
 |---|---|---|
@@ -97,8 +114,12 @@ session. A mapping failure answers `404` (unknown) or `409` (wrong owner) and
 
 - **`turn`** is `active`, `stopped` or `exhausted`. **`stop_reason`** uses the
   vocabulary from §2.
-- **`continuation_id`** names the continuation that started the current or last
-  turn, or null.
+- **`continuation_id`** names the continuation driving the **current** active
+  turn, or is null.
+- **`last_continuation`** (v1.1) is the durable journal record of the
+  session's most recent continuation:
+  `{continuation_id, state, started_at, started_turn_seq, ended_at,
+  exit_reason}`. It is returned even when that turn has already ended.
 - **`last_progress_at`** is the time the task owner last recorded meaningful
   progress, such as a Kanban state change or a completed subtask. A tool call
   alone is not progress.
@@ -136,11 +157,52 @@ A new user message that arrives after the continuation is accepted is queued
 behind it by the normal session serialization. Its turn has no
 `continuation_id`, so it never counts as acknowledgement.
 
+### Durable continuation journal (v1.1)
+
+The adapter keeps one journal row per `idempotency_key` in its own store,
+never in Hermes's `state.db` or `kanban.db`. The store is SQLite with WAL
+and `synchronous=FULL`. A row moves through these states:
+
+`accepted` → `admitted` → `started` → `finished`, or `rejected` / `lost`.
+
+1. **Acceptance.** Under the session's serialization, the adapter validates
+   the request and inserts `{idempotency_key, continuation_id, ref,
+   expected_turn_seq, state: accepted}` in **one transaction**, then commits.
+   Only after the commit does it hand the wake to Hermes, and only after the
+   commit does it answer `accepted: true`. If the wake is refused (not
+   admitted), the row becomes `rejected` (`not_admitted`) and the answer is
+   `accepted: false`.
+2. **Admission.** Once Hermes admits the wake, the row becomes `admitted`.
+3. **Started.** The wake text carries the marker
+   `[gatekeeper-continuation <continuation_id>]`. When a turn's input carries
+   the marker, the adapter records `started_at`, `started_turn_seq` and
+   `turn_id` durably **before the first model call** (in `pre_llm_call`), and
+   from then on tags that turn's calls with the `continuation_id`.
+4. **Finished.** At turn end, the adapter records `ended_at` and `exit_reason`.
+
+**Crash handling:**
+
+- *Before the acceptance commit:* there is no row, and the adapter never
+  answered `accepted`. `/continuation` reports `none`, and Gatekeeper re-sends
+  once with the same key.
+- *After the commit, before `started`:* the in-memory wake died with the
+  process. At startup, the adapter re-validates each such row atomically. If
+  the session is idle at `expected_turn_seq`, it re-delivers **once** with the
+  same `continuation_id` (`deliveries` is capped at 2). Otherwise the row
+  becomes `lost`, with reason `superseded` or `turn_active`. A turn never runs
+  twice for one row, because `started` is written before any model work. At
+  worst, a re-delivered wake leaves a duplicate input message in the
+  transcript.
+- *After `started`:* nothing is re-delivered. `/continuation` and `/status`
+  report the durable record.
+- *Answer lost in transit:* Gatekeeper asks `/continuation` and finds the row.
+
 ### `/continuation` (read-only)
 
 The request is the reference object plus `{idempotency_key}`. The response is
-`{"state": "none" | "accepted" | "started" | "rejected", "continuation_id"?,
-"reason"?}`.
+`{"state": "none" | "accepted" | "admitted" | "started" | "finished" |
+"rejected" | "lost", "continuation_id"?, "started_at"?, "started_turn_seq"?,
+"ended_at"?, "exit_reason"?, "reason"?}`. `lost` is treated like `rejected`.
 
 Gatekeeper calls this after an **ambiguous** `/continue`: a timeout, a dropped
 connection, a 5xx, or its own crash after it recorded "sending". It never
@@ -154,7 +216,7 @@ Gatekeeper tracks four stages separately on the incident:
 | Stage | Evidence | Deadline → outcome |
 |---|---|---|
 | accepted | `/continue` returned `accepted` + `continuation_id` | — |
-| started | `/status` shows `turn: active` with that `continuation_id` | — |
+| started | `/status.last_continuation` (or `/continuation`) carries that `continuation_id` with a `started_at`; it stays provable after the turn ended. The live fallback is `turn: active` with that `continuation_id`. | — |
 | activity | an **executed** (not denied) tool call carrying that `continuation_id` | `ack_timeout_seconds` (300) → `unacknowledged` |
 | progress | `/status.last_progress_at` later than acceptance | `progress_timeout_seconds` (1800) after activity → `blocked:no_progress_after_continuation` |
 
