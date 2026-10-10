@@ -299,8 +299,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         logger.warning(
             "%d credential(s) referenced by toolkits.yaml are missing from %s: "
             "%s. Calls through them will be refused with 'is not configured "
-            "yet' until a value is entered -- in the console at /ui/credentials, "
-            "or by approving the matching request in /ui/requests.",
+            "yet' until a value is entered -- in the console at /app/credentials, "
+            "or by approving the matching request in /app/requests.",
             len(dangling),
             credentials_path,
             "; ".join(
@@ -410,7 +410,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             "GATEKEEPER_UI_READ_ONLY", ""
         ) in ("1", "true", "yes")
         if read_only:
-            logger.info("Console enabled at /ui (read-only, writes disabled by flag)")
+            logger.info("Console enabled at /app (read-only, writes disabled by flag)")
         else:
             store = ConfigStore(
                 service=service,
@@ -421,7 +421,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             )
             # A third Tier 2 file, alongside tools.yaml/identities.yaml --
             # proposals from /admin/mcp that a human has not yet approved
-            # (or rejected) at /ui/requests (Change tab).
+            # (or rejected) at /app/requests (Change tab).
             pending = PendingStore(
                 path=_config_path("pending.yaml", args.pending),
                 audit=audit,
@@ -429,7 +429,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             # A fourth, deliberately separate file: toolkit proposals are a
             # different severity of change from anything in pending.yaml --
             # they touch Tier 1, not Tier 2 -- so they get their own store
-            # and their own /ui/toolkits review surface (see
+            # and their own review surface, /app/requests' Toolkit tab (see
             # toolkit_proposals.py).
             toolkit_proposals = ToolkitProposalStore(
                 path=_config_path("toolkit_proposals.yaml", args.toolkit_proposals),
@@ -448,7 +448,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
                     ", ".join(f"{n}.yaml" for n in stuck),
                 )
             logger.info(
-                "Console enabled at /ui (admins may write; %d admin(s) configured); "
+                "Console enabled at /app (admins may write; %d admin(s) configured); "
                 "admin MCP endpoint enabled at /admin/mcp",
                 sum(1 for i in identities.identities.values() if i.role == "admin"),
             )
@@ -472,7 +472,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # `forwarded_allow_ips` gates uvicorn's own ProxyHeadersMiddleware,
     # which -- for a request whose immediate peer is in this list -- rewrites
     # scope["client"]/scope["scheme"] from X-Forwarded-For/X-Forwarded-Proto
-    # *before* the ASGI app (AuthMiddleware, ui.py's session/CSRF/throttle
+    # *before* the ASGI app (AuthMiddleware, the console API's session/CSRF/throttle
     # logic) ever sees the request. Left at uvicorn's own default
     # ("127.0.0.1" when unset), a container's reverse-proxy sidecar --
     # which is not 127.0.0.1 to gatekeeper -- is not trusted, and every
@@ -567,7 +567,7 @@ audit:
 _INIT_TOOLS = """\
 # Catalog (REQUIREMENTS.md §7). Created empty - this is by design.
 #
-# Tools are created in the console at /ui; it writes this file.
+# Tools are created in the console at /app; it writes this file.
 # Examples to learn from are in config/examples/tools.yaml.
 
 tools: []
@@ -624,7 +624,7 @@ def bootstrap(
             "# Contains only hashes. The console creates further identities.\n"
             "#\n"
             "# Two separate credentials: 'token_hash' belongs to the API (/mcp),\n"
-            "# 'password_hash' for signing in to the console (/ui). Losing one\n"
+            "# 'password_hash' for signing in to the console (/app). Losing one\n"
             "# does not mean losing both.\n\n"
             "identities:\n"
             "  - id: admin\n"
@@ -713,13 +713,13 @@ def _bootstrap_on_first_start(config_dir: str, state_dir: str) -> str | None:
     # uses `gatekeeper init` and GATEKEEPER_NO_BOOTSTRAP=1.
     logger.warning(
         "Administrator console password (shown once, and only here): %s -- "
-        "sign in at /ui as 'admin', then change it there so it no longer "
+        "sign in at /app as 'admin', then change it there so it no longer "
         "lives in this log.",
         password,
     )
     logger.warning(
         "Administrator API token (shown once, and only here): %s -- for "
-        "/mcp only; it does not sign in to /ui. Rotate it in the console.",
+        "/mcp only; it does not sign in to /app. Rotate it in the console.",
         token,
     )
     return None
@@ -757,15 +757,15 @@ def _ensure_console_passwords(path: str, identities: IdentityStore) -> str | Non
                 f"Configuration error: {identity_id!r} has role "
                 f"{identities.identities[identity_id].role!r} but no console "
                 f"password, and one cannot be written: {exc}\n"
-                "Signing in to /ui needs a password since 0.3.0 -- the API "
+                "Signing in to /app needs a password since 0.3.0 -- the API "
                 "token no longer opens the console. Set one on a writable "
                 "copy of the file with:\n"
                 f"  gatekeeper password --identity {identity_id}"
             )
         logger.warning(
             "Console password for %r (shown once, and only here): %s -- this "
-            "identity had none; signing in to /ui needs one since 0.3.0. "
-            "Change it under /ui/account so it no longer lives in this log.",
+            "identity had none; signing in to /app needs one since 0.3.0. "
+            "Change it under /app/account so it no longer lives in this log.",
             identity_id,
             password,
         )
@@ -796,7 +796,7 @@ def cmd_password(args: argparse.Namespace) -> int:
     if not args.password:
         print(f"\nPassword (shown once):\n  {password}")
     print(
-        "\nThis opens /ui only. The API token of this identity is unchanged "
+        "\nThis opens /app only. The API token of this identity is unchanged "
         "and still authenticates /mcp."
     )
     return 0
@@ -840,7 +840,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     # Two lines, because there are two credentials. Collapsing them into one
     # would be exactly the misunderstanding that the separation is meant to resolve.
     print(
-        f"\nAdministrator console password for /ui (shown once):\n  {password}"
+        f"\nAdministrator console password for /app (shown once):\n  {password}"
         f"\n\nAdministrator API token for /mcp (shown once):\n  {token}"
     )
     return 0
@@ -885,7 +885,7 @@ def cmd_token(args: argparse.Namespace) -> int:
 
 
 def cmd_integration(args: argparse.Namespace) -> int:
-    """Prints the same toolkit YAML the `/ui/toolkits/reference` page shows.
+    """Prints the same toolkit YAML the `/app/toolkits/reference` page shows.
 
     A terminal formatter around `integrations.INTEGRATIONS`, nothing more -- useful
     right after 'gatekeeper init', before --ui is even reachable, or for
@@ -912,7 +912,7 @@ def cmd_integration(args: argparse.Namespace) -> int:
     if integration.notes:
         print(f"# {integration.notes}")
     print(integration.toolkit_yaml, end="")
-    print(f"\n# {len(integration.tool_specs)} starter tool(s), created via /ui/tools/integrations:")
+    print(f"\n# {len(integration.tool_specs)} starter tool(s), created via /app/tools/integrations:")
     for spec in integration.tool_specs:
         print(f"#   {spec['id']}: {spec.get('title', '')}")
     return 0
@@ -955,7 +955,7 @@ def main() -> int:
     serve.add_argument(
         "--ui",
         action="store_true",
-        help="Serve the operations console at /ui (needs role: viewer or admin)",
+        help="Serve the operations console at /app (needs role: viewer or admin)",
     )
     serve.add_argument(
         "--ui-read-only",
@@ -1033,7 +1033,7 @@ def main() -> int:
     token.set_defaults(func=cmd_token)
 
     password = sub.add_parser(
-        "password", help="Set the console password of an identity (/ui sign-in)"
+        "password", help="Set the console password of an identity (/app sign-in)"
     )
     password.add_argument(
         "--identity", required=True, help="Which identity gets the password"

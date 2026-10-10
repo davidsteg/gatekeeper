@@ -23,7 +23,6 @@ from gatekeeper.api.deps import (
     require_session_write,
 )
 from gatekeeper.api.session import SESSION_COOKIE, LoginThrottle, SessionStore
-from gatekeeper.ui import UI_PREFIX
 
 
 @pytest.fixture
@@ -141,16 +140,6 @@ async def test_login_is_throttled(env):
         assert response.status_code == 429
 
 
-async def test_ui_and_api_share_the_login_throttle(env):
-    async with client(env["app"]) as c:
-        for _ in range(10):
-            await c.post(f"{UI_PREFIX}/login", data={"identity": "root", "password": "wrong"})
-        response = await c.post(
-            f"{API}/session", json={"identity": "root", "password": PASSWORDS["root"]}
-        )
-        assert response.status_code == 429
-
-
 async def test_roles_in_the_session(env, ro_env):
     async with client(env["app"]) as c:
         admin = await login(c, "root")
@@ -176,31 +165,6 @@ async def test_logout_needs_the_csrf_token(env):
         assert (await c.get(f"{API}/session")).status_code == 401
     denied = [r for r in audit_records(env) if r.get("kind") == "admin_denied"]
     assert [r["reason"] for r in denied] == ["csrf_mismatch", "csrf_mismatch"]
-
-
-async def test_a_ui_password_change_ends_the_api_sessions(env):
-    """One session store: the legacy console's "sign out everywhere else"
-    after a password change reaches API sessions too."""
-    fresh = "a-brand-new-console-password"
-    async with client(env["app"]) as api:
-        await login(api, "eye")
-        async with client(env["app"]) as ui:
-            await ui.post(
-                f"{UI_PREFIX}/login", data={"identity": "eye", "password": PASSWORDS["eye"]}
-            )
-            page = await ui.get(f"{UI_PREFIX}/account")
-            marker = 'name="_csrf" value="'
-            start = page.text.index(marker) + len(marker)
-            csrf = page.text[start : page.text.index('"', start)]
-            changed = await ui.post(
-                f"{UI_PREFIX}/account/password",
-                data={
-                    "_csrf": csrf, "rev": env["store"].identities_revision(),
-                    "current": PASSWORDS["eye"], "password": fresh, "confirm": fresh,
-                },
-            )
-            assert changed.status_code == 200
-        assert (await api.get(f"{API}/session")).status_code == 401
 
 
 async def test_the_schema_is_admin_only(env):

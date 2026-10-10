@@ -3,7 +3,7 @@
 Unit-level: no HTTP, no MCP protocol -- those are covered end-to-end in
 `test_admin_mcp.py`. Here the concern is `pending.py`'s own guarantees
 (propose/approve/reject, stale-on-race) and that `apply_pending` calls the
-exact same `ConfigStore` mutator a human `/ui` write would.
+exact same `ConfigStore` mutator a human console write would.
 """
 
 from __future__ import annotations
@@ -491,7 +491,7 @@ def test_two_pending_tool_deletes_for_different_tools_do_not_invalidate_each_oth
 def test_approving_last_admin_deletion_still_refused(tmp_path, tier1, tool_specs):
     """No parallel guard was built for the pending path -- `apply_pending`
     calls `store.delete_identity`, and that function's own
-    `_guard_last_admin` fires exactly as it would for a direct /ui delete.
+    `_guard_last_admin` fires exactly as it would for a direct console delete.
     """
     tools_path = tmp_path / "tools.yaml"
     tools_path.write_text(yaml.safe_dump({"tools": tool_specs}), encoding="utf-8")
@@ -551,7 +551,7 @@ def test_approving_last_admin_deletion_still_refused(tmp_path, tier1, tool_specs
 
 
 def _sweep(store, pending):
-    """The sweep exactly as `/ui/requests` and `admin.pending_list` run it."""
+    """The sweep exactly as `/app/requests` and `admin.pending_list` run it."""
     return sweep_vanished_pendings(store, pending)
 
 
@@ -808,24 +808,3 @@ def test_load_cached_sees_every_rewrite_and_hands_out_copies(tmp_path):
     assert load_cached(path) == {"pending": [{"id": "a"}]}
     atomic_write(path, dump({"pending": [{"id": "a"}, {"id": "b"}]}))
     assert [e["id"] for e in load_cached(path)["pending"]] == ["a", "b"]
-
-
-def test_requests_archive_is_opt_in_and_paged():
-    """Decided items are not rendered until asked for, then 25 a page,
-    newest first -- the page used to ship every one of them."""
-    from gatekeeper.ui import _ARCHIVE_PAGE_SIZE, _archive_section
-
-    items = [f"item-{n:03d}" for n in range(60)]
-    card = lambda i: f"<p>{i}</p>"  # noqa: E731
-
-    hidden = _archive_section("change", items, card, None)
-    assert "Archive (60)" in hidden and "item-" not in hidden
-    assert _archive_section("change", [], card, None) == ""
-
-    first = _archive_section("change", items, card, 1)
-    assert first.count("<p>") == _ARCHIVE_PAGE_SIZE
-    assert "item-059" in first and "item-034" not in first
-    assert "Page 1 of 3" in first and "archive=2" in first
-
-    last = _archive_section("change", items, card, 99)  # clamped
-    assert "Page 3 of 3" in last and "item-000" in last

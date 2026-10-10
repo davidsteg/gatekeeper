@@ -1,6 +1,6 @@
 """Authentication, roles, CSRF and optimistic concurrency for `/api/v1`.
 
-The rules are the legacy console's, carried over one for one:
+The rules, one for one:
 
 * **Session, not token.** A request is authenticated by the console session
   cookie only. An `Authorization` header is refused outright -- an MCP
@@ -10,14 +10,14 @@ The rules are the legacy console's, carried over one for one:
   (`--ui-read-only`, `GATEKEEPER_UI_READ_ONLY`, i.e. no `ConfigStore`)
   turns every write into a 403 for everyone.
 * **CSRF.** Every mutating request carries `X-CSRF-Token` equal to the
-  session's token, compared in constant time like `ui._csrf_ok`. The
+  session's token, compared in constant time (`hmac.compare_digest`). The
   cookie is `SameSite=Strict` as well; the header closes the same-site gap.
 * **If-Match.** Reads return `ETag: "<store revision>"`; writes must send it
-  back. A stale revision is a 412 -- the guarantee the legacy forms' hidden
-  `rev` fields give.
+  back. A stale revision is a 412, so no write silently overwrites a
+  change made since the read.
 
-Denials are audited with the same `admin_denied` record the legacy
-console writes, so the log reads the same whichever surface was used.
+Denials are audited as an `admin_denied` record (`_deny`), with the
+denied path and the reason.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 @dataclasses.dataclass(slots=True)
 class ApiContext:
-    """The stores the API shares with the legacy console and the MCP mounts."""
+    """The stores the API shares with the MCP mounts (built once in `server.build_app`)."""
 
     service: Service
     identities: IdentityStore
@@ -134,7 +134,7 @@ def require_admin(
     session: Session = Depends(current_session),
     context: ApiContext = Depends(ctx),
 ) -> Session:
-    """Role first, then CSRF -- the legacy `writer` order, so a viewer is
+    """Role first, then CSRF, so a viewer is
     told "not permitted" rather than "stale token"."""
     if context.read_only or not session.can_write:
         _deny(context, request, session, "read_only" if context.read_only else "role_required")

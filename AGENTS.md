@@ -109,7 +109,7 @@ network access outside localhost is needed.
   *and* destinations that both the startup check and the console's "Used by"
   row use; do not hand-roll a second one, it will forget the
   destination-level `credential:` override (FR-8.3g). A dangling reference is
-  a startup warning, not an abort, and shows as a note on `/ui/credentials`.
+  a startup warning, not an abort, and shows as a note on `/app/credentials`.
 - **Three names describe one `google`/`microsoft` operation, and they are
   not interchangeable.** The public **tool ID** is dotted and
   underscore-only (`outlook.list_messages`, `drive.create_folder`); the
@@ -136,27 +136,27 @@ network access outside localhost is needed.
   this container at any path, and belong on `truenas` or `ssh` — the
   Dockerfile carries the long form of why ZFS in particular is not
   installable out of this problem.
-- **`document.querySelector('form')` on an authenticated `/ui` page grabs
-  the sidebar's logout form, not the page's content form** — the sidebar
-  renders before `<main>` in the DOM. When scripting the console (browser
-  automation, CDP, screenshots), scope to `document.querySelector('main
-  form')` instead, or you'll silently log yourself out.
-- **The console has two surfaces until the cutover.** `/ui` (`ui.py`) and
-  the JSON API `/api/v1` (`src/gatekeeper/api/`) share one `SessionStore`,
-  one `LoginThrottle` and every store, built once in `server.build_app`.
-  Shared read logic lives in `api/service.py`; `ui.py` re-exports the moved
-  helpers under their old names, so do not copy one back into `ui.py`. API
-  output goes through the Pydantic models in `api/models.py`: a new field
-  is invisible until a model names it, which is the point. After changing a
-  route or model, `python -m gatekeeper.api` prints the new OpenAPI schema.
+- **`/ui` is gone, except for what must not move (1.0.0).** The console is
+  `/app` over `/api/v1`. `ui.py` is now only redirects (`GET /ui/<x>` →
+  `/app/<x>`, anything else 410) and the OAuth callbacks at
+  `/ui/oauth/{google,microsoft}/callback`, which stay because they are the
+  redirect URIs operators registered with Google and Microsoft. Do not add
+  a page or a write under `/ui`; do not "tidy" the callback paths to
+  `/app` or `/api`. Console security tests live in
+  `tests/test_api_security.py`, not in a `test_ui*.py`.
+- **API output goes through the Pydantic models in `api/models.py`.** A new
+  field is invisible until a model names it, which is the point. Read
+  logic lives in `api/service.py`, writes in `api/writes.py`. After
+  changing a route or model, regenerate the client types (see the frontend
+  loop below), or CI and `tests/test_api_web.py` fail.
 - **No `v` prefix in `RELEASE.md`** — section headers are `## 0.4.0`, not
   `## v0.4.0`.
 - **`latest` tag moves** — pin a fixed version + digest for production
   deployments (NFR-5).
 - **Toolkit creation is UI-unreachable, on purpose.** If a task seems to
-  need a new/edited *toolkit* reachable from `/ui`, stop — that's FR-4.11,
-  not a bug. Toolkits are deploy-time only; only tools, identities, and
-  credentials are console-writable. `/ui/toolkits/reference` prints
+  need a new/edited *toolkit* reachable from the console, stop — that's
+  FR-4.11, not a bug. Toolkits are deploy-time only; only tools, identities,
+  and credentials are console-writable. `/app/toolkits/reference` prints
   copy-pasteable YAML for a human to paste in by hand, it does not write
   the file.
 

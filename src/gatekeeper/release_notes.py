@@ -1,16 +1,16 @@
 """Where RELEASE.md is and how it splits into versions (one copy, two readers).
 
-`ui.py` renders these sections into the console's release-notes popup;
+The console API (`api/app.py`) hands these sections to the React console,
+which renders them as React elements on its release-notes page;
 `server.py` serves them over `/release` for anyone who cannot open a
 browser -- an agent, a deploy script, an operator with `curl`. Both need
 the same two answers ("which file?" and "where does one version end?"),
 and the second one is a format contract with RELEASE.md's own procedure
 section, not an implementation detail either surface owns.
 
-Deliberately markdown in, markdown out: the API must not ship the
-console's HTML, and the console must not re-parse what the API returns.
-Rendering stays in `ui.py`, which is the only module allowed to produce
-HTML at all.
+Deliberately markdown in, markdown out: no Python module renders these
+sections to HTML. Rendering is the SPA's job, as React elements, never as
+injected HTML (the `/app` CSP enforces Trusted Types).
 """
 
 from __future__ import annotations

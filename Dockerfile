@@ -132,13 +132,14 @@ COPY --from=build /opt/artifacts /opt/gatekeeper/artifacts
 ARG GATEKEEPER_COMMIT=unknown
 
 # RELEASE.md is not part of the Python package (it lives at repo root, not
-# under src/gatekeeper/) -- the console's release-notes popup reads it from
+# under src/gatekeeper/) -- the console's Release notes page (/app/release-notes,
+# via /api/v1/release-notes) reads it from
 # this fixed path in production. GATEKEEPER_RELEASE_NOTES can override it;
 # a dev/editable checkout finds the file next to pyproject.toml instead and
-# never needs this at all (see ui.py's _release_notes()).
+# never needs this at all (see release_notes.notes_path()).
 COPY RELEASE.md /usr/share/gatekeeper/RELEASE.md
 
-# Project documentation — bundled into the image so the /ui/docs page
+# Project documentation — bundled into the image so the /app/docs page
 # has the full docs without runtime file access or network.
 COPY README.md REQUIREMENTS.md AGENTS.md /opt/gatekeeper-docs/
 COPY RELEASE.md /opt/gatekeeper-docs/RELEASE.md

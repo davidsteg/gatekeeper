@@ -30,27 +30,31 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import make_catalog
-from test_ui_oauth import (
+from test_oauth import (
+    APP_RESULT,
     AUTH_CODE,
     CLIENT_ID,
     CLIENT_SECRET,
     NEW_REFRESH,
     _build_env,
+    _callback,
     _client,
+    _consent_params,
     _google_tier1,
-    _start_flow,
+    _start,
     _stored_bundle,
 )
 
 from gatekeeper.audit import AuditLog
 from gatekeeper.credentials import KEY_ENV, CredentialStore, generate_master_key
-from gatekeeper.service import Service
-from gatekeeper.ui import (
+from gatekeeper.oauth import (
     DEFAULT_GOOGLE_SCOPES,
     GOOGLE_SCOPE_PREFIX,
-    OAUTH_CALLBACK_PATH,
+    MAX_GOOGLE_SCOPE_CHARS,
+    MAX_GOOGLE_SCOPES,
     _granted_google_scopes,
 )
+from gatekeeper.service import Service
 
 #: What the console asks a human to consent to, spelled the way Google
 #: spells it. Every list in this file is compared against this one.
@@ -121,16 +125,19 @@ def oauth_env(tmp_path, monkeypatch):
     return env
 
 
-async def _run_callback(env, monkeypatch, payload: dict) -> str:
+async def _run_callback(env, monkeypatch, payload: dict) -> tuple[str, str]:
+    """One whole flow through the API; returns (authorize JSON text,
+    callback Location), the latter asserted to be the ok result."""
     async def fake_exchange(**_kwargs):
         return payload
 
-    monkeypatch.setattr("gatekeeper.ui._exchange_google_code", fake_exchange)
+    monkeypatch.setattr("gatekeeper.oauth._exchange_google_code", fake_exchange)
     async with _client(env["app"]) as client:
-        state = (await _start_flow(client))["state"]
-        page = await client.get(f"{OAUTH_CALLBACK_PATH}?code={AUTH_CODE}&state={state}")
-    assert page.status_code == 200, page.text[:2000]
-    return page.text
+        start = await _start(client)
+        state = _consent_params(start)["state"]
+        location = await _callback(client, f"code={AUTH_CODE}&state={state}")
+    assert location == f"{APP_RESULT}?oauth=ok&provider=google&credential=gws"
+    return json.dumps(start), location
 
 
 async def test_callback_persists_the_granted_scopes(oauth_env, monkeypatch):
@@ -180,7 +187,7 @@ async def test_scopes_fall_back_to_the_consent_screens_when_google_says_nothing(
 async def test_the_scopes_are_audited_but_no_token_material_is(
     oauth_env, monkeypatch, tmp_path
 ):
-    page = await _run_callback(
+    start, location = await _run_callback(
         oauth_env, monkeypatch,
         {"refresh_token": NEW_REFRESH, "scope": " ".join(CONSENTED),
          "access_token": "ya29.access-token-value"},
@@ -193,7 +200,8 @@ async def test_the_scopes_are_audited_but_no_token_material_is(
     assert GOOGLE_SCOPE_PREFIX + "gmail.send" in log
     for secret in (NEW_REFRESH, CLIENT_SECRET, AUTH_CODE, "ya29.access-token-value"):
         assert secret not in log, secret
-        assert secret not in page, secret
+        assert secret not in location, secret
+        assert secret not in start, secret
 
 
 @pytest.mark.parametrize(
@@ -212,8 +220,6 @@ def test_an_unusable_scope_field_falls_back(raw):
 
 def test_the_scope_field_is_bounded_and_deduplicated():
     """It arrives in a token response, so it is treated like input."""
-    from gatekeeper.ui import MAX_GOOGLE_SCOPE_CHARS, MAX_GOOGLE_SCOPES
-
     absurd = " ".join(["a" * (MAX_GOOGLE_SCOPE_CHARS + 1)] + [f"s{i}" for i in range(200)])
     granted = _granted_google_scopes({"scope": absurd}, CONSENTED)
     assert len(granted) == MAX_GOOGLE_SCOPES

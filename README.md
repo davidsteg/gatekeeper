@@ -64,16 +64,16 @@ gatekeeper --toolkits config/toolkits.yaml --tools config/tools.yaml \
 
 ## The console UI
 
-Once started with `--ui`, gatekeeper hosts an admin dashboard at `/ui` where you:
+Once started with `--ui`, gatekeeper hosts an admin console at `/app` where you:
 
 - **View access** — who can call what, which resources are protected
 - **Manage tools** — add, edit, enable/disable without restarting
 - **Grant permissions** — link identities to tools with scopes
 - **Monitor audit log** — search activity, track denials, find mistakes
-- **See statistics** — aggregate call stats, success rates, latency, admin activity at `/ui/stats`
+- **See statistics** — aggregate call stats, success rates, latency, admin activity at `/app/stats`
 - **Change passwords** — rotate console access for people
 
-A new React console is at `/app`, backed by a typed JSON API at `/api/v1`. Both sign in with the same console password, and an API token is refused there. Everything the classic console at `/ui` does can be done there, including deciding agent requests, the Stats and Docs pages, and Google or Microsoft sign-in for an oauth2 credential; `/ui` stays until the new console replaces it. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#console-api-api-apiv1).
+The console is a React single-page app served from the image, backed by a typed JSON API at `/api/v1`. It signs in with a console password; an API token is refused there. Since 1.0.0 it is the only console: the old server-rendered one at `/ui` is gone, and a `/ui/...` bookmark redirects to the same page under `/app/...`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#console-api-api-apiv1).
 
 ### Overview: At a glance
 
@@ -135,13 +135,13 @@ Because the two halves live in different tiers, they can disagree: a binding may
 
 Two things follow for the audit log. Every call record names the credential it used (`"credentials": ["sonarr"]`) so you know what to rotate after a leak — and the value itself is masked everywhere it could surface: in the record, in the tool's own response before that response reaches the agent, and in any field whose name looks like a secret. Setting up the master key that encrypts all of this is step 1 of [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#credentials-from-zero-to-a-working-call).
 
-An admin agent on `/admin/mcp` can propose a new credential's *name*, *kind*, and *header* (`admin.cred_propose`) — but never a value; the tool has no such parameter, and one sent anyway is refused, not stored. The proposal waits in `/ui/requests` until a human reviews exactly what was proposed and types the secret themselves, the same write-only guarantee as creating one by hand. The matching half, `admin.credential_bind`, proposes which *toolkit* uses that credential — again two names and nothing value-shaped — and lands on the Toolkit tab, because the binding is Tier 1 (FR-10.4): only a human clicking "Approve & Deploy" ever writes it into `toolkits.yaml`. `admin.cred_delete` removes a slot again by name — refused while any toolkit or destination still references it, and audited by name — so a slot created with the wrong *kind* (a token typed as `bearer` for a service that wants an API-key header) can be deleted and proposed again correctly without a console session.
+An admin agent on `/admin/mcp` can propose a new credential's *name*, *kind*, and *header* (`admin.cred_propose`) — but never a value; the tool has no such parameter, and one sent anyway is refused, not stored. The proposal waits in `/app/requests` until a human reviews exactly what was proposed and types the secret themselves, the same write-only guarantee as creating one by hand. The matching half, `admin.credential_bind`, proposes which *toolkit* uses that credential — again two names and nothing value-shaped — and lands on the Toolkit tab, because the binding is Tier 1 (FR-10.4): only a human clicking "Approve & Deploy" ever writes it into `toolkits.yaml`. `admin.cred_delete` removes a slot again by name — refused while any toolkit or destination still references it, and audited by name — so a slot created with the wrong *kind* (a token typed as `bearer` for a service that wants an API-key header) can be deleted and proposed again correctly without a console session.
 
 ### Identities: Manage access
 
 ![](.readme-assets/identities.png)
 
-Create agents, viewers, admins. Each gets a token (for `/mcp`) and/or password (for `/ui`). Grant per-tool access with scopes. Change passwords on `/ui/account`. Rotate tokens to force reconnection.
+Create agents, viewers, admins. Each gets a token (for `/mcp`) and/or password (for the console at `/app`). Grant per-tool access with scopes. Change passwords on `/app/account`. Rotate tokens to force reconnection.
 
 ### Audit log: Search activity
 
@@ -174,7 +174,7 @@ docker compose up -d
 docker compose logs gatekeeper | grep 'Administrator'
 ```
 
-Output shows the admin password and API token—**shown once only**. After login, change password under `/ui/account`.
+Output shows the admin password and API token—**shown once only**. After login, change password under `/app/account`.
 
 Config files created:
 - `toolkits.yaml` (Tier 1: deploy-time, immutable) — empty, add your clusters
@@ -220,13 +220,13 @@ owned by somebody else, it can declare `run_as: "3001:3001"` (or an account
 name); operations then run as that user, and only for that toolkit. It needs
 `CAP_SETUID` and `CAP_SETGID` — in practice `user: "0:0"` *and* `cap_add:
 [SETUID, SETGID]`, since Docker grants those to uid 0 alone. Changing it over
-`/admin/mcp` needs a human approval at `/ui/requests`, and where the privilege
+`/admin/mcp` needs a human approval at `/app/requests`, and where the privilege
 is missing the calls fail rather than quietly running as the container user — see
 [DEPLOYMENT.md](docs/DEPLOYMENT.md#running-file-operations-as-another-user-run_as).
 
 ### 5. Create tools and grant access
 
-Use the `/ui` console (logged in as admin) or copy from [tools example](config/examples/tools.yaml).
+Use the console at `/app` (logged in as admin) or copy from [tools example](config/examples/tools.yaml).
 
 Example tool:
 
@@ -273,12 +273,12 @@ The agent now sees only tools it has permission for.
 
 ## Authentication: Two systems
 
-### Console (human, `/ui`)
+### Console (human, `/app`)
 
 - **Who**: viewers and admins
 - **Credential**: password (console login only)
-- **Session**: separate cookie-based session
-- **Change it**: `/ui/account` (requires old password)
+- **Session**: separate cookie-based session, scoped to `/api/v1`
+- **Change it**: `/app/account` (requires old password)
 
 ### API (agent, `/mcp`)
 
@@ -288,7 +288,7 @@ The agent now sees only tools it has permission for.
   is authenticated on its own, and no cookie is ever read. The transport
   keeps a session for older-protocol clients so `notifications/tools/list_changed`
   has a stream to travel on; it carries no authority of its own.
-- **Rotate it**: `/ui` under Identities (for admins/viewers) or via CLI for new tokens
+- **Rotate it**: `/app/identities` (for admins/viewers) or via CLI for new tokens
 
 These are intentionally separate. A leaked console password doesn't open `/mcp`. A leaked token doesn't open the dashboard.
 
@@ -296,7 +296,7 @@ These are intentionally separate. A leaked console password doesn't open `/mcp`.
 
 ## What admins can do
 
-From the `/ui` console (when logged in):
+From the console at `/app` (when logged in):
 
 - **Add/edit/disable/delete tools** — modify Tier 2 (runtime)
 - **Create/edit/delete identities** — manage users and agents
@@ -313,10 +313,10 @@ From the `/ui` console (when logged in):
 ### Protections
 
 - **Last admin protected** — can't delete or demote the last admin with a console password
-- **CSRF token on writes** — every form includes a session-scoped token
-- **Optimistic locking** — forms know the file revision; concurrent edits are detected and rejected
+- **CSRF token on writes** — every write carries a session-scoped `X-CSRF-Token` header
+- **Optimistic locking** — every write sends the revision it read (`If-Match`); concurrent edits are detected and rejected
 - **Atomic writes** — temp file + fsync + atomic rename; crashes leave the old file intact
-- **After write, re-read** — the UI doesn't assume the write succeeded; it reloads from disk
+- **After write, re-read** — nothing assumes the write succeeded; the server reloads the file from disk and the console refetches what it shows
 
 ---
 
@@ -324,7 +324,7 @@ From the `/ui` console (when logged in):
 
 A second MCP endpoint, `/admin/mcp`, lets an `admin`-role agent (e.g. an
 always-on orchestrator like Hermes) manage the tool catalog and grants the
-same way a human does at `/ui`, without a human being the bottleneck for
+same way a human does at `/app`, without a human being the bottleneck for
 every routine change.
 
 - **Isolated by construction, not by filter.** `/admin/mcp` is a second,
@@ -335,7 +335,7 @@ every routine change.
   tool (always created disabled), disabling a tool, and enabling/updating a
   `read`-category tool.
 - **Everything that expands what an agent can do goes to a pending queue**
-  at `/ui/requests` (Change tab) instead: enabling/updating a
+  at `/app/requests` (Change tab) instead: enabling/updating a
   `write`/`write_external` tool, deleting a tool, granting access
   (`admin.grant_set`), and changing an identity's role (`admin.role_set`).
   A human approves or rejects from the console — the applied change and
@@ -355,7 +355,7 @@ every routine change.
   deploy time if a tool still references it), and `admin.credential_bind`
   proposes pointing an existing toolkit at an existing credential *name*
   (never a value, never a destination-level override) — all four always
-  land in their own review surface, the Toolkit tab of `/ui/requests` — never the
+  land in their own review surface, the Toolkit tab of `/app/requests` — never the
   Change tab — a toolkit changes what is *possible* at all (Tier 1), not
   just who can do what (Tier 2), so it gets a heavier,
   explicit confirmation. A human clicking "Approve & Deploy" is the only
@@ -407,7 +407,7 @@ JSON Lines, one entry per call:
 {"timestamp":"2026-08-16T12:39:48Z","identity":"homelab","tool":"diag.uptime","status":"ok","exit":0,...}
 ```
 
-Stored in `audit.dir` from `toolkits.yaml`. Automatically rotated (default: 10 files × 32MB each). Search from `/ui/audit` with filters.
+Stored in `audit.dir` from `toolkits.yaml`. Automatically rotated (default: 10 files × 32MB each). Search from `/app/audit` with filters.
 
 ---
 
@@ -417,7 +417,7 @@ Stored in `audit.dir` from `toolkits.yaml`. Automatically rotated (default: 10 f
 - **Container logs can leak secrets gatekeeper doesn't manage.** Agents with `docker.compose_logs` see that container's own environment variables verbatim — gatekeeper only knows to redact secrets it holds itself. Anything created through the credential store (Credentials page) *is* masked out of tool output and the audit log wherever it appears (FR-10.6); an arbitrary secret baked into a container's env is not, because gatekeeper has no way to know it's one.
 - **Admin access is powerful.** An admin can create any tool within Tier 1 bounds, grant it to agents, and they'll run. Treat console password like a host SSH key: one per person, changed regularly, `viewer` role for observers.
 - **No shell history in passwords.** Always use `gatekeeper password --identity <id>` without `--password <value>` to avoid the password landing in shell history.
-- **TLS required for `/ui`.** Console cookies run without `Secure` flag over HTTP. Deploy behind a reverse proxy with HTTPS, or on a private network only.
+- **TLS required for the console.** The session cookie gets the `Secure` flag only when the request arrives over HTTPS (directly, or via `X-Forwarded-Proto` from a trusted proxy); over plain HTTP it travels in the clear. Deploy behind a reverse proxy with HTTPS, or on a private network only.
 
 ---
 

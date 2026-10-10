@@ -1,7 +1,8 @@
 """The `/api/v1` application: a FastAPI sub-app mounted into gatekeeper's
-Starlette app by `server.build_app`, next to `/mcp`, `/admin/mcp` and `/ui`.
+Starlette app by `server.build_app`, next to `/mcp`, `/admin/mcp`, `/app`
+and the `/ui` redirects.
 
-Session handling and every *read* the legacy console offers live here;
+Session handling and every *read* the console offers live here;
 the writes for tools, identities, credentials and one's own password are
 in `writes.py` (phases 3a and 3b, docs/ROADMAP.md), request decisions
 included.

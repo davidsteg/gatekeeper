@@ -1,8 +1,9 @@
-"""`/api/v1` writes (phase 3a): tools, identities, credentials, own password.
+"""`/api/v1` writes: tools, identities, credentials, own password, and
+request decisions.
 
-Each route mirrors a `/ui` form handler, so these tests pin the same
-outcomes the `test_ui_admin.py` tests pin for the forms -- plus the API's
-own gate order on every write: session, role, CSRF, If-Match.
+Each route calls the same store method the 0.x console's forms did; the
+store-level outcomes are pinned in `test_store_admin.py`. These tests add
+the API's own gate order on every write: session, role, CSRF, If-Match.
 """
 
 from __future__ import annotations

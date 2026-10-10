@@ -31,6 +31,10 @@ def built(tmp_path, monkeypatch):
     )
     (dist / "assets" / "index-abc.js").write_text("console.log('x');" * 100, encoding="utf-8")
     (dist / "favicon.svg").write_text("<svg/>", encoding="utf-8")
+    (dist / "manifest.webmanifest").write_text(
+        open(os.path.join(REPO, "frontend", "public", "manifest.webmanifest"), encoding="utf-8").read(),
+        encoding="utf-8",
+    )
     (tmp_path / "secret.txt").write_text("outside the build", encoding="utf-8")
     monkeypatch.setenv(web.WEB_DIR_ENV, str(dist))
     return dist
@@ -135,3 +139,17 @@ def test_the_committed_schema_is_current():
     and `npm run gen:api`."""
     with open(os.path.join(REPO, "frontend", "openapi.json"), encoding="utf-8") as handle:
         assert handle.read() == schema_text()
+
+
+async def test_the_web_app_manifest_is_public_and_scoped_to_app(env):
+    """A browser fetches the manifest before anyone has signed in, so it is
+    public -- which is fine because it is static bytes with no data in it.
+    It installs the console at `/app/` (the `/ui/` one went with 1.0.0)."""
+    async with client(env["app"]) as c:
+        response = await c.get("/app/manifest.webmanifest")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/manifest+json")
+    manifest = response.json()
+    assert (manifest["start_url"], manifest["scope"]) == ("/app/", "/app/")
+    assert all(icon["src"].startswith("/app/") for icon in manifest["icons"])
+    assert "root" not in response.text

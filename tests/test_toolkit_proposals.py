@@ -664,7 +664,7 @@ def test_deploy_bind_to_a_credential_with_no_slot_still_deploys(tmp_path, sandbo
     """Dangling-reference parity (FR-8.3g): the binding is Tier 1, the value
 
     is Tier 2, and the two are allowed to disagree. A name with no slot
-    behind it is a startup *warning* and a note on /ui/credentials -- never
+    behind it is a startup *warning* and a note on /app/credentials -- never
     an abort -- so deploy must not invent a stricter rule than the loader
     it validates with. `__main__.py`'s check is the same set difference.
     """

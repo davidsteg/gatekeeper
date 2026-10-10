@@ -6,16 +6,17 @@ item.
 
 ## Implemented
 
-- Console JSON API at `/api/v1` (read-only, phase 1 of the console
-  migration): session sign-in with the console password, CSRF, ETag /
+- Console JSON API at `/api/v1`: session sign-in with the console password, CSRF, ETag /
   If-Match, viewer/admin roles, bearer tokens refused; overview, tools,
   integrations, identities, credential metadata, toolkits, requests, audit,
   stats, bundled docs and release notes, plus every console write and
   OAuth sign-in (`api/`)
-- React console at `/app`, with every page `/ui` has (phases 2-3b, 0.57.0): Vite + React + TypeScript,
+- The console at `/app` (the only console since 1.0.0): Vite + React + TypeScript,
   types generated from the API schema, served by gatekeeper under a
   `script-src 'self'` + Trusted Types CSP, built in a Node-only Dockerfile
-  stage, with its own CI job (`frontend/`)
+  stage, with its own CI job (`frontend/`). `/ui` paths redirect there
+  (1.0.0); only the OAuth callbacks stay under `/ui/oauth/`, as the
+  redirect URIs registered with Google and Microsoft
 - Two-tier config (Tier 1 immutable / Tier 2 runtime-mutable)
 - `docker` and `local` executors
 - `http` executor — SSRF-safe, no redirects followed, credential-as-header
@@ -32,8 +33,8 @@ item.
 - `microsoft` executor — Outlook mail over Microsoft Graph
   (`execute_microsoft.py` + `_microsoft_api/microsoft_api.py`): list
   messages, get message, list folders, send mail, whitelisted by
-  action string per toolkit. The console signs in at
-  `/ui/oauth/microsoft/authorize` (authorization code + PKCE against
+  action string per toolkit. The console signs in from
+  `/app/credentials` (authorization code + PKCE against
   the `common` authority, so outlook.com/hotmail.com accounts work)
   and stores the refresh token and the granted scopes in the same
   `oauth2` credential kind the `google` executor uses.
@@ -72,14 +73,13 @@ item.
   (Sonarr, Radarr, Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n,
   Uptime Kuma, Immich, Telegram, Google API, TrueNAS, pfSense, Jellystat,
   Netdata, SABnzbd, Paperless-ngx, Docker, Linux-over-SSH, opencode), reachable
-  from `/ui/tools/integrations` (`integrations.py`). TrueNAS's starter set
+  from `/app/tools/integrations` (`integrations.py`). TrueNAS's starter set
   covers pool listing, dataset listing, snapshot listing, and snapshot
   deletion (`pool.query`/`pool.dataset.query`/`zfs.snapshot.query`/
   `zfs.snapshot.delete`) — snapshot *creation* isn't included; see
   "Not implemented" below.
 - `write_external` category — distinct rate-limit bucket, agent-facing
   "cannot be undone" warning, requires an explicit grant
-- Operations console (`/ui`) — no JavaScript, CSP-locked, server-rendered SVG
 - **Live catalog change notification (FR-1.5)** — `/mcp` advertises
   `tools.listChanged: true` and sends `notifications/tools/list_changed` to
   every connected session whenever a write changes what an agent may call
@@ -98,14 +98,14 @@ item.
 
 ## Not implemented (by design or not yet)
 
-- **React console cutover (phase 4).** Phases 1 (JSON API, 0.53.0), 2
-  (read-only SPA at `/app`, 0.54.0), 3a (tool, identity, credential and
-  password writes, 0.55.0), 3b (request decisions, 0.56.0) and the parity
-  release (Stats, Docs and OAuth sign-in at `/app`, 0.57.0) are done.
-  Still to come: the
-  1.0.0 cutover that redirects `/ui` to `/app`, deletes `ui.py`'s HTML
-  views and makes FR-11.9's `script-src 'self'` policy the only console
-  policy. A Playwright smoke test against the built image is not in CI yet.
+- **A browser smoke test of the console in CI.** The console migration is
+  finished (JSON API 0.53.0, SPA 0.54.0, writes 0.55.0, request decisions
+  0.56.0, parity 0.57.0, cutover 1.0.0), and vitest covers the pages, but a
+  Playwright run against the built image is not in CI yet.
+- **Paging for decided requests in the API.** `GET /requests/pending`
+  returns every item (filterable by `status`); the console pages the
+  archive itself. Fine at today's sizes; see "Retention for decided
+  proposals" below.
 
 - **Artifact transfers as another user (`run_as`) and older artifact
   versions.** A transfer writes as the Gatekeeper process user. An image
@@ -148,7 +148,8 @@ item.
   `google_api.py` also dispatches `contacts`, `sheets` and `docs`, which a
   toolkit may whitelist as action strings although no starter tool ships
   for them. The refresh token is obtained in the console since 0.46.0
-  (`/ui/oauth/google/authorize` + `/ui/oauth/google/callback`), so no
+  (started from `/app/credentials` since 1.0.0; the callback is still
+  `/ui/oauth/google/callback`), so no
   setup script outside gatekeeper handles it. Microsoft went the other way
   (0.46.3): its own `microsoft` executor and its own consent routes, a
   sibling of the Google pair rather than a toolkit on it, because the
@@ -182,7 +183,7 @@ item.
 - **Retention for decided proposals** — `pending.yaml` and
   `toolkit_proposals.yaml` keep every approved/rejected/stale/deployed item
   forever (466 on one deployment as of 0.47.4). Page loads no longer pay for
-  that (0.47.3 caches the parse, renders the `/ui/requests` archive on
+  that (0.47.3 caches the parse, shows the requests archive on
   demand), but every propose/decide still re-parses and rewrites the whole
   file — ~170 ms at that size, growing linearly. Moving items decided more
   than N days ago into a separate history file would cap it. Deferred: years

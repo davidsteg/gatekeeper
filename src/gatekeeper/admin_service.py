@@ -3,7 +3,7 @@
 `AdminService` wraps `ConfigStore` + `PendingStore` and is the single
 dispatch point `admin_server.py` calls into for every `admin.*` tool. Every
 mutating action goes through the *same* `ConfigStore`/`PendingStore`
-mutators a human `/ui` write uses -- there is no second, more lenient path
+mutators a human console write (`/api/v1`) uses -- there is no second, more lenient path
 (the same principle `catalog.parse_tool_spec`'s docstring states for tool
 definitions applies here to the whole admin surface).
 
@@ -36,9 +36,9 @@ whether a change applies immediately or is written to the pending queue:
 
 `approve`/`reject` are deliberately **not** methods on this class and are
 not in `_EXPOSED`. The only place a pending item is ever turned into a live
-change is `apply_pending` below, called exclusively from `ui.py`'s
-`/ui/requests` (Change tab) routes (human session + CSRF, exactly like
-every other admin write). There is no code path from `/admin/mcp` that
+change is `apply_pending` below, called only from the console API's
+request-decision routes (`api/writes.py`: human session + `role: admin` +
+CSRF, exactly like every other console write). There is no code path from `/admin/mcp` that
 reaches it -- FR-2.8's
 self-approval prevention is structural, not a permission check.
 """
@@ -73,9 +73,9 @@ _NO_RELEASE_NOTES = (
     "image, which ships it at /usr/share/gatekeeper/RELEASE.md."
 )
 
-#: Server-side mirror of `_credential_editor`'s HTML `pattern` attribute
-#: (ui.py) -- that one is client-side only, so a raw MCP call bypasses it
-#: entirely unless enforced here too.
+#: The credential-name rule for `cred_propose`. A console form check is
+#: client-side only, so a raw MCP call would bypass it entirely unless
+#: enforced here too.
 _CREDENTIAL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 #: Argument names `credential_bind` refuses outright instead of ignoring.
@@ -339,7 +339,7 @@ class AdminService:
         dead end. A slot's kind is fixed at creation (a `paperless` token
         created as `bearer` when the service wants `api_key_header`
         authenticates against nothing), and nothing could change or remove
-        it from here: the only way out was a human in `/ui/credentials`.
+        it from here: the only way out was a human in `/app/credentials`.
         Deleting the slot and proposing it again with the right kind is
         that fix, reachable over `/admin/mcp` alone.
 
@@ -543,7 +543,7 @@ class AdminService:
         are rejected. Like `toolkit_propose`, this changes Tier 1 -- what is
         possible at all, not just who can do what -- so it is always written
         to the toolkit-proposal queue and never applies on its own; a human
-        reviews it at `/ui/requests` (Toolkit tab) and, if they approve,
+        reviews it at `/app/requests` (Toolkit tab) and, if they approve,
         gatekeeper validates, writes toolkits.yaml, and reloads it into the
         running process itself. There is no code path from `/admin/mcp` that
         can make this take effect by itself (FR-2.8's self-approval
@@ -588,7 +588,7 @@ class AdminService:
         What this relaxes is the redeploy, not the human -- the same trade
         `toolkit_update` already made for an executor swap. The proposal is
         written to `ToolkitProposalStore` and never applies on its own;
-        `/ui/requests` (Toolkit tab) is the only place it can take effect,
+        `/app/requests` (Toolkit tab) is the only place it can take effect,
         behind a session, `role: admin`, CSRF and an explicit confirmation.
         There is no code path from `/admin/mcp` to
         `ToolkitProposalStore.deploy` (FR-2.8's self-approval prevention is
@@ -614,7 +614,7 @@ class AdminService:
                 "valid argument here -- this binds a toolkit to a credential "
                 "*name*. No operation on /admin/mcp ever carries secret "
                 "material (FR-10.2/10.8); a value is typed by a human in "
-                "/ui/credentials and never reaches this queue."
+                "/app/credentials and never reaches this queue."
             )
         deploy_time = sorted(set(args) & _BIND_DEPLOY_TIME_ARGS)
         if deploy_time:
@@ -674,7 +674,7 @@ class AdminService:
         (that's advisory to a well-behaved client, not a transport gate) --
         so a stray `value` is rejected explicitly below, loudly rather than
         silently ignored. The value is always typed by a human, at approval
-        time, in `/ui/requests` -- never written to `pending.yaml` (see
+        time, in `/app/requests` -- never written to `pending.yaml` (see
         `pending.py`'s module docstring: everything proposed through it
         sits in a plaintext Tier 2 file).
 
@@ -682,8 +682,8 @@ class AdminService:
         `apply` callback the way `grant_set`/`tool_delete` are: that
         callback fires synchronously at approval with no way to collect
         additional input, but filling in the value *is* the approval here.
-        `ui.py`'s dedicated `/ui/pending/credential-fill` route calls
-        `pending.approve()` directly instead of going through
+        The console API's dedicated `POST /api/v1/requests/pending/{id}/credential`
+        route (`api/writes.py`) calls `pending.approve()` directly instead of going through
         `admin_service.apply_pending`/`_APPLIERS`.
         """
         if self.credentials is None:
@@ -701,7 +701,7 @@ class AdminService:
             raise AdminActionError(
                 "'value' is not a valid argument here -- this proposes a "
                 "credential's name/kind/header only. The secret value is "
-                "always typed by a human in /ui at approval time, never "
+                "always typed by a human in /app/requests at approval time, never "
                 "sent over /admin/mcp (FR-10.2/10.8)."
             )
         name = _require_str(args, "name")
@@ -766,7 +766,7 @@ _EXPOSED: tuple[str, ...] = (
 EXPOSED_ACTIONS: frozenset[str] = frozenset(_EXPOSED)
 
 
-# -- Applying an approved pending action (called only from ui.py) -----------
+# -- Applying an approved pending action (called only from api/writes.py) ---
 
 
 def _apply_tool_update(store: ConfigStore, item: PendingAction) -> Any:
@@ -883,7 +883,8 @@ def sweep_vanished_pendings(
     """Closes every queued proposal whose target record no longer exists.
 
     Called from the read paths a human or an agent actually looks at the
-    queue through (`AdminService.pending_list`, `/ui/requests`), so the
+    queue through (`AdminService.pending_list`, the console's
+    `GET /api/v1/requests/pending` via `api/service.pending_view`), so the
     items `approve`'s guard can only close on a click -- and which nobody
     has a reason to ever click -- do not accumulate as permanent `pending`
     rows. Idempotent; see `PendingStore.close_vanished_targets`.
@@ -897,10 +898,11 @@ def apply_pending(
     store: ConfigStore, pending: PendingStore, action_id: str, *, decided_by: str
 ) -> Any:
     """Approves and applies one pending action -- the only function in this
-    codebase that turns a proposal into a live change. Called exclusively
-    from `ui.py`'s `/ui/requests` (Change tab) approve route (human
-    session, `role: admin`, CSRF token -- the same `writer` wrapper every
-    other admin write goes through). Not part of `AdminService`, not
+    codebase that turns a proposal into a live change. Called only
+    from the console API's request-decision routes in `api/writes.py`
+    (approve and approve-all; human session, `role: admin`, CSRF token --
+    the same `require_admin` dependency every other console write goes
+    through). Not part of `AdminService`, not
     reachable from `/admin/mcp` (FR-2.8/2.9).
     """
     item = pending.get(action_id)

@@ -1,15 +1,15 @@
-"""Console read model, shared by the legacy `/ui` and the JSON API.
+"""Console read model behind the JSON API (`/api/v1`).
 
 The functions here turn the live stores into plain, JSON-serialisable
-structures -- no HTML, no request objects. `ui.py` renders them into its
-f-string pages; `api/app.py` hands them to Pydantic response models. The
-first batch (`read_audit`, the call-stat counters, `_target`) moved here
-from `ui.py` unchanged so both surfaces compute the same numbers; the
-`*_view` builders below are new and feed only the API so far.
+structures -- no HTML, no request objects. `api/app.py` and
+`api/extras.py` hand them to Pydantic response models, and the React
+console at `/app` renders those. `admin_service` reuses some of them for
+the `admin.*` read actions, so the console and `/admin/mcp` compute the
+same numbers.
 
 Nothing in this module writes, with one deliberate exception inherited
 from the console: `pending_view` sweeps vanished pending items before
-listing, exactly like `/ui/requests` and `admin.pending_list` do (see
+listing, exactly like `admin.pending_list` does (see
 `admin_service.sweep_vanished_pendings`).
 """
 
@@ -401,8 +401,7 @@ def audit_path(service: Any) -> str:
 
 
 def _matrix_identities(identities: Any) -> list[Any]:
-    """The rows of the access map, chosen the same way `ui._access_matrix`
-    does: agents, plus console identities that actually hold a grant --
+    """The rows of the access map: agents, plus console identities that actually hold a grant --
     and, on a deployment with nothing but console identities, all of them.
     """
     everyone = identities.identities.values()
@@ -416,10 +415,9 @@ def access_matrix(
 ) -> dict[str, Any]:
     """Identity x toolkit grants with per-pair call counts.
 
-    The same numbers the legacy access map renders as an HTML table: a
-    cell lists the granted tool IDs of that toolkit and the calls this
+    A cell lists the granted tool IDs of that toolkit and the calls this
     identity made into it within the audit window. `hot_threshold` is the
-    legacy heat-map cut-off (75th percentile of pair totals, at least 3).
+    heat-map cut-off (75th percentile of pair totals, at least 3).
     """
     toolkits = sorted(service.tier1.toolkits.items())
     tools_by_kit: dict[str, set[str]] = {name: set() for name, _ in toolkits}
@@ -454,7 +452,7 @@ def overview_view(
     pending: PendingStore | None, toolkit_proposals: ToolkitProposalStore | None,
     *, now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Everything `/ui/` shows, as data: posture, the 12 h activity series,
+    """Everything the console's overview page (`/app/`) shows, as data: posture, the 12 h activity series,
     the most recent events and the access matrix."""
     catalog = service.catalog
     records, _ = read_audit(audit_path(service), limit=400)
@@ -628,7 +626,7 @@ def pending_view(store: Any, pending: PendingStore | None, status: str | None) -
 def _review_tool(store: Any, tool_id: str, marker: str = "") -> dict[str, Any]:
     """One tool a proposal names, resolved against the live catalog, so a
     reviewer sees whether it exists and what it is now -- a grant on a tool
-    that was never created is a right to nothing (`ui._resolved_tool_badge`)."""
+    that was never created is a right to nothing."""
     flat = store.service.catalog.flat_spec_of(tool_id) if store is not None else None
     if flat is None:
         return {"id": tool_id, "marker": marker, "state": "missing", "title": "", "category": ""}
@@ -642,8 +640,8 @@ def _review_tool(store: Any, tool_id: str, marker: str = "") -> dict[str, Any]:
 
 def pending_review(item: Any, store: Any) -> dict[str, Any]:
     """What a reviewer needs to judge one proposal, as plain data: a
-    one-line headline and the tools it touches. The same reading as
-    `ui._pending_payload_summary`; the full payload stays in `payload`.
+    one-line headline and the tools it touches; the full payload stays in
+    `payload`.
 
     A `grant_set` is a full replacement, so it is diffed against the
     `prev_tools` snapshot taken at propose time and only the added and
@@ -733,7 +731,7 @@ def toolkit_proposals_view(
         spec = item.to_spec()
         live = service.tier1.toolkits.get(item.name)
         spec["current"] = toolkit_summary(item.name, live) if live is not None else None
-        # What deploying writes, as the `/ui` card shows it: a create as a
+        # What deploying writes, as the review card shows it: a create as a
         # complete `name: {...}` block, an update as just the changed fields.
         spec["spec_yaml"] = (
             "" if item.kind in ("delete", "bind")
@@ -768,11 +766,11 @@ def audit_page(
 ) -> dict[str, Any]:
     """A page of the audit log, newest first, filtered.
 
-    Paginates over the same tail window `read_audit` reads for `/ui/audit`
+    Paginates over the tail window `read_audit` reads
     (`AUDIT_READ_BYTES`); the cursor is an offset into the filtered,
     newest-first sequence. Stage 1 moves the audit index to SQLite, and
     the cursor -- opaque on purpose -- can then become a row key without
-    a client change. `window_truncated` keeps the legacy page's honesty:
+    a client change. `window_truncated` keeps the page honest:
     older records exist that this window does not reach.
     """
     offset = decode_cursor(cursor)
@@ -830,7 +828,7 @@ def toolkit_reference_view() -> list[dict[str, Any]]:
     ]
 
 
-# -- Shared by the write paths of /ui and /api/v1 ------------------------------------
+# -- Shared by the write paths of /api/v1 -------------------------------------------
 
 
 def _tool_scaffold(service: Any) -> str:
@@ -907,10 +905,10 @@ def drop_sessions_after_identity_update(
         sessions.drop_identity(replaces, keep=keep)
 
 
-# -- Stats and docs (moved out of `ui.py`) ------------------------------------------
+# -- Stats and docs ------------------------------------------------------------------
 
-#: `src/gatekeeper`, the directory `ui.py` lives in -- the doc lookup below
-#: was written relative to it.
+#: `src/gatekeeper`, the package directory -- the doc lookup below is
+#: written relative to it.
 _PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _ADMIN_VERBS = {
@@ -1060,8 +1058,7 @@ _STATS_WINDOWS = (("24h", "Last 24 hours", 24, 200), ("7d", "Last 7 days", 7, 10
 def stats_view(service: Any, window: str) -> dict[str, Any]:
     """The Stats page as data: tiles, an activity series (hourly for 24 h,
     daily otherwise), and per-toolkit, per-identity, latency and admin
-    tables. Best-effort over the tail of the current audit log, like
-    `/ui/stats`."""
+    tables. Best-effort over the tail of the current audit log."""
     spec = next((w for w in _STATS_WINDOWS if w[0] == window), _STATS_WINDOWS[0])
     key, label, span, limit = spec
     records, truncated = read_audit(audit_path(service), limit=limit)

@@ -1,6 +1,6 @@
 """`/api/v1` stats, bundled documents and OAuth sign-in (0.57.0).
 
-The OAuth half reuses `test_ui_oauth.py`'s console (a google toolkit
+The OAuth half reuses `test_oauth.py`'s console (a google toolkit
 bound to the half-filled `gws` credential). What matters here: the API
 start shares the callback's single-use state, the callback sends an
 `/app`-started flow back to `/app` with a result code only, and no
@@ -14,7 +14,7 @@ import urllib.parse
 
 import pytest
 from api_env import API, login, make_env
-from test_ui_oauth import (
+from test_oauth import (
     AUTH_CODE,
     BASE,
     CLIENT_ID,
@@ -41,7 +41,7 @@ def env(tmp_path, tier1, tool_specs):
 
 @pytest.fixture
 def oauth_env(tmp_path, monkeypatch):
-    """`test_ui_oauth`'s console: a google toolkit, a half-filled `gws`."""
+    """`test_oauth`'s console: a google toolkit, a half-filled `gws`."""
     monkeypatch.setenv(KEY_ENV, generate_master_key())
     env = _build_env(tmp_path, _google_tier1(tmp_path))
     env["credentials"].create(
@@ -171,7 +171,7 @@ async def test_an_app_flow_returns_to_app_with_a_result_code(oauth_env, monkeypa
             "scope": "https://www.googleapis.com/auth/gmail.readonly",
         }
 
-    monkeypatch.setattr("gatekeeper.ui._exchange_google_code", fake_exchange)
+    monkeypatch.setattr("gatekeeper.oauth._exchange_google_code", fake_exchange)
     async with _client(oauth_env["app"]) as c:
         start = await _api_start(c)
         response = await c.get(f"{OAUTH_CALLBACK_PATH}?code={AUTH_CODE}&state={_state(start)}")
@@ -180,7 +180,10 @@ async def test_an_app_flow_returns_to_app_with_a_result_code(oauth_env, monkeypa
         assert location == "/app/credentials?oauth=ok&provider=google&credential=gws"
         # Single use: the same state again changes nothing.
         again = await c.get(f"{OAUTH_CALLBACK_PATH}?code={AUTH_CODE}&state={_state(start)}")
-        assert again.status_code != 303 or "oauth=ok" not in again.headers.get("location", "")
+        assert again.status_code == 303
+        assert again.headers["location"] == (
+            "/app/credentials?oauth=state_mismatch&provider=google&credential="
+        )
     assert _stored_bundle(oauth_env["credentials"])["refresh_token"] == NEW_REFRESH
     for secret in SECRETS:
         assert secret not in location

@@ -13,7 +13,7 @@ workflow, see [AGENTS.md](../AGENTS.md).
 | `GATEKEEPER_AUDIT_DIR` | Audit-log directory a **fresh** `init` writes into `toolkits.yaml`. `/var/log/gatekeeper` in the container image; unset elsewhere, which falls back to `<state-dir>/logs`. Never rewrites an existing `audit.dir` — that value is Tier 1 and authoritative. See [Where the audit log goes](#where-the-audit-log-goes) |
 | `GATEKEEPER_CREDENTIAL_KEY` | Fernet master key for the credential store (generate with `gatekeeper credential-key`) |
 | `GATEKEEPER_CREDENTIAL_KEY_FILE` | Path to a file holding that same key, for a separately mounted secret instead of a plain env var |
-| `GATEKEEPER_RELEASE_NOTES` | Path to `RELEASE.md`, for the console's release-notes popup. Defaults to `/usr/share/gatekeeper/RELEASE.md` in the container image; a dev checkout finds the file next to `pyproject.toml` on its own and never needs this set |
+| `GATEKEEPER_RELEASE_NOTES` | Path to `RELEASE.md`, for the console's Release notes page (`/app/release-notes`). Defaults to `/usr/share/gatekeeper/RELEASE.md` in the container image; a dev checkout finds the file next to `pyproject.toml` on its own and never needs this set |
 | `GATEKEEPER_LOG_LEVEL` | Python logging level, default `INFO` |
 | `GATEKEEPER_UI` | `1`/`true` enables the console without passing `--ui` |
 | `GATEKEEPER_UI_READ_ONLY` | `1`/`true` disables console writes regardless of role |
@@ -34,7 +34,7 @@ disabled.
 A `google` toolkit authenticates with an `oauth2` credential holding
 `client_id`, `client_secret`, `refresh_token` and `scopes`. The first two
 come from an OAuth client in the Google Cloud console and are typed into
-`/ui/credentials`; the other two are produced by the console itself
+`/app/credentials`; the other two are produced by the console itself
 (0.46.0):
 
 1. In the Google Cloud console, add this **exact** string to the OAuth
@@ -45,19 +45,23 @@ come from an OAuth client in the Google Cloud console and are typed into
    ```
 
    Google compares it character for character — a mismatch is answered
-   with `redirect_uri_mismatch` and nothing else. `/ui/oauth/google/authorize`
-   prints the value this deployment will actually send, in a copyable
-   field; use that one rather than typing it from here.
+   with `redirect_uri_mismatch` and nothing else. The path is the same
+   one 0.x used: the 1.0.0 console moved to `/app`, but this callback
+   stayed at `/ui/oauth/google/callback`, so a client registered before
+   1.0.0 needs no change. Step 3 shows the value this deployment will
+   actually send; use that one rather than typing it from here.
 
-2. Create the credential at `/ui/credentials` as kind `oauth2`, with the
+2. Create the credential at `/app/credentials` as kind `oauth2`, with the
    value `{"client_id": "...", "client_secret": "..."}`.
 
-3. Click **Connect Google** on that credential (or open
-   `/ui/oauth/google/authorize?credential=<name>`), work through Google's
-   consent screen, and the refresh token is written back into the same
+3. On `/app/credentials`, under *Sign in with a provider*, click
+   **Connect Google: `<name>`**. The console shows the redirect URI it
+   will send and the scopes it will ask for; **Continue to Google** opens
+   the consent screen. Once you have worked through it, Google returns to
+   the callback above, the refresh token is written back into the same
    credential, encrypted, together with the scopes the grant actually
-   covers. The token is never displayed — the page says only whether it
-   worked.
+   covers, and you land on `/app/credentials` again. The token is never
+   displayed — the page says only whether it worked.
 
    The scopes are stored because a refresh needs them: Google renews a
    token for a named set of scopes and refuses the refresh outright with
@@ -122,7 +126,7 @@ a convention. Nothing else in the toolkit block changes — `base_url`,
 `allowed_cidrs`, `allowed_methods` and `allowed_path_prefixes` stay as they
 are. Redeploy (or send `SIGHUP`, see below) so Tier 1 is re-read.
 
-**3. Enter the values in the console.** `/ui/credentials` → *Add credential*,
+**3. Enter the values in the console.** `/app/credentials` → *Add credential*,
 once per service. Name must equal the `credential:` value from step 2; kind
 and header follow the service (see the table in the README's Credentials
 section — most homelab services are `api_key_header`, SABnzbd is the one
@@ -130,9 +134,9 @@ section — most homelab services are `api_key_header`, SABnzbd is the one
 role, no route, and no export ever shows it again.
 
 **4. Enable the tools.** A tool with no grantees exists but is invisible to
-every agent — `/ui/tools` to enable, `/ui/identities` to grant.
+every agent — `/app/tools` to enable, `/app/identities` to grant.
 
-To verify, call one read-only tool and check `/ui/audit`: a successful record
+To verify, call one read-only tool and check `/app/audit`: a successful record
 names the credential it used (`"credentials": ["jellyfin"]`) and contains the
 value nowhere. A `credential_unavailable` denial means step 2 and step 3
 disagree about the name.
@@ -151,7 +155,7 @@ what goes in `base_url`.
 **2. Add the toolkit** (Tier 1 — `toolkits.yaml`, redeploy, never the
 console). Copy the block from
 [`config/examples/toolkits.yaml`](../config/examples/toolkits.yaml) or
-`/ui/toolkits/reference`, then edit three lines:
+`/app/toolkits/reference`, then edit three lines:
 
 - `base_url` — scheme, host, port. The only place any of the three ever
   appears; no tool and no parameter can influence the target.
@@ -179,13 +183,13 @@ check is skipped, because this container genuinely cannot answer it.
 **4. Auth is optional and off by default.** opencode ships with no
 authentication. If the server is reachable by anything other than
 gatekeeper, set `OPENCODE_SERVER_PASSWORD` on it, create a `basic`
-credential at `/ui/credentials` whose value is `<user>:<password>`, and
+credential at `/app/credentials` whose value is `<user>:<password>`, and
 name it with `credential:` on the toolkit — it is then sent as an
 `Authorization: Basic` header, and never appears in a tool definition, a
 response, or the audit log.
 
 **5. Create the tools, enable them, grant them.** Either from
-`/ui/tools/integrations` (the *opencode* card carries all seven starter
+`/app/tools/integrations` (the *opencode* card carries all seven starter
 tools) or by copying the entries from
 [`config/examples/tools.yaml`](../config/examples/tools.yaml). They ship
 `enabled: false`, like every other starter definition.
@@ -375,9 +379,10 @@ three things at once:
   entries show the proxy's address for every sign-in, not the person who
   actually signed in — undercutting the audit trail this project exists to
   provide.
-- **The session cookie's `Secure` flag never activates.** `ui.py` and the
-  console API (`/api/v1`) set it from the request's scheme; behind a TLS-terminating proxy that scheme is
-  `http` internally even though the browser is on `https`.
+- **The session cookie's `Secure` flag never activates.** The console API
+  (`/api/v1`) sets it from the request's scheme; behind a TLS-terminating
+  proxy that scheme is `http` internally even though the browser is on
+  `https`.
 
 Fix it by naming the proxy's actual address (its container name resolves to
 an IP on the shared Docker network, or use the network's CIDR):
@@ -398,10 +403,13 @@ needs to change. Only name proxies gatekeeper actually shares a network
 with; `*` trusts any peer and should stay reserved for a network gatekeeper
 does not share with anything untrusted.
 
-The new console lives at `/app` and talks to `/api/v1`, both on the same
-port as `/ui`. A proxy that only forwards `/ui` and `/mcp` must forward
-`/app` and `/api/v1` too. They need no extra headers and no CORS: the API is
-same-origin only and refuses `Authorization` headers. Do not let the proxy
+The console lives at `/app` and talks to `/api/v1`, both on the same port
+as `/mcp`. A proxy must forward `/app`, `/api/v1` and `/ui/oauth/*` (the
+OAuth callbacks, which kept their 0.x paths because they are the redirect
+URIs registered with Google and Microsoft), next to `/mcp` and
+`/admin/mcp`. Forwarding the rest of `/ui` is optional: since 1.0.0 it only
+redirects old bookmarks to `/app`. None of these need extra headers or
+CORS: the API is same-origin only and refuses `Authorization` headers. Do not let the proxy
 rewrite or drop gatekeeper's `Content-Security-Policy` header. `/app`
 depends on it (REQUIREMENTS.md FR-11.9), and a proxy that adds its own CSP
 must not loosen it.
@@ -787,7 +795,7 @@ Three things worth being deliberate about before doing this:
   `path_roots` rather than adding `run_as` to an existing broad one.
 - **The capabilities are the boundary, not the YAML.** Since 0.29.0 an
   admin-role agent can *propose* a `run_as` change over `/admin/mcp`
-  (`admin.toolkit_update`), which a human then approves at `/ui/requests`.
+  (`admin.toolkit_update`), which a human then approves at `/app/requests`.
   What no proposal can touch is this section's `cap_add` block, or the
   toolkit's `path_roots` — so the question "may anything here run as
   another user at all, and over which directories" stays exactly where you
@@ -821,7 +829,7 @@ One running instance, for agents that operate against it directly:
 | **Local clone** | `/opt/example/gatekeeper` |
 | **Container** | `gatekeeper`, port `30221→8080`, image `davidsteg/gatekeeper:latest` |
 | **Deploy mounts** | `<data-root>/gatekeeper/config → /etc/gatekeeper`, `<data-root>/gatekeeper/logs → /var/log/gatekeeper`, `/var/run/docker.sock` |
-| **Host** | `10.0.0.10` (example), console at `http://10.0.0.10:30221/ui/` |
+| **Host** | `10.0.0.10` (example), console at `http://10.0.0.10:30221/app/` |
 | **Container user** | `568:568` (unprivileged), `group_add: 999` (docker.sock GID) |
 
 Before starting work against this clone: `git fetch origin && git log

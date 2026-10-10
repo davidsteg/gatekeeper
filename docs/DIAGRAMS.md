@@ -15,7 +15,7 @@ flowchart LR
     subgraph Gatekeeper["gatekeeper (one process)"]
         MCP["/mcp\nagent role only"]
         AdminMCP["/admin/mcp\nadmin role only\nfixed admin.* tool list"]
-        UI["/ui console\nviewer + admin roles\nscript-free, server-rendered"]
+        UI["/app console (React SPA)\nover /api/v1\nviewer + admin roles"]
 
         Service["service.py\ncall pipeline"]
         AdminService["admin_service.py\ndispatch"]
@@ -108,16 +108,17 @@ flowchart TD
     B -->|admin.cred_propose\n(name/kind/header, no value)| C3
     B -->|admin.toolkit_propose| C4["queued to toolkit_proposals.yaml\n(never pending.yaml)"]
 
-    C3 --> D["Human reviews at /ui/requests, Change tab"]
-    D -->|"approve (most actions)"| E1["store.py write + CSRF-protected action\n(admin_change, audit)"]
-    D -->|"approve (cred_propose only) --\nhuman types the value here"| E3["credentials.py CredentialStore.create()\nvia /ui/pending/credential-fill, not apply_pending"]
+    C3 --> D["Human reviews at /app/requests, Change tab"]
+    D -->|"approve (most actions)"| E1["store.py write via POST /api/v1/requests/pending/id/approve\n(CSRF-protected, admin_change, audit)"]
+    D -->|"approve (cred_propose only) --\nhuman types the value here"| E3["credentials.py CredentialStore.create()\nvia POST /api/v1/requests/pending/id/credential,\nnot apply_pending"]
     D -->|reject| E2["discarded (admin_denied, audit)"]
 
-    C4 --> F["Human reviews at /ui/requests, Toolkit tab"]
+    C4 --> F["Human reviews at /app/requests, Toolkit tab"]
     F -->|approve & deploy| G["merge + validate via load_tier1()\nwrite toolkits.yaml\nService.reload_config() -- no restart"]
     F -->|reject| E2
 ```
 
-`approve`/`reject` (both tabs) are only reachable via `/ui/requests`, never
-from `/admin/mcp` -- an agent can propose a change but can never approve its
-own proposal.
+`approve`/`reject` (both tabs) are only reachable through `/api/v1` with a
+human console session (admin role, CSRF token), which is what the Requests
+page at `/app/requests` uses -- never from `/admin/mcp`. An agent can propose
+a change but can never approve its own proposal.

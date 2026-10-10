@@ -28,7 +28,6 @@ from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.store import ConfigStore
 from gatekeeper.toolkit_proposals import ToolkitProposalStore
-from gatekeeper.ui import UI_PREFIX
 
 BASE = "http://gatekeeper.test"
 PASSWORDS = {"root": "admin-console-password"}
@@ -222,7 +221,7 @@ async def test_admin_token_still_cannot_call_agent_tools(admin_mcp_env):
     assert response.status_code == 401
 
 
-# -- Tier-1 rejection parity with /ui -----------------------------------------
+# -- Tier-1 rejection parity with /app -----------------------------------------
 
 
 async def test_tool_create_rejects_tier1_violation(admin_mcp_env):
@@ -395,12 +394,12 @@ async def test_calling_admin_approve_by_name_is_unknown_tool(admin_mcp_env):
     assert result.is_error
 
 
-# -- Approving via /ui makes the change reach /mcp for a granted agent -------
+# -- Approving via /api/v1 makes the change reach /mcp for a granted agent -------
 
 
 async def test_approved_pending_change_becomes_callable_on_mcp(admin_mcp_env):
     """The manual-verification scenario from the plan, automated: create
-    (inert) -> propose an enable on a write tool -> approve at /ui/requests
+    (inert) -> propose an enable on a write tool -> approve at /app/requests
     -> the tool becomes callable on /mcp for a granted agent identity.
     """
     app, store, pending, _toolkit_proposals = admin_mcp_env["build"]()
@@ -427,18 +426,17 @@ async def test_approved_pending_change_becomes_callable_on_mcp(admin_mcp_env):
         actor="root", rev=store.identities_revision(), replaces="bot",
     )
 
-    async with _http(app, tokens["root"]) as http:
-        await http.post(
-            f"{UI_PREFIX}/login", data={"identity": "root", "password": PASSWORDS["root"]}
+    # The human side: a console session (never a bearer token -- the API
+    # refuses one outright) approving through `/api/v1`.
+    async with _http(app, None) as http:
+        session = await http.post(
+            "/api/v1/session", json={"identity": "root", "password": PASSWORDS["root"]}
         )
-        page = await http.get(f"{UI_PREFIX}/requests?tab=change")
-        marker = 'name="_csrf" value="'
-        start = page.text.index(marker) + len(marker)
-        csrf = page.text[start : page.text.index('"', start)]
         approve = await http.post(
-            f"{UI_PREFIX}/pending/approve", data={"id": item.id, "_csrf": csrf}
+            f"/api/v1/requests/pending/{item.id}/approve",
+            headers={"X-CSRF-Token": session.json()["csrf"]},
         )
-    assert approve.status_code in (200, 303)
+    assert approve.status_code == 200, approve.text
     assert store.service.catalog.tools["demo.approved_write"].enabled is True
 
     # A fresh app: everything above is file-backed (tools.yaml/
@@ -850,7 +848,7 @@ async def test_toolkit_delete_always_pending(admin_mcp_env):
 async def test_toolkit_deploy_and_reject_absent_from_admin_mcp_tool_list(admin_mcp_env):
     """Same structural self-approval prevention as `pending.py`'s
     approve/reject, extended to this surface: `ToolkitProposalStore.deploy`/
-    `.reject` are only reachable from `/ui/toolkits`, never `/admin/mcp`.
+    `.reject` are only reachable from `/app/requests`, never `/admin/mcp`.
     """
     app, _store, _pending, _toolkit_proposals = admin_mcp_env["build"]()
     tokens = admin_mcp_env["tokens"]
@@ -1129,7 +1127,7 @@ async def test_credential_bind_queues_and_never_auto_applies(
     """Queue-only, even with both names valid and the merge guaranteed to
 
     succeed: the binding is Tier 1 (FR-10.4), so only a human at
-    /ui/requests can make it live.
+    /app/requests can make it live.
     """
     credential_store.create(
         "sonarr-api-key", kind="api_key_header", header="X-Api-Key",

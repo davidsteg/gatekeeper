@@ -8,7 +8,7 @@ token could flip a toolkit's executor live with no review step at all. It
 now works exactly like `admin.toolkit_propose`: the call only *proposes* a
 change (kind="update" on the same `ToolkitProposalStore`/
 `toolkit_proposals.yaml` queue `admin.toolkit_propose` uses), and only a
-human clicking "Approve & Deploy" at `/ui/requests` (Toolkit tab) can make
+human clicking "Approve & Deploy" at `/app/requests` (Toolkit tab) can make
 it take effect (`ToolkitProposalStore.deploy`).
 
 Only `executor`/`binaries`/`denied_args` may ever appear in an update
@@ -133,7 +133,7 @@ def test_toolkit_update_no_updates_returns_error_without_proposing(tmp_path, san
     assert toolkit_proposals.list() == []
 
 
-# -- Deploying an update proposal (human, /ui/requests only) ----------------
+# -- Deploying an update proposal (human, /app/requests only) ----------------
 
 
 def test_deploy_update_merges_only_the_proposed_fields(tmp_path, sandbox):

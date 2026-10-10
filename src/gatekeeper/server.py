@@ -67,8 +67,8 @@ class AuthMiddleware:
     This middleware reads exclusively the `Authorization` header and
     never a cookie. That is the reason why `/mcp` is immune to CSRF:
     a browser does not attach such a header on its own, so a foreign
-    site cannot produce it. The session of the operations UI (`ui.py`)
-    is deliberately a separate mechanism -- if it applied here,
+    site cannot produce it. The session of the console (`/app`, backed by
+    `/api/v1` -- `api/session.py`) is deliberately a separate mechanism -- if it applied here,
     any arbitrary website could execute tools on the host in the background.
     """
 
@@ -371,7 +371,7 @@ def build_app(
     write functions -- and even then only for `role: admin`.
 
     `/admin/mcp` (FR-2.8) is mounted under exactly the same condition as
-    `/ui`'s write functions: a writable `ConfigStore`. `pending` (a
+    the console's write functions: a writable `ConfigStore`. `pending` (a
     `PendingStore`) and `toolkit_proposals` (a `ToolkitProposalStore`) must
     both be supplied whenever `store` is -- `__main__.py` constructs all
     three together; a caller passing `store` without either is a
@@ -520,21 +520,16 @@ def build_app(
         Route("/artifacts/{artifact_id}/{version}", artifact_download, methods=["GET"]),
     ]
     if ui:
-        # One session store and one login throttle for both console
-        # surfaces: a password change or a deleted identity signs out of
-        # `/ui` and `/api` alike, and failed attempts count against one
-        # budget whichever login form they hit.
+        # One session store and one login throttle for the console API.
         sessions = SessionStore()
         throttle = LoginThrottle()
-        # And one store of OAuth flows in flight: a flow started from
-        # `/app` returns through the callback route `build_ui_routes` owns.
+        # And one store of OAuth flows in flight: a flow started by the
+        # API returns through the callback route `build_ui_routes` owns.
         oauth_states = OAuthStateStore()
         routes.extend(
             build_ui_routes(
-                service=service, identities=identities, audit=audit, store=store,
-                credentials=credentials, pending=pending,
-                toolkit_proposals=toolkit_proposals,
-                sessions=sessions, throttle=throttle, oauth_states=oauth_states,
+                identities=identities, audit=audit, store=store,
+                credentials=credentials, oauth_states=oauth_states,
             )
         )
         routes.extend(build_web_routes())
