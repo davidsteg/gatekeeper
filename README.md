@@ -73,7 +73,7 @@ Once started with `--ui`, gatekeeper hosts an admin dashboard at `/ui` where you
 - **See statistics** — aggregate call stats, success rates, latency, admin activity at `/ui/stats`
 - **Change passwords** — rotate console access for people
 
-A new React console is at `/app`, backed by a typed JSON API at `/api/v1`. Both sign in with the same console password, and an API token is refused there. Tools, identities, credentials and your own password can be changed there already; pending requests are still decided on `/ui` until the new console replaces it. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#console-api-api-apiv1).
+A new React console is at `/app`, backed by a typed JSON API at `/api/v1`. Both sign in with the same console password, and an API token is refused there. Everything the classic console at `/ui` does can be done there, including deciding agent requests; `/ui` stays until the new console replaces it. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#console-api-api-apiv1).
 
 ### Overview: At a glance
 

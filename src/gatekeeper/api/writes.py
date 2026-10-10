@@ -6,6 +6,11 @@ the same audit record, the same sessions ended -- and adds nothing a form
 could not do. In particular there is still no route that writes a toolkit
 (FR-4.11).
 
+Request decisions (phase 3b) follow at the end: approving, rejecting and
+filling in the proposals an admin-role agent filed on `/admin/mcp`, and
+deploying or rejecting a toolkit proposal. There is no path to any of them
+from `/admin/mcp` (FR-2.8): only a console session reaches these routes.
+
 What every write needs, in this order (`deps.py`):
 
 1. a console session (an `Authorization` header is refused),
@@ -14,6 +19,11 @@ What every write needs, in this order (`deps.py`):
 3. `X-CSRF-Token`,
 4. `If-Match` with the ETag of the collection read (`GET /tools`,
    `GET /identities`, `GET /credentials`). Missing is a 428, stale a 412.
+   Request decisions take none: each acts on one proposal by ID, the
+   store refuses one that is no longer `pending`, and `apply_pending`
+   checks the proposal against the configuration it was made on -- a
+   queue-wide revision would only turn every newly filed proposal into a
+   spurious conflict for whoever is reviewing.
 
 The early `If-Match` check makes the common conflict a clean 412 before any
 work; the store's own check under its lock is the real guarantee, and its
@@ -329,3 +339,134 @@ def register_write_routes(app: FastAPI) -> None:
             session.identity, keep=request.cookies.get(SESSION_COOKIE)
         )
         return _written(response, context.store.identities_revision())
+
+
+def register_request_routes(app: FastAPI) -> None:
+    from ..admin_service import apply_pending
+
+    def _pending(context: ApiContext) -> Any:
+        if context.pending is None:
+            raise ApiError(409, "No pending queue is configured on this deployment.")
+        return context.pending
+
+    def _proposal(context: ApiContext) -> Any:
+        if context.toolkit_proposals is None:
+            raise ApiError(409, "No toolkit-proposal queue is configured on this deployment.")
+        return context.toolkit_proposals
+
+    def _item(store: Any, item_id: str) -> Any:
+        item = store.get(item_id)
+        if item is None:
+            raise ApiError(404, f"No proposal {item_id!r}.")
+        return item
+
+    @app.post("/requests/pending/{item_id}/approve", response_model=models.Decided,
+              tags=["requests"], responses=_WRITE_ERRORS)
+    async def pending_approve(
+        item_id: str, session: Session = Depends(require_admin),
+        context: ApiContext = Depends(ctx),
+    ) -> Any:
+        """Applies one proposal through `apply_pending`, which refuses a
+        stale one. A credential proposal needs its value: use
+        `/credential` instead."""
+        queue = _pending(context)
+        item = _item(queue, item_id)
+        if item.action == "cred_propose":
+            raise ApiError(400, "A credential proposal needs a value; approve it with POST .../credential.")
+        try:
+            await _call(apply_pending, context.store, queue, item_id, decided_by=session.identity)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ApiError(400, f"The proposal's payload is malformed: {exc}") from None
+        return {"id": item_id, "status": _item(queue, item_id).status}
+
+    @app.post("/requests/pending/{item_id}/credential", response_model=models.Decided,
+              tags=["requests"], responses=_WRITE_ERRORS)
+    async def pending_credential_fill(
+        item_id: str, body: models.CredentialFill, session: Session = Depends(require_admin),
+        context: ApiContext = Depends(ctx),
+    ) -> Any:
+        """Approves a `cred_propose` with the value a human types now. The
+        agent never sees or supplies the value (FR-10.2)."""
+        queue = _pending(context)
+        credentials = context.credentials
+        if credentials is None:
+            raise ApiError(409, "No credential store is configured (GATEKEEPER_CREDENTIAL_KEY is not set).")
+        item = _item(queue, item_id)
+        if item.action != "cred_propose":
+            raise ApiError(400, "Only a credential proposal takes a value.")
+        await _call(
+            queue.approve, item_id, decided_by=session.identity,
+            current_rev=lambda _item: credentials.revision(),
+            apply=lambda i: credentials.create(
+                i.payload["name"], kind=i.payload["kind"], header=i.payload.get("header"),
+                value=body.value, probe_url=i.payload.get("probe_url"),
+                actor=session.identity, rev=credentials.revision(),
+            ),
+        )
+        if item.payload.get("probe_url"):
+            rm._schedule_credential_probe(credentials, str(item.payload.get("name") or ""))
+        return {"id": item_id, "status": _item(queue, item_id).status}
+
+    @app.post("/requests/pending/{item_id}/reject", response_model=models.Decided,
+              tags=["requests"], responses=_WRITE_ERRORS)
+    async def pending_reject(
+        item_id: str, body: models.RejectBody, session: Session = Depends(require_admin),
+        context: ApiContext = Depends(ctx),
+    ) -> Any:
+        queue = _pending(context)
+        _item(queue, item_id)
+        await _call(queue.reject, item_id, decided_by=session.identity, reason=body.reason)
+        return {"id": item_id, "status": _item(queue, item_id).status}
+
+    @app.post("/requests/pending/approve-all", response_model=models.ApproveAllResult,
+              tags=["requests"], responses=_WRITE_ERRORS)
+    async def pending_approve_all(
+        body: models.ApproveAll, session: Session = Depends(require_admin),
+        context: ApiContext = Depends(ctx),
+    ) -> Any:
+        """Applies exactly the listed proposals, oldest first, each on its
+        own: a refusal does not stop the rest. Credential proposals and
+        anything no longer pending are skipped -- they cannot be batched."""
+        queue = _pending(context)
+        wanted = set(body.ids)
+        batch = [
+            i for i in queue.list()
+            if i.id in wanted and i.status == "pending" and i.action != "cred_propose"
+        ]
+        applied, refused = 0, []
+        for item in batch:
+            try:
+                await asyncio.to_thread(
+                    apply_pending, context.store, queue, item.id, decided_by=session.identity
+                )
+                applied += 1
+            except (ConfigError, KeyError, TypeError, ValueError) as exc:
+                # A malformed payload is one refusal, not a 500 halfway
+                # through a batch that has already applied some items.
+                refused.append({"id": item.id, "action": item.action, "reason": str(exc)})
+        return {"applied": applied, "refused": refused}
+
+    @app.post("/requests/toolkits/{proposal_id}/deploy", response_model=models.Decided,
+              tags=["requests"], responses=_WRITE_ERRORS)
+    async def toolkit_deploy(
+        proposal_id: str, body: models.DeployBody, session: Session = Depends(require_admin),
+        context: ApiContext = Depends(ctx),
+    ) -> Any:
+        """Writes the proposal into toolkits.yaml and reloads Tier 1 in
+        this process, at once. `confirm: true` is required: the client
+        must have shown that this changes what the deployment can reach."""
+        queue = _proposal(context)
+        _item(queue, proposal_id)
+        await _call(queue.deploy, proposal_id, decided_by=session.identity)
+        return {"id": proposal_id, "status": _item(queue, proposal_id).status}
+
+    @app.post("/requests/toolkits/{proposal_id}/reject", response_model=models.Decided,
+              tags=["requests"], responses=_WRITE_ERRORS)
+    async def toolkit_reject(
+        proposal_id: str, body: models.RejectBody, session: Session = Depends(require_admin),
+        context: ApiContext = Depends(ctx),
+    ) -> Any:
+        queue = _proposal(context)
+        _item(queue, proposal_id)
+        await _call(queue.reject, proposal_id, decided_by=session.identity, reason=body.reason)
+        return {"id": proposal_id, "status": _item(queue, proposal_id).status}

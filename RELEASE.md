@@ -1,3 +1,25 @@
+## 0.56.0
+
+Phase 3b of the console migration: agent requests are decided in the React console at `/app`. Everything `/ui` does is now possible there too.
+
+### Added
+
+- **Request decisions in `/api/v1`:**
+  - `POST /requests/pending/{id}/approve` and `.../reject` (with an optional reason).
+  - `POST /requests/pending/{id}/credential` approves an agent's credential proposal with a value you type; the agent proposes only the name and kind.
+  - An approve-all route (`POST` on `approve-all` under `/requests/pending`) applies exactly the listed proposals, oldest first, each on its own, and reports any that were refused.
+  - `POST /requests/toolkits/{id}/deploy` (requires `{"confirm": true}`) and `.../reject`.
+  - Pending items now carry a `review`: a one-line summary, the tools they name with whether each exists and is enabled, a grant change shown as a diff, and why a stale item cannot be applied. Toolkit proposals carry the YAML that deploying would write.
+- **Requests page in the React console** with Change and Toolkit tabs, refreshed every 15 s, and an open-request count in the sidebar.
+  - Each card has approve and reject, and a credential proposal has a password field for its value.
+  - "Approve all" lists what it is about to apply before it runs.
+  - Deploying a toolkit spells out what changes, including a redirected credential binding or a `run_as` change, and needs a ticked acknowledgement.
+  - Decided items move to a paged archive.
+
+### Security
+
+- These routes are reachable only with a console session, role `admin`, a writable configuration and `X-CSRF-Token`; there is still no path to them from `/admin/mcp` (FR-2.8). They take no `If-Match`: each acts on one proposal by ID, and the stores refuse a proposal that is no longer pending or whose target changed since it was made. Agent-written text (actor, payload, reasons) is rendered as text. A typed credential value never appears in a response or the audit log.
+
 ## 0.55.0
 
 Phase 3a of the console migration: the React console at `/app` can now change tools, identities, credentials and your own password. Pending requests are still decided on `/ui`.

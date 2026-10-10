@@ -15,9 +15,11 @@ from api_env import API, PASSWORDS, audit_records, client, login, make_env
 
 from gatekeeper.api.app import build_api_app, openapi_schema
 from gatekeeper.credentials import generate_master_key
+from gatekeeper.tier1 import load_tier1
 
 _FILL = {
     "{tool_id}": "demo.show", "{identity_id}": "bot", "{name}": "demo-key", "{key}": "sonarr",
+    "{item_id}": "nope", "{proposal_id}": "nope",
 }
 
 
@@ -85,6 +87,9 @@ def test_the_schema_lists_the_phase_3a_writes():
         ("POST", "/identities/bot/token"), ("DELETE", "/identities/bot"),
         ("POST", "/credentials"), ("POST", "/credentials/demo-key/rotate"),
         ("DELETE", "/credentials/demo-key"), ("PUT", "/account/password"),
+        ("POST", "/requests/pending/nope/approve"), ("POST", "/requests/pending/nope/reject"),
+        ("POST", "/requests/pending/nope/credential"), ("POST", "/requests/pending/approve-all"),
+        ("POST", "/requests/toolkits/nope/deploy"), ("POST", "/requests/toolkits/nope/reject"),
     }
 
 
@@ -347,3 +352,127 @@ async def test_own_password_change(env):
         assert (await c.get(f"{API}/session")).status_code == 200
         assert (await other.get(f"{API}/session")).status_code == 401
         assert env["identities"].authenticate_console("eye", "a-new-viewer-password")
+
+
+# -- Request decisions (phase 3b) ------------------------------------------------------
+
+
+def _propose_delete(env, tool_id: str = "demo.show"):
+    return env["pending"].propose(
+        action="tool_delete", actor="hermes", payload={"id": tool_id},
+        base_rev=env["store"].tool_revision(tool_id),
+    )
+
+
+async def test_pending_items_carry_a_review(env):
+    store = env["store"]
+    env["pending"].propose(
+        action="grant_set", actor="hermes",
+        payload={"identity_id": "bot", "tools": ["demo.show", "demo.ghost"], "prev_tools": ["demo.show"]},
+        base_rev=store.identity_revision("bot"),
+    )
+    _propose_delete(env)
+    async with client(env["app"]) as c:
+        await login(c, "eye")
+        items = (await c.get(f"{API}/requests/pending")).json()
+    by_action = {i["action"]: i["review"] for i in items}
+    grant = by_action["grant_set"]
+    assert grant["headline"] == "identity bot: +1 -0, 1 unchanged"
+    assert grant["tools"] == [
+        {"id": "demo.ghost", "marker": "+", "state": "missing", "title": "", "category": ""}
+    ]
+    assert by_action["tool_delete"]["tools"][0]["state"] == "enabled"
+
+
+async def test_approve_and_reject_a_proposal(env):
+    first, second = _propose_delete(env), _propose_delete(env, "demo.echo")
+    async with client(env["app"]) as c:
+        admin = await login(c, "root")
+        approved = await c.post(f"{API}/requests/pending/{first.id}/approve", headers=_h(admin))
+        assert approved.status_code == 200, approved.text
+        assert approved.json() == {"id": first.id, "status": "approved"}
+        assert env["service"].catalog.flat_spec_of("demo.show") is None
+
+        rejected = await c.post(
+            f"{API}/requests/pending/{second.id}/reject", json={"reason": "not now"},
+            headers=_h(admin),
+        )
+        assert rejected.json()["status"] == "rejected"
+        assert env["pending"].get(second.id).reason == "not now"
+
+        again = await c.post(f"{API}/requests/pending/{first.id}/approve", headers=_h(admin))
+        assert again.status_code == 400
+        missing = await c.post(f"{API}/requests/pending/nope/approve", headers=_h(admin))
+        assert missing.status_code == 404
+
+
+async def test_approve_all_applies_only_the_listed_ids(env):
+    first, second = _propose_delete(env), _propose_delete(env, "demo.echo")
+    late = env["pending"].propose(
+        action="tool_enable", actor="hermes", payload={"id": "demo.show"},
+        base_rev=env["store"].tool_revision("demo.show"),
+    )
+    async with client(env["app"]) as c:
+        admin = await login(c, "root")
+        result = await c.post(
+            f"{API}/requests/pending/approve-all", json={"ids": [first.id, second.id]},
+            headers=_h(admin),
+        )
+    assert result.status_code == 200
+    assert result.json() == {"applied": 2, "refused": []}
+    assert env["pending"].get(late.id).status in ("pending", "stale")
+    assert env["pending"].get(late.id).status != "approved"
+
+
+async def test_a_credential_proposal_is_approved_only_with_a_typed_value(env, monkeypatch):
+    monkeypatch.setenv("GATEKEEPER_CREDENTIAL_KEY", generate_master_key())
+    item = env["pending"].propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "sonarr-key", "kind": "bearer", "header": None, "probe_url": None},
+        base_rev=env["credentials"].revision(),
+    )
+    secret = "sk-typed-by-a-human-42"
+    async with client(env["app"]) as c:
+        admin = await login(c, "root")
+        plain = await c.post(f"{API}/requests/pending/{item.id}/approve", headers=_h(admin))
+        assert plain.status_code == 400
+        filled = await c.post(
+            f"{API}/requests/pending/{item.id}/credential", json={"value": secret},
+            headers=_h(admin),
+        )
+        assert filled.status_code == 200, filled.text
+        assert filled.json()["status"] == "approved"
+        listing = await c.get(f"{API}/requests/pending")
+        assert secret not in listing.text
+    assert [m.name for m in env["credentials"].names()] == ["sonarr-key"]
+    assert secret not in json.dumps(audit_records(env))
+
+
+async def test_toolkit_deploy_needs_confirm_and_reloads_tier1(env, tier1):
+    queue = env["toolkit_proposals"]
+    python = tier1.toolkits["demo"].binaries[0]
+    item = queue.propose(name="extra", spec={"executor": "local", "binaries": [python]}, actor="hermes")
+    other = queue.propose(name="other", spec={"executor": "local", "binaries": [python]}, actor="hermes")
+    async with client(env["app"]) as c:
+        await login(c, "eye")
+        listing = (await c.get(f"{API}/requests/toolkits")).json()
+        assert "extra:" in next(p for p in listing if p["id"] == item.id)["spec_yaml"]
+        await c.delete(f"{API}/session")
+        admin = await login(c, "root")
+        unconfirmed = await c.post(
+            f"{API}/requests/toolkits/{item.id}/deploy", json={}, headers=_h(admin)
+        )
+        assert unconfirmed.status_code == 422
+        assert queue.get(item.id).status == "pending"
+        deployed = await c.post(
+            f"{API}/requests/toolkits/{item.id}/deploy", json={"confirm": True}, headers=_h(admin)
+        )
+        assert deployed.status_code == 200, deployed.text
+        assert deployed.json()["status"] == "deployed"
+        assert "extra" in env["service"].tier1.toolkits
+        rejected = await c.post(
+            f"{API}/requests/toolkits/{other.id}/reject", json={"reason": "no"}, headers=_h(admin)
+        )
+        assert rejected.json()["status"] == "rejected"
+    # Written to the file too, so a restart keeps it.
+    assert "extra" in load_tier1(queue.toolkits_path).toolkits
