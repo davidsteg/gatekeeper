@@ -141,9 +141,14 @@ def require_admin(
     return require_csrf(request, session, context)
 
 
+#: The ETag of a store whose file does not exist yet (no credential has
+#: been created, say). Sent back, it matches only while the file is still
+#: missing -- once someone creates it, the revision is real and this is stale.
+EMPTY_REVISION = "0"
+
+
 def set_etag(response: Response, revision: str) -> None:
-    if revision:
-        response.headers["ETag"] = f'"{revision}"'
+    response.headers["ETag"] = f'"{revision or EMPTY_REVISION}"'
 
 
 def if_match(request: Request, current: str) -> str:
@@ -160,6 +165,6 @@ def if_match(request: Request, current: str) -> str:
     if supplied.startswith("W/"):
         supplied = supplied[2:]
     supplied = supplied.strip('"')
-    if current and supplied != current:
+    if supplied != (current or EMPTY_REVISION):
         raise ApiError(412, "The resource changed since you loaded it. Reload and apply your edit again.")
     return supplied

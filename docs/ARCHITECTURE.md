@@ -692,7 +692,9 @@ side on the same stores.
   (`tools_revision`, `identities_revision`, the credential, pending and
   toolkit-proposal revisions); `deps.if_match` turns a missing `If-Match`
   into 428 and a stale one into 412, and the store's own check at write
-  time stays the real guarantee (`WriteRefused` and friends map to 412).
+  time stays the real guarantee (its "changed since" refusal maps to 412
+  too). A store whose file does not exist yet has the ETag `"0"`, which
+  matches only while the file is still missing.
 - **Output boundary.** Responses are serialised through the Pydantic
   models in `api/models.py`, which drop every field they do not name.
   `CredentialMeta` has no value field and `IdentityOut` no hash field.
@@ -716,8 +718,25 @@ side on the same stores.
   can become a row key when the Stage 1 SQLite audit index lands, without
   a client change.
 
-Phase 1 (0.53.0) added session handling plus every read the console
-offers. Write endpoints and the cutover follow as their own releases.
+- **Writes (`api/writes.py`).** Each route calls the same store method as
+  the matching `/ui` form handler and ends the same sessions:
+  `POST /tools`, `PUT /tools/{id}` (YAML in, Tier 1 checked by
+  `parse_tool_spec`; a new ID in the YAML renames), `PUT
+  /tools/{id}/enabled`, `DELETE /tools/{id}`; `POST /identities` and `POST
+  /identities/{id}/token` (the token is returned once, in the body only),
+  `PUT /identities/{id}` (`service.drop_sessions_after_identity_update`,
+  shared with `/ui`), `DELETE /identities/{id}`; `POST /credentials`,
+  `POST /credentials/{name}/rotate`, `DELETE /credentials/{name}` (values
+  go in, never out); `PUT /account/password` (any role, needs the current
+  password; a wrong one is audited as `ui_password_change_failed`). Each
+  answers `{"revision"}` plus the new `ETag`, so a second edit needs no
+  reload. Request bodies forbid unknown fields. Store calls run on a
+  thread (scrypt). `GET /tool-scaffold` returns the new-tool starting YAML
+  and each integration tool carries its YAML for the editor.
+
+Phase 1 (0.53.0) added session handling plus every read; phase 3a
+(0.55.0) the writes above. Request decisions (approve, reject, credential
+fill, toolkit deploy) and the cutover follow as their own releases.
 
 ## Console SPA (`frontend/`, `/app`)
 
@@ -763,8 +782,15 @@ gatekeeper itself at `/app` (`api/web.py`). It is a pure client of
   result is copied into `src/gatekeeper/_web/` before `pip install`, and
   `[tool.setuptools.package-data]` ships it. The runtime image has no Node.
 
-Phase 2 (0.54.0) is read-only, like the API behind it; the pages link to
-`/ui` for anything that changes state.
+Phase 2 (0.54.0) was read-only. Since phase 3a (0.55.0) tools (YAML
+editor, enable/disable, delete, add from an integration), identities
+(create with a one-time token, edit, rotate, delete), credentials
+(create, rotate with overlap, delete; values only in password fields) and
+one's own password are edited here too. Writes go through
+`components/forms.tsx`: a 412 shows "Changed elsewhere" with a reload
+instead of retrying, and destructive actions ask once, inline. Write
+controls are hidden unless `can_write`; the server checks every write
+regardless. The Requests page is still `/ui` only.
 
 ## UI architecture (`ui.py`)
 

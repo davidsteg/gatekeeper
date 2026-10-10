@@ -97,10 +97,11 @@ item.
 
 ## Not implemented (by design or not yet)
 
-- **React console write flows and cutover (phases 3 and 4).** Phases 1
-  (JSON API, 0.53.0) and 2 (read-only SPA at `/app`, 0.54.0) are done.
-  Still to come, each as its own release: the write flows (tools,
-  identities, credentials, account, then requests separately), and the
+- **React console request decisions and cutover (phases 3b and 4).**
+  Phases 1 (JSON API, 0.53.0), 2 (read-only SPA at `/app`, 0.54.0) and 3a
+  (tool, identity, credential and password writes, 0.55.0) are done.
+  Still to come, each as its own release: request decisions (approve,
+  reject, approve all, credential fill, toolkit deploy/reject), and the
   1.0.0 cutover that redirects `/ui` to `/app`, deletes `ui.py`'s HTML
   views and makes FR-11.9's `script-src 'self'` policy the only console
   policy. A Playwright smoke test against the built image is not in CI yet.

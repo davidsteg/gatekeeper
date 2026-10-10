@@ -199,6 +199,9 @@ class IntegrationTool(_Model):
     category: str
     description: str
     exists: bool
+    #: The definition as YAML, for pre-filling the new-tool editor. It is
+    #: saved through the same `POST /tools` as a hand-written one.
+    yaml: str
 
 
 class Integration(_Model):
@@ -314,6 +317,75 @@ class ToolkitProposalOut(_Model):
     decided_at: str | None
     reason: str | None
     current: ToolkitOut | None
+
+
+# -- Writes ------------------------------------------------------------------------------
+#
+# Request bodies forbid unknown fields: a typo in a field name is an error,
+# not a silently ignored edit.
+
+
+class _Body(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Written(_Model):
+    """What every write answers: the store's revision after the write, the
+    `If-Match` for the next one (also sent as `ETag`)."""
+
+    revision: str
+
+
+class ToolScaffold(_Model):
+    yaml: str
+
+
+class ToolWrite(_Body):
+    #: One tool definition as YAML, exactly what the editor shows.
+    yaml: str = Field(max_length=262144)
+
+
+class ToolSaved(Written):
+    id: str
+
+
+class ToolEnabled(_Body):
+    enabled: bool
+
+
+class IdentityWrite(_Body):
+    id: str = Field(max_length=64)
+    role: str = Field(max_length=32)
+    tools: list[str] = Field(default_factory=list, max_length=4096)
+    scopes: list[str] = Field(default_factory=list, max_length=1024)
+    #: Optional console password. Empty means "leave as is" on an update.
+    password: str = Field("", max_length=4096)
+
+
+class TokenIssued(Written):
+    """The only response that carries a secret: the new API token, shown
+    once. It is never stored in plaintext and never readable again."""
+
+    identity: str
+    token: str
+
+
+class CredentialCreate(_Body):
+    name: str = Field(max_length=128)
+    kind: str = Field(max_length=32)
+    header: str | None = Field(None, max_length=256)
+    value: str = Field(max_length=65536)
+    probe_url: str | None = Field(None, max_length=2048)
+
+
+class CredentialRotate(_Body):
+    value: str = Field(max_length=65536)
+    overlap_seconds: int = Field(0, ge=0, le=366 * 24 * 3600)
+
+
+class PasswordChange(_Body):
+    current: str = Field(max_length=4096)
+    password: str = Field(max_length=4096)
 
 
 # -- Audit / release notes -----------------------------------------------------------------
