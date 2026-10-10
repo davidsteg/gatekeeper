@@ -72,6 +72,32 @@ from starlette.routing import Route
 
 from . import __version__, release_notes
 from .admin_service import apply_pending, sweep_vanished_pendings
+
+# Moved out of this module so the JSON API shares them; re-exported here
+# under their old names because the legacy views and tests still use them.
+from .api.service import (  # noqa: F401
+    AUDIT_CHUNK_BYTES,
+    AUDIT_DEFAULT_LIMIT,
+    AUDIT_READ_BYTES,
+    _bucket_calls,
+    _call_stats,
+    _local_now,
+    _outcome_totals,
+    _pair_call_stats,
+    _parse_ts,
+    _request_pending_counts,
+    _target,
+    _to_local,
+    _tool_call_stats,
+    read_audit,
+)
+from .api.session import (  # noqa: F401
+    SESSION_COOKIE,
+    SESSION_TTL_SECONDS,
+    LoginThrottle,
+    Session,
+    SessionStore,
+)
 from .audit import AuditLog
 from .catalog import ToolDef
 from .credentials import KINDS as CREDENTIAL_KINDS
@@ -94,7 +120,6 @@ from .pending import (
 )
 from .service import Service
 from .store import ConfigStore, WriteRefused, load_tool_yaml, tool_to_yaml
-from .tier1 import Destination, Toolkit
 from .toolkit_proposals import (
     BIND_FIELD,
     ToolkitProposal,
@@ -139,19 +164,6 @@ UI_COMPANION_PATHS = frozenset({
     f"{UI_PREFIX}/sw.js",
     f"{UI_PREFIX}/icon.svg",
 })
-
-SESSION_COOKIE = "gatekeeper_ui"
-SESSION_TTL_SECONDS = 8 * 3600
-
-#: Read at most this many bytes from the end of the log file. The log may grow to 32 MB;
-#: parsing it in full would make the page unusable.
-AUDIT_READ_BYTES = 2 * 1024 * 1024
-AUDIT_DEFAULT_LIMIT = 200
-
-#: `read_audit` walks the log backwards in chunks of this size and stops as
-#: soon as it has enough records, so a 200-row page costs one chunk instead
-#: of a full 2 MiB decode. `AUDIT_READ_BYTES` stays the hard floor.
-AUDIT_CHUNK_BYTES = 256 * 1024
 
 #: How many of the newest RELEASE.md sections the popup embeds. The modal is
 #: appended to *every* page, so the full changelog in there was ~290 KB of
@@ -292,109 +304,6 @@ OAUTH_STATE_TTL_SECONDS = 600
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class Session:
-    identity: str
-    role: str
-    csrf: str
-
-    @property
-    def can_write(self) -> bool:
-        return self.role == ADMIN_ROLE
-
-
-@dataclasses.dataclass(slots=True)
-class SessionStore:
-    """Sessions in memory.
-
-    Deliberately not persisted: a restart signs out everyone. The loss is
-    a re-login, the gain is that a session token does not
-    survive a restart and never lands on disk.
-    """
-
-    ttl: int = SESSION_TTL_SECONDS
-    _sessions: dict[str, tuple[Session, float]] = dataclasses.field(default_factory=dict)
-
-    def create(self, identity_id: str, role: str) -> str:
-        self._prune()
-        sid = secrets.token_urlsafe(32)
-        session = Session(
-            identity=identity_id, role=role, csrf=secrets.token_urlsafe(24)
-        )
-        self._sessions[sid] = (session, time.monotonic() + self.ttl)
-        return sid
-
-    def resolve(self, sid: str | None) -> Session | None:
-        if not sid:
-            return None
-        entry = self._sessions.get(sid)
-        if entry is None:
-            return None
-        session, expires = entry
-        if time.monotonic() >= expires:
-            self._sessions.pop(sid, None)
-            return None
-        return session
-
-    def destroy(self, sid: str | None) -> None:
-        if sid:
-            self._sessions.pop(sid, None)
-
-    def drop_identity(self, identity_id: str, *, keep: str | None = None) -> None:
-        """Signs out all sessions of an identity.
-
-        Called after deletion, role revocation, and password change: an
-        existing session would otherwise continue, even though access
-        has been revoked or the secret has been changed.
-
-        `keep` spares exactly one session -- the one that initiated the change
-        itself. Without this exception, self-service would sign
-        the user out for a successful change.
-        """
-        for sid in [
-            s
-            for s, (sess, _) in self._sessions.items()
-            if sess.identity == identity_id and s != keep
-        ]:
-            self._sessions.pop(sid, None)
-
-    def _prune(self) -> None:
-        now = time.monotonic()
-        for sid in [s for s, (_, exp) in self._sessions.items() if now >= exp]:
-            self._sessions.pop(sid, None)
-
-
-@dataclasses.dataclass(slots=True)
-class LoginThrottle:
-    """Thwarts rate attacks against the login form.
-
-    The scrypt comparison costs about 50 ms per attempt per stored
-    identity and thus already throttles on its own. But the form is the
-    first surface a human can touch in a browser -- a hard
-    limit per source address is cheaper here than the debate over whether
-    scrypt alone suffices.
-    """
-
-    max_failures: int = 10
-    window_seconds: int = 300
-    _failures: dict[str, list[float]] = dataclasses.field(default_factory=dict)
-
-    def blocked(self, client: str) -> bool:
-        return len(self._recent(client)) >= self.max_failures
-
-    def record_failure(self, client: str) -> None:
-        self._recent(client).append(time.monotonic())
-
-    def reset(self, client: str) -> None:
-        self._failures.pop(client, None)
-
-    def _recent(self, client: str) -> list[float]:
-        cutoff = time.monotonic() - self.window_seconds
-        recent = [t for t in self._failures.get(client, []) if t >= cutoff]
-        self._failures[client] = recent
-        return recent
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
 class OAuthState:
     """What an issued `state` stands for: who started the flow, for which
 
@@ -480,152 +389,6 @@ class OAuthStateStore:
         now = time.monotonic()
         for state in [s for s, (_, exp) in self._states.items() if now >= exp]:
             self._states.pop(state, None)
-
-
-# -- Reading the audit log -------------------------------------------------------
-
-
-def read_audit(
-    path: str,
-    *,
-    limit: int = AUDIT_DEFAULT_LIMIT,
-    identity: str = "",
-    tool: str = "",
-    outcome: str = "",
-) -> tuple[list[dict[str, Any]], bool]:
-    """Reads the most recent entries of the current log file.
-
-    Returns `(entries, truncated)`. `truncated` indicates that older
-    material exists that is not visible here -- either because the file
-    is longer than `AUDIT_READ_BYTES` or because rotation has already occurred. The UI
-    points this out so that nobody takes the absence of an entry as
-    proof.
-
-    The file is walked **backwards** from EOF in `AUDIT_CHUNK_BYTES` chunks
-    and the walk stops as soon as enough records are in hand -- the page
-    wants the newest 200 of a log that may hold tens of thousands, and
-    decoding the whole 2 MiB window to throw away 98 % of it was the single
-    most expensive thing any console page did. Two details carry the
-    correctness:
-
-    * a chunk boundary cuts a record in half, so the first line of every
-      chunk is held back and prepended to the chunk read next (the one
-      *before* it in the file) -- without that, one record per boundary
-      would vanish silently;
-    * one record more than `limit` is collected, purely so `truncated`
-      still means exactly what it meant before: "more matching entries
-      exist in this window than are shown".
-    """
-    try:
-        size = os.path.getsize(path)
-    except OSError:
-        return [], False
-
-    floor = max(0, size - AUDIT_READ_BYTES)
-    # One past `limit` is enough to know whether anything is being hidden.
-    wanted = max(1, limit) + 1
-    records: list[dict[str, Any]] = []
-    carry = b""  # Start of the line that straddles the boundary, held back.
-    pos = size
-
-    with open(path, "rb") as handle:
-        while pos > floor and len(records) < wanted:
-            chunk_start = max(floor, pos - AUDIT_CHUNK_BYTES)
-            handle.seek(chunk_start)
-            blob = handle.read(pos - chunk_start) + carry
-            pos = chunk_start
-            lines = blob.split(b"\n")
-            if pos > floor:
-                # Incomplete: it continues into the chunk not yet read.
-                carry = lines.pop(0)
-            elif floor > 0:
-                # At the window floor mid-file: the first line was cut by
-                # the window itself and is not valid JSON. Drop it, as the
-                # forward reader did.
-                carry = b""
-                lines.pop(0)
-            else:
-                carry = b""
-            for line in reversed(lines):  # Newest first, within the chunk.
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(record, dict):
-                    continue
-                if identity and record.get("identity") != identity:
-                    continue
-                if tool and record.get("tool") != tool:
-                    continue
-                if outcome and record.get("outcome") != outcome:
-                    continue
-                records.append(record)
-                if len(records) >= wanted:
-                    break
-
-    truncated = floor > 0 or len(records) > limit
-    return records[:limit], truncated
-
-
-def _parse_ts(value: Any) -> datetime | None:
-    try:
-        return datetime.strptime(str(value), "%Y-%m-%dT%H:%M:%S%z")
-    except (ValueError, TypeError):
-        return None
-
-
-def _local_now() -> datetime:
-    """Current time in the container's local timezone.
-
-    The audit log stores timestamps with a timezone offset (via
-    `time.strftime("%Y-%m-%dT%H:%M:%S%z")`), so `_parse_ts` can convert
-    them back. The UI displays them in local time -- the operator reads
-    their own wall clock, not UTC. All chart bucketing and axis labels
-    use this instead of `datetime.now(UTC)`.
-    """
-    return datetime.now().astimezone()
-
-
-def _to_local(stamp: datetime) -> datetime:
-    """Converts a parsed timestamp to local time for display."""
-    return stamp.astimezone()
-
-
-def _bucket_calls(
-    records: list[dict[str, Any]], hours: int = 12, *, now: datetime | None = None
-) -> list[tuple[int, int]]:
-    """Calls per hour slot as `(succeeded, not succeeded)`.
-
-    Both sides are rounded down to the full hour before computing.
-    Rounding down only the present would be a silent bug: an entry from the
-    current hour would then lie *after* the rounded-down present, get a
-    negative age, and fall out of every slot -- the chart would
-    stay empty even though calls just took place.
-    """
-    current = (now or _local_now()).replace(
-        minute=0, second=0, microsecond=0
-    )
-    buckets = [(0, 0) for _ in range(hours)]
-    for record in records:
-        if record.get("kind") != "call":
-            continue
-        stamp = _parse_ts(record.get("ts"))
-        if stamp is None:
-            continue
-        hour = _to_local(stamp).replace(
-            minute=0, second=0, microsecond=0
-        )
-        age = int((current - hour).total_seconds() // 3600)
-        if 0 <= age < hours:
-            slot = hours - 1 - age
-            ok, bad = buckets[slot]
-            if record.get("outcome") == "ok":
-                buckets[slot] = (ok + 1, bad)
-            else:
-                buckets[slot] = (ok, bad + 1)
-    return buckets
 
 
 # -- Image markers ------------------------------------------------------------
@@ -848,17 +611,6 @@ def _toolkit_badge(name: str) -> str:
     letters = ("".join(w[0] for w in words[:2]) or name[:1] or "?").upper()
     color = _BADGE_COLORS[sum(ord(c) for c in name) % len(_BADGE_COLORS)]
     return monogram(_e(letters), f"var({color})", css_class="am-col-logo am-col-badge")
-
-
-def _target(obj: Toolkit | Destination) -> str:
-    """The one target field that's actually set on a Toolkit or a
-
-    Destination -- both carry the same three mutually-exclusive
-    per-executor fields (FR-8.3g: a Destination mirrors Toolkit's own
-    target fields), so picking "whichever one is set" is exactly the same
-    one-liner for either type.
-    """
-    return obj.docker_host or obj.base_url or obj.ws_url or ""
 
 
 def _base_tool_id(tool: ToolDef) -> str:
@@ -2338,90 +2090,6 @@ def _respond(
 # -- Access map ---------------------------------------------------------
 
 
-def _call_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
-    """Counts calls per identity: {id: {ok, denied, failed, total}}."""
-    stats: dict[str, dict[str, int]] = {}
-    for record in records:
-        if record.get("kind") != "call":
-            continue
-        ident = record.get("identity") or ""
-        if not ident:
-            continue
-        bucket = stats.setdefault(ident, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
-        outcome = record.get("outcome") or "unknown"
-        if outcome == "ok":
-            bucket["ok"] += 1
-        elif outcome == "denied":
-            bucket["denied"] += 1
-        elif outcome == "failed":
-            bucket["failed"] += 1
-        bucket["total"] += 1
-    return stats
-
-
-def _tool_call_stats(
-    records: list[dict[str, Any]], tools_by_kit: dict[str, set[str]],
-) -> dict[str, dict[str, int]]:
-    """Counts calls per toolkit by resolving the tool ID.
-
-    ``{toolkit: {ok, denied, failed, total}}``. A call whose tool is in
-    no known toolkit is grouped under ``_unknown``.
-    """
-    tool_to_kit: dict[str, str] = {}
-    for kit, tool_ids in tools_by_kit.items():
-        for tid in tool_ids:
-            tool_to_kit[tid] = kit
-    stats: dict[str, dict[str, int]] = {}
-    for record in records:
-        if record.get("kind") != "call":
-            continue
-        tool_id = record.get("tool") or ""
-        kit = tool_to_kit.get(tool_id, "_unknown")
-        bucket = stats.setdefault(kit, {"ok": 0, "denied": 0, "failed": 0, "total": 0})
-        outcome = record.get("outcome") or "unknown"
-        if outcome == "ok":
-            bucket["ok"] += 1
-        elif outcome == "denied":
-            bucket["denied"] += 1
-        elif outcome == "failed":
-            bucket["failed"] += 1
-        bucket["total"] += 1
-    return stats
-
-
-def _pair_call_stats(
-    records: list[dict[str, Any]], tools_by_kit: dict[str, set[str]],
-) -> dict[tuple[str, str], dict[str, int]]:
-    """Counts calls per (identity, toolkit) pair -- the access map's edges.
-
-    Without a hub node in the middle, each edge is a direct claim ("this
-    identity called into this toolkit this many times"), so the stat it
-    needs is per-pair, not per-identity and per-toolkit separately.
-    """
-    tool_to_kit: dict[str, str] = {}
-    for kit, tool_ids in tools_by_kit.items():
-        for tid in tool_ids:
-            tool_to_kit[tid] = kit
-    stats: dict[tuple[str, str], dict[str, int]] = {}
-    for record in records:
-        if record.get("kind") != "call":
-            continue
-        ident = record.get("identity") or ""
-        kit = tool_to_kit.get(record.get("tool") or "")
-        if not ident or not kit:
-            continue
-        bucket = stats.setdefault((ident, kit), {"ok": 0, "denied": 0, "failed": 0, "total": 0})
-        outcome = record.get("outcome") or "unknown"
-        if outcome == "ok":
-            bucket["ok"] += 1
-        elif outcome == "denied":
-            bucket["denied"] += 1
-        elif outcome == "failed":
-            bucket["failed"] += 1
-        bucket["total"] += 1
-    return stats
-
-
 def _bucket_calls_by_day(
     records: list[dict[str, Any]], days: int = 7, *, now: datetime | None = None,
 ) -> list[tuple[int, int]]:
@@ -2511,27 +2179,6 @@ def _duration_stats(
         "count": float(len(all_durations)),
     }
     return result
-
-
-def _outcome_totals(records: list[dict[str, Any]]) -> dict[str, int]:
-    """Flat outcome totals and error rate across all call records."""
-    ok = denied = failed = 0
-    for record in records:
-        if record.get("kind") != "call":
-            continue
-        outcome = record.get("outcome") or "unknown"
-        if outcome == "ok":
-            ok += 1
-        elif outcome == "denied":
-            denied += 1
-        elif outcome == "failed":
-            failed += 1
-    total = ok + denied + failed
-    error_rate = int((denied + failed) / total * 100) if total else 0
-    return {
-        "ok": ok, "denied": denied, "failed": failed,
-        "total": total, "error_rate": error_rate,
-    }
 
 
 def _access_graph_data(
@@ -4401,17 +4048,6 @@ def _toolkit_tab(
         )
     )
     return "".join(parts)
-
-
-def _request_pending_counts(
-    pending: PendingStore | None, toolkit_proposals: ToolkitProposalStore | None
-) -> tuple[int, int]:
-    change_n = sum(1 for i in pending.list() if i.status == "pending") if pending is not None else 0
-    toolkit_n = (
-        sum(1 for i in toolkit_proposals.list() if i.status == "pending")
-        if toolkit_proposals is not None else 0
-    )
-    return change_n, toolkit_n
 
 
 def _view_requests(

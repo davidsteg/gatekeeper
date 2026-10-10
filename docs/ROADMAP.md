@@ -6,6 +6,11 @@ item.
 
 ## Implemented
 
+- Console JSON API at `/api/v1` (read-only, phase 1 of the console
+  migration): session sign-in with the console password, CSRF, ETag /
+  If-Match, viewer/admin roles, bearer tokens refused; overview, tools,
+  integrations, identities, credential metadata, toolkits, requests, audit
+  and release notes (`api/`)
 - Two-tier config (Tier 1 immutable / Tier 2 runtime-mutable)
 - `docker` and `local` executors
 - `http` executor — SSRF-safe, no redirects followed, credential-as-header
@@ -87,6 +92,15 @@ item.
   only artifact) was removed.
 
 ## Not implemented (by design or not yet)
+
+- **React console (phases 2 to 4 of the console migration).** Phase 1,
+  the JSON API at `/api/v1` with session, CSRF, ETag, roles and every read
+  (0.53.0), is done. Still to come, each as its own release: the React +
+  TypeScript SPA at `/app` with the read-only pages, the Dockerfile node
+  stage and a CI frontend job; the write flows (tools, identities,
+  credentials, account, then requests separately); and the 1.0.0 cutover
+  that redirects `/ui` to `/app`, deletes `ui.py`'s HTML views and changes
+  the console CSP from script-free to `script-src 'self'`.
 
 - **Artifact transfers as another user (`run_as`) and older artifact
   versions.** A transfer writes as the Gatekeeper process user. An image

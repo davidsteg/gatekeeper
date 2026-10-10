@@ -73,6 +73,8 @@ Once started with `--ui`, gatekeeper hosts an admin dashboard at `/ui` where you
 - **See statistics** — aggregate call stats, success rates, latency, admin activity at `/ui/stats`
 - **Change passwords** — rotate console access for people
 
+The same data is available as a typed JSON API at `/api/v1`, signed in with the same console password (an API token is refused there). It is the backend for a React console that will replace `/ui` page by page; until then `/ui` is the console. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#console-api-api-apiv1).
+
 ### Overview: At a glance
 
 ![](.readme-assets/overview.png)
