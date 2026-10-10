@@ -52,6 +52,7 @@ from collections.abc import Callable
 from typing import Any
 
 from . import __version__
+from .api.service import credential_summaries, read_audit, toolkit_summaries
 from .catalog import normalize_tool_entry, parse_tool_spec
 from .credentials import KINDS as CREDENTIAL_KINDS
 from .credentials import CredentialStore
@@ -120,11 +121,6 @@ _BIND_DEPLOY_TIME_ARGS = frozenset(
 #: Fields that are proposable, just not from here -- pointed at the tool
 #: that does take them rather than refused with a flat "unknown argument".
 _BIND_UPDATE_ARGS = frozenset({"executor", "binaries", "denied_args", "run_as"})
-
-# Imported lazily inside `audit_query` (not at module level): `ui.py`
-# imports `apply_pending` from this module for its `/ui/requests` routes,
-# so a top-level `from .ui import read_audit` here would be circular.
-
 
 class AdminActionError(ConfigError):
     """A malformed `admin.*` call -- unknown tool name, missing argument."""
@@ -228,8 +224,6 @@ class AdminService:
         return {"grants": out}
 
     def audit_query(self, _actor: str, args: dict[str, Any]) -> dict[str, Any]:
-        from .ui import read_audit
-
         limit = int(args.get("limit") or 200)
         path = os.path.join(self.store.service.tier1.audit_dir, "audit.jsonl")
         records, truncated = read_audit(
@@ -311,72 +305,14 @@ class AdminService:
         toolkit's executor/limits are) instead of guessing before drafting
         a proposal. Read-only -- Tier 1 itself is never written from here.
         """
-        # Deferred: ui.py imports admin_service.py at module load, so a
-        # top-level import here would be circular -- same reason
-        # `read_audit` above is imported this way instead of at the top.
-        from .ui import _target
-
         tier1 = self.store.service.tier1
-        toolkits = [
-            {
-                "name": name,
-                "executor": tk.executor,
-                "binaries": list(tk.binaries),
-                "denied_args": list(tk.denied_args),
-                "path_roots": list(tk.path_roots),
-                "protected_resources": list(tk.protected_resources),
-                "max_timeout_seconds": tk.max_timeout_seconds,
-                "max_output_bytes": tk.max_output_bytes,
-                "destinations": list(tk.destinations),
-                # Where this toolkit connects to, and which credential it
-                # references -- not previously reported here, which read
-                # as "not configured" when it was actually just missing
-                # from this report. `credential` is the name only (e.g.
-                # "bazarr-api-key"), never its value -- the credential
-                # store stays write-only (FR-10.2) regardless.
-                "target": _target(tk),
-                "credential": tk.credential,
-                # `file` executor only; `None` on every other toolkit and
-                # on any `file` toolkit that never declared it -- reported
-                # plainly rather than omitted, for the same reason as
-                # `target`/`credential` above: a field that exists on
-                # `Toolkit` but is missing from this dict reads as "not
-                # configured", which for `run_as` means an approved
-                # toolkit_update proposal looking like it never took effect.
-                "run_as": tk.run_as,
-                # `agent` executor only, reported for the same reason as
-                # `run_as` above: an `agent` toolkit has no `target`, so
-                # without these two it would read as a toolkit that
-                # reaches nothing and may do nothing.
-                "mailbox_path": tk.mailbox_path,
-                "allowed_agent_operations": list(tk.allowed_agent_operations),
-            }
-            for name, tk in sorted(tier1.toolkits.items())
-        ]
-        return {"toolkits": toolkits, "destinations": sorted(tier1.destinations)}
+        return {"toolkits": toolkit_summaries(tier1), "destinations": sorted(tier1.destinations)}
 
     def cred_list(self, _actor: str, _args: dict[str, Any]) -> dict[str, Any]:
         if self.credentials is None:
             return {"credentials": []}
-        used_by = self.store.service.tier1.credential_references()
         return {
-            "credentials": [
-                {
-                    "name": meta.name,
-                    "kind": meta.kind,
-                    "header": meta.header,
-                    "created_at": meta.created_at,
-                    "rotated_at": meta.rotated_at,
-                    "in_overlap": meta.in_overlap,
-                    "used_by": list(meta.used_by),
-                    "probe_url": meta.probe_url,
-                    "probe_status": meta.probe_status,
-                    "probe_checked_at": meta.probe_checked_at,
-                    "suspect_status": meta.suspect_status,
-                    "suspect_at": meta.suspect_at,
-                }
-                for meta in self.credentials.names(used_by=used_by)
-            ]
+            "credentials": credential_summaries(self.credentials, self.store.service.tier1)
         }
 
     # -- Always auto-apply ---------------------------------------------------
