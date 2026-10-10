@@ -1,6 +1,6 @@
-## 1.0.0
+## 0.52.0
 
-Removes the recovery supervisor and its Hermes integration. Gatekeeper is back to tool execution, permissions, audit and artifact serving; Hermes's native orchestration handles results, wakes and follow-ups. **MAJOR:** a `toolkits.yaml` whose `recovery:` block still enables anything no longer loads (see Migration).
+Removes the recovery supervisor and its Hermes integration. Gatekeeper is back to tool execution, permissions, audit and artifact serving; Hermes's native orchestration handles results, wakes and follow-ups. **Breaking for one case:** a `toolkits.yaml` whose `recovery:` block still enables anything no longer loads (see Migration).
 
 ### Removed
 

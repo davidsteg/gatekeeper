@@ -83,7 +83,7 @@ item.
   They are listed, read and checksummed over MCP, downloadable over
   authenticated HTTP, and transferable into a Tier 1 `handover_dir` with
   sha256 verification. The GitHub release carries the same manifest. No
-  sources are declared since 1.0.0, when the Hermes recovery adapter (the
+  sources are declared since 0.52.0, when the Hermes recovery adapter (the
   only artifact) was removed.
 
 ## Not implemented (by design or not yet)
@@ -92,7 +92,7 @@ item.
   versions.** A transfer writes as the Gatekeeper process user. An image
   serves only its own release's artifacts.
 
-- **Session recovery or continuation, by design (removed in 1.0.0).**
+- **Session recovery or continuation, by design (removed in 0.52.0).**
   Gatekeeper never wakes, continues or re-prompts an agent session. The
   recovery supervisor (0.48.0–0.51.0), its rescue and decision providers,
   `/recovery/*` and the Hermes recovery adapter were removed: deployments

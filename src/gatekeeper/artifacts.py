@@ -53,7 +53,7 @@ CHUNK = 64 * 1024
 #:   {"id": "example-doc", "kind": "file", "path": "docs/EXAMPLE.md",
 #:    "file": "EXAMPLE.md", "media_type": "text/markdown; charset=utf-8", "text": True}
 #:
-#: Empty since 1.0.0: the Hermes recovery adapter and its contract, the
+#: Empty since 0.52.0: the Hermes recovery adapter and its contract, the
 #: only artifacts so far, were removed with the recovery supervisor. The
 #: image still carries a commit-bound (empty) manifest.
 SOURCES: tuple[dict[str, Any], ...] = ()

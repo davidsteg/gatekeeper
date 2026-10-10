@@ -24,7 +24,7 @@ RUN python -m venv /opt/venv \
 # built from exactly these sources and stamped with the commit CI passes
 # in. The release job copies these exact files out of the published image
 # for the GitHub release -- one build, one set of bytes. SOURCES is empty
-# since 1.0.0 (the Hermes recovery adapter was removed), so this writes a
+# since 0.52.0 (the Hermes recovery adapter was removed), so this writes a
 # commit-bound manifest with no artifacts; a future source must also be
 # COPY'd here. Without a commit (a local `docker build`), the manifest
 # says "unknown" and versioned downloads 404.

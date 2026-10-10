@@ -268,7 +268,7 @@ container image runs on Linux and is unaffected.
 
 ## Removed: recovery supervisor
 
-Gatekeeper 1.0.0 removes the recovery supervisor (0.48.0–0.51.0) together
+Gatekeeper 0.52.0 removes the recovery supervisor (0.48.0–0.51.0) together
 with its Hermes recovery adapter. Gatekeeper no longer tracks incidents,
 holds repeats (`recovery_hold`), consults a rescue or decision model, or
 continues a Hermes session; `POST /recovery/events` and
@@ -278,7 +278,7 @@ unchanged official Hermes images and their native orchestration.
 
 **What an upgrade does with old configuration:**
 
-| Left in place | 1.0.0 behavior |
+| Left in place | 0.52.0 behavior |
 |---|---|
 | `recovery:` block that enables anything (`enabled: true` at any level, e.g. `rescue.enabled`, `decision.enabled`) | Refused at load (`gatekeeper check`, start, SIGHUP): *"'recovery' enables a feature that no longer exists …"*. A failed SIGHUP keeps the running config. |
 | `recovery:` block with everything disabled | Loads, logs *"the 'recovery:' block is ignored"* with the same hint. |
@@ -311,7 +311,7 @@ reads none of these and deletes none of them:
 
 The image carries the files listed in `artifacts.SOURCES` under
 `/opt/gatekeeper/artifacts/`, bound to the release commit by
-`manifest.json`. **1.0.0 declares no sources** (the Hermes recovery
+`manifest.json`. **0.52.0 declares no sources** (the Hermes recovery
 adapter, the only artifact so far, was removed), so the manifest is empty
 and an `artifact` toolkit has nothing to serve until a source is added. The
 mechanism is unchanged. To hand artifacts to an agent, mount the handover

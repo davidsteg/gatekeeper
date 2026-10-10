@@ -1,4 +1,4 @@
-"""The recovery supervisor is gone (1.0.0), and what an existing deployment
+"""The recovery supervisor is gone (0.52.0), and what an existing deployment
 still carries of it must not look as if it did anything.
 
 - A `recovery:` block that enables anything is refused at load, with the
@@ -95,9 +95,9 @@ def env(tmp_path, caplog):
     identities = load_identities(str(ipath))
     service = Service(tier1=tier1, catalog=catalog, audit=AuditLog(str(tmp_path / "logs")),
                       identities=identities)
-    # What the 1.0.0 image carries: a manifest without artifacts.
+    # What the 0.52.0 image carries: a manifest without artifacts.
     from gatekeeper.artifacts import ArtifactStore, build
-    build(str(tmp_path), str(tmp_path / "artifacts"), commit="a" * 40, release="1.0.0")
+    build(str(tmp_path), str(tmp_path / "artifacts"), commit="a" * 40, release="0.52.0")
     service.artifact_store = ArtifactStore(str(tmp_path / "artifacts"))
     return service, identities, token
 

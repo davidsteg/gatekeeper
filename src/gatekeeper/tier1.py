@@ -94,12 +94,12 @@ AGENT_OPERATIONS = frozenset({"send_message", "read_messages", "mailbox_status"}
 ARTIFACT_OPERATIONS = frozenset({"list", "info", "read", "transfer"})
 
 #: The recovery supervisor and its Hermes adapter were removed (RELEASE.md
-#: 1.0.0). Hermes orchestrates its own tasks; Gatekeeper never continues a
+#: 0.52.0). Hermes orchestrates its own tasks; Gatekeeper never continues a
 #: session. What is left of that feature in an existing toolkits.yaml must
 #: not look as if it still did something -- see `_check_removed_recovery`.
 REMOVED_ARTIFACTS = frozenset({"hermes-adapter-contract", "hermes-recovery-adapter"})
 RECOVERY_MIGRATION = (
-    "The recovery supervisor was removed from Gatekeeper in 1.0.0; Hermes "
+    "The recovery supervisor was removed from Gatekeeper in 0.52.0; Hermes "
     "orchestrates and recovers its own tasks. Delete the 'recovery:' block "
     "from toolkits.yaml -- see docs/DEPLOYMENT.md, 'Removed: recovery "
     "supervisor'. recovery.yaml and the credentials it named are no longer "
@@ -1262,7 +1262,7 @@ def load_tier1(path: str) -> Tier1:
                 # when nothing else it allows is served.
                 logger.warning(
                     "%s: allowed_artifacts names %s, which this image no longer "
-                    "builds (the Hermes recovery adapter was removed in 1.0.0). "
+                    "builds (the Hermes recovery adapter was removed in 0.52.0). "
                     "Remove them; drop the toolkit, its tools and the matching "
                     "'artifact:' scopes if nothing else is left.",
                     where, removed_artifacts)

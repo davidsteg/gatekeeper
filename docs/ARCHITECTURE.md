@@ -455,7 +455,7 @@ Gatekeeper does not continue, wake or re-prompt an agent session. The
 recovery supervisor (`recovery.py`: incidents, cooldowns, rescue and decision
 providers, `/recovery/*`, the `_meta.hermes` / `_hermes_recovery`
 correlation, the `recovery_hold` denial) and the Hermes recovery adapter were
-removed in 1.0.0. Hermes's native orchestration (worker result, wake, check,
+removed in 0.52.0. Hermes's native orchestration (worker result, wake, check,
 targeted follow-up) owns that loop; Gatekeeper's part ends with the audited
 tool result. A leftover `recovery:` block in toolkits.yaml is refused at
 load when it enables anything and warned about when it is inert, so it never
@@ -465,7 +465,7 @@ looks effective (`tier1._check_removed_recovery`).
 
 Files Gatekeeper serves to agents, each bound to exactly one commit. Which
 repository paths are artifacts is fixed in `artifacts.SOURCES` (a single file
-or a directory packaged as tar.gz). The list is empty since 1.0.0 -- the only
+or a directory packaged as tar.gz). The list is empty since 0.52.0 -- the only
 entries were the Hermes recovery adapter and its contract -- so the image
 carries a commit-bound manifest with no artifacts until a source is added
 (and COPY'd in the Dockerfile).

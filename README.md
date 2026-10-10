@@ -42,7 +42,7 @@ No shell injection. No command confusion. No hidden side effects.
   current release declares no artifact sources
 - **No session recovery.** Gatekeeper executes tools, enforces permissions,
   audits and serves artifacts. It never continues an agent session: the
-  recovery supervisor and its Hermes adapter were removed in 1.0.0, and
+  recovery supervisor and its Hermes adapter were removed in 0.52.0, and
   Hermes's own orchestration handles results, wakes and follow-ups (migration:
   [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#removed-recovery-supervisor))
 

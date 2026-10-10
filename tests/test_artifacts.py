@@ -51,7 +51,7 @@ def repo(tmp_path):
 @pytest.fixture
 def store_dir(tmp_path, repo):
     out = tmp_path / "artifacts"
-    build(str(repo), str(out), commit=COMMIT, release="1.0.0", sources=FIXTURE_SOURCES)
+    build(str(repo), str(out), commit=COMMIT, release="0.52.0", sources=FIXTURE_SOURCES)
     return out
 
 
@@ -111,7 +111,7 @@ async def call(service, identities, who, tool, **args):
 
 def test_build_is_deterministic_and_bound_to_the_commit(tmp_path, repo, store_dir):
     again = tmp_path / "again"
-    build(str(repo), str(again), commit=COMMIT, release="1.0.0", sources=FIXTURE_SOURCES)
+    build(str(repo), str(again), commit=COMMIT, release="0.52.0", sources=FIXTURE_SOURCES)
     m1 = json.loads((store_dir / "manifest.json").read_text())
     m2 = json.loads((again / "manifest.json").read_text())
     assert m1 == m2
@@ -146,7 +146,7 @@ def test_the_image_builds_a_commit_bound_manifest_without_the_removed_adapter(tm
     # and the removed Hermes recovery artifacts are not built.
     assert not {s["id"] for s in SOURCES} & {"hermes-adapter-contract", "hermes-recovery-adapter"}
     out = tmp_path / "image"
-    manifest = build(str(tmp_path / "empty-checkout"), str(out), commit=COMMIT, release="1.0.0")
+    manifest = build(str(tmp_path / "empty-checkout"), str(out), commit=COMMIT, release="0.52.0")
     assert manifest["commit"] == COMMIT and manifest["artifacts"] == []
     store = ArtifactStore(str(out))
     assert store.commit == COMMIT and store.list() == []
