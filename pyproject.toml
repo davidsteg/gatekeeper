@@ -1,6 +1,6 @@
 [project]
 name = "gatekeeper"
-version = "0.53.0"
+version = "0.54.0"
 description = "Controlled MCP server for host operations"
 requires-python = ">=3.12"
 dependencies = [
@@ -44,8 +44,10 @@ where = ["src"]
 # package, not modules -- without this they are dropped from the wheel and
 # /ui/manifest.webmanifest answers 404 in the image while working fine in
 # an editable checkout. Read by ui.py's _read_pwa_asset().
+# `_web/` is the React console's build (frontend/dist), copied in by the
+# Dockerfile's node stage and served at /app by api/web.py -- same reason.
 [tool.setuptools.package-data]
-gatekeeper = ["_pwa/*"]
+gatekeeper = ["_pwa/*", "_web/*", "_web/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

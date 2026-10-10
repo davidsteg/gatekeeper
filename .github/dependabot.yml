@@ -1,0 +1,13 @@
+# Dependency update PRs for the console's npm tree (frontend/). Weekly and
+# grouped: every update still lands as a reviewed PR that runs the full CI,
+# including `npm audit` and the generated-types check.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      frontend:
+        patterns: ["*"]
+    open-pull-requests-limit: 5

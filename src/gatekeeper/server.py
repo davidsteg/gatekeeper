@@ -31,6 +31,7 @@ from .api import API_PREFIX
 from .api.app import build_api_app
 from .api.deps import ApiContext
 from .api.session import LoginThrottle, SessionStore
+from .api.web import APP_PREFIX, build_web_routes
 from .audit import AuditLog
 from .errors import DenialReason, Denied
 from .execute import OUTCOME_OK, OUTCOME_UNKNOWN
@@ -91,6 +92,9 @@ class AuthMiddleware:
         # refuses a bearer token outright (api/deps.py), so letting it
         # past here opens nothing an agent token could use.
         if path == API_PREFIX or path.startswith(API_PREFIX + "/"):
+            return True
+        # The React console's static build: public bytes, no data in them.
+        if path == APP_PREFIX or path.startswith(APP_PREFIX + "/"):
             return True
         # '/' and '/favicon.ico' are requested by the browser on its own.
         # Letting them through keeps the audit log free of noise that
@@ -529,6 +533,7 @@ def build_app(
                 sessions=sessions, throttle=throttle,
             )
         )
+        routes.extend(build_web_routes())
         routes.append(
             Mount(
                 API_PREFIX,
