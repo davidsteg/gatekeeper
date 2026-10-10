@@ -110,7 +110,12 @@ def split_reserved(arguments: dict[str, Any] | None) -> tuple[dict[str, Any], An
 #: user is `user_stopped` and is never overridden.
 STUCK_REASONS = frozenset({"exhausted", "breaker_open", "error", "timeout", "interrupted"})
 USER_STOP = "user_stopped"
-STOP_REASONS = STUCK_REASONS | {"final_reply", USER_STOP}
+#: The adapter could not map the turn exit onto a stable reason (an exit
+#: string its mapping layer does not know, or an interruption whose origin
+#: it did not observe). Accepted, recorded -- and never a trigger for an
+#: automatic continuation, not even after a cooldown.
+UNMAPPED = "unmapped"
+STOP_REASONS = STUCK_REASONS | {"final_reply", USER_STOP, UNMAPPED}
 TERMINAL_EVENTS = {
     "task_completed": "completed",
     "task_cancelled": "cancelled",
@@ -1336,6 +1341,14 @@ class RecoverySupervisor:
             return {"accepted": True, "action": "suppressed"}
         if incident["status"] in ("continuing", "accepted", "active"):
             return {"accepted": True, "action": "none", "reason": "continuation in progress"}
+        if reason == UNMAPPED:
+            # Not continuable. A pending cooldown continuation is withdrawn;
+            # the incident stays open so tool-response guidance still works.
+            self._update(incident["id"], status="guided", check_done=True,
+                         last_turn_seq=int(payload["turn_seq"]))
+            self._log("not_continuable", incident_id=incident["id"], task_id=incident["task_id"],
+                      installation=installation.name, reason=UNMAPPED)
+            return {"accepted": True, "action": "none", "reason": "unmapped exit is not continuable"}
         cooldown_until = payload.get("cooldown_until")
         if isinstance(cooldown_until, (int, float)) and not isinstance(cooldown_until, bool) \
                 and cooldown_until > now:
@@ -1410,6 +1423,11 @@ class RecoverySupervisor:
             return "suppressed"
         if status.get("recovery_owner") == "hermes":
             return self._defer_to_hermes(incident, status.get("recovery_until"))
+        if status.get("stop_reason") == UNMAPPED:
+            self._update(inc_id, status="guided", check_done=True)
+            self._log("not_continuable", incident_id=inc_id, task_id=incident["task_id"],
+                      installation=incident["installation"], reason=UNMAPPED, trigger=trigger)
+            return "not_continuable"
         status_seq = _int(status.get("turn_seq"))
         if status.get("turn") == "active" or (
             status_seq is not None and status_seq > incident["last_turn_seq"]

@@ -1358,3 +1358,56 @@ async def test_hermes_owned_session_without_deadline_is_left_to_hermes(env, herm
     await service.recovery.handle_event("homelab-agent", _stopped())
     assert _incidents(service)[0]["outcome"] == "suppressed:hermes_recovery_owner"
     assert fake.continue_calls == []
+
+
+# -- Unmapped exits, reserved name scope ---------------------------------------------
+
+
+async def test_unmapped_exit_is_accepted_but_never_continued(env, hermes):
+    service, identities, _ = env(rescue_enabled=False)
+    fake = hermes["homelab"]
+    fake.session("sess-1", "task-1", turn="active")
+    await _fail(service, identities, 2)
+    fake.state().update(turn="stopped", stop_reason="unmapped")
+    code, resp = await service.recovery.handle_event("homelab-agent", _stopped(reason="unmapped"))
+    assert code == 200 and resp["action"] == "none"
+    assert fake.continue_calls == [] and fake.status_calls[-1:] != []  # status was only the threshold check
+    assert _incidents(service)[0]["status"] == "guided"
+
+
+async def test_unmapped_exit_withdraws_a_cooldown_continuation(env, hermes):
+    clock = Clock()
+    service, identities, _ = env(rescue_enabled=False, clock=clock)
+    fake = hermes["homelab"]
+    fake.session("sess-1", "task-1")
+    await _call(service, identities, "homelab-agent", "demo.limited")
+    await _call(service, identities, "homelab-agent", "demo.limited")
+    assert _incidents(service)[0]["status"] == "cooling"
+    await service.recovery.handle_event("homelab-agent", _stopped(reason="unmapped"))
+    clock.now += 120
+    await service.recovery.tick()
+    assert fake.continue_calls == []
+
+
+async def test_status_reporting_unmapped_blocks_reconcile_and_cooldown_paths(env, hermes):
+    clock = Clock()
+    service, identities, _ = env(rescue_enabled=False, clock=clock)
+    fake = hermes["homelab"]
+    fake.session("sess-1", "task-1")
+    await _call(service, identities, "homelab-agent", "demo.limited")
+    await _call(service, identities, "homelab-agent", "demo.limited")
+    fake.state().update(turn="stopped", stop_reason="unmapped")  # stop event never arrived
+    clock.now += 61
+    await service.recovery.tick()
+    assert fake.continue_calls == []
+
+
+def test_only_the_exact_reserved_name_is_refused(tmp_path, tier1):
+    base = {"toolkit": "demo", "binary": PYTHON, "version": 1, "title": "x", "description": "x",
+            "category": "read", "idempotent": True, "enabled": True, "argv": ["-c", "print(1)"],
+            "required_scopes": [], "timeout_seconds": 5, "max_output_bytes": 100}
+    ok = {**base, "id": "demo.underscored",
+          "parameters": {"_internal_flag": {"type": "string", "pattern": "^[a-z]+$", "description": "legit"},
+                         "_hermes_recovery_x": {"type": "string", "pattern": "^[a-z]+$", "description": "legit"}}}
+    catalog = make_catalog(tmp_path, tier1, [ok])
+    assert "demo.underscored" in catalog.tools

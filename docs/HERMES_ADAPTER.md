@@ -14,12 +14,15 @@ against a mock adapter; no live round trip has been demonstrated yet.
   installation, an incident pinned to one session, and an authoritative,
   echo-checked mapping (§6).
 - Stop reasons are a closed enum. Hermes exit strings are mapped in the
-  adapter, never in this contract (§2.1).
-- Recovery ownership is explicit: Gatekeeper never continues during a
-  Hermes-internal recovery attempt or its backoff (§3).
+  adapter, never in this contract. An exit the adapter cannot map is
+  reported as `unmapped`, which is accepted and never continued (§2.1).
+- Recovery ownership is binding: Gatekeeper never continues a session while
+  a Hermes-internal recovery attempt or its backoff is pending (§3).
 - Continuation acceptance and idempotency are journaled durably before the
   turn starts, with defined crash handling (§4).
-- "Started" is durable and stays provable after the turn ended (§4, §5).
+- "Started" is durable and stays provable after the turn ended (§4, §5). The
+  continuation marker counts only together with a matching journal row and a
+  validated binding; the text alone does nothing (§5).
 
 **Who owns what.** Hermes owns planning, delegation, Kanban tasks, result checks,
 user replies, and its own in-place turn recovery. Gatekeeper owns permissions,
@@ -54,6 +57,9 @@ The rules for the carriers:
   Gatekeeper call. A turn with no bound task gets `null`. `modify` merges the
   plugin's value over the model's arguments, so a value the model wrote itself
   never reaches Gatekeeper.
+- **Only this exact name is reserved.** The name `_hermes_recovery` and
+  nothing else: other parameter names, including names that start with `_`
+  (even `_hermes_recovery_x`), stay valid.
 - **Removal at the MCP boundary.** Gatekeeper removes `_hermes_recovery` from
   every call before the pipeline sees it, even while recovery is off. The call
   then runs through all the usual checks: authorization, parameter
@@ -127,34 +133,39 @@ any blocked tool running.
 | `interrupted` | A technical interruption (process restart, lost connection) | yes |
 | `final_reply` | The turn ended normally | only after a cooldown Gatekeeper scheduled |
 | `user_stopped` | An **explicit** user stop | **never**; the incident is suppressed, even mid-cooldown |
+| `unmapped` | The adapter could not map the exit to one of the values above: an exit value its mapping layer does not know, or an interruption whose origin it did not observe | **never**. The value is accepted and recorded; a continuation already scheduled after a cooldown is withdrawn, and the incident stays open for tool-response guidance. |
 
 Hermes's internal exit strings (for example `turn_exit_reason`) are
 version-dependent diagnostics, and this contract does not depend on them. The
 adapter keeps a **versioned mapping layer** from the Hermes version it runs on
 to these reasons:
 
-- A loop exit it cannot map is reported as `error`, and the unmapped value is
-  logged on the adapter side.
+- A loop exit it cannot map is reported as **`unmapped`**, never as a
+  continuable reason. The raw value is logged on the adapter side only.
 - An explicit user stop is reported as `user_stopped` only when the adapter
-  observed a user-initiated stop. A technical interruption must never be
-  reported as `user_stopped`, nor the other way round.
+  observed a user-initiated stop. A technical interruption is reported as
+  `interrupted` only when the adapter knows it was technical, for example
+  because the process restarted with the turn still marked active. An
+  interruption of unknown origin is `unmapped`. Neither may be reported as
+  the other.
 - The adapter must emit `exhausted` from a **real loop-exit point**, not from
   inference over transcripts or timings. For the emission point found in
-  Hermes v0.21.6, see §9; Homelab must confirm the same point exists in the
-  Hermes version it runs.
+  Hermes v0.21.6, see §9. Homelab has confirmed the same reason-carrying
+  `on_session_end` hook on the version it runs.
 
 ## 3. Recovery ownership
 
 Hermes runs its own bounded, in-place recovery for dispatcher-owned Kanban
 worker turns (`agent/kanban_turn_recovery.py` in v0.21.6). It makes a few
 attempts with backoff, in the same session, and the dispatcher takes over
-after that. Two recovery systems must never act on one session at the same
-time:
+after that. **These rules are binding:** two recovery systems never act on
+one session at the same time, and Gatekeeper never continues a session in
+parallel with Hermes's own recovery.
 
-- **Hermes-internal recovery wins.** While the adapter knows that an internal
-  recovery attempt or its backoff is pending for a session, `/status` reports
-  `recovery_owner: "hermes"` and `recovery_until` (Unix seconds), and
-  `/continue` is rejected with
+- **Hermes-internal recovery wins.** While an internal recovery attempt or
+  its backoff is pending for a session, the adapter **MUST** report
+  `recovery_owner: "hermes"` and `recovery_until` (Unix seconds) on `/status`,
+  and **MUST** reject `/continue` with
   `{"accepted": false, "reason": "internal_recovery", "retry_after_until": …}`.
 - **What Gatekeeper does then.** It spends no recovery and starts nothing. It
   waits for the deadline like a cooldown and then checks once, at most 3 times
@@ -265,10 +276,20 @@ never in Hermes's `state.db` or `kanban.db`. The store is SQLite with WAL and
    returned). Hermes-side idempotency keys are derived from the
    `idempotency_key`.
 3. **Started.** The turn's input carries the marker
-   `[gatekeeper-continuation <continuation_id>]`. When a turn starts with that
-   marker, the adapter records `started_at`, `started_turn_seq` and `turn_id`
-   durably **before the first model call**, and from then on tags that turn's
-   Gatekeeper calls with the `continuation_id`.
+   `[gatekeeper-continuation <continuation_id>]`. **The marker alone proves
+   nothing.** It is accepted only if all of the following hold:
+   - a journal row with that `continuation_id` exists, in state `accepted` or
+     `admitted`;
+   - the row's `session_id` is the session of the starting turn;
+   - the row's `board_id`, `task_id` and `task_generation` equal the
+     session's current binding;
+   - the starting turn is `expected_turn_seq + 1`.
+
+   Only then does the adapter record `started_at`, `started_turn_seq` and
+   `turn_id` durably **before the first model call**, and from then on tag that
+   turn's Gatekeeper calls with the `continuation_id`. A marker without such a
+   row is ignored and logged. The turn then runs as an ordinary turn, and its
+   calls carry no `continuation_id`.
 4. **Finished.** At turn end, the adapter records `ended_at` and the mapped
    `exit_reason` (§2.1).
 
@@ -372,8 +393,9 @@ not part of the contract.
   `turn_id`, `completed`, `failed` and `interrupted`. Hermes then asks the model
   for a summary, so **`completed` can be true on an exhausted turn**, which is
   why the mapping keys on the exit reason and not on `completed`. The hook is
-  skipped when persistence is disabled. **Homelab must confirm this point on its
-  Hermes version.**
+  skipped when persistence is disabled. **Homelab has confirmed** this
+  reason-carrying `on_session_end` hook on its Hermes version, so no Hermes
+  source patch is needed.
 - **Turn start:** `pre_llm_call` fires once per turn, before the loop, with
   `session_id`, `turn_id` and `user_message`. That is where the adapter records
   `started` and advances `turn_seq`.
