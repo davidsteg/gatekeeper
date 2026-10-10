@@ -13,7 +13,7 @@ and Tier 2 change-approval flow diagrams.
 | Tier | File | Mutable at runtime | Changed via |
 |------|------|:--:|-------------|
 | 1 | `toolkits.yaml` | ✗ | Redeploy only (FR-4.11) |
-| 2 | `tools.yaml`, `identities.yaml`, `credentials.yaml`, `pending.yaml` | ✓ | Admin UI at `/ui`, or `admin.*` on `/admin/mcp` for low-risk changes (queued to `pending.yaml` otherwise -- see below) |
+| 2 | `tools.yaml`, `identities.yaml`, `credentials.yaml`, `pending.yaml` | ✓ | Console at `/app` (via `/api/v1`), or `admin.*` on `/admin/mcp` for low-risk changes (queued to `pending.yaml` otherwise -- see below) |
 
 A toolkit **proposal** (`toolkit_proposals.yaml`) is the one deliberate,
 narrow exception: an `admin.toolkit_propose` call from `/admin/mcp` can
@@ -27,7 +27,7 @@ deploy time if any non-deleted tool still references it), and
 so a destination's own `credential:` override stays deploy-time) -- but
 either way it only ever lands in this separate Tier 2 file -- never
 `pending.yaml` --
-and only a human clicking "Approve & Deploy" at `/ui/requests` (Toolkit
+and only a human clicking "Approve & Deploy" at `/app/requests` (Toolkit
 tab) writes it into `toolkits.yaml` and reloads it into the running
 process (`Service.reload_config`, no restart). See
 [`toolkit_proposals.py`](../src/gatekeeper/toolkit_proposals.py).
@@ -36,7 +36,7 @@ process (`Service.reload_config`, no restart). See
 that writes `toolkits.yaml`. The console can create tools, identities, and
 credentials through it — never a toolkit. The one exception lives entirely
 outside `store.py`: `toolkit_proposals.py`'s `ToolkitProposalStore.deploy`,
-reachable only from a human clicking "Approve & Deploy" at `/ui/toolkits`,
+reachable only from a human clicking "Approve & Deploy" at `/app/requests`,
 never automatically and never from `/admin/mcp` (see below).
 
 - **Tier 1** defines: which executor a toolkit uses, its allowlist (binaries /
@@ -47,14 +47,15 @@ never automatically and never from `/admin/mcp` (see below).
 
 ## Roles
 
-| Role | MCP (`/mcp`) | Admin MCP (`/admin/mcp`) | Console (`/ui`) read | Tier 2 write |
+| Role | MCP (`/mcp`) | Admin MCP (`/admin/mcp`) | Console (`/app`) read | Tier 2 write |
 |---|:--:|:--:|:--:|:--:|
 | `agent` | ✓ | ✗ | — | — |
 | `viewer` | — | ✗ | ✓ | — |
 | `admin` | ✗ | ✓ | ✓ | ✓ |
 
 Console login uses the console password, not the API token. The token
-authenticates `/mcp`; the password opens `/ui`. Losing one does not expose
+authenticates `/mcp`; the password opens the console (`/app`, via a
+`/api/v1` session). Losing one does not expose
 the other.
 
 `/admin/mcp` is a second MCP endpoint, isolated by construction (FR-2.8/2.9):
@@ -64,17 +65,18 @@ each mount -- an `admin`-role token is rejected outright on `/mcp`, and every
 other role is rejected outright on `/admin/mcp`, so a token never opens the
 "wrong" endpoint even in principle. See [`admin_service.py`](../src/gatekeeper/admin_service.py)
 for which `admin.*` actions apply immediately versus land in the
-`pending.yaml` queue for a human to approve at `/ui/requests` (Change tab)
+`pending.yaml` queue for a human to approve at `/app/requests` (Change tab)
 -- `approve`/`reject` are not reachable from `/admin/mcp` at all, so an
 agent cannot approve its own proposal. `admin.cred_propose` also lands in
 `pending.yaml`, but its own approval never goes through `apply_pending`/its
 `_APPLIERS` table (those are `store.py`-shaped): the dedicated
-`/ui/pending/credential-fill` route calls `PendingStore.approve()` directly,
+`POST /api/v1/requests/pending/<id>/credential` route calls
+`PendingStore.approve()` directly,
 with the human-typed secret value as its `apply` callback's only extra
 input -- the value itself is never written to `pending.yaml`, only the
 proposed name/kind/header are. `admin.toolkit_propose` is separate
 again: it never applies and never touches `pending.yaml`, only the
-dedicated `toolkit_proposals.yaml`/`/ui/requests` (Toolkit tab) surface
+dedicated `toolkit_proposals.yaml`/`/app/requests` (Toolkit tab) surface
 described above -- a toolkit
 changes Tier 1, not Tier 2, so it is deliberately not reachable through the
 same review path as an ordinary tool/grant change.
@@ -256,10 +258,10 @@ opencode. Most are
 (binaries/denied_args/path_roots, mirroring `config/examples/toolkits.yaml`)
 and Linux reuses the `ssh` executor's, via `_tool_argv()` rather than the
 http-shaped `_tool()` helper; opencode uses `_opencode_tool()`, whose tools
-carry an `opencode_operation` and no request shape at all. Reachable from `/ui/tools/integrations` —
+carry an `opencode_operation` and no request shape at all. Reachable from `/app/tools/integrations` —
 picking an integration's tool pre-fills the *existing* tool editor, then
 goes through the exact same Tier 1 validation as hand-written YAML.
-Integrations never create a toolkit; `/ui/toolkits/reference` (or
+Integrations never create a toolkit; `/app/toolkits/reference` (or
 `gatekeeper integration show <key>`) prints the YAML block for a human to
 paste into `toolkits.yaml` by hand.
 
@@ -272,11 +274,12 @@ by the same "no embedded bitmap" rule as an external one), and fall back to
 a plain colored-circle monogram. Every fetched SVG has its `style=""`
 attributes and any `<style>` block resolved into plain presentation
 attributes (`fill="#hex"`, not CSS) and its ids/classes namespaced per
-integration: the console's CSP (`style-src 'self' 'nonce-...'`, which no
-`style` attribute matches) silently drops any
-`style` it doesn't carry the nonce for, and the gallery renders every logo
-on one page at once, so an unnamespaced id or class in one service's SVG
-can collide with another's.
+integration. Both rules date from the pre-1.0 `/ui` console, which inlined
+every logo into one page under a `style-src` that no `style` attribute
+matched; they are kept because they make each mark self-contained. The `/app` console loads each
+logo as an image (`GET /api/v1/integrations/<key>/logo.svg`, served with
+a `sandbox` CSP), so a logo never shares a document with another one and
+never runs script.
 
 No OAuth2 in the `http` executor — it supports static credentials only
 (bearer, API-key header, basic). Services that require an authorization-code
@@ -290,9 +293,11 @@ The script itself is baked into the image at
 naming both paths, at startup and on the call.
 
 The refresh token in that bundle is obtained by the console itself
-(0.46.0): `GET /ui/oauth/google/authorize` builds Google's consent URL
-from the credential's `client_id`, and `GET /ui/oauth/google/callback`
-exchanges the returned code and writes the refresh token back into the
+(0.46.0): `POST /api/v1/oauth/google/authorize` (the **Connect** button
+on `/app/credentials`) builds Google's consent URL from the credential's
+`client_id`, and `GET /ui/oauth/google/callback` -- the redirect URI
+registered with Google, which kept its 0.x path through the 1.0.0 move to
+`/app` -- exchanges the returned code and writes the refresh token back into the
 same credential (`rotate` when it exists, `create` when it does not),
 together with a `scopes` list — Google's own `scope` field from the token
 response, not the list the consent URL asked for, because an operator may
@@ -301,22 +306,27 @@ allowed to ask for: a request covering anything outside the grant is
 answered with `invalid_scope` and the refresh fails as a whole, so it
 travels into the per-call token file and `google_api.py` reads it from
 there instead of guessing.
-Both routes are session-gated and `role: admin`, neither is in
-`server.PUBLIC_PATHS`, and neither renders, logs, or echoes a token, a
-code, or the client secret — the pages say "ok" or "error" (FR-10.2/10.7).
+The authorize route needs an admin console session and the CSRF header;
+the callback cannot see that session (the cookie is scoped to `/api/v1`),
+so it trusts only the single-use state and re-checks that the identity it
+names is still an admin. Neither is in `server.PUBLIC_PATHS`, and neither
+renders, logs, or echoes a token, a code, or the client secret: the
+callback always answers 303 to
+`/app/credentials?oauth=<result>&provider=&credential=`, and the console
+shows its own text for the result code (FR-10.2/10.7).
 The scopes asked for are the union of every `google` toolkit's
 `required_scopes` (`Tier1.google_oauth_scopes`), read at request time,
-falling back to a documented default set (`ui.DEFAULT_GOOGLE_SCOPES`,
+falling back to a documented default set (`oauth.DEFAULT_GOOGLE_SCOPES`,
 which `google_api.SCOPES` mirrors for token files written before scopes
 were stored). What carries the flow across
 Google's cross-site redirect — which a `SameSite=Strict` session cookie
 does not survive — is a single-use `state` bound to the operator, the
-credential, and the redirect URI (`ui.OAuthStateStore`).
+credential, and the redirect URI (`oauth.OAuthStateStore`).
 
 The `microsoft` executor is the same arrangement for Outlook mail
 (outlook.com/hotmail.com and work accounts alike):
-`GET /ui/oauth/microsoft/authorize` and
-`GET /ui/oauth/microsoft/callback` against
+`POST /api/v1/oauth/microsoft/authorize` and
+`GET /ui/oauth/microsoft/callback` (again the registered redirect URI) against
 `login.microsoftonline.com/common/oauth2/v2.0/{authorize,token}`, writing
 the same `oauth2` bundle plus a `provider: microsoft` field, which
 `service._oauth_token_env` uses to refuse a credential from the other
@@ -326,14 +336,14 @@ identity platform rather than let it fail as an unexplained 401.
 refresh token; it imports nothing outside the standard library, because
 it runs as a subprocess and may not share gatekeeper's environment.
 Every gate in the two route handlers is shared with the Google pair
-(`ui._oauth_authorize`/`_oauth_callback`, parameterized by
-`ui.OAuthProviderSpec`), including the state binding — a state minted by
+(`api/extras.py`'s `oauth_authorize` and `oauth.build_callback_routes`,
+parameterized by `oauth.OAuthProviderSpec`), including the state binding — a state minted by
 one provider's flow is not redeemable at the other's callback. Two
 things are Microsoft's own: the flow carries PKCE (S256), so an
 intercepted code is not redeemable without a verifier that never left
 this process; and `offline_access` is what makes Microsoft return a
 refresh token at all, yet Microsoft omits it from the token response's
-`scope` field — `ui._granted_microsoft_scopes` adds the reserved scopes
+`scope` field — `oauth._granted_microsoft_scopes` adds the reserved scopes
 the consent screen asked for back, or the next refresh would stop asking
 for it and the credential would go quietly read-only.
 
@@ -526,7 +536,8 @@ src/gatekeeper/
   __main__.py        Entry point: CLI (serve/check/init/token/password/
                       credential-key/integration), bootstrap, SIGHUP handler
   release_notes.py    Where RELEASE.md is and how it splits into versions
-                       -- one copy, read by the console popup, /release and
+                       -- one copy, read by /api/v1/release-notes (the
+                       console's Release notes page), /release and
                        admin.release_notes alike
   server.py           MCP protocol, ASGI middleware, health/metrics/release
                        routes;
@@ -553,7 +564,8 @@ src/gatekeeper/
                        /admin/mcp -- see pending.py
   pending.py            The pending-actions queue (pending.yaml) an
                        admin-role agent's higher-risk admin.* calls land in;
-                       approved only via /ui/requests, Change tab (human + CSRF)
+                       approved only via /api/v1 (/app/requests, Change
+                       tab; human session + admin + CSRF)
   toolkit_proposals.py  ToolkitProposalStore (toolkit_proposals.yaml) --
                        admin.toolkit_propose (new toolkit, kind="create"),
                        admin.toolkit_update (executor/binaries/
@@ -566,8 +578,8 @@ src/gatekeeper/
                        deploy() merges/removes + validates via load_tier1()
                        before writing toolkits.yaml, then calls
                        Service.reload_config() in-process (no restart).
-                       Only reachable from
-                       /ui/requests, Toolkit tab (human + CSRF)
+                       Only reachable from /api/v1 (/app/requests,
+                       Toolkit tab; human session + admin + CSRF)
   service.py          Call pipeline: auth -> authorize -> registry ->
                        validate -> build request -> execute -> audit;
                        dispatches to execute.py / execute_http.py /
@@ -609,7 +621,7 @@ src/gatekeeper/
                        channel, mandatory host-key pinning
   credentials.py       The write-only, encrypted credential store
   integrations.py      Starter toolkit/tool definitions + logos for 22
-                       services, used by /ui/tools/integrations
+                       services, used by /app/tools/integrations
   identity.py          scrypt token hashing, constant-time verify,
                        IdentityStore, roles
   audit.py             JSON Lines audit log with rotation and redaction
@@ -618,20 +630,25 @@ src/gatekeeper/
                        delete_tool soft-deletes (deleted: true, history kept)
   _atomic.py           Shared atomic-write/revision helpers (store.py and
                        credentials.py both use these, independently)
-  ui.py                Operations console at /ui -- no JavaScript,
-                       CSP-locked, server-rendered SVG diagrams
+  ui.py                What is left of /ui: redirects to /app, 410 for
+                       old form posts, the OAuth callback routes
+                       (from oauth.py), has_ui_identity
+  oauth.py             Google/Microsoft authorization-code flow: state
+                       store, consent URLs, code exchange, the callbacks
   api/                 The console's JSON API at /api/v1 (FastAPI
                        sub-app) -- see "Console API"
-    session.py          Session, SessionStore, LoginThrottle -- shared
-                         by /ui and /api/v1
+    session.py          Session, SessionStore, LoginThrottle
     service.py          Read model: audit reader, call statistics and
-                         the per-page builders, shared with ui.py and
+                         the per-page builders, shared with
                          admin_service.py
     deps.py             Session/role/CSRF/If-Match dependencies
     models.py           Pydantic response models (the output boundary)
-    app.py              Routes; `python -m gatekeeper.api` prints the
-                         OpenAPI schema
+    app.py              Session and read routes; `python -m
+                         gatekeeper.api` prints the OpenAPI schema
+    writes.py           Write and request-decision routes
+    extras.py           Stats, bundled docs, OAuth sign-in start
     web.py              Serves the React build at /app, with its CSP
+                         and manifest.webmanifest
   _web/                The React build (image only; .gitignored)
 frontend/              React console source: Vite, TypeScript, Tailwind;
                        openapi.json + src/api/schema.d.ts are generated
@@ -643,51 +660,52 @@ frontend/              React console source: Vite, TypeScript, Tailwind;
   ratelimit.py         Per-identity, per-category sliding window limiter
 config/
   toolkits.yaml         Tier 1 -- immutable at runtime
-  tools.yaml             Seed catalog -- mutable via UI
+  tools.yaml             Seed catalog -- mutable via the console
   examples/               Ready-made templates: identities.yaml,
                          toolkits.yaml (incl. a working http + truenas +
                          ssh entry), tools.yaml
 tests/
-  test_api_auth.py, test_api_read.py, test_api_web.py,
-  api_env.py (shared API setup),
+  test_api_auth.py, test_api_read.py, test_api_write.py,
+  test_api_extras.py, test_api_security.py, test_api_parity.py,
+  test_api_web.py, api_env.py (shared API setup), test_oauth.py,
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
-  test_ui.py, test_ui_admin.py, test_credentials.py, test_execute_http.py,
+  test_credentials.py, test_execute_http.py,
   test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py,
-  test_integrations.py, test_agent_messaging.py,
-  test_ui_credentials.py, test_ui_integrations.py, test_admin_mcp.py,
+  test_integrations.py, test_agent_messaging.py, test_admin_mcp.py,
   test_catalog_versioning.py, test_pending.py, test_notifications.py,
   test_mcp_live_catalog.py, conftest.py
 ```
 
 ## Console API (`api/`, `/api/v1`)
 
-A FastAPI sub-app mounted into the Starlette app in `server.build_app`
-next to the `/ui` routes, and only when `--ui` is on. It is the backend
-for the React console that replaces `ui.py` page by page (see
-[ROADMAP.md](ROADMAP.md)); until that cutover, both surfaces run side by
-side on the same stores.
+A FastAPI sub-app mounted into the Starlette app in `server.build_app`,
+and only when `--ui` is on. It is the only backend of the console: since
+1.0.0 the React SPA at `/app` is the one console, and every page reads and
+writes through these routes.
 
-- **Shared state.** `build_app` creates one `SessionStore` and one
-  `LoginThrottle` and hands them to both `build_ui_routes` and
+- **Shared state.** `build_app` creates one `SessionStore`, one
+  `LoginThrottle` and one `OAuthStateStore` and hands them to
   `build_api_app` (via `api.deps.ApiContext`), together with `Service`,
   `ConfigStore`, `CredentialStore`, `PendingStore`,
-  `ToolkitProposalStore` and `AuditLog`. Every write the API gains goes
-  through those stores, so audit records stay identical.
+  `ToolkitProposalStore` and `AuditLog`; the OAuth callback routes under
+  `/ui/oauth/` get the same state store. Every write goes through those
+  stores, the same ones `/admin/mcp` uses, so audit records stay identical.
 - **Authentication.** `POST /api/v1/session` takes the console password
   as JSON (never the API token, FR-11.5) and sets the session cookie with
-  `HttpOnly`, `SameSite=Strict`, path `/api/v1`, and `Secure` over HTTPS.
+  `HttpOnly`, `SameSite=Strict`, path `/api/v1`, and `Secure` over HTTPS
+  (the request's scheme, which honours `X-Forwarded-Proto` only from a
+  trusted proxy). The cookie keeps its 0.x name, `gatekeeper_ui`.
   JSON-only login means a cross-site form cannot drive it. `GET` returns
   identity, role, `can_write`, `read_only` and the CSRF token; `DELETE`
   signs out. `AuthMiddleware` lets `/api/v1/*` through without a bearer
-  token, like `/ui/*`, and `deps.current_session` then refuses *any*
+  token (as it does `/app/*` and `/ui/*`), and `deps.current_session` then refuses *any*
   `Authorization` header (audited as `api_bearer_rejected`): an MCP token
   opens nothing here, with or without a cookie.
-- **Roles and CSRF.** `require_viewer`, `require_admin` (role, then CSRF,
-  the legacy `writer` order) and `require_session_write` (one's own
-  password, like `ui.session_post`). Read-only mode (no `ConfigStore`)
-  refuses every write with 403. Mutating requests carry `X-CSRF-Token`,
-  compared with `hmac.compare_digest`. Denials write the same
-  `admin_denied` records `/ui` writes.
+- **Roles and CSRF.** `require_viewer`, `require_admin` (role, then CSRF)
+  and `require_session_write` (one's own password, any role). Read-only
+  mode (no `ConfigStore`) refuses every write with 403. Mutating requests
+  carry `X-CSRF-Token`, compared with `hmac.compare_digest`. Denials are
+  audited as `admin_denied`.
 - **Optimistic concurrency.** Reads set `ETag: "<store revision>"`
   (`tools_revision`, `identities_revision`, the credential, pending and
   toolkit-proposal revisions); `deps.if_match` turns a missing `If-Match`
@@ -698,12 +716,13 @@ side on the same stores.
 - **Output boundary.** Responses are serialised through the Pydantic
   models in `api/models.py`, which drop every field they do not name.
   `CredentialMeta` has no value field and `IdentityOut` no hash field.
-  Free-form `dict` fields exist only where `/ui` already shows the data
+  Free-form `dict` fields exist only where the console shows the data
   verbatim (audit records, a pending payload, a tool spec).
 - **Invariants carried over.** No route writes a toolkit (FR-4.11):
-  toolkits are `GET` plus the reference YAML as text. Pending approval and
-  toolkit deploy will exist only here, behind a console session, never on
-  `/admin/mcp`.
+  toolkits are `GET` plus the reference YAML as text. Pending approval,
+  credential fill and toolkit deploy exist only here, behind a human
+  console session with the admin role and the CSRF header, never on
+  `/admin/mcp` (FR-2.8).
 - **Headers.** Every API response carries `Content-Security-Policy:
   default-src 'none'; frame-ancestors 'none'; base-uri 'none'`,
   `nosniff`, `no-referrer` and `Cache-Control: no-store`. Integration
@@ -713,19 +732,19 @@ side on the same stores.
   interactive docs pages. `python -m gatekeeper.api` prints the same
   schema with sorted keys and a fixed `v1` version, so generated client
   types change only when the API does.
-- **Audit pagination.** `GET /audit` pages newest-first over the same tail
-  window `/ui/audit` reads (`AUDIT_READ_BYTES`). The cursor is opaque so it
+- **Audit pagination.** `GET /audit` pages newest-first over the audit
+  log's tail window (`AUDIT_READ_BYTES`). The cursor is opaque so it
   can become a row key when the Stage 1 SQLite audit index lands, without
   a client change.
 
-- **Writes (`api/writes.py`).** Each route calls the same store method as
-  the matching `/ui` form handler and ends the same sessions:
+- **Writes (`api/writes.py`).** Each route calls the store method the
+  pre-1.0 `/ui` form handler did and ends the same sessions:
   `POST /tools`, `PUT /tools/{id}` (YAML in, Tier 1 checked by
   `parse_tool_spec`; a new ID in the YAML renames), `PUT
   /tools/{id}/enabled`, `DELETE /tools/{id}`; `POST /identities` and `POST
   /identities/{id}/token` (the token is returned once, in the body only),
-  `PUT /identities/{id}` (`service.drop_sessions_after_identity_update`,
-  shared with `/ui`), `DELETE /identities/{id}`; `POST /credentials`,
+  `PUT /identities/{id}` (`service.drop_sessions_after_identity_update`),
+  `DELETE /identities/{id}`; `POST /credentials`,
   `POST /credentials/{name}/rotate`, `DELETE /credentials/{name}` (values
   go in, never out); `PUT /account/password` (any role, needs the current
   password; a wrong one is audited as `ui_password_change_failed`). Each
@@ -752,7 +771,7 @@ side on the same stores.
   apply) and `spec_yaml` on each toolkit proposal.
 
 - **Stats, documents, OAuth sign-in (`api/extras.py`, 0.57.0).** `GET
-  /stats?window=24h|7d|30d` is `/ui/stats` as data (`service.stats_view`:
+  /stats?window=24h|7d|30d` (`service.stats_view`:
   tiles, an hourly or daily series, per-toolkit, per-identity, latency
   and admin-action tables, over the same audit tail). `GET /documents`
   and `GET /documents/{slug}` serve the bundled README, REQUIREMENTS,
@@ -761,20 +780,18 @@ side on the same stores.
   unrouted: it is FastAPI's Swagger path, which is not served.) `GET
   /oauth/providers` lists the providers some toolkit uses with the
   credentials it names, and `POST /oauth/{provider}/authorize` (admin,
-  CSRF) starts a Google or Microsoft sign-in exactly as
-  `/ui/oauth/<provider>/authorize` does -- the provider code moved to
-  `oauth.py`, shared by both surfaces, and `build_app` creates one
-  `OAuthStateStore` for both -- and answers the consent URL, redirect URI
-  and scopes as data. The state records `return_to="app"`, so the
-  unchanged callback path (still the redirect URI registered with the
-  provider) redirects to `/app/credentials?oauth=<code>&provider=&credential=`
-  instead of rendering a page. Only a result code travels; the console
-  shows its own text for it.
+  CSRF) starts a Google or Microsoft sign-in (provider code in
+  `oauth.py`) and answers the consent URL, redirect URI and scopes as
+  data. The browser comes back to the unchanged callback path (still the
+  redirect URI registered with the provider), which redirects to
+  `/app/credentials?oauth=<code>&provider=&credential=` instead of
+  rendering a page. Only a result code travels; the console shows its own
+  text for it.
 
 Phase 1 (0.53.0) added session handling plus every read; phases 3a
 (0.55.0) and 3b (0.56.0) every write the console has, and 0.57.0 the last
-`/ui` pages (Stats, Docs, OAuth sign-in). The cutover follows as its own
-release.
+pages the old console had (Stats, Docs, OAuth sign-in). 1.0.0 removed the
+old console.
 
 ## Console SPA (`frontend/`, `/app`)
 
@@ -813,7 +830,8 @@ gatekeeper itself at `/app` (`api/web.py`). It is a pure client of
 - **Serving.** `index.html` is `no-store`; hashed files under
   `/app/assets/` are `immutable`; any other `/app/...` path without a file
   falls back to `index.html` (client routes, including dotted tool IDs),
-  while a missing asset stays 404. Gzip as on `/ui`. The build is looked
+  while a missing asset stays 404. Responses are gzipped
+  (`GZipMiddleware`, `minimum_size=500`). The build is looked
   up in `GATEKEEPER_WEB_DIR`, then the package's `_web/` (the image), then
   `frontend/dist` (a checkout); with none, `/app` answers 503 with the
   build command.
@@ -837,59 +855,39 @@ credential proposal, an "Approve all" that lists what it will apply, and
 a toolkit deploy that spells out what changes and needs a ticked
 acknowledgement. Everything an agent wrote is rendered as text.
 
-## UI architecture (`ui.py`)
+## What is left of `/ui` (`ui.py`)
 
-**Script-free, with no exception.** CSP (`_respond`): `default-src 'none';
-style-src 'self' 'nonce-...'; img-src 'self' data: https://cdn.jsdelivr.net;
-manifest-src 'self'; worker-src 'self'; form-action 'self';
-frame-ancestors 'none'; base-uri 'none'`. There is no `script-src`
-directive at all, so `default-src 'none'` covers scripts on every page —
-the invariant `ui.py`'s module docstring states. Any per-service logo
-(integrations) ships as inline SVG in `integrations.py`, never a hotlinked
-image.
+The server-rendered console that lived at `/ui` (0.x) was removed in
+1.0.0. `build_ui_routes` keeps only what a browser or an identity provider
+may still send there, and none of it renders a page:
 
-`style-src` carries `'self'` because the stylesheet is no longer inlined
-into each page: `_STYLE` is served once from a content-addressed route,
-`/ui/static/gatekeeper.<sha256-16>.css` (`_STYLE_PATH`, in
-`UI_COMPANION_PATHS`), with `Cache-Control: public, max-age=31536000,
-immutable`. The URL is derived from the stylesheet's own hash, so a changed
-style is a changed URL and no cache outlives an upgrade. The nonce
-allowance stays for the per-page `<style>` blocks. Cache policy splits by
-content: HTML shells keep `no-store` (permission and audit data), the
-stylesheet is immutable. Every `/ui` route is additionally wrapped in
-Starlette's `GZipMiddleware` (`minimum_size=500`) in `build_ui_routes()`.
+- **Redirects.** `GET`/`HEAD` on `/ui` or `/ui/<x>` answer 308 to
+  `/app/<x>`, so a bookmark or an installed shortcut lands on the same
+  page. `GET /` answers 303 to `/app/`, and `/favicon.ico` 308 to
+  `/app/favicon.svg`. The target always starts with `/app/`, so no request
+  can turn this into a redirect to another origin.
+- **410 for everything else.** Any other method under `/ui` (a form posted
+  from a tab left open across the upgrade) gets 410 with a plain-text
+  note. It is not replayed against `/api/v1`, which has its own CSRF and
+  `If-Match` rules.
+- **The OAuth callbacks.** `/ui/oauth/google/callback` and
+  `/ui/oauth/microsoft/callback` (`oauth.build_callback_routes`) keep
+  their 0.x paths because they are the redirect URIs operators registered
+  with Google and Microsoft. They always answer 303 to `/app/credentials`
+  with a result code (see "Integrations" above).
+- **`has_ui_identity`**, the `--ui` startup check that at least one
+  identity can sign in (console role *and* password).
 
-Diagrams are server-rendered SVG or HTML, built with no client code:
-- **Access map** — `_access_matrix()`: a server-rendered identity×toolkit
-  HTML grid, one row per identity, a heat class per cell from the audit
-  log's call counts (`_view_access_map`, with a `?q=` filter over identity,
-  role, toolkit and executor names). Embedded on Overview and as a
-  dedicated page at `/ui/access-map`. The Cytoscape.js graph and its
-  client-side successor are both gone (0.20.0) — `_access_graph_data()`
-  survives as a JSON view of the same graph with no route of its own, used
-  only by `test_destinations.py`.
-- **Tool matrix** — `_tool_matrix()`: HTML table, one tool per row; the
-  `/ui/tools` Cards/Matrix toggle (`?view=matrix`) switches to it in place
-  of the per-toolkit tool cards
-- **Activity chart** — `_activity_chart()`: calls/hour as stacked bars
-- **Activity feed** — `_feed()`: recent calls as a timeline
+`/`, `/favicon.ico`, `/app/*`, `/api/v1/*` and `/ui/*` pass
+`AuthMiddleware` without a bearer token only while the console is enabled;
+that keeps browser-initiated requests out of the audit log's
+`auth_failure` records. With `--ui` off, all of them need a token like any
+other path.
 
-The version badge (sidebar and login page) is a link into a **release-notes
-popup** (`_release_notes_modal()`): a pure-CSS modal using the `:target`
-selector, no JavaScript needed to open/close it. Content comes from
-`RELEASE.md`, parsed by `_parse_release_notes()`/`_render_release_body()`
-(only `## <version>` headings start a new entry; bold/inline-code render,
-everything else is escaped). The file ships inside the container image
-(`GATEKEEPER_RELEASE_NOTES`, default `/usr/share/gatekeeper/RELEASE.md`) or
-is found next to `pyproject.toml` in a dev checkout.
-
-The modal embeds only the newest `RELEASE_NOTES_MODAL_SECTIONS` (3)
-entries and links the rest to `/ui/docs?doc=release`, which renders the
-same file in full. The cap is about page weight, not about the parser:
-every page in the console carries this modal, so embedding all of
-`RELEASE.md` put ~290 KB of HTML on every single response and grew by one
-entry per release, forever. `_load_release_notes()` still parses and
-caches every section.
+The PWA manifest is `/app/manifest.webmanifest` (`start_url` and `scope`
+`/app/`, icon `/app/icon.svg`), built from `frontend/public/`. The old
+`/ui` manifest, icon and the never-registered service-worker stub are
+gone with `src/gatekeeper/_pwa/`.
 
 ## Audit log format
 
@@ -953,20 +951,22 @@ asyncio event loop rather than using a thread pool or an async file API:
 - `CredentialStore._raw()` (`credentials.py`) re-reads and re-parses
   `credentials.yaml`, and re-runs Fernet decryption, on every credential
   resolution -- there is no in-memory cache of the decrypted value.
-- `ui.py`'s `read_audit` reads the audit log on every render of a page
-  that shows it. It walks backwards from EOF in `AUDIT_CHUNK_BYTES`
-  (256 KB) chunks and stops once it has the `limit` records the page
+- `api/service.py`'s `read_audit` reads the audit log on every API
+  request that shows it. It walks backwards from EOF in `AUDIT_CHUNK_BYTES`
+  (256 KB) chunks and stops once it has the `limit` records the request
   asks for, so a typical 200-row page decodes one chunk rather than the
   whole window; `AUDIT_READ_BYTES` (2 MB) remains the floor it will not
   read past, and reaching it is what sets the `truncated` flag.
 
-The console's read pages are the exception: every view behind `guarded`
-renders on a worker thread (`asyncio.to_thread`), because a page's cost
+The console API is the exception: its read routes are plain `def`
+handlers, which FastAPI runs on its worker thread pool, and its writes
+call the stores through `asyncio.to_thread`, because a request's cost
 grows with data the operator does not control -- a few hundred decided
-proposals once made each page take seconds, with every MCP call queued
-behind it. `pending.yaml` and `toolkit_proposals.yaml` are additionally
-parsed once per distinct content (`_atomic.load_cached`), since every page
-counts their pending entries for the sidebar badge.
+proposals once made each page of the pre-1.0 console take seconds, with
+every MCP call queued behind it. `pending.yaml` and
+`toolkit_proposals.yaml` are additionally parsed once per distinct content
+(`_atomic.load_cached`), since the console polls their pending counts for
+the sidebar badge.
 
 This is a deliberate choice, not an oversight: at the scale gatekeeper
 targets (per NFR-5/§14, a handful of agents against a single homelab
@@ -976,7 +976,7 @@ here than shaving milliseconds off a request rate this project was never
 sized for. It stops being free past roughly the point where either
 concurrent call volume or `credentials.yaml`'s size make a single-digit-
 millisecond block on the event loop start queuing noticeably, or where the
-audit log's read cost per UI page load becomes the visible bottleneck
+audit log's read cost per console request becomes the visible bottleneck
 (watch `read_audit`'s truncation behavior on a directory nearing
 `audit_max_bytes` per file as the practical early signal). If gatekeeper
 ever needs to scale past a single instance or a much higher call rate,

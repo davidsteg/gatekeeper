@@ -4,7 +4,7 @@ This is the "simplify adding tools" half of the http/truenas executor work:
 once an admin has pasted an integration's `toolkit_yaml` into `toolkits.yaml` and
 redeployed (Tier 1 stays a manual, deploy-time step -- FR-4.11, integrations do
 not and must not change that), picking one of its `tool_specs` in
-`/ui/tools/integrations` pre-fills the *existing* tool editor instead of a blank
+`/app/tools/integrations` pre-fills the *existing* tool editor instead of a blank
 textarea. The integration never bypasses `parse_tool_spec`/Tier 1 validation --
 it only saves typing what would otherwise be hand-written YAML.
 
@@ -43,9 +43,9 @@ def monogram(letters: str, color: str, *, css_class: str = "") -> str:
     """A flat-color circular badge with 1-3 letters -- the shared visual
 
     language for every integration logo, so twelve services read as one system
-    instead of twelve mismatched icon styles. Not module-private: `ui.py`
-    reuses this for the access map's toolkit-badge fallback rather than
-    keeping a second copy of the same circle-plus-initials drawing code.
+    instead of twelve mismatched icon styles. Not module-private, so
+    any other server-side caller can reuse it rather than keeping a second
+    copy of the same circle-plus-initials drawing code.
     `color` may be any valid SVG paint, including a `var(--token)` reference,
     so a caller that needs to stay theme-aware isn't limited to literal hex.
     `css_class`, when given, is added to the `<svg>` so a caller like the
@@ -1155,7 +1155,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
             "      - gmail labels\n"
             "      - gmail modify\n"
             "    # What the console's Google sign-in asks consent for\n"
-            "    # (/ui/oauth/google/authorize) -- the union across every\n"
+            "    # (started from /app/credentials) -- the union across every\n"
             "    # google toolkit. Bare names or full scope URLs.\n"
             "    required_scopes:\n"
             "      - gmail.readonly\n"
@@ -1164,7 +1164,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
             "    credential: google\n"
             "    # An oauth2 credential: a JSON bundle\n"
             "    # {\"client_id\": ..., \"client_secret\": ..., \"refresh_token\": ...}\n"
-            "    # created via /ui/credentials (kind=oauth2), then completed by\n"
+            "    # created via /app/credentials (kind=oauth2), then completed by\n"
             "    # Connect Google, which adds the refresh token and the scopes\n"
             "    # the grant covers. Never in this file.\n"
             "    max_timeout_seconds: 30\n"
@@ -1173,7 +1173,7 @@ _INTEGRATIONS_LIST: list[Integration] = [
         credential_kind="oauth2",
         notes=(
             "OAuth2: create a credential named 'google' (kind=oauth2) in "
-            "/ui/credentials with a JSON bundle of client_id and "
+            "/app/credentials with a JSON bundle of client_id and "
             "client_secret, then run Connect Google -- it adds the refresh "
             "token and records which scopes the grant covers. The consent "
             "must cover all scopes the tools need (gmail.readonly for reads, "

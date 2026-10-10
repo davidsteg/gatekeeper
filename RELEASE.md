@@ -1,3 +1,43 @@
+## 1.0.0
+
+The console at `/app` is now the only console. The server-rendered HTML console at `/ui` (`ui.py`, about 6,800 lines) is gone. Bookmarks to `/ui` still land on the same page, and nothing in `toolkits.yaml`, `tools.yaml`, `identities.yaml` or the credential store changes.
+
+This is a major release because a deployment may need one adjustment: a reverse proxy that forwards only `/ui` and `/mcp` must now also forward `/app` and `/api/v1`.
+
+### Upgrading
+
+- **Reverse proxy.** Forward `/app`, `/api/v1` and `/ui/oauth/` (plus `/mcp` and `/admin/mcp` as before). `/` and the rest of `/ui` only redirect.
+- **OAuth.** Nothing to change at Google or Microsoft: the callbacks are still `/ui/oauth/google/callback` and `/ui/oauth/microsoft/callback`, the redirect URIs you registered. Start a sign-in from **Credentials** in `/app` (the Connect button). The old `/ui/oauth/*/authorize` pages are gone.
+- **Home-screen shortcut.** A console added to a home screen from `/ui` opens and then redirects. Add it again from `/app` to get the new manifest (`/app/manifest.webmanifest`).
+- **Scripts that read `/ui` pages.** Use the JSON API at `/api/v1` instead. It takes the same console password, and its schema is served at `/api/v1/openapi.json` to admins. A form post to `/ui` now gets `410 Gone` and changes nothing; it is not replayed against the API.
+- Sign-in, passwords, roles and `gatekeeper serve --ui` are unchanged. Anyone signed in to `/ui` signs in once more at `/app`; a `/ui` session never carried over.
+
+### Changed
+
+- `GET /ui/<page>` answers `308` to `/app/<page>`, and `GET /` answers `303` to `/app/`. Any other method under `/ui` gets `410`.
+- The OAuth callback always ends with a redirect to `/app/credentials?oauth=<result>`. A missing, expired or reused state now reports `state_mismatch` there instead of rendering a page.
+- The web-app manifest and icon moved to `/app`. The `/ui` manifest, icon and the never-registered service-worker stub were removed, along with `src/gatekeeper/_pwa`.
+- FR-11.9's policy (`script-src 'self'` plus Trusted Types on `/app`, `default-src 'none'` on `/api/v1`) is the only console CSP. The `/ui` nonce and hash policy no longer exists.
+- `AGENTS.md`: the "`querySelector('form')` grabs the logout form" pitfall is retired with the page it described.
+
+### Fixed
+
+- **API writes accept a destination-qualified tool ID.** A toolkit with destinations lists `docker.compose_up@nas1` and `@nas2`. `PUT /api/v1/tools/<id>`, `PUT .../enabled` and `DELETE` on such an ID used to answer 400. They now edit the one definition on disk, as the old form did; the bare ID still works. The console was not affected because it sent the bare ID.
+
+### Security
+
+- Every security property the `/ui` tests pinned is now asserted against `/api/v1` (`tests/test_api_security.py`), including:
+  - a console session never authenticates `/mcp`, `/admin/mcp` or `/metrics`, even with the cookie sent by hand;
+  - the console password is not an API token;
+  - sign-in gives one answer for an unknown identity, a wrong password and an agent;
+  - only a trusted proxy can set the audited client address and the cookie's `Secure` flag;
+  - another session's CSRF token is refused;
+  - a role change, rename, token rotation or deletion ends that identity's sessions;
+  - FR-4.11 holds across every route in the app;
+  - Tier 1 refuses an over-ceiling, foreign-binary or free-text tool over HTTP;
+  - stale and still-referenced request decisions are refused.
+- Store-level admin tests moved to `tests/test_store_admin.py`, and the OAuth tests now drive the API-started flow.
+
 ## 0.57.0
 
 The React console at `/app` now has the last three things only `/ui` had: Stats, Docs and OAuth sign-in. Nothing is lost when `/ui` goes away in 1.0.0.

@@ -1,15 +1,12 @@
-"""Stats, bundled docs and OAuth sign-in for `/api/v1` -- the last pages
-the legacy console had that the React console did not (0.57.0).
+"""Stats, bundled docs and OAuth sign-in for `/api/v1` (0.57.0).
 
-OAuth: `POST /oauth/{provider}/authorize` starts a flow exactly as
-`/ui/oauth/<provider>/authorize` does -- same gates (session, `admin`,
-CSRF), same single-use state (one `OAuthStateStore`, shared with the
-callback route), same audit record -- and answers the consent URL as
-data. The browser then leaves for the provider and comes back to the
-unchanged callback path, so the redirect URI registered with Google or
-Microsoft keeps working; because the state says the flow came from
-`/app`, the callback redirects there with a result code instead of
-rendering a page.
+OAuth: `POST /oauth/{provider}/authorize` starts a flow -- session,
+`admin`, CSRF, a single-use state from the `OAuthStateStore` the callback
+route shares, an audit record -- and answers the consent URL as data. The
+browser leaves for the provider and comes back to the callback path that
+0.x registered (`/ui/oauth/<provider>/callback`, `oauth.build_callback_routes`),
+so redirect URIs set up with Google or Microsoft keep working; the
+callback redirects to `/app/credentials` with a result code.
 """
 
 from __future__ import annotations
@@ -99,7 +96,7 @@ def register_extra_routes(app: FastAPI) -> None:
         verifier, challenge = oauth._pkce_pair() if spec.uses_pkce else ("", "")
         state = context.oauth_states.issue(
             identity=session.identity, credential=name, redirect_uri=redirect_uri,
-            scopes=scopes, provider=spec.key, code_verifier=verifier, return_to="app",
+            scopes=scopes, provider=spec.key, code_verifier=verifier,
         )
         if spec.key == "microsoft":
             consent_url = oauth._microsoft_consent_url(

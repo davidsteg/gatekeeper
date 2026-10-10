@@ -186,7 +186,7 @@ export interface paths {
          * Identity Update
          * @description Role, grants, scopes, and optionally a new console password or ID.
          *
-         *     Sessions end by the same rule as in `/ui`
+         *     Sessions end by one shared rule
          *     (`service.drop_sessions_after_identity_update`).
          */
         put: operations["identity_update_identities__identity_id__put"];

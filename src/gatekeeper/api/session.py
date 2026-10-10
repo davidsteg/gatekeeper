@@ -1,9 +1,9 @@
-"""Console sessions, shared by the legacy `/ui` and the JSON API (`/api/v1`).
+"""Console sessions for the JSON API (`/api/v1`).
 
-Moved here from `ui.py` unchanged, so both surfaces resolve the same
-in-memory store: a password change or an identity deletion that calls
-`drop_identity` signs that identity out of both, and there is exactly one
-place that decides what a session is. The session never applies to `/mcp`
+One in-memory store, built once in `server.build_app`: a password change
+or an identity deletion that calls `drop_identity` signs that identity
+out everywhere, and there is exactly one place that decides what a
+session is. The session never applies to `/mcp`
 or `/admin/mcp` -- `AuthMiddleware` does not read cookies.
 """
 

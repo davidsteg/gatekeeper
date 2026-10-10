@@ -66,7 +66,7 @@ TOKEN_PATH = HERMES_HOME / "microsoft_token.json"
 #: as much as for work accounts, and `common` is the authority that
 #: accepts both. Constants, not configuration: they are Microsoft's, and
 #: a configurable token endpoint is a credential-exfiltration knob (the
-#: same reasoning GOOGLE_TOKEN_ENDPOINT carries in ui.py).
+#: same reasoning GOOGLE_TOKEN_ENDPOINT carries in oauth.py).
 AUTHORITY = "https://login.microsoftonline.com/common"
 TOKEN_ENDPOINT = f"{AUTHORITY}/oauth2/v2.0/token"
 

@@ -1,8 +1,9 @@
 """Microsoft OAuth sign-in, and the scopes a Microsoft grant covers.
 
-The google pair (tests/test_ui_oauth.py, tests/test_google_token_scopes.py)
-established what these two routes have to be true about: no token
-material is ever rendered, logged or echoed back on any path, a callback
+The google pair (tests/test_oauth.py, tests/test_google_token_scopes.py)
+established what the flow has to be true about: no token material is
+ever rendered, logged or echoed back on any path -- not in the authorize
+JSON, not in the callback's Location header, not in the audit log -- a callback
 that does not match a flow this console started changes nothing, and the
 scopes the operator consented to travel with the refresh token that
 needs them. This file asks the same questions of the Microsoft flow, and
@@ -25,43 +26,51 @@ import hashlib
 import importlib.util
 import json
 import sys
-import urllib.parse
 from pathlib import Path
 
 import pytest
 import yaml
 from conftest import PYTHON, make_catalog
-from test_ui_oauth import (
+from test_oauth import (
+    API,
+    APP_RESULT,
     AUTH_CODE,
     BASE,
     CLIENT_ID,
     CLIENT_SECRET,
     NEW_REFRESH,
     OLD_REFRESH,
+    _assert_clean,
     _audit_text,
+    _authorize,
     _build_env,
+    _callback,
     _client,
+    _consent_params,
     _google_tier1,
     _login,
+    _never,
+    _result,
+    _start,
     _stored_bundle,
 )
 
 from gatekeeper.audit import AuditLog
 from gatekeeper.credentials import KEY_ENV, CredentialStore, generate_master_key
 from gatekeeper.errors import Denied
-from gatekeeper.service import Service
-from gatekeeper.tier1 import load_tier1
-from gatekeeper.ui import (
+from gatekeeper.oauth import (
     DEFAULT_MICROSOFT_SCOPES,
-    MICROSOFT_OAUTH_AUTHORIZE_PATH,
+    MAX_GOOGLE_SCOPE_CHARS,
+    MAX_GOOGLE_SCOPES,
     MICROSOFT_OAUTH_CALLBACK_PATH,
     MICROSOFT_SCOPE_PREFIX,
-    OAUTH_AUTHORIZE_PATH,
-    UI_PREFIX,
+    OAUTH_CALLBACK_PATH,
     _granted_microsoft_scopes,
     _microsoft_scope_urls,
     _pkce_pair,
 )
+from gatekeeper.service import Service
+from gatekeeper.tier1 import load_tier1
 
 #: What the console asks a human to consent to, spelled the way
 #: Microsoft spells it: Graph resources as URLs, `offline_access` bare.
@@ -125,35 +134,32 @@ def oauth_env(tmp_path, monkeypatch):
     return env
 
 
-def _consent_params(page_text: str) -> dict[str, str]:
-    import html
-    import re
-
-    match = re.search(r'href="(https://login\.microsoftonline\.com[^"]+)"', page_text)
-    assert match, f"no consent link on the page: {page_text[:2000]}"
-    query = urllib.parse.urlparse(html.unescape(match.group(1))).query
-    return dict(urllib.parse.parse_qsl(query))
+async def _start_ms(client, **kwargs) -> dict:
+    """Signs in and starts the Microsoft flow; returns the authorize JSON."""
+    return await _start(client, provider="microsoft", credential="msgraph", **kwargs)
 
 
 async def _start_flow(client) -> dict[str, str]:
-    await _login(client)
-    page = await client.get(f"{MICROSOFT_OAUTH_AUTHORIZE_PATH}?credential=msgraph")
-    assert page.status_code == 200, page.text[:2000]
-    return _consent_params(page.text)
+    return _consent_params(await _start_ms(client))
+
+
+async def _ms_callback(client, query: str) -> str:
+    return await _callback(client, query, path=MICROSOFT_OAUTH_CALLBACK_PATH)
 
 
 async def _run_callback(env, monkeypatch, payload: dict) -> str:
+    """Runs one whole flow; returns the callback's Location (asserted ok)."""
     async def fake_exchange(**_kwargs):
         return payload
 
-    monkeypatch.setattr("gatekeeper.ui._exchange_microsoft_code", fake_exchange)
+    monkeypatch.setattr("gatekeeper.oauth._exchange_microsoft_code", fake_exchange)
     async with _client(env["app"]) as client:
-        state = (await _start_flow(client))["state"]
-        page = await client.get(
-            f"{MICROSOFT_OAUTH_CALLBACK_PATH}?code={AUTH_CODE}&state={state}"
-        )
-    assert page.status_code == 200, page.text[:2000]
-    return page.text
+        start = await _start_ms(client)
+        state = _consent_params(start)["state"]
+        location = await _ms_callback(client, f"code={AUTH_CODE}&state={state}")
+    assert location == f"{APP_RESULT}?oauth=ok&provider=microsoft&credential=msgraph"
+    _assert_clean(json.dumps(start), location)
+    return location
 
 
 def _stored(credentials, name: str = "msgraph") -> dict:
@@ -163,22 +169,24 @@ def _stored(credentials, name: str = "msgraph") -> dict:
 # -- The gate ---------------------------------------------------------------
 
 
-async def test_both_routes_require_a_session(oauth_env):
+async def test_starting_a_flow_requires_an_api_session(oauth_env):
     async with _client(oauth_env["app"]) as client:
-        for path in (MICROSOFT_OAUTH_AUTHORIZE_PATH, MICROSOFT_OAUTH_CALLBACK_PATH):
-            response = await client.get(path, follow_redirects=False)
-            assert response.status_code == 303, path
-            assert response.headers["location"].endswith("/login"), path
+        response = await _authorize(client, None, provider="microsoft", credential="msgraph")
+        assert response.status_code == 401
+        # The callback with nothing at all redeems nothing.
+        location = await _ms_callback(client, f"code={AUTH_CODE}&state=invented")
+    assert _result(location) == {
+        "oauth": "state_mismatch", "provider": "microsoft", "credential": "",
+    }
+    assert "refresh_token" not in _stored(oauth_env["credentials"])
 
 
 async def test_a_viewer_cannot_start_the_flow(oauth_env):
     async with _client(oauth_env["app"]) as client:
-        await _login(client, "eye")
-        response = await client.get(
-            MICROSOFT_OAUTH_AUTHORIZE_PATH, follow_redirects=False
-        )
-        assert response.status_code == 303
-        assert response.headers["location"].endswith("/credentials")
+        csrf = await _login(client, "eye")
+        response = await _authorize(client, csrf, provider="microsoft", credential="msgraph")
+    assert response.status_code == 403
+    assert "consent_url" not in response.text
 
 
 # -- The consent URL --------------------------------------------------------
@@ -186,11 +194,9 @@ async def test_a_viewer_cannot_start_the_flow(oauth_env):
 
 async def test_authorize_builds_the_consent_url_with_state_and_pkce(oauth_env):
     async with _client(oauth_env["app"]) as client:
-        await _login(client)
-        page = await client.get(MICROSOFT_OAUTH_AUTHORIZE_PATH)
+        start = await _start_ms(client)
 
-    assert page.status_code == 200
-    params = _consent_params(page.text)
+    params = _consent_params(start)
     assert params["client_id"] == CLIENT_ID
     assert params["redirect_uri"] == f"{BASE}{MICROSOFT_OAUTH_CALLBACK_PATH}"
     assert params["response_type"] == "code"
@@ -201,8 +207,12 @@ async def test_authorize_builds_the_consent_url_with_state_and_pkce(oauth_env):
     assert params["code_challenge_method"] == "S256"
     assert "=" not in params["code_challenge"]
     assert len(params["code_challenge"]) == 43
-    # The verifier is not on the page, and neither is the secret.
-    assert CLIENT_SECRET not in page.text
+    # The callback URI the operator registers in Azure is the one named.
+    assert start["callback_uri"] == params["redirect_uri"]
+    assert start["mismatch_error"] == "AADSTS50011"
+    # The secret is not in the answer (the verifier is checked below:
+    # it never leaves this process, so it cannot be in here either).
+    _assert_clean(json.dumps(start))
 
 
 async def test_the_exchange_gets_the_verifier_that_matches_the_challenge(
@@ -216,15 +226,18 @@ async def test_the_exchange_gets_the_verifier_that_matches_the_challenge(
         seen.update(kwargs)
         return {"refresh_token": NEW_REFRESH}
 
-    monkeypatch.setattr("gatekeeper.ui._exchange_microsoft_code", fake_exchange)
+    monkeypatch.setattr("gatekeeper.oauth._exchange_microsoft_code", fake_exchange)
     async with _client(oauth_env["app"]) as client:
-        params = await _start_flow(client)
-        await client.get(
-            f"{MICROSOFT_OAUTH_CALLBACK_PATH}?code={AUTH_CODE}&state={params['state']}"
-        )
+        start = await _start_ms(client)
+        params = _consent_params(start)
+        location = await _ms_callback(client, f"code={AUTH_CODE}&state={params['state']}")
 
     verifier = seen["code_verifier"]
     assert verifier
+    # The verifier is nowhere a browser or a log could see it.
+    assert verifier not in json.dumps(start)
+    assert verifier not in location
+    assert verifier not in _audit_text(oauth_env["tier1"])
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     assert base64.urlsafe_b64encode(digest).decode().rstrip("=") == (
         params["code_challenge"]
@@ -245,10 +258,10 @@ def test_the_pkce_pair_is_a_valid_rfc7636_pair():
 
 async def test_scopes_default_when_no_toolkit_declares_any(oauth_env):
     async with _client(oauth_env["app"]) as client:
-        await _login(client)
-        page = await client.get(MICROSOFT_OAUTH_AUTHORIZE_PATH)
+        start = await _start_ms(client)
 
-    assert _consent_params(page.text)["scope"].split(" ") == CONSENTED
+    assert _consent_params(start)["scope"].split(" ") == CONSENTED
+    assert start["scopes"] == CONSENTED
 
 
 async def test_scopes_are_the_union_of_the_microsoft_toolkits(tmp_path, monkeypatch):
@@ -268,10 +281,9 @@ async def test_scopes_are_the_union_of_the_microsoft_toolkits(tmp_path, monkeypa
     env = _build_env(tmp_path, tier1)
     _client_pair_only(env)
     async with _client(env["app"]) as client:
-        await _login(client)
-        page = await client.get(MICROSOFT_OAUTH_AUTHORIZE_PATH)
+        start = await _start_ms(client)
 
-    assert _consent_params(page.text)["scope"].split(" ") == [
+    assert _consent_params(start)["scope"].split(" ") == [
         MICROSOFT_SCOPE_PREFIX + "Mail.Read",
         MICROSOFT_SCOPE_PREFIX + "Mail.Send",
         "offline_access",
@@ -298,7 +310,7 @@ def test_bare_graph_names_are_expanded_and_urls_left_alone():
 
 
 async def test_callback_persists_the_token_scopes_and_provider(oauth_env, monkeypatch):
-    page = await _run_callback(
+    location = await _run_callback(
         oauth_env, monkeypatch,
         {
             "access_token": "EwB.access-token-value",
@@ -317,9 +329,8 @@ async def test_callback_persists_the_token_scopes_and_provider(oauth_env, monkey
         # what tells a microsoft toolkit it has the right one.
         "provider": "microsoft",
     }
-    assert "Connected" in page
     for secret in (NEW_REFRESH, CLIENT_SECRET, AUTH_CODE, "EwB.access-token-value"):
-        assert secret not in page, secret
+        assert secret not in location, secret
 
 
 async def test_offline_access_survives_a_response_that_omits_it(
@@ -372,8 +383,6 @@ def test_an_unusable_scope_field_falls_back(raw):
 
 
 def test_the_scope_field_is_bounded_and_deduplicated():
-    from gatekeeper.ui import MAX_GOOGLE_SCOPE_CHARS, MAX_GOOGLE_SCOPES
-
     absurd = " ".join(
         ["a" * (MAX_GOOGLE_SCOPE_CHARS + 1)] + [f"s{i}" for i in range(200)]
     )
@@ -411,19 +420,16 @@ async def test_a_denied_consent_changes_nothing(oauth_env, monkeypatch):
         actor="root", rev=oauth_env["credentials"].revision(),
     )
 
-    async def fail(**_kwargs):  # pragma: no cover - must never run
-        raise AssertionError("no exchange on a denied consent")
-
-    monkeypatch.setattr("gatekeeper.ui._exchange_microsoft_code", fail)
+    monkeypatch.setattr("gatekeeper.oauth._exchange_microsoft_code", _never)
     async with _client(oauth_env["app"]) as client:
         state = (await _start_flow(client))["state"]
-        page = await client.get(
-            f"{MICROSOFT_OAUTH_CALLBACK_PATH}?error=access_denied&state={state}"
+        location = await _ms_callback(
+            client, f"error=access_denied&error_description=AADSTS65004+evil&state={state}"
         )
 
-    assert page.status_code == 400
-    assert "Not connected" in page.text
-    assert "access_denied" in page.text
+    # The console's own code only: Microsoft's text is not reflected.
+    assert location == f"{APP_RESULT}?oauth=denied&provider=microsoft&credential=msgraph"
+    assert "access_denied" not in location and "AADSTS" not in location
     assert _stored(oauth_env["credentials"])["refresh_token"] == OLD_REFRESH
     assert '"result": "denied"' in _audit_text(oauth_env["tier1"])
 
@@ -432,16 +438,14 @@ async def test_a_response_without_a_refresh_token_is_an_error(oauth_env, monkeyp
     async def fake_exchange(**_kwargs):
         return {"access_token": "EwB.access-token-value", "expires_in": 3599}
 
-    monkeypatch.setattr("gatekeeper.ui._exchange_microsoft_code", fake_exchange)
+    monkeypatch.setattr("gatekeeper.oauth._exchange_microsoft_code", fake_exchange)
     async with _client(oauth_env["app"]) as client:
         state = (await _start_flow(client))["state"]
-        page = await client.get(
-            f"{MICROSOFT_OAUTH_CALLBACK_PATH}?code={AUTH_CODE}&state={state}"
-        )
+        location = await _ms_callback(client, f"code={AUTH_CODE}&state={state}")
 
-    assert page.status_code == 400
-    assert "no refresh token" in page.text
-    assert "EwB.access-token-value" not in page.text
+    assert _result(location)["oauth"] == "no_refresh_token"
+    assert "EwB.access-token-value" not in location
+    assert "EwB.access-token-value" not in _audit_text(oauth_env["tier1"])
     assert "refresh_token" not in _stored(oauth_env["credentials"])
 
 
@@ -466,46 +470,48 @@ async def test_a_google_state_is_not_redeemable_at_the_microsoft_callback(
         actor="root", rev="",
     )
 
-    async def fail(**_kwargs):  # pragma: no cover - must never run
-        raise AssertionError("no exchange for a foreign provider's state")
-
-    monkeypatch.setattr("gatekeeper.ui._exchange_microsoft_code", fail)
-    monkeypatch.setattr("gatekeeper.ui._exchange_google_code", fail)
+    monkeypatch.setattr("gatekeeper.oauth._exchange_microsoft_code", _never)
+    monkeypatch.setattr("gatekeeper.oauth._exchange_google_code", _never)
 
     async with _client(env["app"]) as client:
-        await _login(client)
-        page = await client.get(f"{OAUTH_AUTHORIZE_PATH}?credential=gws")
-        import html
-        import re
+        state = _consent_params(await _start(client))["state"]
+        crossed = await _ms_callback(client, f"code={AUTH_CODE}&state={state}")
+        # Spent, not just refused: the same state at its own callback is
+        # gone too, so a wrong-provider redirect cannot be retried.
+        after = await _callback(client, f"code={AUTH_CODE}&state={state}")
 
-        state = dict(
-            urllib.parse.parse_qsl(
-                urllib.parse.urlparse(
-                    html.unescape(
-                        re.search(r'href="(https://accounts\.google\.com[^"]+)"',
-                                  page.text).group(1)
-                    )
-                ).query
-            )
-        )["state"]
-        crossed = await client.get(
-            f"{MICROSOFT_OAUTH_CALLBACK_PATH}?code={AUTH_CODE}&state={state}"
-        )
-
-    assert crossed.status_code == 400
+    assert _result(crossed) == {
+        "oauth": "state_mismatch", "provider": "microsoft", "credential": "",
+    }
+    assert _result(after)["oauth"] == "state_mismatch"
     assert _stored_bundle(env["credentials"])["refresh_token"] == OLD_REFRESH
     assert '"result": "state_mismatch"' in _audit_text(env["tier1"])
 
 
-async def test_the_credentials_page_offers_the_flow_its_toolkit_names(oauth_env):
-    """The button follows Tier 1: this credential is a microsoft
-    toolkit's, so the Google flow is not offered for it."""
+async def test_a_microsoft_state_is_not_redeemable_at_the_google_callback(
+    oauth_env, monkeypatch
+):
+    monkeypatch.setattr("gatekeeper.oauth._exchange_microsoft_code", _never)
+    monkeypatch.setattr("gatekeeper.oauth._exchange_google_code", _never)
     async with _client(oauth_env["app"]) as client:
-        await _login(client)
-        page = await client.get(f"{UI_PREFIX}/credentials")
+        state = (await _start_flow(client))["state"]
+        crossed = await _callback(client, f"code={AUTH_CODE}&state={state}")
+    assert _result(crossed)["oauth"] == "state_mismatch"
+    assert "refresh_token" not in _stored(oauth_env["credentials"])
 
-    assert f"{MICROSOFT_OAUTH_AUTHORIZE_PATH}?credential=msgraph" in page.text
-    assert f"{OAUTH_AUTHORIZE_PATH}?credential=msgraph" not in page.text
+
+async def test_the_providers_listing_offers_the_flow_its_toolkit_names(oauth_env):
+    """The offer follows Tier 1: this credential is a microsoft toolkit's,
+    so the Google flow is not offered for it."""
+    async with _client(oauth_env["app"]) as client:
+        await _login(client, "eye")
+        response = await client.get(f"{API}/oauth/providers")
+
+    assert response.json() == [{
+        "key": "microsoft", "label": "Microsoft", "credentials": ["msgraph"],
+        "callback_path": MICROSOFT_OAUTH_CALLBACK_PATH,
+    }]
+    assert OAUTH_CALLBACK_PATH not in response.text
 
 
 # -- The credential reaches the token file ----------------------------------

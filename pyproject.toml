@@ -1,6 +1,6 @@
 [project]
 name = "gatekeeper"
-version = "0.57.0"
+version = "1.0.0"
 description = "Controlled MCP server for host operations"
 requires-python = ">=3.12"
 dependencies = [
@@ -40,14 +40,13 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# The PWA assets (manifest, service worker, icon) are data files inside the
-# package, not modules -- without this they are dropped from the wheel and
-# /ui/manifest.webmanifest answers 404 in the image while working fine in
-# an editable checkout. Read by ui.py's _read_pwa_asset().
-# `_web/` is the React console's build (frontend/dist), copied in by the
-# Dockerfile's node stage and served at /app by api/web.py -- same reason.
+# `_web/` is the React console's build (frontend/dist, including the web-app
+# manifest and icon), copied in by the Dockerfile's node stage and served at
+# /app by api/web.py. Data files, not modules: without this they are dropped
+# from the wheel and /app answers 503 in the image while working fine in an
+# editable checkout.
 [tool.setuptools.package-data]
-gatekeeper = ["_pwa/*", "_web/*", "_web/assets/*"]
+gatekeeper = ["_web/*", "_web/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

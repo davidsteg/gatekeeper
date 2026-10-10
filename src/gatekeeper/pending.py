@@ -2,7 +2,7 @@
 
 Low-risk admin actions apply immediately (see `admin_service.py`); anything
 that expands what an agent can actually do or touch is written here instead
-and waits for a human to approve or reject it through `/ui/requests` (Change
+and waits for a human to approve or reject it through `/app/requests` (Change
 tab). This is
 a third Tier 2 file, `pending.yaml`, written with the exact same
 atomic-write / revision-fingerprint primitives `store.py` uses for
@@ -15,8 +15,8 @@ revision of the file the action targets and, if it moved, marks the item
 `stale` instead of applying (no silent re-basing: a human/Hermes must
 re-propose from the current state). If it is not stale, the caller-supplied
 `apply` callback performs the mutation -- which for every real admin action
-means calling straight into the *same* `ConfigStore` mutator a human `/ui`
-write would call (wired up in `admin_service.apply_pending`), so the
+means calling straight into the *same* `ConfigStore` mutator a human console
+write (`/api/v1`) would call (wired up in `admin_service.apply_pending`), so the
 resulting audit entry and validation are identical either way.
 """
 
@@ -42,7 +42,7 @@ STATUSES = frozenset({"pending", "approved", "rejected", "stale"})
 
 #: The two reasons an item is marked `stale`, as one vocabulary shared by
 #: every path that can mark one -- `approve`'s gate and
-#: `close_vanished_targets`' sweep -- so a human reading `/ui/requests`
+#: `close_vanished_targets`' sweep -- so a human reading `/app/requests`
 #: sees the same sentence whichever of the two closed the item.
 STALE_VANISHED_REASON = "What this targeted no longer exists. Nothing to apply."
 STALE_CHANGED_REASON = (
@@ -209,7 +209,7 @@ class PendingStore:
         ever clicks -- there is nothing to gain from approving a delete of a
         tool that is already gone -- sits in the queue as `pending` forever
         (14 such items observed in production on 0.46.4). Sweeping on the
-        read path closes them on the next `/ui/requests` visit instead,
+        read path closes them on the next `/app/requests` visit instead,
         with the same `STALE_VANISHED_REASON` a clicked approval would have
         written.
 
@@ -229,7 +229,7 @@ class PendingStore:
         """
         # A read-only `pending.yaml` cannot self-heal; refusing to try is
         # the difference between a queue that still renders and a GET of
-        # `/ui/requests` that 500s on an `OSError` from the atomic write.
+        # `/api/v1/requests/pending` that 500s on an `OSError` from the atomic write.
         if not _writable(self.path):
             return []
         with self._lock:

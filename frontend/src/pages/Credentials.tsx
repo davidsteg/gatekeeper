@@ -221,6 +221,10 @@ const OAUTH_RESULT: Record<string, { tone: "good" | "bad"; text: string }> = {
   role_required: { tone: "bad", text: "The account that started this sign-in can no longer write credentials. Nothing was changed." },
   read_only: { tone: "bad", text: "This console cannot write credentials. Nothing was changed." },
   write_refused: { tone: "bad", text: "The credential store refused the write. Nothing was changed." },
+  state_mismatch: {
+    tone: "bad",
+    text: "This did not match a sign-in started from this console: it expired, was already used, or came from elsewhere. Start again here. Nothing was changed.",
+  },
 };
 
 function OAuthResult() {
