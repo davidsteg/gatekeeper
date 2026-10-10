@@ -11,6 +11,10 @@ item.
   If-Match, viewer/admin roles, bearer tokens refused; overview, tools,
   integrations, identities, credential metadata, toolkits, requests, audit
   and release notes (`api/`)
+- React console at `/app`, read-only (phase 2): Vite + React + TypeScript,
+  types generated from the API schema, served by gatekeeper under a
+  `script-src 'self'` + Trusted Types CSP, built in a Node-only Dockerfile
+  stage, with its own CI job (`frontend/`)
 - Two-tier config (Tier 1 immutable / Tier 2 runtime-mutable)
 - `docker` and `local` executors
 - `http` executor — SSRF-safe, no redirects followed, credential-as-header
@@ -93,14 +97,13 @@ item.
 
 ## Not implemented (by design or not yet)
 
-- **React console (phases 2 to 4 of the console migration).** Phase 1,
-  the JSON API at `/api/v1` with session, CSRF, ETag, roles and every read
-  (0.53.0), is done. Still to come, each as its own release: the React +
-  TypeScript SPA at `/app` with the read-only pages, the Dockerfile node
-  stage and a CI frontend job; the write flows (tools, identities,
-  credentials, account, then requests separately); and the 1.0.0 cutover
-  that redirects `/ui` to `/app`, deletes `ui.py`'s HTML views and changes
-  the console CSP from script-free to `script-src 'self'`.
+- **React console write flows and cutover (phases 3 and 4).** Phases 1
+  (JSON API, 0.53.0) and 2 (read-only SPA at `/app`, 0.54.0) are done.
+  Still to come, each as its own release: the write flows (tools,
+  identities, credentials, account, then requests separately), and the
+  1.0.0 cutover that redirects `/ui` to `/app`, deletes `ui.py`'s HTML
+  views and makes FR-11.9's `script-src 'self'` policy the only console
+  policy. A Playwright smoke test against the built image is not in CI yet.
 
 - **Artifact transfers as another user (`run_as`) and older artifact
   versions.** A transfer writes as the Gatekeeper process user. An image

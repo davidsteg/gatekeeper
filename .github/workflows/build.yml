@@ -227,9 +227,60 @@ jobs:
         # und der Job kostet nur Laufzeit, die parallel zum normalen liegt.
         run: pytest -q
 
+  frontend:
+    name: frontend
+    # The React console (frontend/, served at /app). It is the one part of
+    # gatekeeper that runs in a browser, so its dependency tree gets the same
+    # gate as the Python one: installed from the lockfile with no install
+    # scripts, type-checked, linted, tested, audited -- and its generated API
+    # types must match the server's schema, or client and server disagree.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Audit dependencies (npm audit)
+        run: npm audit --audit-level=high
+
+      - name: Generated API types are current
+        # Regenerate the schema from the server, then the types from the
+        # schema; either changing means a commit forgot `npm run gen:api`.
+        run: |
+          pip install -e "..[dev]" -c ../constraints.txt
+          python -m gatekeeper.api > openapi.json
+          npm run check:api
+
+      - name: Type check (tsc)
+        run: npx tsc --noEmit
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Tests (vitest)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
   image:
     name: image
-    needs: [test, test-privileged]
+    needs: [test, test-privileged, frontend]
     runs-on: ubuntu-latest
     permissions:
       contents: read

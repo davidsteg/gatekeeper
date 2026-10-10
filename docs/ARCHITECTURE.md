@@ -631,6 +631,10 @@ src/gatekeeper/
     models.py           Pydantic response models (the output boundary)
     app.py              Routes; `python -m gatekeeper.api` prints the
                          OpenAPI schema
+    web.py              Serves the React build at /app, with its CSP
+  _web/                The React build (image only; .gitignored)
+frontend/              React console source: Vite, TypeScript, Tailwind;
+                       openapi.json + src/api/schema.d.ts are generated
   errors.py            DenialReason enum, opaque denial for catalog info
   artifacts.py         Release-bound artifacts: deterministic build from repo
                        paths (image build), read-only store with sha256
@@ -644,7 +648,8 @@ config/
                          toolkits.yaml (incl. a working http + truenas +
                          ssh entry), tools.yaml
 tests/
-  test_api_auth.py, test_api_read.py, api_env.py (shared API setup),
+  test_api_auth.py, test_api_read.py, test_api_web.py,
+  api_env.py (shared API setup),
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_ui.py, test_ui_admin.py, test_credentials.py, test_execute_http.py,
   test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py,
@@ -711,9 +716,55 @@ side on the same stores.
   can become a row key when the Stage 1 SQLite audit index lands, without
   a client change.
 
-Phase 1 is read-only: session handling plus every read the console
-offers. Write endpoints, the SPA at `/app` and the cutover follow as their
-own releases.
+Phase 1 (0.53.0) added session handling plus every read the console
+offers. Write endpoints and the cutover follow as their own releases.
+
+## Console SPA (`frontend/`, `/app`)
+
+A React 19 + TypeScript (strict) single-page app built with Vite, served by
+gatekeeper itself at `/app` (`api/web.py`). It is a pure client of
+`/api/v1`: it holds no catalog logic, so FR-11.1 holds for it too.
+
+- **Stack.** React Router for pages, TanStack Query for fetching, caching
+  and polling (15 s on Overview and Audit), Tailwind with shadcn/ui-style
+  primitives copied into `src/components/ui/` (no component library at
+  runtime), Recharts for the activity chart, `lucide-react` icons. Dark mode
+  follows `prefers-color-scheme`.
+- **Typed client.** `frontend/openapi.json` is the server's schema
+  (`python -m gatekeeper.api`); `openapi-typescript` turns it into
+  `src/api/schema.d.ts`, and `src/api/client.ts` types every path, query
+  and response from it. CI regenerates both and fails on a diff, and
+  `tests/test_api_web.py` fails when the committed schema is stale. The
+  client sends `X-CSRF-Token` on every mutating request and `If-Match` from
+  the last read's `ETag`, and a 412 becomes a `ConflictError`.
+- **Sessions.** A 401 from any query drops the cached session and routes
+  to the login page. The cookie is the API's (`/api/v1` path); the SPA
+  never sees it.
+- **CSP (FR-11.9).** `default-src 'none'; script-src 'self'; style-src
+  'self'; connect-src 'self'; img-src 'self' data:; font-src 'self';
+  manifest-src 'self'; worker-src 'self'; form-action 'self';
+  frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for
+  'script'` on every `/app` response. The build has no inline script
+  (Vite's module-preload polyfill is off, assets are never inlined), no
+  dependency loads anything from a third-party origin, and eslint forbids
+  `dangerouslySetInnerHTML`, `innerHTML` and `eval`. Agent-supplied audit
+  values and RELEASE.md are rendered as text nodes; the release-notes
+  Markdown subset is built as React elements (`pages/markdown.tsx`).
+  Integration logos are `<img src="/api/v1/integrations/<key>/logo.svg">`.
+- **Serving.** `index.html` is `no-store`; hashed files under
+  `/app/assets/` are `immutable`; any other `/app/...` path without a file
+  falls back to `index.html` (client routes, including dotted tool IDs),
+  while a missing asset stays 404. Gzip as on `/ui`. The build is looked
+  up in `GATEKEEPER_WEB_DIR`, then the package's `_web/` (the image), then
+  `frontend/dist` (a checkout); with none, `/app` answers 503 with the
+  build command.
+- **Build.** The Dockerfile's first stage (`node:22.22.0-bookworm-slim`
+  pinned by digest) runs `npm ci --ignore-scripts && npm run build`; the
+  result is copied into `src/gatekeeper/_web/` before `pip install`, and
+  `[tool.setuptools.package-data]` ships it. The runtime image has no Node.
+
+Phase 2 (0.54.0) is read-only, like the API behind it; the pages link to
+`/ui` for anything that changes state.
 
 ## UI architecture (`ui.py`)
 

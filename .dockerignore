@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 compose.yaml
 config/identities.yaml
+frontend/node_modules/
+frontend/dist/
+src/gatekeeper/_web/

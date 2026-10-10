@@ -1,3 +1,19 @@
+## 0.54.0
+
+Phase 2 of the console migration: a React console at `/app`, read-only, served by gatekeeper itself. `/ui` is unchanged and remains the place to make changes.
+
+### Added
+
+- **The React console at `/app`** (`frontend/`, Vite + React 19 + TypeScript strict). Its pages are Login, Overview (stats, 12 h activity chart, recent events, filterable access map), Tools (cards and matrix, each definition with its YAML, the integrations gallery), Identities, Credentials (metadata only), Toolkits (plus copyable reference YAML), Audit log (filters, infinite scroll) and Release notes. Overview and Audit refresh every 15 s.
+- **A typed client.** TypeScript types are generated from the API's OpenAPI schema (`frontend/openapi.json` → `src/api/schema.d.ts`). The fetch client adds `X-CSRF-Token` to every mutating request and `If-Match` from the last read's `ETag`, and turns a 412 into a `ConflictError`.
+- **`/app` serving** (`api/web.py`). `index.html` is `no-store`, hashed assets under `/app/assets/` are `immutable`, other paths fall back to the SPA, responses are gzipped, and nothing outside the build directory is readable.
+- **Dockerfile node stage.** It builds the console with `npm ci --ignore-scripts` on a digest-pinned `node` image and copies the result into the package as `gatekeeper/_web/`. The runtime image stays Node-free.
+- **CI `frontend` job.** It runs `npm ci --ignore-scripts`, `npm audit --audit-level=high`, a check that the generated API types match the server's schema, `tsc`, eslint, vitest and the build. The image now also waits for this job. Dependabot covers `frontend/`.
+
+### Security
+
+- **New console CSP for `/app` (REQUIREMENTS.md FR-11.9):** `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; manifest-src 'self'; worker-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'`. There is no inline script, no `eval` and no CDN. Trusted Types are enforced, and eslint rejects `dangerouslySetInnerHTML`/`innerHTML`. Audit values and release notes are rendered as text, and integration logos load as `<img>`. `/ui` keeps its script-free policy until the cutover.
+
 ## 0.53.0
 
 Phase 1 of the console migration: a typed JSON API at `/api/v1`, inside the same process and sharing every store with `/ui`. Read-only for now; the legacy console is unchanged and stays the place to make changes.
