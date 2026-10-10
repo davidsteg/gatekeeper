@@ -109,7 +109,11 @@ item.
   `/continue` must resume the original session; a new run or a follow-up
   Kanban task does not count. Without `_meta.hermes`, nothing in recovery
   activates, even with the flag on. No live round trip has been
-  demonstrated.
+  demonstrated for Telegram. Safe automatic Telegram continuation is
+  **not supported** by the verified unchanged official Hermes v0.21.6
+  interfaces and remains disabled. Only unchanged official Hermes images
+  are permitted; no patch/custom-image/CLI workaround is planned. See
+  [HERMES_TELEGRAM_SUPPORT.md](HERMES_TELEGRAM_SUPPORT.md).
 - **Recovery of a stop without a prior Gatekeeper failure.** This is not
   covered in v1. Iteration exhaustion with no failed Gatekeeper call is not
   resumed.

@@ -1,3 +1,12 @@
+## 0.51.0
+
+Documents the supported Telegram message-injection interfaces and recovery limits of unchanged official Hermes v0.21.6. Automatic Telegram recovery remains disabled; Gatekeeper and the Artifact Store remain available.
+
+### Changed
+
+- **Explicit Hermes Telegram support assessment.** `docs/HERMES_TELEGRAM_SUPPORT.md` records the pinned official image/source, supported `PluginContext.inject_message` routing and native session serialization, and the missing stop-suppression and recovery-idempotency guarantees. Live Telegram delivery remains unproven because the local official test instance has no test bot configured.
+- **Adapter contract, adapter README and roadmap** distinguish ordinary queued status-check messages from Gatekeeper's stronger atomic recovery contract. The permitted deployment uses unchanged official Hermes images. The experimental Gateway patch and custom test image remain outside this release.
+
 ## 0.50.0
 
 Release-bound artifacts: Homelab gets the Hermes adapter contract and the adapter package from Gatekeeper itself, bound to the release commit, with no manual transfer.
@@ -3387,4 +3396,3 @@ individually.
 ### 0.45.1 addendum (CI fix)
 
 - test(mailbox): assert the V2 headers (X-webhook-timestamp + X-webhook-signature-v2) and timestamp-bound signature instead of the removed X-Gatekeeper-Signature header; fixes CI #146 test-suite failure.
-
