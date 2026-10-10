@@ -1,6 +1,0 @@
-name: gatekeeper-recovery
-version: "0.1.0"
-description: >
-  Gatekeeper recovery adapter (contract v1.1): correlation on Gatekeeper MCP
-  calls, durable turn/continuation journal, lifecycle events. Pairs with the
-  adapter sidecar.

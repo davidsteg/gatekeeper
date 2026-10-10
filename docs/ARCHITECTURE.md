@@ -449,118 +449,26 @@ pointed at an empty directory: each call dies at authentication, after
 argparse has accepted the argv and before any request leaves the
 process.
 
-## Recovery supervisor (`recovery.py`)
+## No session recovery
 
-The supervisor is off unless `recovery.enabled: true` is set in toolkits.yaml.
-Its job is to get a stuck Hermes task moving again without a human typing
-"continue", and nothing more. The Hermes side is specified in
-[HERMES_ADAPTER.md](HERMES_ADAPTER.md) and does not exist yet.
-
-**Who owns what.** Hermes owns planning, delegation, Kanban tasks, result checks
-and user replies. Gatekeeper owns permissions, execution and operation status.
-The supervisor owns incidents, cooldowns, duplicate protection, one rescue
-consultation, and one continuation key per incident. It never executes a tool,
-never retries one for the agent, and never plans.
-
-```
-tools/call (+ _meta.hermes) ──► Service.call ──► executor
-                                    │ outcome
-                                    ▼
-                           RecoverySupervisor ──► recovery.yaml
-          guidance in the   ◄───────┤   ├──► rescue model (diagnostic, no tools)
-          tool response             │   ├──► decision provider (optional, off)
-                                    │   └──► Hermes adapter: /status /continue /continuation
-POST /recovery/events ──────────────┘
-```
-
-**Keys and ordering.** Incidents are keyed by `(installation, board_id, task_id)`
-plus a `task_generation`. The installation comes from the identity. A
-client-supplied installation, or a profile outside the installation's list,
-drops the correlation on a tool call and gets a 403 on an event. A client
-whose MCP stack cannot send per-call `_meta` (Hermes v0.21.6) sends the same
-object as the reserved argument `_hermes_recovery`, which `server.on_call_tool`
-strips from every call before the pipeline sees it. Ordering uses
-the integer `turn_seq`, never the opaque `turn_id`. Every correlated call and
-event needs an `event_id`, and duplicates are dropped across restarts.
-
-**Fixed rules, in order.**
-
-| Failure or event | What happens |
-|---|---|
-| Explicit user stop | Incident suppressed, cooldown or not. Never overridden. |
-| Task completed, cancelled or superseded | Only that task and generation is closed. A worker's completion never closes its parent. A higher generation starts a fresh lifecycle. |
-| Permission or policy denial | Blocked at once. One identical text for every FR-7.7-opaque reason. |
-| Rate limit, or client-reported breaker cooldown | One status check when the cooldown ends, then a continuation if the turn is stopped. |
-| `unknown` outcome on a non-idempotent tool | "Check status first". An exact repeat is refused with `recovery_hold` until a successful read on the same toolkit. |
-| Invalid arguments, missing dependency | After `trigger_after` failures: targeted correction. |
-| Other repeated failure | After `trigger_after` failures: the optional decision provider may choose among the actions the rules still allow. Otherwise one rescue consultation (if configured), then "change approach". |
-
-`max_recoveries_per_task` bounds guidance and continuation rounds across all
-of a task's incidents.
-
-**Continuation.** `/continue` carries `expected_turn_seq` and a stable
-`idempotency_key`. The adapter validates ownership, that no turn is active, and
-the sequence number atomically. A rejection because a user message won the race
-(`turn_active`, `superseded`, `turn_seq_mismatch`) costs no recovery. An
-ambiguous delivery (a timeout, a 5xx, or Gatekeeper crashing after it recorded
-"sending") is resolved through `/continuation`, never by blind re-sending. At
-most one re-send is made, with the same key.
-
-**Delivery is not recovery.** The incident moves through four stages:
-
-1. `accepted`: the adapter returned a `continuation_id`.
-2. Started: `/status` shows that id on an active turn.
-3. `active`: an executed tool call carries that id.
-4. `recovered`: `last_progress_at` moved past acceptance.
-
-`task_completed` then marks the incident `resolved`. If no activity arrives
-within `ack_timeout_seconds`, the outcome is `unacknowledged`. If no progress
-follows activity within `progress_timeout_seconds`, it is
-`blocked:no_progress_after_continuation`.
-
-**Crash coverage.** Hermes emits `interrupted` on startup for turns that were
-active when it went down. Independently, an open incident with no traffic for
-`reconcile_after_seconds` is checked against `/status`, at most `max_reconciles`
-times.
-
-**v1 limit.** A turn that stops without any prior Gatekeeper failure has no
-incident and is not resumed.
-
-**Rescue.** An OpenAI-compatible `chat/completions` call with no tools. The
-exact `model` is checked against `GET /models` before first use. Calls are
-capped by `timeout_seconds`, `max_tokens`, one per incident and `max_per_hour`.
-The advice is labeled untrusted. A failure ends as `blocked:rescue_failed`.
-
-**Decision provider (optional, off).** A small interface: the input is redacted
-attempts, status, remaining budget and `allowed_actions`; the output is a
-validated `{action, rationale, evidence}` from a fixed enum. It is consulted
-only at the "other repeated failure" step, after every fixed rule has run.
-Anything else (a disallowed action, invalid output, a timeout, an unavailable
-provider) falls back to the deterministic choice. Shadow mode logs the proposal
-but applies the deterministic choice. No concrete provider is registered, so
-enabling it is a startup error until a provider (for example Jev) is verified.
-See HERMES_ADAPTER.md §7.
-
-**Lifecycle route.** `POST /recovery/events` (bearer auth, agent role) executes
-nothing, so it can be used while Hermes's breaker around the tools is open.
-`GET /recovery/incidents` is read-only, scoped to the caller's installation.
-
-**State and logs.** `recovery.yaml` is written atomically and holds incidents,
-task ledgers, seen event ids, holds, and continuation keys. Every transition is
-a JSON line on the `gatekeeper.recovery` logger and a `"kind": "recovery"` audit
-record. Those carry the incident, task, consultation and continuation ids; for
-decisions, they also carry the provider, model, proposed and accepted action.
-They never carry prompts.
-
-**Rollback.** Set `recovery.enabled: false` and SIGHUP. Every hook returns
-immediately, `/recovery/*` answers 404, and no hold is enforced.
-`recovery.yaml` can be deleted afterwards.
+Gatekeeper does not continue, wake or re-prompt an agent session. The
+recovery supervisor (`recovery.py`: incidents, cooldowns, rescue and decision
+providers, `/recovery/*`, the `_meta.hermes` / `_hermes_recovery`
+correlation, the `recovery_hold` denial) and the Hermes recovery adapter were
+removed in 0.52.0. Hermes's native orchestration (worker result, wake, check,
+targeted follow-up) owns that loop; Gatekeeper's part ends with the audited
+tool result. A leftover `recovery:` block in toolkits.yaml is refused at
+load when it enables anything and warned about when it is inert, so it never
+looks effective (`tier1._check_removed_recovery`).
 
 ## Release-bound artifacts (`artifacts.py`, `artifact` executor)
 
-Some files Gatekeeper serves to agents: the Hermes adapter contract
-(`docs/HERMES_ADAPTER.md`) and the adapter itself
-(`contrib/hermes-recovery-adapter/`). Each is bound to exactly one commit.
+Files Gatekeeper serves to agents, each bound to exactly one commit. Which
+repository paths are artifacts is fixed in `artifacts.SOURCES` (a single file
+or a directory packaged as tar.gz). The list is empty since 0.52.0 -- the only
+entries were the Hermes recovery adapter and its contract -- so the image
+carries a commit-bound manifest with no artifacts until a source is added
+(and COPY'd in the Dockerfile).
 
 **Git is the only source.** Nothing is uploaded. The image build runs
 `python -m gatekeeper.artifacts`, which packages those fixed repository paths
@@ -581,7 +489,7 @@ sha256 over exactly the bytes it hands on.
 | Surface | What it does |
 |---|---|
 | `artifact.list` / `artifact.info` | release, commit, sha256, size, download path |
-| `artifact.read` | text artifacts inline (the contract), within `max_output_bytes` |
+| `artifact.read` | text artifacts inline, within `max_output_bytes` |
 | `artifact.transfer` | copies into the toolkit's `handover_dir` (see below) |
 | `GET /artifacts/{id}[/{version}]` | authenticated download (bearer token); `X-Artifact-SHA256`, `X-Artifact-Commit`, ETag |
 
@@ -717,10 +625,6 @@ src/gatekeeper/
                        paths (image build), read-only store with sha256
                        verification -- see "Release-bound artifacts"
   execute_artifact.py  `artifact` executor: list/info/read/transfer
-  recovery.py          Recovery supervisor (feature-flagged): incidents in
-                       recovery.yaml, classification, cooldowns, rescue
-                       consultation, Hermes continuation -- see "Recovery
-                       supervisor"
   ratelimit.py         Per-identity, per-category sliding window limiter
 config/
   toolkits.yaml         Tier 1 -- immutable at runtime

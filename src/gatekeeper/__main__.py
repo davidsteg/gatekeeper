@@ -38,7 +38,6 @@ from .identity import (
     load_identities,
 )
 from .pending import PendingStore
-from .recovery import IncidentStore, RecoverySupervisor
 from .server import build_app, log_startup
 from .service import Service
 from .store import ConfigStore, set_password_in_file
@@ -350,11 +349,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
         identities=identities,
     )
 
-    # Always attached, so a SIGHUP that flips `recovery.enabled` takes
-    # effect without a restart; with the flag off every hook returns at
-    # once and `recovery.yaml` is never written.
-    service.recovery = _build_recovery(service, credentials, identities)
-
     def _on_credentials_change() -> None:
         audit.set_secrets(credentials.plaintext_values_for_masking())
         # A rotated docker_tls credential must not keep serving a stale
@@ -578,43 +572,6 @@ _INIT_TOOLS = """\
 
 tools: []
 """
-
-
-def _build_recovery(
-    service: Service, credentials: CredentialStore, identities: IdentityStore
-) -> RecoverySupervisor:
-    """The recovery supervisor, reading its config live from `service.tier1`."""
-    config = service.tier1.recovery
-    path = config.state_file or os.path.join(_state_dir(), "recovery.yaml")
-
-    def _secret(name: str) -> str | None:
-        resolved = credentials._resolve(name)
-        return resolved.value if resolved is not None else None
-
-    def _tools_for(identity_id: str) -> list[dict[str, object]]:
-        identity = identities.identities.get(identity_id)
-        if identity is None:
-            return []
-        return [
-            {"name": v.name, "title": v.title, "read_only": v.read_only,
-             "idempotent": v.idempotent}
-            for v in service.visible_tools(identity)
-        ]
-
-    if config.enabled:
-        logger.info(
-            "Recovery supervisor enabled (%d installation(s), rescue %s); state in %s",
-            len(config.installations),
-            "configured" if config.rescue.enabled else "off",
-            path,
-        )
-    return RecoverySupervisor(
-        config_source=lambda: service.tier1.recovery,
-        store=IncidentStore(path),
-        audit=service.audit,
-        secret_resolver=_secret,
-        tools_for=_tools_for,
-    )
 
 
 def _paths(config_dir: str, state_dir: str) -> dict[str, str]:

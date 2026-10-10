@@ -1,3 +1,25 @@
+## 0.52.0
+
+Removes the recovery supervisor and its Hermes integration. Gatekeeper is back to tool execution, permissions, audit and artifact serving; Hermes's native orchestration handles results, wakes and follow-ups. **Breaking for one case:** a `toolkits.yaml` whose `recovery:` block still enables anything no longer loads (see Migration).
+
+### Removed
+
+- **Recovery supervisor** (`recovery.py`, 0.48.0–0.51.0): incidents and `recovery.yaml`, the background scheduler, cooldown checks, rescue consultation, the decision-provider interface (including the unimplemented Jev provider), and continuation through a Hermes adapter.
+- **`POST /recovery/events` and `GET /recovery/incidents`.** Both answer 404.
+- **Recovery correlation.** `_meta.hermes` is no longer read, and `_hermes_recovery` is no longer stripped from calls or reserved as a parameter name. It is now an ordinary unknown argument (`param_unknown`).
+- **Recovery holds.** The denial reason `recovery_hold` and the recovery guidance appended to tool results are gone. Every other check, including rate limits, scopes and the general denial handling, is unchanged.
+- **Hermes recovery adapter, sidecar and contract** (`contrib/hermes-recovery-adapter/`, `docs/HERMES_ADAPTER.md`, `docs/HERMES_TELEGRAM_SUPPORT.md`). The image no longer builds or serves the artifacts `hermes-adapter-contract` and `hermes-recovery-adapter`, and the GitHub release no longer attaches them. CI no longer collects the adapter's tests.
+
+### Kept
+
+- **Artifact Store and `artifact` executor**: MCP tools, `GET /artifacts/…`, manifest, sha256 verification and `transfer` are unchanged. `artifacts.SOURCES` is empty, so the image ships a commit-bound manifest with no artifacts, and the release still attaches it. `build()` takes an explicit `sources` list for tests and future sources.
+
+### Migration
+
+- **`recovery:` block in `toolkits.yaml`.** If it enables anything (`enabled: true` at any level), load fails with a message that names the removal. If everything in it is disabled, it loads with a warning. Delete the block in either case.
+- **`artifact` toolkit that allows only the removed artifacts.** It loads with a warning, its tools answer "unknown artifact", and `/health/ready` reports it degraded. Remove the toolkit, its `artifact.*` tools and grants, and the `artifact:` scopes.
+- **Left on disk on purpose.** `recovery.yaml`, the credentials the block named, the handover directory and the Hermes-side journals are not deleted. `docs/DEPLOYMENT.md` ("Removed: recovery supervisor") lists what can be archived later.
+
 ## 0.51.0
 
 Documents the supported Telegram message-injection interfaces and recovery limits of unchanged official Hermes v0.21.6. Automatic Telegram recovery remains disabled; Gatekeeper and the Artifact Store remain available.

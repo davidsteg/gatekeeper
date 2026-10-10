@@ -1,4 +1,8 @@
-"""Release-bound artifacts: build, store, `artifact` executor, HTTP download."""
+"""Release-bound artifacts: build, store, `artifact` executor, HTTP download.
+
+The image's own `artifacts.SOURCES` is empty since the recovery adapter was
+removed, so these tests build from a small fixture repository: one text
+file and one directory, the two kinds a source can have."""
 
 from __future__ import annotations
 
@@ -11,7 +15,7 @@ import pytest
 import yaml
 from conftest import make_catalog
 
-from gatekeeper.artifacts import ArtifactStore, build
+from gatekeeper.artifacts import SOURCES, ArtifactStore, build
 from gatekeeper.audit import AuditLog
 from gatekeeper.errors import ConfigError
 from gatekeeper.identity import generate_token, hash_token, load_identities
@@ -19,15 +23,35 @@ from gatekeeper.server import build_app
 from gatekeeper.service import Service
 from gatekeeper.tier1 import load_tier1
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMMIT = "7aa7b394cb713162db98aad29c91c342508a49c7"
-CONTRACT, ADAPTER = "hermes-adapter-contract", "hermes-recovery-adapter"
+CONTRACT, ADAPTER = "example-doc", "example-kit"
+DOC_FILE, KIT_FILE = "EXAMPLE.md", "example-kit.tar.gz"
+FIXTURE_SOURCES = (
+    {"id": CONTRACT, "kind": "file", "path": "docs/EXAMPLE.md", "file": DOC_FILE,
+     "media_type": "text/markdown; charset=utf-8", "text": True},
+    {"id": ADAPTER, "kind": "tree", "path": "kit", "file": KIT_FILE,
+     "media_type": "application/gzip", "text": False},
+)
 
 
 @pytest.fixture
-def store_dir(tmp_path):
+def repo(tmp_path):
+    root = tmp_path / "repo"
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "EXAMPLE.md").write_bytes(b"# Example document\r\n\nreleased with the image\n")
+    (root / "kit" / "pkg" / "__pycache__").mkdir(parents=True)
+    (root / "kit" / "pkg" / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    (root / "kit" / "pkg" / "__pycache__" / "main.cpython-312.pyc").write_bytes(b"\0")
+    (root / "kit" / "out").mkdir()
+    (root / "kit" / "out" / "generated.txt").write_text("x", encoding="utf-8")
+    (root / "kit" / "README.md").write_text("kit\n", encoding="utf-8")
+    return root
+
+
+@pytest.fixture
+def store_dir(tmp_path, repo):
     out = tmp_path / "artifacts"
-    build(REPO, str(out), commit=COMMIT, release="0.50.0")
+    build(str(repo), str(out), commit=COMMIT, release="0.52.0", sources=FIXTURE_SOURCES)
     return out
 
 
@@ -85,29 +109,29 @@ async def call(service, identities, who, tool, **args):
 # -- Build and store ------------------------------------------------------------------
 
 
-def test_build_is_deterministic_and_bound_to_the_commit(tmp_path, store_dir):
+def test_build_is_deterministic_and_bound_to_the_commit(tmp_path, repo, store_dir):
     again = tmp_path / "again"
-    build(REPO, str(again), commit=COMMIT, release="0.50.0")
+    build(str(repo), str(again), commit=COMMIT, release="0.52.0", sources=FIXTURE_SOURCES)
     m1 = json.loads((store_dir / "manifest.json").read_text())
     m2 = json.loads((again / "manifest.json").read_text())
     assert m1 == m2
     assert m1["commit"] == COMMIT and {a["version"] for a in m1["artifacts"]} == {COMMIT}
-    contract = open(os.path.join(REPO, "docs", "HERMES_ADAPTER.md"), "rb").read().replace(b"\r\n", b"\n")
+    contract = (repo / "docs" / "EXAMPLE.md").read_bytes().replace(b"\r\n", b"\n")
     entry = next(a for a in m1["artifacts"] if a["id"] == CONTRACT)
     assert entry["sha256"] == hashlib.sha256(contract).hexdigest()
 
 
-def test_adapter_archive_contains_the_adapter_and_nothing_generated(store_dir):
+def test_tree_archive_contains_the_tree_and_nothing_generated(store_dir):
     import tarfile
-    with tarfile.open(store_dir / "hermes-recovery-adapter.tar.gz") as tar:
+    with tarfile.open(store_dir / KIT_FILE) as tar:
         names = tar.getnames()
-    assert f"{ADAPTER}/plugin/gatekeeper-recovery/__init__.py" in names
-    assert f"{ADAPTER}/sidecar/adapter.py" in names
+    assert f"{ADAPTER}/pkg/main.py" in names
+    assert f"{ADAPTER}/README.md" in names
     assert not any("/out/" in n or n.endswith(".pyc") or "__pycache__" in n for n in names)
 
 
 def test_tampered_file_is_disabled(store_dir):
-    (store_dir / "HERMES_ADAPTER.md").write_text("tampered", encoding="utf-8")
+    (store_dir / DOC_FILE).write_text("tampered", encoding="utf-8")
     store = ArtifactStore(str(store_dir))
     assert store.get(CONTRACT) is None and store.disabled[CONTRACT] == "sha256 mismatch"
     assert store.get(ADAPTER) is not None
@@ -115,6 +139,17 @@ def test_tampered_file_is_disabled(store_dir):
 
 def test_missing_directory_serves_nothing(tmp_path):
     assert ArtifactStore(str(tmp_path / "nowhere")).list() == []
+
+
+def test_the_image_builds_a_commit_bound_manifest_without_the_removed_adapter(tmp_path):
+    # What the Dockerfile runs: no repository path is required any more,
+    # and the removed Hermes recovery artifacts are not built.
+    assert not {s["id"] for s in SOURCES} & {"hermes-adapter-contract", "hermes-recovery-adapter"}
+    out = tmp_path / "image"
+    manifest = build(str(tmp_path / "empty-checkout"), str(out), commit=COMMIT, release="0.52.0")
+    assert manifest["commit"] == COMMIT and manifest["artifacts"] == []
+    store = ArtifactStore(str(out))
+    assert store.commit == COMMIT and store.list() == []
 
 
 # -- Executor -------------------------------------------------------------------------
@@ -141,7 +176,7 @@ async def test_info_and_read_with_version_prefix(env):
                                   artifact=CONTRACT, version=COMMIT[:7])).stdout)
     assert info["commit"] == COMMIT and info["download_path"] == f"/artifacts/{CONTRACT}/{COMMIT}"
     text = (await call(service, identities, "homelab", "artifact.read", artifact=CONTRACT)).stdout
-    assert text.startswith("# Hermes recovery adapter")
+    assert text.startswith("# Example document\n")
     wrong = await call(service, identities, "homelab", "artifact.info", artifact=CONTRACT, version="deadbee")
     assert wrong.outcome == "failed"
 
@@ -155,7 +190,7 @@ async def test_read_refuses_a_binary_artifact(env):
 async def test_transfer_writes_verified_and_is_idempotent(env, tmp_path):
     service, identities, _ = env
     first = json.loads((await call(service, identities, "homelab", "artifact.transfer", artifact=ADAPTER)).stdout)
-    target = tmp_path / "handover" / ADAPTER / COMMIT / "hermes-recovery-adapter.tar.gz"
+    target = tmp_path / "handover" / ADAPTER / COMMIT / KIT_FILE
     assert first["transfer"] == "transferred" and first["path"] == str(target)
     assert hashlib.sha256(target.read_bytes()).hexdigest() == first["sha256"]
     assert not [p for p in target.parent.iterdir() if p.name.startswith(".gk-")]
@@ -165,7 +200,7 @@ async def test_transfer_writes_verified_and_is_idempotent(env, tmp_path):
 
 async def test_transfer_never_overwrites_a_different_file(env, tmp_path):
     service, identities, _ = env
-    target = tmp_path / "handover" / CONTRACT / COMMIT / "HERMES_ADAPTER.md"
+    target = tmp_path / "handover" / CONTRACT / COMMIT / DOC_FILE
     target.parent.mkdir(parents=True)
     target.write_text("someone else's file", encoding="utf-8")
     res = await call(service, identities, "homelab", "artifact.transfer", artifact=CONTRACT)
@@ -175,7 +210,7 @@ async def test_transfer_never_overwrites_a_different_file(env, tmp_path):
 
 async def test_transfer_writes_nothing_when_the_bytes_changed_on_disk(env, tmp_path, store_dir):
     service, identities, _ = env
-    (store_dir / "hermes-recovery-adapter.tar.gz").write_bytes(b"changed after startup")
+    (store_dir / KIT_FILE).write_bytes(b"changed after startup")
     res = await call(service, identities, "homelab", "artifact.transfer", artifact=ADAPTER)
     assert res.outcome == "failed" and "nothing was written" in res.stderr
     target_dir = tmp_path / "handover" / ADAPTER / COMMIT
@@ -229,7 +264,7 @@ async def test_http_download_streams_verified_bytes(env, store_dir):
         anonymous = await http.get(f"/artifacts/{ADAPTER}")
     assert ok.status_code == 200
     assert hashlib.sha256(ok.content).hexdigest() == ok.headers["x-artifact-sha256"]
-    assert ok.content == (store_dir / "hermes-recovery-adapter.tar.gz").read_bytes()
+    assert ok.content == (store_dir / KIT_FILE).read_bytes()
     assert ok.headers["x-artifact-commit"] == COMMIT
     assert hidden.status_code == unknown.status_code == 404 and hidden.json() == unknown.json()
     assert anonymous.status_code == 401

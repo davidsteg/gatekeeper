@@ -1,6 +1,6 @@
 [project]
 name = "gatekeeper"
-version = "0.51.0"
+version = "0.52.0"
 description = "Controlled MCP server for host operations"
 requires-python = ">=3.12"
 dependencies = [
@@ -43,7 +43,7 @@ where = ["src"]
 gatekeeper = ["_pwa/*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "contrib/hermes-recovery-adapter/tests"]
+testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
