@@ -1,0 +1,537 @@
+{
+  "journal_session": [
+    {
+      "session_id": "orch-1791622180",
+      "profile": "default",
+      "board_id": "default",
+      "task_id": "t_b6604e5c",
+      "task_generation": 0,
+      "objective": "Check the stack",
+      "turn_seq": 2,
+      "active": 0,
+      "active_turn_id": "orch-1791622180:orch-1791622180:6a573137",
+      "active_continuation_id": null,
+      "stop_reason": "final_reply",
+      "task_state": "open",
+      "last_progress_at": 1791622247.6297271,
+      "updated_at": 1791622247.656518,
+      "turn_gk_attempts": 1
+    }
+  ],
+  "journal_continuations": [
+    {
+      "idempotency_key": "inc_53e24db3f507:1",
+      "continuation_id": "cont-b72391fbc73f4da9",
+      "state": "finished",
+      "reason": null,
+      "run_id": "run_b9f7376dd1744a20b6dc77d6e98eae82",
+      "deliveries": 1,
+      "expected_turn_seq": 1,
+      "started_turn_seq": 2,
+      "started_at": 1791622247.375984,
+      "ended_at": 1791622247.656518,
+      "exit_reason": "final_reply"
+    }
+  ],
+  "journal_outbox": [
+    {
+      "event_id": "stop-orch-1791619937-1",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791619937-2",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791620320-1",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791620584-1",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791620584-2",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791620810-1",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791620810-2",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791620810-3",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791621147-1",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791621147-2",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791621335-1",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791621335-2",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791622180-1",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    },
+    {
+      "event_id": "stop-orch-1791622180-2",
+      "attempts": 1,
+      "sent": 1,
+      "dropped": null
+    }
+  ],
+  "gatekeeper_incidents": [
+    {
+      "id": "inc_53e24db3f507",
+      "session_id": "orch-1791622180",
+      "task_id": "t_b6604e5c",
+      "status": "recovered",
+      "outcome": "recovered",
+      "last_turn_seq": 1,
+      "continuation": {
+        "status": "accepted",
+        "idempotency_key": "inc_53e24db3f507:1",
+        "trigger": "cooldown_elapsed",
+        "expected_turn_seq": 1,
+        "sent_at": 1791622247.1252644,
+        "resends": 0,
+        "queries": 0,
+        "continuation_id": "cont-b72391fbc73f4da9",
+        "delivery_id": "cont-b72391fbc73f4da9",
+        "accepted_at": 1791622247.3861592,
+        "ack_deadline": 1791622427.3861592,
+        "activity_at": 1791622247.6231427,
+        "activity_turn_seq": 2,
+        "activity_tool_id": "demo.read",
+        "polled_at": 1791622250.4647527,
+        "started_at": 1791622250.4647527,
+        "progress_at": 1791622247.6297271
+      }
+    }
+  ],
+  "gatekeeper_audit_recovery": [
+    {
+      "event": "recovery.incident_opened",
+      "incident_id": "inc_563a8a82cb0e",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.fail"
+    },
+    {
+      "event": "recovery.guidance_issued",
+      "incident_id": "inc_563a8a82cb0e",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_accepted",
+      "incident_id": "inc_563a8a82cb0e",
+      "continuation_id": "cont-7b5e024842cf48f8",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_started",
+      "incident_id": "inc_563a8a82cb0e",
+      "continuation_id": "cont-7b5e024842cf48f8",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_blocked",
+      "incident_id": "inc_563a8a82cb0e",
+      "continuation_id": "cont-7b5e024842cf48f8",
+      "action": null,
+      "outcome": "unacknowledged",
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_opened",
+      "incident_id": "inc_3aeb2447ec62",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.fail"
+    },
+    {
+      "event": "recovery.guidance_issued",
+      "incident_id": "inc_3aeb2447ec62",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.cooldown_scheduled",
+      "incident_id": "inc_3aeb2447ec62",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_blocked",
+      "incident_id": "inc_3aeb2447ec62",
+      "continuation_id": null,
+      "action": null,
+      "outcome": "blocked:recovery_budget_exhausted",
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_opened",
+      "incident_id": "inc_dcb2f9230484",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.fail"
+    },
+    {
+      "event": "recovery.cooldown_scheduled",
+      "incident_id": "inc_dcb2f9230484",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_accepted",
+      "incident_id": "inc_dcb2f9230484",
+      "continuation_id": "cont-3f20e10677594ef9",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_activity",
+      "incident_id": "inc_dcb2f9230484",
+      "continuation_id": "cont-3f20e10677594ef9",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.read"
+    },
+    {
+      "event": "recovery.continuation_started",
+      "incident_id": "inc_dcb2f9230484",
+      "continuation_id": "cont-3f20e10677594ef9",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_closed",
+      "incident_id": "inc_dcb2f9230484",
+      "continuation_id": "cont-3f20e10677594ef9",
+      "action": null,
+      "outcome": "recovered",
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.duplicate_event",
+      "incident_id": null,
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.duplicate_event",
+      "incident_id": null,
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_opened",
+      "incident_id": "inc_9961cb11a755",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.fail"
+    },
+    {
+      "event": "recovery.guidance_issued",
+      "incident_id": "inc_9961cb11a755",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.cooldown_scheduled",
+      "incident_id": "inc_9961cb11a755",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.cooldown_scheduled",
+      "incident_id": "inc_9961cb11a755",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_accepted",
+      "incident_id": "inc_9961cb11a755",
+      "continuation_id": "cont-c39ddc1938b4408c",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_activity",
+      "incident_id": "inc_9961cb11a755",
+      "continuation_id": "cont-c39ddc1938b4408c",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.read"
+    },
+    {
+      "event": "recovery.continuation_started",
+      "incident_id": "inc_9961cb11a755",
+      "continuation_id": "cont-c39ddc1938b4408c",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_closed",
+      "incident_id": "inc_9961cb11a755",
+      "continuation_id": "cont-c39ddc1938b4408c",
+      "action": null,
+      "outcome": "recovered",
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_opened",
+      "incident_id": "inc_6520bd2a5154",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.fail"
+    },
+    {
+      "event": "recovery.guidance_issued",
+      "incident_id": "inc_6520bd2a5154",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.cooldown_scheduled",
+      "incident_id": "inc_6520bd2a5154",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_closed",
+      "incident_id": "inc_6520bd2a5154",
+      "continuation_id": null,
+      "action": null,
+      "outcome": "suppressed:superseded_by_newer_turn",
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_opened",
+      "incident_id": "inc_feaa258ffcba",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.fail"
+    },
+    {
+      "event": "recovery.cooldown_scheduled",
+      "incident_id": "inc_feaa258ffcba",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_accepted",
+      "incident_id": "inc_feaa258ffcba",
+      "continuation_id": "cont-26f4941d061044be",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_started",
+      "incident_id": "inc_feaa258ffcba",
+      "continuation_id": "cont-26f4941d061044be",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_activity",
+      "incident_id": "inc_feaa258ffcba",
+      "continuation_id": "cont-26f4941d061044be",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.read"
+    },
+    {
+      "event": "recovery.incident_closed",
+      "incident_id": "inc_feaa258ffcba",
+      "continuation_id": "cont-26f4941d061044be",
+      "action": null,
+      "outcome": "recovered",
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_opened",
+      "incident_id": "inc_53e24db3f507",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.fail"
+    },
+    {
+      "event": "recovery.guidance_issued",
+      "incident_id": "inc_53e24db3f507",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.cooldown_scheduled",
+      "incident_id": "inc_53e24db3f507",
+      "continuation_id": null,
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_accepted",
+      "incident_id": "inc_53e24db3f507",
+      "continuation_id": "cont-b72391fbc73f4da9",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.continuation_activity",
+      "incident_id": "inc_53e24db3f507",
+      "continuation_id": "cont-b72391fbc73f4da9",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": "demo.read"
+    },
+    {
+      "event": "recovery.continuation_started",
+      "incident_id": "inc_53e24db3f507",
+      "continuation_id": "cont-b72391fbc73f4da9",
+      "action": null,
+      "outcome": null,
+      "trigger": null,
+      "tool_id": null
+    },
+    {
+      "event": "recovery.incident_closed",
+      "incident_id": "inc_53e24db3f507",
+      "continuation_id": "cont-b72391fbc73f4da9",
+      "action": null,
+      "outcome": "recovered",
+      "trigger": null,
+      "tool_id": null
+    }
+  ],
+  "hermes_user_messages": [
+    "START default t_b6604e5c",
+    "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what y",
+    "[gatekeeper-continuation cont-b72391fbc73f4da9]\n[gatekeeper recovery inc_53e24db3f507] Continue task t_b6604e5c where it"
+  ],
+  "hermes_continuation_inputs": 1
+}

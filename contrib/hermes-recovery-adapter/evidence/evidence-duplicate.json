@@ -1,0 +1,41 @@
+{
+  "continue_replays": [
+    {
+      "accepted": true,
+      "continuation_id": "cont-3f20e10677594ef9"
+    },
+    {
+      "accepted": true,
+      "continuation_id": "cont-3f20e10677594ef9"
+    },
+    {
+      "accepted": true,
+      "continuation_id": "cont-3f20e10677594ef9"
+    }
+  ],
+  "event_replays": [
+    {
+      "accepted": true,
+      "duplicate": true,
+      "action": "none",
+      "reason": null
+    },
+    {
+      "accepted": true,
+      "duplicate": true,
+      "action": "none",
+      "reason": null
+    }
+  ],
+  "continuations_after": [
+    {
+      "continuation_id": "cont-3f20e10677594ef9",
+      "state": "finished",
+      "deliveries": 1,
+      "run_id": "run_7abf5b00cff8497bbbc45296c0db0c1c"
+    }
+  ],
+  "turn_seq_before": 2,
+  "turn_seq_after": 2,
+  "continuation_inputs_in_transcript": 1
+}

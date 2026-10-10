@@ -20,6 +20,7 @@ from typing import Any
 from . import (
     execute,
     execute_agent,
+    execute_artifact,
     execute_google,
     execute_http,
     execute_microsoft,
@@ -28,6 +29,7 @@ from . import (
     execute_truenas,
     validate,
 )
+from .artifacts import ArtifactStore
 from .audit import AuditLog
 from .catalog import Catalog, ToolDef, load_catalog
 from .credentials import CredentialStore
@@ -124,6 +126,20 @@ class Service:
         #: once the state directory is known. None in a bare `Service` --
         #: then `call` behaves exactly as it did before recovery existed.
         self.recovery: RecoverySupervisor | None = None
+        #: The image's release-bound artifacts (artifacts.py), loaded on
+        #: first use -- a deployment without an `artifact` toolkit never
+        #: reads the directory. Tests set it directly.
+        self._artifact_store: ArtifactStore | None = None
+
+    @property
+    def artifact_store(self) -> ArtifactStore:
+        if self._artifact_store is None:
+            self._artifact_store = ArtifactStore.from_env()
+        return self._artifact_store
+
+    @artifact_store.setter
+    def artifact_store(self, store: ArtifactStore) -> None:
+        self._artifact_store = store
 
     # -- Registry ---------------------------------------------------------
 
@@ -534,6 +550,7 @@ class Service:
             microsoft_env: dict[str, str] | None = None
             opencode_operation: str | None = None
             agent_operation: str | None = None
+            artifact_operation: str | None = None
             if toolkit.executor in ("docker", "local", "ssh"):
                 argv = validate.build_argv(tool, values, toolkit)
                 # Resolved here, inside the same try/except as everything
@@ -579,6 +596,8 @@ class Service:
                     tool, values, toolkit,
                     known_recipients=self._known_recipients(),
                 )
+            elif toolkit.executor == "artifact":
+                artifact_operation = validate.build_artifact_call(tool, values, toolkit)
             elif toolkit.executor == "file":
                 pass  # parameters resolved directly into the call below
 
@@ -676,6 +695,18 @@ class Service:
                     store=self._mailbox(toolkit),
                     max_output_bytes=max_output_bytes,
                     redact=self.audit.redact,
+                )
+            elif toolkit.executor == "artifact":
+                assert artifact_operation is not None
+                result = await execute_artifact.run(
+                    operation=artifact_operation,
+                    values=values,
+                    toolkit=toolkit,
+                    store=self.artifact_store,
+                    # Per artifact, on top of the tool grant: an identity
+                    # sees an artifact only with scope `artifact:<id>`.
+                    visible=lambda art_id: identity.covers_scope(f"artifact:{art_id}"),
+                    max_output_bytes=max_output_bytes,
                 )
             elif toolkit.executor == "file":
                 from .execute_file import run as _file_run
@@ -887,6 +918,8 @@ class Service:
             return await execute_opencode.probe(toolkit)
         if toolkit.executor == "agent":
             return await execute_agent.probe(toolkit)
+        if toolkit.executor == "artifact":
+            return await execute_artifact.probe(toolkit, self.artifact_store)
         return False
 
     def render_metrics(self) -> str:

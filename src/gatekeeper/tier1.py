@@ -38,6 +38,7 @@ KNOWN_EXECUTORS = frozenset(
         "opencode",
         "agent",
         "microsoft",
+        "artifact",
     }
 )
 
@@ -89,6 +90,10 @@ MICROSOFT_FALLBACK_SCRIPT = "/opt/gatekeeper/microsoft/microsoft_api.py"
 #: identity may empty but not fill -- there is no separate permission to
 #: deny sending, it structurally does not exist for that toolkit.
 AGENT_OPERATIONS = frozenset({"send_message", "read_messages", "mailbox_status"})
+
+#: The `artifact` executor's vocabulary (execute_artifact.py). `transfer`
+#: is the only one that writes, and only into the toolkit's `handover_dir`.
+ARTIFACT_OPERATIONS = frozenset({"list", "info", "read", "transfer"})
 
 
 def missing_agent_operations(toolkit: Toolkit) -> tuple[str, ...]:
@@ -363,6 +368,13 @@ class Toolkit:
     mailbox_path: str | None = None
     #: Subset of `AGENT_OPERATIONS` this toolkit may ever perform.
     allowed_agent_operations: tuple[str, ...] = ()
+    #: `artifact` executor: the operations, the artifact ids (from the
+    #: image's manifest) and -- only for `transfer` -- the absolute directory
+    #: transfers land in. All three are deploy-time only; no parameter, tool
+    #: field or admin API can name another artifact or another directory.
+    allowed_artifact_operations: tuple[str, ...] = ()
+    allowed_artifacts: tuple[str, ...] = ()
+    handover_dir: str | None = None
     #: Ceiling on one message's subject + body, in bytes. A mailbox is for
     #: coordination, not for shipping payloads through gatekeeper.
     max_message_bytes: int = DEFAULT_MAX_MESSAGE_BYTES
@@ -532,6 +544,11 @@ class Toolkit:
         `allows_opencode_operation` above.
         """
         return operation in self.allowed_agent_operations
+
+    # -- `artifact` executor ----------------------------------------------
+
+    def allows_artifact_operation(self, operation: str) -> bool:
+        return operation in self.allowed_artifact_operations
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -857,6 +874,11 @@ def _toolkit_destinations(
             f"{where}: 'ssh' toolkits cannot declare destinations yet -- "
             "one toolkit, one host (use a separate toolkit per host)"
         )
+    if dest_names and executor == "artifact":
+        raise ConfigError(
+            f"{where}: 'artifact' toolkits cannot declare destinations -- artifacts "
+            "come from this image, not from a target to connect to"
+        )
     if dest_names and executor == "agent":
         raise ConfigError(
             f"{where}: 'agent' toolkits cannot declare destinations -- the "
@@ -946,6 +968,9 @@ def load_tier1(path: str) -> Tier1:
         allowed_opencode_operations: tuple[str, ...] = ()
         mailbox_path: str | None = None
         allowed_agent_operations: tuple[str, ...] = ()
+        allowed_artifact_operations: tuple[str, ...] = ()
+        allowed_artifacts: tuple[str, ...] = ()
+        handover_dir: str | None = None
         max_message_bytes = DEFAULT_MAX_MESSAGE_BYTES
         max_mailbox_messages = DEFAULT_MAILBOX_LIMIT
 
@@ -1189,6 +1214,28 @@ def load_tier1(path: str) -> Tier1:
             )
             if max_message_bytes <= 0 or max_mailbox_messages <= 0:
                 raise ConfigError(f"{where}: mailbox ceilings must be positive")
+        elif executor == "artifact":
+            # No target: artifacts are files of this image. Tier 1 fixes
+            # which of them, which operations, and where transfers land.
+            allowed_artifact_operations = _str_tuple(
+                _require(spec, "allowed_artifact_operations", where), where)
+            unknown_art_ops = sorted(set(allowed_artifact_operations) - ARTIFACT_OPERATIONS)
+            if not allowed_artifact_operations or unknown_art_ops:
+                raise ConfigError(
+                    f"{where}: allowed_artifact_operations must be a non-empty subset of "
+                    f"{sorted(ARTIFACT_OPERATIONS)}"
+                    + (f" (unknown: {unknown_art_ops})" if unknown_art_ops else ""))
+            allowed_artifacts = _str_tuple(_require(spec, "allowed_artifacts", where), where)
+            if not allowed_artifacts:
+                raise ConfigError(f"{where}: 'allowed_artifacts' must not be empty")
+            if "transfer" in allowed_artifact_operations:
+                handover_dir = str(_require(spec, "handover_dir", where))
+                if not _is_absolute(handover_dir) or ".." in PurePosixPath(handover_dir).parts:
+                    raise ConfigError(
+                        f"{where}: 'handover_dir' must be an absolute path without '..'")
+            elif spec.get("handover_dir") is not None:
+                raise ConfigError(
+                    f"{where}: 'handover_dir' is only meaningful with the 'transfer' operation")
 
         toolkits[name] = Toolkit(
             name=name,
@@ -1224,6 +1271,9 @@ def load_tier1(path: str) -> Tier1:
             allowed_opencode_operations=allowed_opencode_operations,
             mailbox_path=mailbox_path,
             allowed_agent_operations=allowed_agent_operations,
+            allowed_artifact_operations=allowed_artifact_operations,
+            allowed_artifacts=allowed_artifacts,
+            handover_dir=handover_dir,
             max_message_bytes=max_message_bytes,
             max_mailbox_messages=max_mailbox_messages,
         )

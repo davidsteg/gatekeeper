@@ -290,6 +290,9 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Binds the image's artifacts (artifacts.py) to this commit.
+          build-args: |
+            GATEKEEPER_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -335,6 +338,21 @@ jobs:
           cp compose.yaml README.md RELEASE.md "bundle/$dir/"
           cp -r config "bundle/$dir/"
           tar -C bundle -czf "$dir-deploy.tar.gz" "$dir"
+
+      - name: Copy the release-bound artifacts out of the published image
+        # Not rebuilt here: gzip output depends on the zlib build, so a second
+        # build could differ byte for byte. Copying them out of the image by
+        # digest makes the release assets exactly the bytes the image serves.
+        env:
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          docker pull "$IMAGE@$DIGEST"
+          cid=$(docker create "$IMAGE@$DIGEST")
+          docker cp "$cid:/opt/gatekeeper/artifacts" artifacts
+          docker rm "$cid"
+          grep -q '"commit": "${{ github.sha }}"' artifacts/manifest.json \
+            || { echo "::error::image artifacts are not bound to ${{ github.sha }}"; exit 1; }
+          cp artifacts/manifest.json "gatekeeper-${{ needs.test.outputs.version }}-artifacts.json"
 
       - name: Compose the notes
         env:
@@ -394,4 +412,7 @@ jobs:
             --notes-file notes.md \
             --verify-tag \
             $prerelease \
-            "gatekeeper-$VERSION-deploy.tar.gz"
+            "gatekeeper-$VERSION-deploy.tar.gz" \
+            "gatekeeper-$VERSION-artifacts.json" \
+            artifacts/HERMES_ADAPTER.md \
+            artifacts/hermes-recovery-adapter.tar.gz
