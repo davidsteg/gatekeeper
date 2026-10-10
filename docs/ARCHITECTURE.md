@@ -620,6 +620,17 @@ src/gatekeeper/
                        credentials.py both use these, independently)
   ui.py                Operations console at /ui -- no JavaScript,
                        CSP-locked, server-rendered SVG diagrams
+  api/                 The console's JSON API at /api/v1 (FastAPI
+                       sub-app) -- see "Console API"
+    session.py          Session, SessionStore, LoginThrottle -- shared
+                         by /ui and /api/v1
+    service.py          Read model: audit reader, call statistics and
+                         the per-page builders, shared with ui.py and
+                         admin_service.py
+    deps.py             Session/role/CSRF/If-Match dependencies
+    models.py           Pydantic response models (the output boundary)
+    app.py              Routes; `python -m gatekeeper.api` prints the
+                         OpenAPI schema
   errors.py            DenialReason enum, opaque denial for catalog info
   artifacts.py         Release-bound artifacts: deterministic build from repo
                        paths (image build), read-only store with sha256
@@ -633,6 +644,7 @@ config/
                          toolkits.yaml (incl. a working http + truenas +
                          ssh entry), tools.yaml
 tests/
+  test_api_auth.py, test_api_read.py, api_env.py (shared API setup),
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_ui.py, test_ui_admin.py, test_credentials.py, test_execute_http.py,
   test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py,
@@ -641,6 +653,67 @@ tests/
   test_catalog_versioning.py, test_pending.py, test_notifications.py,
   test_mcp_live_catalog.py, conftest.py
 ```
+
+## Console API (`api/`, `/api/v1`)
+
+A FastAPI sub-app mounted into the Starlette app in `server.build_app`
+next to the `/ui` routes, and only when `--ui` is on. It is the backend
+for the React console that replaces `ui.py` page by page (see
+[ROADMAP.md](ROADMAP.md)); until that cutover, both surfaces run side by
+side on the same stores.
+
+- **Shared state.** `build_app` creates one `SessionStore` and one
+  `LoginThrottle` and hands them to both `build_ui_routes` and
+  `build_api_app` (via `api.deps.ApiContext`), together with `Service`,
+  `ConfigStore`, `CredentialStore`, `PendingStore`,
+  `ToolkitProposalStore` and `AuditLog`. Every write the API gains goes
+  through those stores, so audit records stay identical.
+- **Authentication.** `POST /api/v1/session` takes the console password
+  as JSON (never the API token, FR-11.5) and sets the session cookie with
+  `HttpOnly`, `SameSite=Strict`, path `/api/v1`, and `Secure` over HTTPS.
+  JSON-only login means a cross-site form cannot drive it. `GET` returns
+  identity, role, `can_write`, `read_only` and the CSRF token; `DELETE`
+  signs out. `AuthMiddleware` lets `/api/v1/*` through without a bearer
+  token, like `/ui/*`, and `deps.current_session` then refuses *any*
+  `Authorization` header (audited as `api_bearer_rejected`): an MCP token
+  opens nothing here, with or without a cookie.
+- **Roles and CSRF.** `require_viewer`, `require_admin` (role, then CSRF,
+  the legacy `writer` order) and `require_session_write` (one's own
+  password, like `ui.session_post`). Read-only mode (no `ConfigStore`)
+  refuses every write with 403. Mutating requests carry `X-CSRF-Token`,
+  compared with `hmac.compare_digest`. Denials write the same
+  `admin_denied` records `/ui` writes.
+- **Optimistic concurrency.** Reads set `ETag: "<store revision>"`
+  (`tools_revision`, `identities_revision`, the credential, pending and
+  toolkit-proposal revisions); `deps.if_match` turns a missing `If-Match`
+  into 428 and a stale one into 412, and the store's own check at write
+  time stays the real guarantee (`WriteRefused` and friends map to 412).
+- **Output boundary.** Responses are serialised through the Pydantic
+  models in `api/models.py`, which drop every field they do not name.
+  `CredentialMeta` has no value field and `IdentityOut` no hash field.
+  Free-form `dict` fields exist only where `/ui` already shows the data
+  verbatim (audit records, a pending payload, a tool spec).
+- **Invariants carried over.** No route writes a toolkit (FR-4.11):
+  toolkits are `GET` plus the reference YAML as text. Pending approval and
+  toolkit deploy will exist only here, behind a console session, never on
+  `/admin/mcp`.
+- **Headers.** Every API response carries `Content-Security-Policy:
+  default-src 'none'; frame-ancestors 'none'; base-uri 'none'`,
+  `nosniff`, `no-referrer` and `Cache-Control: no-store`. Integration
+  logos are served as `image/svg+xml` with a `sandbox` CSP, for use as an
+  `<img>`, so the SPA never needs `innerHTML` for them.
+- **Schema.** `GET /api/v1/openapi.json` is admin-only; there are no
+  interactive docs pages. `python -m gatekeeper.api` prints the same
+  schema with sorted keys and a fixed `v1` version, so generated client
+  types change only when the API does.
+- **Audit pagination.** `GET /audit` pages newest-first over the same tail
+  window `/ui/audit` reads (`AUDIT_READ_BYTES`). The cursor is opaque so it
+  can become a row key when the Stage 1 SQLite audit index lands, without
+  a client change.
+
+Phase 1 is read-only: session handling plus every read the console
+offers. Write endpoints, the SPA at `/app` and the cutover follow as their
+own releases.
 
 ## UI architecture (`ui.py`)
 

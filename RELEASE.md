@@ -1,3 +1,20 @@
+## 0.53.0
+
+Phase 1 of the console migration: a typed JSON API at `/api/v1`, inside the same process and sharing every store with `/ui`. Read-only for now; the legacy console is unchanged and stays the place to make changes.
+
+### Added
+
+- **`/api/v1` (FastAPI, `src/gatekeeper/api/`).** Mounted only with `serve --ui`. Endpoints: `session` (sign in with the console password, sign out, who am I), `account`, `overview` (stats, 12 h activity series, recent events, access matrix), `tools` and `tools/{id}` (with the definition's YAML), `integrations` (with each logo as an image), `identities`, `credentials` (metadata only), `toolkits` and `toolkits/reference`, `requests/pending`, `requests/toolkits`, `audit` (filters and cursor pagination) and `release-notes`.
+- **Same rules as the console.** Session cookie only (`HttpOnly`, `SameSite=Strict`, path `/api/v1`, `Secure` over HTTPS); an `Authorization: Bearer` header is refused on every API route, so an agent token never reaches console capabilities. Viewers read, admins write, and read-only mode refuses writes. Mutating requests need `X-CSRF-Token`, and resources carry `ETag: <store revision>` so writes can require `If-Match` (412 on a stale revision, 428 without one). Denials write the same `admin_denied` audit records as `/ui`.
+- **Pydantic response models are the output boundary.** The credential model has no value field and the identity model has no hash field, so neither can be serialised by accident. A test scans every API response for a known credential plaintext and its ciphertext.
+- **OpenAPI schema** at `GET /api/v1/openapi.json`, admin only; `python -m gatekeeper.api` prints it. There are no Swagger/ReDoc pages, which would need inline and third-party scripts.
+
+### Changed
+
+- **One session store and one login throttle for `/ui` and `/api/v1`.** A password change or deleted identity signs out of both, and failed sign-ins on either count against the same budget.
+- **Console read helpers moved out of `ui.py`** into `api/session.py` (sessions, throttle) and `api/service.py` (audit reader, call statistics, toolkit and credential summaries). `ui.py` re-exports them under their old names; `admin.toolkit_list` and `admin.cred_list` now build their answers from the same helpers as the API.
+- **New runtime dependencies:** `fastapi` and `pydantic`, pinned in `constraints.txt`.
+
 ## 0.52.0
 
 Removes the recovery supervisor and its Hermes integration. Gatekeeper is back to tool execution, permissions, audit and artifact serving; Hermes's native orchestration handles results, wakes and follow-ups. **Breaking for one case:** a `toolkits.yaml` whose `recovery:` block still enables anything no longer loads (see Migration).

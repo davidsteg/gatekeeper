@@ -1,6 +1,6 @@
 [project]
 name = "gatekeeper"
-version = "0.52.0"
+version = "0.53.0"
 description = "Controlled MCP server for host operations"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,6 +13,11 @@ dependencies = [
     "asyncssh>=2.14",
     "google-api-python-client>=2.100",
     "google-auth-oauthlib>=1.0",
+    # The console's JSON API (`/api/v1`, src/gatekeeper/api/). FastAPI is
+    # Starlette-based, so it mounts into the existing app; pydantic models
+    # are the API's output boundary.
+    "fastapi>=0.115",
+    "pydantic>=2.7",
 ]
 
 [project.optional-dependencies]
@@ -78,6 +83,11 @@ ignore = [
     # not a lint-driven one.
     "UP042",
 ]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency markers are declared as argument defaults by design
+# (api/); they are immutable markers, not shared mutable state.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
 
 [tool.mypy]
 mypy_path = "src"

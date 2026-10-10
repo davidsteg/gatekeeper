@@ -18,7 +18,7 @@ from mcp.server.lowlevel.server import InitializationOptions, NotificationOption
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from gatekeeper import __version__, release_notes
@@ -27,6 +27,10 @@ from ._authctx import SCOPE_IDENTITY
 from ._authctx import identity_from as _identity_from
 from .admin_server import build_admin_mcp_server
 from .admin_service import AdminService
+from .api import API_PREFIX
+from .api.app import build_api_app
+from .api.deps import ApiContext
+from .api.session import LoginThrottle, SessionStore
 from .audit import AuditLog
 from .errors import DenialReason, Denied
 from .execute import OUTCOME_OK, OUTCOME_UNKNOWN
@@ -82,6 +86,11 @@ class AuthMiddleware:
     def _is_ui_path(self, path: str) -> bool:
         # Exact prefix comparison: '/uixyz' must not be included.
         if path == UI_PREFIX or path.startswith(UI_PREFIX + "/"):
+            return True
+        # The console's JSON API authenticates by session as well -- and
+        # refuses a bearer token outright (api/deps.py), so letting it
+        # past here opens nothing an agent token could use.
+        if path == API_PREFIX or path.startswith(API_PREFIX + "/"):
             return True
         # '/' and '/favicon.ico' are requested by the browser on its own.
         # Letting them through keeps the audit log free of noise that
@@ -506,11 +515,31 @@ def build_app(
         Route("/artifacts/{artifact_id}/{version}", artifact_download, methods=["GET"]),
     ]
     if ui:
+        # One session store and one login throttle for both console
+        # surfaces: a password change or a deleted identity signs out of
+        # `/ui` and `/api` alike, and failed attempts count against one
+        # budget whichever login form they hit.
+        sessions = SessionStore()
+        throttle = LoginThrottle()
         routes.extend(
             build_ui_routes(
                 service=service, identities=identities, audit=audit, store=store,
                 credentials=credentials, pending=pending,
                 toolkit_proposals=toolkit_proposals,
+                sessions=sessions, throttle=throttle,
+            )
+        )
+        routes.append(
+            Mount(
+                API_PREFIX,
+                app=build_api_app(
+                    ApiContext(
+                        service=service, identities=identities, audit=audit,
+                        sessions=sessions, throttle=throttle, store=store,
+                        credentials=credentials, pending=pending,
+                        toolkit_proposals=toolkit_proposals,
+                    )
+                ),
             )
         )
 

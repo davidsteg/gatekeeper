@@ -17,7 +17,7 @@ not, see [docs/ROADMAP.md](docs/ROADMAP.md).
 |---|---|
 | **Repo** | `davidsteg/gatekeeper` |
 | **Language** | Python 3.12+ |
-| **Runtime deps** | `mcp`, `pyyaml`, `uvicorn`, `httpx`, `websockets`, `cryptography`, `asyncssh` — see `pyproject.toml` |
+| **Runtime deps** | `mcp`, `pyyaml`, `uvicorn`, `httpx`, `websockets`, `cryptography`, `asyncssh`, `fastapi`, `pydantic` — see `pyproject.toml` |
 | **Tests** | `python -m pytest -q` — all must pass before push |
 
 Check the current version in `pyproject.toml`, not here — it changes every
@@ -141,6 +141,14 @@ network access outside localhost is needed.
   renders before `<main>` in the DOM. When scripting the console (browser
   automation, CDP, screenshots), scope to `document.querySelector('main
   form')` instead, or you'll silently log yourself out.
+- **The console has two surfaces until the cutover.** `/ui` (`ui.py`) and
+  the JSON API `/api/v1` (`src/gatekeeper/api/`) share one `SessionStore`,
+  one `LoginThrottle` and every store, built once in `server.build_app`.
+  Shared read logic lives in `api/service.py`; `ui.py` re-exports the moved
+  helpers under their old names, so do not copy one back into `ui.py`. API
+  output goes through the Pydantic models in `api/models.py`: a new field
+  is invisible until a model names it, which is the point. After changing a
+  route or model, `python -m gatekeeper.api` prints the new OpenAPI schema.
 - **No `v` prefix in `RELEASE.md`** — section headers are `## 0.4.0`, not
   `## v0.4.0`.
 - **`latest` tag moves** — pin a fixed version + digest for production

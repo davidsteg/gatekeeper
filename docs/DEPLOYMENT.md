@@ -375,8 +375,8 @@ three things at once:
   entries show the proxy's address for every sign-in, not the person who
   actually signed in — undercutting the audit trail this project exists to
   provide.
-- **The session cookie's `Secure` flag never activates.** `ui.py` sets it
-  from the request's scheme; behind a TLS-terminating proxy that scheme is
+- **The session cookie's `Secure` flag never activates.** `ui.py` and the
+  console API (`/api/v1`) set it from the request's scheme; behind a TLS-terminating proxy that scheme is
   `http` internally even though the browser is on `https`.
 
 Fix it by naming the proxy's actual address (its container name resolves to
@@ -397,6 +397,11 @@ gatekeeper-specific mechanism — it configures uvicorn's own
 needs to change. Only name proxies gatekeeper actually shares a network
 with; `*` trusts any peer and should stay reserved for a network gatekeeper
 does not share with anything untrusted.
+
+The console API lives under `/api/v1` on the same port as `/ui`. A proxy
+that only forwards `/ui` and `/mcp` must forward `/api/v1` too once the new
+console is in use. It needs no extra headers and no CORS: the API is
+same-origin only and refuses `Authorization` headers.
 
 ## Deploy (example container)
 
