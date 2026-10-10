@@ -734,9 +734,26 @@ side on the same stores.
   thread (scrypt). `GET /tool-scaffold` returns the new-tool starting YAML
   and each integration tool carries its YAML for the editor.
 
-Phase 1 (0.53.0) added session handling plus every read; phase 3a
-(0.55.0) the writes above. Request decisions (approve, reject, credential
-fill, toolkit deploy) and the cutover follow as their own releases.
+- **Request decisions (phase 3b).** `POST
+  /requests/pending/{id}/approve` (`apply_pending`, which refuses a stale
+  proposal), `.../credential` (a `cred_propose` approved with a value a
+  human types; the agent proposed only name and kind), `.../reject`
+  (optional reason), `POST /requests/pending/approve-all` (exactly the IDs
+  the reviewer saw, oldest first, each on its own; credential proposals
+  are never batched; the answer lists what was refused and why), and
+  `POST /requests/toolkits/{id}/deploy` (body `{"confirm": true}`, Tier 1
+  written and reloaded at once) and `.../reject`. They take no `If-Match`:
+  each acts on one proposal by ID and the stores refuse one that is no
+  longer pending, so a queue-wide revision would only make every newly
+  filed proposal a conflict. Reads add what a reviewer judges by:
+  `review` on each pending item (a plain-text headline, the tools it names
+  resolved against the catalog as enabled, disabled or missing, a
+  `grant_set` diffed against its `prev_tools`, and why a stale item cannot
+  apply) and `spec_yaml` on each toolkit proposal.
+
+Phase 1 (0.53.0) added session handling plus every read; phases 3a
+(0.55.0) and 3b (0.56.0) every write the console has. The cutover follows
+as its own release.
 
 ## Console SPA (`frontend/`, `/app`)
 
@@ -790,7 +807,12 @@ one's own password are edited here too. Writes go through
 `components/forms.tsx`: a 412 shows "Changed elsewhere" with a reload
 instead of retrying, and destructive actions ask once, inline. Write
 controls are hidden unless `can_write`; the server checks every write
-regardless. The Requests page is still `/ui` only.
+regardless. Since phase 3b (0.56.0) the Requests page decides proposals
+too: two tabs (Change, Toolkit) polled every 15 s with an open count in
+the sidebar, approve and reject per card, an inline value form for a
+credential proposal, an "Approve all" that lists what it will apply, and
+a toolkit deploy that spells out what changes and needs a ticked
+acknowledgement. Everything an agent wrote is rendered as text.
 
 ## UI architecture (`ui.py`)
 

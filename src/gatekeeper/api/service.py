@@ -22,8 +22,10 @@ import os
 from datetime import datetime, timedelta
 from typing import Any
 
+import yaml
+
 from ..identity import UI_ROLES
-from ..pending import PendingStore
+from ..pending import STALE_VANISHED_REASON, PendingStore
 from ..tier1 import Destination, Toolkit
 from ..toolkit_proposals import ToolkitProposalStore
 
@@ -615,7 +617,108 @@ def pending_view(store: Any, pending: PendingStore | None, status: str | None) -
         return []
     if store is not None:
         sweep_vanished_pendings(store, pending)
-    return [item.to_spec() for item in pending.list(status=status)]
+    out = []
+    for item in pending.list(status=status):
+        spec = item.to_spec()
+        spec["review"] = pending_review(item, store)
+        out.append(spec)
+    return out
+
+
+def _review_tool(store: Any, tool_id: str, marker: str = "") -> dict[str, Any]:
+    """One tool a proposal names, resolved against the live catalog, so a
+    reviewer sees whether it exists and what it is now -- a grant on a tool
+    that was never created is a right to nothing (`ui._resolved_tool_badge`)."""
+    flat = store.service.catalog.flat_spec_of(tool_id) if store is not None else None
+    if flat is None:
+        return {"id": tool_id, "marker": marker, "state": "missing", "title": "", "category": ""}
+    return {
+        "id": tool_id, "marker": marker,
+        "state": "enabled" if flat.get("enabled") else "disabled",
+        "title": str(flat.get("title") or tool_id),
+        "category": str(flat.get("category", "")),
+    }
+
+
+def pending_review(item: Any, store: Any) -> dict[str, Any]:
+    """What a reviewer needs to judge one proposal, as plain data: a
+    one-line headline and the tools it touches. The same reading as
+    `ui._pending_payload_summary`; the full payload stays in `payload`.
+
+    A `grant_set` is a full replacement, so it is diffed against the
+    `prev_tools` snapshot taken at propose time and only the added and
+    removed tools are listed -- plus any unchanged grant that is missing
+    or disabled, which stays a live concern."""
+    payload = item.payload
+    tools: list[dict[str, Any]] = []
+    unchanged = 0
+    action = item.action
+    if action in ("tool_enable", "tool_disable", "tool_delete"):
+        headline = f"{action.replace('tool_', '')} tool {payload.get('id', '')}"
+        tools.append(_review_tool(store, str(payload.get("id", ""))))
+    elif action in ("tool_create", "tool_update"):
+        spec = payload.get("spec") or {}
+        target = payload.get("replaces") or spec.get("id", "")
+        headline = (
+            f"tool {target}: category {spec.get('category', '')}, "
+            f"enabled={spec.get('enabled', False)}"
+        )
+    elif action == "grant_set":
+        identity_id = payload.get("identity_id", "")
+        proposed_ids = payload.get("tools") or []
+        prev = payload.get("prev_tools")
+        if prev is None:
+            headline = f"identity {identity_id}: {len(proposed_ids)} tool grant(s)"
+            tools = [_review_tool(store, t) for t in sorted(proposed_ids)]
+        else:
+            catalog = store.service.catalog if store is not None else None
+
+            def _normalize(ids: Any) -> set[str]:
+                found: set[str] = set()
+                for tid in ids:
+                    resolved = catalog.grantable_ids(tid) if catalog is not None else []
+                    found.update(resolved or [tid])
+                return found
+
+            proposed, previous = _normalize(proposed_ids), _normalize(prev)
+            added, removed = sorted(proposed - previous), sorted(previous - proposed)
+            kept = sorted(proposed & previous)
+            unchanged = len(kept)
+            headline = (
+                f"identity {identity_id}: +{len(added)} -{len(removed)}, "
+                f"{unchanged} unchanged"
+            )
+            tools = [_review_tool(store, t, "+") for t in added]
+            tools += [_review_tool(store, t, "-") for t in removed]
+            tools += [
+                r for r in (_review_tool(store, t) for t in kept) if r["state"] != "enabled"
+            ]
+    elif action == "cred_propose":
+        header = payload.get("header")
+        headline = (
+            f"credential {payload.get('name', '')}: kind {payload.get('kind', '')}"
+            + (f", header {header}" if header else "")
+            + " (no value: typed by a human on approval)"
+        )
+    elif action == "role_set":
+        identity_id = payload.get("identity_id", "")
+        new_role = payload.get("role", "")
+        current = store.identities.identities.get(identity_id) if store is not None else None
+        if current is not None and current.role != new_role:
+            headline = f"identity {identity_id}: role {current.role} -> {new_role}"
+        else:
+            headline = f"identity {identity_id}: role {new_role}"
+    else:
+        headline = json.dumps(payload, default=str)
+    stale = None
+    if item.status == "stale":
+        stale = (
+            "What this proposal targeted no longer exists, so there is nothing to apply it to."
+            if item.reason == STALE_VANISHED_REASON
+            else "The configuration it referred to changed after it was proposed; "
+            "ask the agent to re-propose from the current state."
+        )
+    return {"headline": headline, "tools": tools, "unchanged": unchanged, "stale": stale}
 
 
 def toolkit_proposals_view(
@@ -630,6 +733,15 @@ def toolkit_proposals_view(
         spec = item.to_spec()
         live = service.tier1.toolkits.get(item.name)
         spec["current"] = toolkit_summary(item.name, live) if live is not None else None
+        # What deploying writes, as the `/ui` card shows it: a create as a
+        # complete `name: {...}` block, an update as just the changed fields.
+        spec["spec_yaml"] = (
+            "" if item.kind in ("delete", "bind")
+            else yaml.safe_dump(
+                item.spec if item.kind == "update" else {item.name: item.spec},
+                sort_keys=False, allow_unicode=True,
+            )
+        )
         out.append(spec)
     return out
 

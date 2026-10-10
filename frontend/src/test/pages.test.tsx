@@ -241,3 +241,64 @@ describe("writes", () => {
     expect(screen.queryByText("sk-123")).toBeNull();
   });
 });
+
+const PENDING = {
+  id: "p1", action: "grant_set", actor: "hermes", payload: {}, base_rev: "r", status: "pending",
+  created_at: "2026-10-10T10:00:00+0000", decided_by: null, decided_at: null, reason: null,
+  review: {
+    headline: "identity bot: +1 -0, 0 unchanged <img src=x>", unchanged: 0, stale: null,
+    tools: [{ id: "demo.ghost", marker: "+", state: "missing", title: "", category: "" }],
+  },
+};
+const PROPOSAL = {
+  id: "t1", name: "zfs", spec: { executor: "local" }, actor: "hermes", kind: "create", status: "pending",
+  created_at: "2026-10-10T10:00:00+0000", decided_by: null, decided_at: null, reason: null, current: null,
+  spec_yaml: "zfs:\n  executor: local\n",
+};
+
+describe("requests", () => {
+  it("renders a proposal's review as text and approves it with CSRF", async () => {
+    let approved: RequestInit | undefined;
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/requests/pending")) return json(200, approved ? [{ ...PENDING, status: "approved" }] : [PENDING]);
+      if (url.endsWith("/requests/toolkits")) return json(200, []);
+      if (url.endsWith("/requests/pending/p1/approve")) {
+        approved = init;
+        return json(200, { id: "p1", status: "approved" });
+      }
+      return json(200, {});
+    });
+    renderAt("/requests");
+    expect(await screen.findByText(/<img src=x>/)).toBeInTheDocument();
+    expect(screen.getByText("no such tool in the catalog")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(approved).toBeDefined());
+    expect((approved?.headers as Record<string, string>)["X-CSRF-Token"]).toBe("tok");
+    expect(await screen.findByText("Nothing pending.")).toBeInTheDocument();
+  });
+
+  it("deploys a toolkit only after the acknowledgement is ticked", async () => {
+    let body: unknown;
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/requests/pending")) return json(200, []);
+      if (url.endsWith("/requests/toolkits")) return json(200, [PROPOSAL]);
+      if (url.endsWith("/requests/toolkits/t1/deploy")) {
+        body = JSON.parse(String(init.body));
+        return json(200, { id: "t1", status: "deployed" });
+      }
+      return json(200, {});
+    });
+    renderAt("/requests?tab=toolkit");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Approve and deploy" }));
+    const submit = screen.getAllByRole("button", { name: "Approve and deploy" }).at(-1);
+    expect(submit).toBeDisabled();
+    await user.click(screen.getByRole("checkbox"));
+    expect(submit).toBeEnabled();
+    if (submit) await user.click(submit);
+    await waitFor(() => expect(body).toEqual({ confirm: true }));
+  });
+});

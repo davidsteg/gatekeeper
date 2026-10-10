@@ -1,10 +1,11 @@
 import { NavLink, Outlet } from "react-router";
 import {
-  Activity, BookOpen, Boxes, Gauge, KeyRound, Lock, LogOut, ScrollText, SlidersHorizontal, UserRound,
+  Activity, BookOpen, Boxes, Gauge, Inbox, KeyRound, Lock, LogOut, ScrollText, SlidersHorizontal, UserRound,
 } from "lucide-react";
 import { useAuth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useOpenRequestCount } from "@/pages/Requests";
 
 const NAV = [
   { to: "/", label: "Overview", icon: Gauge, end: true },
@@ -12,6 +13,7 @@ const NAV = [
   { to: "/identities", label: "Identities", icon: KeyRound },
   { to: "/credentials", label: "Credentials", icon: Lock },
   { to: "/toolkits", label: "Toolkits", icon: Boxes },
+  { to: "/requests", label: "Requests", icon: Inbox },
   { to: "/audit", label: "Audit log", icon: Activity },
   { to: "/release-notes", label: "Release notes", icon: BookOpen },
   { to: "/account", label: "Account", icon: UserRound },
@@ -19,6 +21,7 @@ const NAV = [
 
 export function Layout() {
   const { session, signOut } = useAuth();
+  const open = useOpenRequestCount();
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="border-b border-border bg-card md:sticky md:top-0 md:h-screen md:w-56 md:border-r md:border-b-0">
@@ -42,6 +45,9 @@ export function Layout() {
             >
               <Icon className="size-4" aria-hidden />
               {label}
+              {to === "/requests" && open > 0 && (
+                <Badge tone="warn" className="ml-auto" aria-label={`${open} open`}>{open}</Badge>
+              )}
             </NavLink>
           ))}
         </nav>

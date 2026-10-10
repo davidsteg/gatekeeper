@@ -3,7 +3,8 @@ Starlette app by `server.build_app`, next to `/mcp`, `/admin/mcp` and `/ui`.
 
 Session handling and every *read* the legacy console offers live here;
 the writes for tools, identities, credentials and one's own password are
-in `writes.py` (phase 3a, docs/ROADMAP.md). Request decisions follow.
+in `writes.py` (phases 3a and 3b, docs/ROADMAP.md), request decisions
+included.
 
 Invariants this module keeps, and the tests in `tests/test_api_*.py` pin:
 
@@ -39,7 +40,7 @@ from .deps import (
     set_etag,
 )
 from .session import SESSION_COOKIE, Session
-from .writes import register_write_routes
+from .writes import register_request_routes, register_write_routes
 
 #: API responses are data, never a document: nothing in them may run,
 #: frame or load anything, even if a browser is pointed straight at one.
@@ -375,6 +376,7 @@ def build_api_app(context: ApiContext | None) -> FastAPI:
         return {"version": __version__, "releases": releases, "total": total}
 
     register_write_routes(app)
+    register_request_routes(app)
 
     # -- Schema --------------------------------------------------------------------------------
 
