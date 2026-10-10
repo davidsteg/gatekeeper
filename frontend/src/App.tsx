@@ -10,7 +10,7 @@ import { Login } from "@/pages/Login";
 import { Overview } from "@/pages/Overview";
 import { ReleaseNotes } from "@/pages/ReleaseNotes";
 import { ToolkitReference, Toolkits } from "@/pages/Toolkits";
-import { Integrations, ToolDetail, Tools } from "@/pages/Tools";
+import { Integrations, ToolDetail, ToolEditor, Tools } from "@/pages/Tools";
 
 function RequireSession() {
   const { session, loading } = useAuth();
@@ -28,7 +28,9 @@ export function App() {
           <Route index element={<Overview />} />
           <Route path="tools" element={<Tools />} />
           <Route path="tools/integrations" element={<Integrations />} />
+          <Route path="tools/new" element={<ToolEditor />} />
           <Route path="tools/:toolId" element={<ToolDetail />} />
+          <Route path="tools/:toolId/edit" element={<ToolEditor />} />
           <Route path="identities" element={<Identities />} />
           <Route path="credentials" element={<Credentials />} />
           <Route path="toolkits" element={<Toolkits />} />

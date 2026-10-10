@@ -86,9 +86,12 @@ from .api.service import (  # noqa: F401
     _pair_call_stats,
     _parse_ts,
     _request_pending_counts,
+    _schedule_credential_probe,
     _target,
     _to_local,
     _tool_call_stats,
+    _tool_scaffold,
+    drop_sessions_after_identity_update,
     read_audit,
 )
 from .api.session import (  # noqa: F401
@@ -646,18 +649,6 @@ def _icon(name: str, size: int = 16) -> str:
         'fill="none" stroke="currentColor" stroke-width="1.7" '
         f'stroke-linecap="round" stroke-linejoin="round">{_ICONS.get(name, "")}</svg>'
     )
-
-
-def _schedule_credential_probe(credentials: CredentialStore, name: str) -> None:
-    async def _run() -> None:
-        try:
-            await credentials.probe_credential(name)
-        except Exception:
-            # A probe is detection-only and save is fail-open; the credential
-            # has already been written and must not be rolled back by metadata.
-            pass
-
-    asyncio.create_task(_run())
 
 
 # -- HTML ------------------------------------------------------------------
@@ -4375,50 +4366,6 @@ def _view_audit(service: Service, request: Request) -> str:
 
 # -- Views: write ------------------------------------------------------
 
-def _tool_scaffold(service: Service) -> str:
-    """Scaffold for a new definition, built from the real Tier 1.
-
-    This used to contain a finished Docker tool with foreign paths. That was
-    doubly wrong: it looked like an integration, and on a system
-    without this toolkit it could not even be saved. The scaffold now
-    takes the first configured toolkit and its actual values -- it
-    is thus a valid starting point on every deployment.
-    """
-    name, toolkit = next(iter(sorted(service.tier1.toolkits.items())))
-    binary = toolkit.binaries[0]
-    lines = [
-        f"id: {name}.CHANGEME",
-        f"toolkit: {name}",
-        f"binary: {binary}",
-        "version: 1",
-        "title: CHANGEME",
-        "description: What this does, in one sentence for the agent.",
-        "category: read            # read | write | write_external",
-        "idempotent: true",
-        "enabled: true",
-        "",
-        "# Every element becomes exactly one argument. A parameter value can",
-        "# never produce a second one (FR-5.4).",
-        'argv: ["--help"]',
-        "",
-        "# Every string parameter needs a pattern -- unvalidated free text is",
-        "# not permitted (FR-5.7). Paths are derived by the server, never",
-        "# supplied by the agent.",
-        "parameters: {}",
-        "",
-        "required_scopes: []",
-        f"timeout_seconds: {min(30, toolkit.max_timeout_seconds)}",
-        f"max_output_bytes: {min(65536, toolkit.max_output_bytes)}",
-    ]
-    if toolkit.path_roots:
-        lines.insert(
-            -3,
-            "# This toolkit allows derived paths under: "
-            + ", ".join(toolkit.path_roots),
-        )
-    return "\n".join(lines) + "\n"
-
-
 def _no_toolkits_note() -> str:
     """What to do when Tier 1 is empty.
 
@@ -6478,17 +6425,11 @@ def build_ui_routes(
                                  replaces=replaces, error=str(exc)),
                 session, icon="pencil", active="/identities", status=400,
             )
-        # Renamed or locked out of the UI: existing sessions of the old
-        # identity must not continue. A new password ends them
-        # too -- otherwise a taken-over session would remain open exactly when
-        # an administrator is trying to close it.
-        locked_out = values["id"] != replaces or values["role"] not in UI_ROLES
-        if locked_out or password:
-            keep = None
-            if not locked_out and replaces == session.identity:
-                # Anyone setting their own password here stays signed in.
-                keep = request.cookies.get(SESSION_COOKIE)
-            sessions.drop_identity(replaces, keep=keep)
+        drop_sessions_after_identity_update(
+            sessions, replaces=replaces, new_id=values["id"], role=values["role"],
+            password_set=bool(password), actor=session.identity,
+            current_sid=request.cookies.get(SESSION_COOKIE),
+        )
         return RedirectResponse(f"{UI_PREFIX}/identities", status_code=303)
 
     async def identity_rotate(request: Request, session: Session, form: FormData) -> Response:

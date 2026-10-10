@@ -1,7 +1,10 @@
-import { Link, useParams, useSearchParams } from "react-router";
+import { useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, LayoutGrid, Table2 } from "lucide-react";
-import { API_BASE, apiGet, type Schemas } from "@/api/client";
+import { ArrowLeft, LayoutGrid, Pencil, Plus, Table2 } from "lucide-react";
+import { API_BASE, apiGet, apiSend, type Schemas } from "@/api/client";
+import { useCanWrite } from "@/auth";
+import { ConfirmButton, Textarea, useWrite, WriteError } from "@/components/forms";
 import { PageHeader } from "@/components/Layout";
 import { Badge, Pills } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +15,7 @@ import { Loading, Notice, QueryError } from "@/components/ui/notice";
 type Tool = Schemas["Tool"];
 
 export function Tools() {
+  const canWrite = useCanWrite();
   const [params, setParams] = useSearchParams();
   const matrix = params.get("view") === "matrix";
   const query = useQuery({ queryKey: ["tools"], queryFn: () => apiGet("/tools") });
@@ -33,6 +37,9 @@ export function Tools() {
         subtitle="Defining and granting are two separate steps: a tool with no grantees exists, but is invisible to every agent."
         actions={
           <div className="flex gap-1">
+            {canWrite && toolkits.length > 0 && (
+              <Link to="/tools/new"><Button size="sm"><Plus className="size-3.5" /> New tool</Button></Link>
+            )}
             <Link to="/tools/integrations"><Button variant="outline" size="sm">Integrations</Button></Link>
             <Button size="sm" variant={matrix ? "outline" : "default"} onClick={() => setParams({})}>
               <LayoutGrid className="size-3.5" /> Cards
@@ -149,10 +156,25 @@ function ToolMatrix({ tools }: { tools: Tool[] }) {
 
 export function ToolDetail() {
   const { toolId = "" } = useParams();
+  const canWrite = useCanWrite();
+  const navigate = useNavigate();
   const query = useQuery({
     queryKey: ["tool", toolId],
     queryFn: () => apiGet("/tools/{tool_id}", { path: { tool_id: toolId } }),
   });
+  const self = `/tools/${encodeURIComponent(toolId)}`;
+  const toggle = useWrite(
+    (enabled: boolean) => apiSend("PUT", `${self}/enabled`, { body: { enabled }, ifMatchOf: self }),
+    [["tool", toolId], ["tools"], ["overview"]],
+  );
+  const remove = useWrite(
+    () => apiSend("DELETE", self, { ifMatchOf: self }),
+    [["tools"], ["overview"]],
+    () => void navigate("/tools"),
+  );
+  const holders = query.data
+    ? [...new Set(query.data.tools.flatMap((t) => t.grantees))].sort()
+    : [];
   return (
     <>
       <Link to="/tools" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
@@ -160,7 +182,31 @@ export function ToolDetail() {
       </Link>
       {query.isPending ? <Loading /> : query.isError ? <QueryError error={query.error} /> : (
         <>
-          <PageHeader title={query.data.id} subtitle={`Version ${query.data.current_version ?? "?"}`} />
+          <PageHeader
+            title={query.data.id}
+            subtitle={`Version ${query.data.current_version ?? "?"}${query.data.enabled ? "" : " · disabled"}`}
+            actions={canWrite && (
+              <div className="flex flex-wrap items-start gap-1">
+                <Link to={`${self}/edit`}><Button size="sm"><Pencil className="size-3.5" /> Edit</Button></Link>
+                <Button
+                  size="sm" variant="outline" disabled={toggle.isPending}
+                  onClick={() => toggle.mutate(!query.data.enabled)}
+                >
+                  {query.data.enabled ? "Disable" : "Enable"}
+                </Button>
+                <ConfirmButton
+                  label="Delete" question={`Delete ${query.data.id}?`}
+                  busy={remove.isPending} onConfirm={() => remove.mutate(undefined)}
+                >
+                  <span className="text-xs text-muted-foreground">
+                    The full definition goes to the audit log.
+                    {holders.length > 0 && ` These identities keep a dangling grant: ${holders.join(", ")}.`}
+                  </span>
+                </ConfirmButton>
+              </div>
+            )}
+          />
+          <WriteError error={toggle.error ?? remove.error} onReload={() => void query.refetch()} />
           {query.data.tools.map((tool) => (
             <Card key={tool.id}>
               <CardHeader title={<span className="font-mono">{tool.id}</span>} />
@@ -196,6 +242,7 @@ export function ToolDetail() {
 }
 
 export function Integrations() {
+  const canWrite = useCanWrite();
   const query = useQuery({ queryKey: ["integrations"], queryFn: () => apiGet("/integrations") });
   return (
     <>
@@ -217,11 +264,109 @@ export function Integrations() {
                   </Badge>
                 </div>
                 {it.notes && <p className="text-xs text-muted-foreground">{it.notes}</p>}
-                <Pills values={it.tools.map((t) => t.id)} />
+                {canWrite && it.toolkit_configured ? (
+                  <ul className="space-y-1 text-sm">
+                    {it.tools.map((t) => (
+                      <li key={t.id} className="flex items-center gap-2">
+                        <code className="flex-1 truncate text-xs">{t.id}</code>
+                        {t.exists ? <Badge tone="ok">added</Badge> : (
+                          <Link
+                            className="text-xs text-primary hover:underline"
+                            to={`/tools/new?integration=${encodeURIComponent(it.key)}&tool=${encodeURIComponent(t.id)}`}
+                          >
+                            Add
+                          </Link>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <Pills values={it.tools.map((t) => t.id)} />
+                )}
               </CardBody>
             </Card>
           ))}
         </div>
+      )}
+    </>
+  );
+}
+
+/** The YAML editor for a new definition or an existing one. The server
+ *  checks it against Tier 1 on save, exactly as the classic form does; an
+ *  integration only pre-fills it. */
+export function ToolEditor() {
+  const { toolId } = useParams();
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const editing = toolId !== undefined;
+  const self = editing ? `/tools/${encodeURIComponent(toolId)}` : "/tools";
+  const integration = params.get("integration");
+  const fromTool = params.get("tool");
+
+  const source = useQuery({
+    queryKey: ["tool-editor", toolId ?? "", integration ?? "", fromTool ?? ""],
+    // Also the read whose ETag the save sends back as If-Match.
+    queryFn: async () => {
+      if (editing) return (await apiGet("/tools/{tool_id}", { path: { tool_id: toolId } })).yaml;
+      await apiGet("/tools");
+      if (integration && fromTool) {
+        const all = await apiGet("/integrations");
+        const spec = all.find((i) => i.key === integration)?.tools.find((t) => t.id === fromTool);
+        if (spec) return spec.yaml;
+      }
+      return (await apiGet("/tool-scaffold")).yaml;
+    },
+    staleTime: Infinity,
+    gcTime: 0,
+  });
+
+  const [text, setText] = useState<string | null>(null);
+  const value = text ?? source.data ?? "";
+  const save = useWrite(
+    (yaml: string) =>
+      apiSend<Schemas["ToolSaved"]>(editing ? "PUT" : "POST", self, { body: { yaml }, ifMatchOf: self }),
+    [["tools"], ["tool"], ["overview"], ["integrations"]],
+    (saved) => void navigate(`/tools/${encodeURIComponent(saved.id)}`),
+  );
+
+  return (
+    <>
+      <Link to={editing ? self : "/tools"} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="size-4" /> {editing ? toolId : "Tools"}
+      </Link>
+      <PageHeader
+        title={editing ? `Edit ${toolId}` : "New tool"}
+        subtitle="The definition is checked against Tier 1 before it is stored."
+      />
+      {source.isPending ? <Loading /> : source.isError ? <QueryError error={source.error} /> : (
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save.mutate(value);
+          }}
+        >
+          <WriteError
+            error={save.error}
+            onReload={() => {
+              setText(null);
+              save.reset();
+              void source.refetch();
+            }}
+          />
+          <Textarea
+            aria-label="Definition (YAML)"
+            className="min-h-[28rem] w-full font-mono text-xs"
+            spellCheck={false}
+            value={value}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <Button type="submit" disabled={save.isPending}>{editing ? "Save" : "Create"}</Button>
+            <Link to={editing ? self : "/tools"}><Button type="button" variant="ghost">Cancel</Button></Link>
+          </div>
+        </form>
       )}
     </>
   );

@@ -1,10 +1,9 @@
 """The `/api/v1` application: a FastAPI sub-app mounted into gatekeeper's
 Starlette app by `server.build_app`, next to `/mcp`, `/admin/mcp` and `/ui`.
 
-Phase 1 of the console migration (docs/ROADMAP.md): session handling and
-every *read* the legacy console offers. Writes follow in later releases;
-the dependencies they need (`require_admin`, `if_match`) live in `deps.py`
-already and are tested there.
+Session handling and every *read* the legacy console offers live here;
+the writes for tools, identities, credentials and one's own password are
+in `writes.py` (phase 3a, docs/ROADMAP.md). Request decisions follow.
 
 Invariants this module keeps, and the tests in `tests/test_api_*.py` pin:
 
@@ -40,6 +39,7 @@ from .deps import (
     set_etag,
 )
 from .session import SESSION_COOKIE, Session
+from .writes import register_write_routes
 
 #: API responses are data, never a document: nothing in them may run,
 #: frame or load anything, even if a browser is pointed straight at one.
@@ -190,8 +190,12 @@ def build_api_app(context: ApiContext | None) -> FastAPI:
 
     @app.get("/account", response_model=models.Account, tags=["account"])
     def account(
-        session: Session = Depends(require_viewer), context: ApiContext = Depends(ctx)
+        response: Response, session: Session = Depends(require_viewer),
+        context: ApiContext = Depends(ctx),
     ) -> models.Account:
+        if context.store is not None:
+            # The `If-Match` for `PUT /account/password`.
+            set_etag(response, context.store.identities_revision())
         return models.Account(
             identity=session.identity, role=session.role,
             can_change_password=not context.read_only,
@@ -369,6 +373,8 @@ def build_api_app(context: ApiContext | None) -> FastAPI:
     ) -> Any:
         releases, total = release_notes.query(version=version, search=search, limit=limit)
         return {"version": __version__, "releases": releases, "total": total}
+
+    register_write_routes(app)
 
     # -- Schema --------------------------------------------------------------------------------
 

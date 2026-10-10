@@ -1,3 +1,21 @@
+## 0.55.0
+
+Phase 3a of the console migration: the React console at `/app` can now change tools, identities, credentials and your own password. Pending requests are still decided on `/ui`.
+
+### Added
+
+- **Write endpoints in `/api/v1`** (`api/writes.py`), each calling the same store method as the matching `/ui` form:
+  - Tools: `POST /tools` and `PUT /tools/{id}` take one definition as YAML and check it against Tier 1, `PUT /tools/{id}/enabled` enables or disables it, and `DELETE /tools/{id}` removes it (the full definition goes to the audit log).
+  - Identities: `POST /identities` creates one and returns its API token once, `PUT /identities/{id}` changes role, grants, scopes, ID or console password, `POST /identities/{id}/token` rotates the token, and `DELETE /identities/{id}` removes it. Sessions end by the same rules as on `/ui`.
+  - Credentials: `POST /credentials`, `POST /credentials/{name}/rotate` (with an optional overlap) and `DELETE /credentials/{name}`. Values go in and never come out.
+  - `PUT /account/password` changes your own password for any role, needs the current one, and signs out your other sessions.
+  - `GET /tool-scaffold` returns the starting YAML for a new tool, and each integration tool now carries its YAML.
+- **Write flows in the React console.** A YAML editor for new and existing tools (also pre-filled from an integration), enable/disable and delete on a tool's page; create, edit, rotate and delete on Identities, with the new token shown once; create, rotate and delete on Credentials, with values only in password fields; and a password form on Account. A conflicting edit shows "Changed elsewhere" with a reload instead of overwriting, and destructive actions ask once before they run. Write controls are hidden from viewers and on read-only deployments.
+
+### Security
+
+- Every write needs a console session, role `admin` (except your own password), a writable configuration, `X-CSRF-Token` and `If-Match`; a missing `If-Match` is a 428 and a stale one a 412, before anything is written. Request bodies reject unknown fields. Tests check each write route against that order, and that issued tokens and credential values appear neither in later responses nor in the audit log.
+
 ## 0.54.0
 
 Phase 2 of the console migration: a React console at `/app`, read-only, served by gatekeeper itself. `/ui` is unchanged and remains the place to make changes.
