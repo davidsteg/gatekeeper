@@ -9,6 +9,7 @@ import { Identities } from "@/pages/Identities";
 import { Login } from "@/pages/Login";
 import { Overview } from "@/pages/Overview";
 import { ReleaseNotes } from "@/pages/ReleaseNotes";
+import { Requests } from "@/pages/Requests";
 import { ToolkitReference, Toolkits } from "@/pages/Toolkits";
 import { Integrations, ToolDetail, ToolEditor, Tools } from "@/pages/Tools";
 
@@ -35,6 +36,7 @@ export function App() {
           <Route path="credentials" element={<Credentials />} />
           <Route path="toolkits" element={<Toolkits />} />
           <Route path="toolkits/reference" element={<ToolkitReference />} />
+          <Route path="requests" element={<Requests />} />
           <Route path="audit" element={<Audit />} />
           <Route path="release-notes" element={<ReleaseNotes />} />
           <Route path="account" element={<Account />} />

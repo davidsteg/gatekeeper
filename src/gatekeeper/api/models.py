@@ -292,6 +292,27 @@ class ToolkitReference(_Model):
 # -- Requests -------------------------------------------------------------------------------
 
 
+class ReviewTool(_Model):
+    id: str
+    #: "+" added, "-" removed, "" neither (a `grant_set` diff).
+    marker: str
+    state: Literal["enabled", "disabled", "missing"]
+    title: str
+    category: str
+
+
+class PendingReview(_Model):
+    """What to judge a proposal by, as plain text and data -- rendered as
+    text, never as markup."""
+
+    headline: str
+    tools: list[ReviewTool]
+    #: Unchanged grants in a `grant_set` diff (those not listed in `tools`).
+    unchanged: int
+    #: Why a `stale` item can no longer be applied.
+    stale: str | None
+
+
 class PendingItem(_Model):
     id: str
     action: str
@@ -303,6 +324,7 @@ class PendingItem(_Model):
     decided_by: str | None
     decided_at: str | None
     reason: str | None
+    review: PendingReview
 
 
 class ToolkitProposalOut(_Model):
@@ -317,6 +339,8 @@ class ToolkitProposalOut(_Model):
     decided_at: str | None
     reason: str | None
     current: ToolkitOut | None
+    #: What deploying writes into toolkits.yaml ("" for delete and bind).
+    spec_yaml: str
 
 
 # -- Writes ------------------------------------------------------------------------------
@@ -386,6 +410,45 @@ class CredentialRotate(_Body):
 class PasswordChange(_Body):
     current: str = Field(max_length=4096)
     password: str = Field(max_length=4096)
+
+
+class RejectBody(_Body):
+    reason: str = Field("", max_length=240)
+
+
+class CredentialFill(_Body):
+    """The value for an agent's `cred_propose`: the agent proposes the
+    name and kind, only a human ever types the secret."""
+
+    value: str = Field(max_length=65536)
+
+
+class ApproveAll(_Body):
+    #: Exactly the proposals the reviewer saw. One filed after the page
+    #: loaded is not in this list and stays pending.
+    ids: list[str] = Field(max_length=1000)
+
+
+class Refusal(_Model):
+    id: str
+    action: str
+    reason: str
+
+
+class ApproveAllResult(_Model):
+    applied: int
+    refused: list[Refusal]
+
+
+class DeployBody(_Body):
+    #: Must be true: deploying changes Tier 1 at once, with no further
+    #: review, and the client has to say it showed that.
+    confirm: Literal[True]
+
+
+class Decided(_Model):
+    id: str
+    status: str
 
 
 # -- Audit / release notes -----------------------------------------------------------------
