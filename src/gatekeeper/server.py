@@ -271,13 +271,11 @@ def build_mcp_server(service: Service, notifier: CatalogNotifier) -> Server[None
         # as a parameter. The supervisor derives the installation from the
         # identity itself and ignores both while recovery is disabled.
         arguments, reserved = split_reserved(params.arguments)
-        correlation = None
-        if service.recovery is not None:
-            meta = params.meta
-            if not (isinstance(meta, dict) and isinstance(meta.get("hermes"), dict)) \
-                    and isinstance(reserved, dict):
-                meta = {"hermes": reserved}
-            correlation = service.recovery.correlate(identity.id, meta)
+        correlation = (
+            service.recovery.correlate_call(identity.id, params.meta, reserved)
+            if service.recovery is not None
+            else None
+        )
         try:
             result = await service.call(
                 identity, params.name, arguments, correlation=correlation
