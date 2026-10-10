@@ -439,46 +439,13 @@ audit:
   dir: /var/log/gatekeeper
   max_bytes: 33554432
   keep_files: 10
-# Release-bound artifacts (artifacts.py): contract + adapter of this image's
-# release, bound to its commit. See docs/DEPLOYMENT.md for the tools.
+# Release-bound artifacts (artifacts.py): repository files of this image's
+# release, bound to its commit. This release declares none (artifacts.SOURCES
+# is empty), so an artifact toolkit has nothing to serve yet. See
+# docs/DEPLOYMENT.md for the tools.
 #   artifact:
 #     executor: artifact
 #     allowed_artifact_operations: [list, info, read, transfer]
-#     allowed_artifacts: [hermes-adapter-contract, hermes-recovery-adapter]
-#     handover_dir: /mnt/raid/agent/recovery-adapter-handover
+#     allowed_artifacts: [<id from artifacts.SOURCES>]
+#     handover_dir: /mnt/raid/agent/artifact-handover
 # (as an entry under `toolkits:` above)
-
-# Recovery supervisor (recovery.py) - OFF unless enabled. See
-# docs/HERMES_ADAPTER.md for the Hermes adapter contract;
-# the adapter must exist on the Hermes side before continuations can work.
-# recovery:
-#   enabled: false
-#   trigger_after: 2              # unsuccessful attempts before assessment
-#   max_recoveries_per_task: 3    # across all incidents of one task
-#   max_cooldown_seconds: 3600
-#   uncertain_hold_seconds: 900   # hold on re-running an UNKNOWN-outcome mutation
-#   ack_timeout_seconds: 300      # accepted -> executed call with continuation_id
-#   progress_timeout_seconds: 1800  # activity -> task owner reports progress
-#   reconcile_after_seconds: 600  # idle open incident -> check /status
-#   installations:
-#     homelab:
-#       identities: [hermes-homelab]
-#       profiles: [orchestrator]
-#       adapter_url: http://hermes-homelab:8650/gatekeeper-recovery
-#       credential: hermes-homelab-recovery   # HMAC secret, credential store
-#     personal:
-#       identities: [hermes-personal]
-#       adapter_url: http://hermes-personal:8650/gatekeeper-recovery
-#       credential: hermes-personal-recovery
-#   rescue:
-#     enabled: false
-#     base_url: https://provider.example/v1   # OpenAI-compatible
-#     model: <exact model id>                 # no default; checked via GET /models
-#     reasoning_effort: high                  # optional; only if the model supports it
-#     timeout_seconds: 45
-#     max_tokens: 1200
-#     max_per_hour: 10
-#     credential: rescue-api-key
-#   decision:                     # optional decision provider; none implemented yet
-#     enabled: false
-#     mode: shadow

@@ -78,23 +78,13 @@ item.
   served: a `subscriptions/listen` stream at 2026-07-28+, the standalone
   `GET /mcp` SSE stream before it (`notifications.py`)
 
-- **Recovery supervisor (`recovery.py`, off by default)** — incidents per
-  `(installation, board, task, generation)` in `recovery.yaml`, failure
-  classification, cooldown checks, a hold on re-running UNKNOWN-outcome
-  mutations, at most one rescue consultation per incident, continuation
-  through a Hermes adapter with `turn_seq` ordering, idempotency keys,
-  ambiguous-delivery queries, and staged accepted → active → recovered →
-  resolved tracking. Exposes `POST /recovery/events` and
-  `GET /recovery/incidents`. Also includes an optional decision-provider
-  interface with no provider registered. Covered by `tests/test_recovery.py`
-  against loopback mocks only
-
-- **Release-bound artifacts (`artifact` executor, 0.50.0)** — the Hermes
-  adapter contract and the adapter, built from the repo into the image and
-  bound to the release commit. They are listed, read and checksummed over
-  MCP, downloadable over authenticated HTTP, and transferable into a Tier 1
-  `handover_dir` with sha256 verification. The GitHub release carries the
-  same bytes.
+- **Release-bound artifacts (`artifact` executor, 0.50.0)** — fixed
+  repository paths built into the image and bound to the release commit.
+  They are listed, read and checksummed over MCP, downloadable over
+  authenticated HTTP, and transferable into a Tier 1 `handover_dir` with
+  sha256 verification. The GitHub release carries the same manifest. No
+  sources are declared since 0.52.0, when the Hermes recovery adapter (the
+  only artifact) was removed.
 
 ## Not implemented (by design or not yet)
 
@@ -102,24 +92,13 @@ item.
   versions.** A transfer writes as the Gatekeeper process user. An image
   serves only its own release's artifacts.
 
-- **The Hermes side of recovery.** The contract is in
-  [HERMES_ADAPTER.md](HERMES_ADAPTER.md). Hermes still has to send
-  `_meta.hermes` on `tools/call`, post lifecycle events through a durable
-  outbox, and serve `/status`, `/continue` and `/continuation`.
-  `/continue` must resume the original session; a new run or a follow-up
-  Kanban task does not count. Without `_meta.hermes`, nothing in recovery
-  activates, even with the flag on. No live round trip has been
-  demonstrated for Telegram. Safe automatic Telegram continuation is
-  **not supported** by the verified unchanged official Hermes v0.21.6
-  interfaces and remains disabled. Only unchanged official Hermes images
-  are permitted; no patch/custom-image/CLI workaround is planned. See
-  [HERMES_TELEGRAM_SUPPORT.md](HERMES_TELEGRAM_SUPPORT.md).
-- **Recovery of a stop without a prior Gatekeeper failure.** This is not
-  covered in v1. Iteration exhaustion with no failed Gatekeeper call is not
-  resumed.
-- **A concrete decision provider (Jev).** Its API, model id, structured
-  output and usage terms through the OpenCode Go access are unverified.
-  Enabling `recovery.decision` therefore fails at startup.
+- **Session recovery or continuation, by design (removed in 0.52.0).**
+  Gatekeeper never wakes, continues or re-prompts an agent session. The
+  recovery supervisor (0.48.0–0.51.0), its rescue and decision providers,
+  `/recovery/*` and the Hermes recovery adapter were removed: deployments
+  run unchanged official Hermes images, whose native orchestration already
+  handles worker result → wake → check → targeted follow-up. Not to be
+  rebuilt as a replacement supervisor.
 
 - **Pushing a message into an agent's *running* session.** Not a gap in the
   mailbox above — a protocol limit. An MCP client does not listen for
