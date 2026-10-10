@@ -1411,3 +1411,41 @@ def test_only_the_exact_reserved_name_is_refused(tmp_path, tier1):
                          "_hermes_recovery_x": {"type": "string", "pattern": "^[a-z]+$", "description": "legit"}}}
     catalog = make_catalog(tmp_path, tier1, [ok])
     assert "demo.underscored" in catalog.tools
+
+
+# -- A newer turn means the session moved on (found in the live test) -------------------
+
+
+async def test_user_turn_during_cooldown_supersedes_the_incident(env, hermes):
+    clock = Clock()
+    service, identities, _ = env(rescue_enabled=False, clock=clock)
+    fake = hermes["homelab"]
+    fake.session("sess-1", "task-1")
+    await _call(service, identities, "homelab-agent", "demo.limited")
+    await _call(service, identities, "homelab-agent", "demo.limited")
+    await service.recovery.handle_event("homelab-agent", _stopped(reason="exhausted"))
+    # The user's own next turn ends normally, while the breaker still pauses.
+    _, resp = await service.recovery.handle_event(
+        "homelab-agent", _stopped(turn_seq=2, reason="final_reply", cooldown_until=clock.now + 50))
+    assert resp["action"] == "suppressed"
+    fake.state().update(turn_seq=2)
+    clock.now += 120
+    await service.recovery.tick()
+    assert fake.continue_calls == []
+    assert _incidents(service)[0]["outcome"] == "suppressed:superseded_by_newer_turn"
+
+
+async def test_newer_turn_blocked_by_client_breaker_is_still_continuable(env, hermes):
+    clock = Clock()
+    service, identities, _ = env(rescue_enabled=False, clock=clock)
+    fake = hermes["homelab"]
+    fake.session("sess-1", "task-1", turn="active")
+    await _fail(service, identities, 1)
+    # Turn 2 tried Gatekeeper, but Hermes's own breaker blocked the calls.
+    fake.state().update(turn="exhausted", turn_seq=2)
+    _, resp = await service.recovery.handle_event(
+        "homelab-agent", _stopped(turn_seq=2, gatekeeper_attempts=3, cooldown_until=clock.now + 30))
+    assert resp["action"] == "cooldown_scheduled"
+    clock.now += 31
+    await service.recovery.tick()
+    assert len(fake.continue_calls) == 1 and fake.continue_calls[0]["expected_turn_seq"] == 2

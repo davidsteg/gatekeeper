@@ -1335,6 +1335,12 @@ class RecoverySupervisor:
         if int(payload["turn_seq"]) < incident["last_turn_seq"]:
             return {"accepted": True, "action": "none", "reason": "older turn"}
         reason = payload["reason"]
+        if int(payload["turn_seq"]) > incident["last_turn_seq"]                 and incident["status"] not in ("continuing", "accepted", "active")                 and not _int(payload.get("gatekeeper_attempts")):
+            # A newer turn that Gatekeeper did not start and that did not even
+            # try a Gatekeeper call (e.g. the user's own next message): the
+            # session moved on. Never continue on top of it.
+            self._suppress(incident, "superseded_by_newer_turn")
+            return {"accepted": True, "action": "suppressed", "reason": "session moved on"}
         if reason == USER_STOP:
             # An explicit user stop is final for this incident, cooldown or not.
             self._suppress(incident, USER_STOP)
