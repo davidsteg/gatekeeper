@@ -17,6 +17,7 @@ import yaml
 
 from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, Tier1Violation, read_config_file
+from .recovery import RESERVED_ARGUMENT
 from .tier1 import Tier1, Toolkit, _validate_http_base_url
 
 #: Placeholders in argv, derived and scope templates.
@@ -292,6 +293,10 @@ def _placeholders(template: str) -> set[str]:
 
 
 def _parse_parameter(name: str, spec: dict[str, Any], where: str) -> Parameter:
+    if name == RESERVED_ARGUMENT:
+        # `server.on_call_tool` strips this argument before validation; a
+        # parameter of that name would silently never receive a value.
+        raise ConfigError(f"{where}: parameter name {name!r} is reserved for recovery correlation")
     if not isinstance(spec, dict):
         raise ConfigError(f"{where}: parameter {name!r} expects a mapping")
 

@@ -476,7 +476,10 @@ POST /recovery/events ──────────────┘
 **Keys and ordering.** Incidents are keyed by `(installation, board_id, task_id)`
 plus a `task_generation`. The installation comes from the identity. A
 client-supplied installation, or a profile outside the installation's list,
-drops the correlation on a tool call and gets a 403 on an event. Ordering uses
+drops the correlation on a tool call and gets a 403 on an event. A client
+whose MCP stack cannot send per-call `_meta` (Hermes v0.21.6) sends the same
+object as the reserved argument `_hermes_recovery`, which `server.on_call_tool`
+strips from every call before the pipeline sees it. Ordering uses
 the integer `turn_seq`, never the opaque `turn_id`. Every correlated call and
 event needs an `event_id`, and duplicates are dropped across restarts.
 

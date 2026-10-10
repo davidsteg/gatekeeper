@@ -1152,3 +1152,82 @@ async def test_end_to_end_over_mcp_and_the_events_route(env, hermes):
         anonymous = httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url=base)
         async with anonymous:
             assert (await anonymous.post("/recovery/events", json=_stopped())).status_code == 401
+
+
+# -- Contract v1.1: reserved-argument correlation, durable "started" ------------------
+
+
+def test_catalog_refuses_the_reserved_parameter_name(tmp_path, tier1):
+    spec = {"id": "demo.x", "toolkit": "demo", "binary": PYTHON, "version": 1, "title": "x",
+            "description": "x", "category": "read", "idempotent": True, "enabled": True,
+            "argv": ["-c", "print(1)"], "required_scopes": [], "timeout_seconds": 5,
+            "max_output_bytes": 100,
+            "parameters": {recovery.RESERVED_ARGUMENT: {"type": "string", "description": "x"}}}
+    catalog = make_catalog(tmp_path, tier1, [spec], strict=False)
+    assert "demo.x" not in catalog.tools
+
+
+async def _mcp_call(app, token, tool, args):
+    base = "http://gatekeeper.test"
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url=base,
+                                  headers={"Authorization": f"Bearer {token}"}, timeout=30) as http:
+        async with Client(streamable_http_client(f"{base}/mcp", http_client=http)) as client:
+            return await client.call_tool(tool, args)
+
+
+async def test_reserved_argument_carries_the_correlation_and_is_never_a_parameter(env, hermes):
+    service, identities, tokens = env(rescue_enabled=False)
+    hermes["homelab"].session("sess-1", "task-1", turn="active")
+    app = build_app(service=service, identities=identities, audit=service.audit)
+    async with app.router.lifespan_context(app):
+        for _ in range(2):
+            args = {"target": "nas", recovery.RESERVED_ARGUMENT: _meta("homelab-agent")["hermes"]}
+            result = await _mcp_call(app, tokens["homelab-agent"], "demo.fail", args)
+    assert '"action": "change_approach"' in result.content[0].text
+    audit = open(os.path.join(service.tier1.audit_dir, "audit.jsonl"), encoding="utf-8").read()
+    calls = [json.loads(x) for x in audit.splitlines() if '"kind": "call"' in x]
+    assert calls and all(recovery.RESERVED_ARGUMENT not in c["parameters"] for c in calls)
+    assert all(c["outcome"] == "failed" for c in calls)  # executed, not PARAM_UNKNOWN
+
+
+async def test_reserved_argument_is_stripped_while_recovery_is_off(env):
+    service, identities, tokens = env(recovery_extra={"enabled": False})
+    app = build_app(service=service, identities=identities, audit=service.audit)
+    async with app.router.lifespan_context(app):
+        result = await _mcp_call(app, tokens["homelab-agent"], "demo.read",
+                                 {recovery.RESERVED_ARGUMENT: {"session_id": "x"}})
+    assert not result.is_error and "stack ok" in result.content[0].text
+
+
+async def test_started_is_proven_by_the_durable_record_after_the_turn_ended(env, hermes):
+    clock = Clock()
+    service, identities, _ = env(rescue_enabled=False, clock=clock)
+    await _continued(service, identities, hermes)
+    # The resumed turn ran and ended before Gatekeeper's next poll.
+    hermes["homelab"].state().update(
+        turn="stopped", stop_reason="final_reply", continuation_id=None,
+        last_continuation={"continuation_id": "cont-1", "state": "finished",
+                           "started_at": clock.now, "started_turn_seq": 2,
+                           "ended_at": clock.now + 1, "exit_reason": "final_reply"})
+    clock.now += 2
+    await service.recovery.tick()
+    assert _incidents(service)[0]["continuation"]["started_at"]
+
+
+async def test_continuation_query_reporting_started_counts_as_started(env, hermes):
+    clock = Clock()
+    service, identities, _ = env(rescue_enabled=False, clock=clock,
+                                 recovery_extra={"adapter_timeout_seconds": 0.5})
+    fake = hermes["homelab"]
+    fake.session("sess-1", "task-1", turn="active")
+    await _fail(service, identities, 2)
+    fake.state().update(turn="exhausted")
+    fake.continue_delay = 1.5
+    await service.recovery.handle_event("homelab-agent", _stopped())
+    fake.continue_delay = 0
+    key = next(iter(fake.deliveries))
+    fake.deliveries[key].update(state="started", started_at=clock.now)
+    clock.now += 1
+    await service.recovery.tick()
+    cont = _incidents(service)[0]["continuation"]
+    assert _incidents(service)[0]["status"] == "accepted" and cont["started_at"]

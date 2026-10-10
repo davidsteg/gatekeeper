@@ -1,3 +1,16 @@
+## 0.49.0
+
+Recovery contract v1.1: correlation for MCP clients that cannot send per-call `_meta`, and durable proof that a continuation started. Recovery stays off by default.
+
+### Added
+
+- **Reserved argument `_hermes_recovery`.** It carries the same correlation object as `_meta.hermes`, for clients whose MCP stack has no per-call `_meta` (Hermes v0.21.6). `server.on_call_tool` strips it from every call before validation, also while recovery is off, so it is never validated, executed or audited as a parameter. A tool that declares a parameter of that name is refused at catalog load.
+- **Durable "started" evidence.** The supervisor accepts the adapter's `/status.last_continuation` record (and `/continuation` states `started`/`finished`) as proof that the resumed turn started, even if that turn ended before the next poll. `/continuation` state `lost` is handled like `rejected`.
+
+### Changed
+
+- **`docs/HERMES_ADAPTER.md` is now contract v1.1.** It specifies the adapter's durable continuation journal (accepted → admitted → started → finished, or rejected/lost), which commits acceptance and idempotency before the turn starts, and defines crash handling between acceptance, start and answer.
+
 ## 0.48.0
 
 A bounded recovery supervisor for stuck Hermes tasks, off by default (`recovery.enabled: false`).
