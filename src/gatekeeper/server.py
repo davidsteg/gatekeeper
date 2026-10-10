@@ -503,6 +503,52 @@ def build_app(
             {"incidents": service.recovery.incidents_for(identity.id, task_id)}
         )
 
+    async def artifact_download(request: Request) -> Response:
+        """Authenticated download of a release-bound artifact (artifacts.py).
+
+        The same gate as the `artifact` tools, so the HTTP path can never
+        reach more than they do: the artifact must be enabled in an
+        `artifact` toolkit and the caller must hold scope `artifact:<id>`.
+        Everything else -- unknown id, wrong version, missing scope, no
+        artifact toolkit at all -- is one indistinguishable 404 (FR-7.7).
+        The bytes come from `ArtifactStore.stream`, the same function
+        `artifact.transfer` writes from.
+        """
+        from starlette.responses import StreamingResponse
+
+        from .artifacts import IntegrityError
+
+        identity = request.scope.get(SCOPE_IDENTITY)
+        art_id = request.path_params["artifact_id"]
+        version = request.path_params.get("version") or None
+        enabled = {a for t in service.tier1.toolkits.values() if t.executor == "artifact"
+                   for a in t.allowed_artifacts}
+        art = None
+        if identity is not None and art_id in enabled and identity.covers_scope(f"artifact:{art_id}"):
+            art = service.artifact_store.get(art_id, version)
+        audit.write({"kind": "artifact_download", "identity": getattr(identity, "id", None),
+                     "artifact": art_id, "version": version,
+                     "outcome": "ok" if art is not None else "denied",
+                     "sha256": art.sha256 if art is not None else None})
+        if art is None:
+            return JSONResponse({"error": "not found"}, 404)
+
+        def body():
+            try:
+                yield from service.artifact_store.stream(art)
+            except IntegrityError:
+                logger.error("Artifact %s changed on disk; download aborted", art.id)
+                raise
+
+        return StreamingResponse(body(), media_type=art.media_type, headers={
+            "Content-Length": str(art.size),
+            "Content-Disposition": f'attachment; filename="{art.file}"',
+            "ETag": f'"{art.sha256}"',
+            "X-Artifact-SHA256": art.sha256,
+            "X-Artifact-Version": art.version,
+            "X-Artifact-Commit": art.commit,
+        })
+
     routes = [
         Route("/health/live", health_live, methods=["GET"]),
         Route("/health/ready", health_ready, methods=["GET"]),
@@ -510,6 +556,8 @@ def build_app(
         Route("/metrics", metrics, methods=["GET"]),
         Route("/release", release, methods=["GET"]),
         Route("/recovery/events", recovery_events, methods=["POST"]),
+        Route("/artifacts/{artifact_id}", artifact_download, methods=["GET"]),
+        Route("/artifacts/{artifact_id}/{version}", artifact_download, methods=["GET"]),
         Route("/recovery/incidents", recovery_incidents, methods=["GET"]),
     ]
     if ui:

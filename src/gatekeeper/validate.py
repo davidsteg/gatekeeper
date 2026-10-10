@@ -550,6 +550,24 @@ def build_opencode_call(
 RECIPIENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
+def build_artifact_call(tool: ToolDef, values: dict[str, str], toolkit: Toolkit) -> str:
+    """The `artifact` operation, re-checked against Tier 1, and the shape of
+    the only two values a call can supply (an id and a commit prefix)."""
+    from .artifacts import ID_RE, VERSION_RE
+
+    assert tool.artifact_operation is not None
+    if not toolkit.allows_artifact_operation(tool.artifact_operation):
+        raise Denied(DenialReason.TIER1_VIOLATION,
+                     f"Artifact operation {tool.artifact_operation!r} is not allowed for this toolkit.")
+    if "artifact" in values and not ID_RE.fullmatch(values["artifact"]):
+        raise Denied(DenialReason.PARAM_INVALID,
+                     "Parameter 'artifact' must be an artifact id (lowercase letters, digits, '-').")
+    if values.get("version") and not VERSION_RE.fullmatch(values["version"]):
+        raise Denied(DenialReason.PARAM_INVALID,
+                     "Parameter 'version' must be a commit id or a prefix of at least 7 hex digits.")
+    return tool.artifact_operation
+
+
 def build_agent_call(
     tool: ToolDef,
     values: dict[str, str],

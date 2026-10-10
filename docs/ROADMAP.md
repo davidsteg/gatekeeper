@@ -89,7 +89,18 @@ item.
   interface with no provider registered. Covered by `tests/test_recovery.py`
   against loopback mocks only
 
+- **Release-bound artifacts (`artifact` executor, 0.50.0)** — the Hermes
+  adapter contract and the adapter, built from the repo into the image and
+  bound to the release commit. They are listed, read and checksummed over
+  MCP, downloadable over authenticated HTTP, and transferable into a Tier 1
+  `handover_dir` with sha256 verification. The GitHub release carries the
+  same bytes.
+
 ## Not implemented (by design or not yet)
+
+- **Artifact transfers as another user (`run_as`) and older artifact
+  versions.** A transfer writes as the Gatekeeper process user. An image
+  serves only its own release's artifacts.
 
 - **The Hermes side of recovery.** The contract is in
   [HERMES_ADAPTER.md](HERMES_ADAPTER.md). Hermes still has to send

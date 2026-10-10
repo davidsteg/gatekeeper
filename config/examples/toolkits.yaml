@@ -439,6 +439,15 @@ audit:
   dir: /var/log/gatekeeper
   max_bytes: 33554432
   keep_files: 10
+# Release-bound artifacts (artifacts.py): contract + adapter of this image's
+# release, bound to its commit. See docs/DEPLOYMENT.md for the tools.
+#   artifact:
+#     executor: artifact
+#     allowed_artifact_operations: [list, info, read, transfer]
+#     allowed_artifacts: [hermes-adapter-contract, hermes-recovery-adapter]
+#     handover_dir: /mnt/raid/agent/recovery-adapter-handover
+# (as an entry under `toolkits:` above)
+
 # Recovery supervisor (recovery.py) - OFF unless enabled. See
 # docs/HERMES_ADAPTER.md for the Hermes adapter contract;
 # the adapter must exist on the Hermes side before continuations can work.

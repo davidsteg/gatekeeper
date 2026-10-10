@@ -325,6 +325,51 @@ apply. An agent token can read its own installation's incidents at
 returns 404, and no hold is enforced any more. `recovery.yaml` can be
 removed afterwards.
 
+## Release-bound artifacts (contract and adapter)
+
+The image carries the Hermes adapter contract and the adapter package of its
+own release under `/opt/gatekeeper/artifacts/`, bound to the release commit.
+To hand them to an agent, mount the handover directory and add a toolkit:
+
+```yaml
+# toolkits.yaml (Tier 1)
+toolkits:
+  artifact:
+    executor: artifact
+    allowed_artifact_operations: [list, info, read, transfer]
+    allowed_artifacts: [hermes-adapter-contract, hermes-recovery-adapter]
+    handover_dir: /mnt/raid/agent/recovery-adapter-handover   # must be mounted read-write
+```
+
+```yaml
+# tools.yaml (or via the console): one tool per operation
+tools:
+  - {id: artifact.list, toolkit: artifact, version: 1, enabled: true, title: List artifacts,
+     description: Release-bound artifacts of this Gatekeeper, category: read, idempotent: true,
+     artifact_operation: list, parameters: {}, required_scopes: [],
+     timeout_seconds: 30, max_output_bytes: 65536}
+  - {id: artifact.transfer, toolkit: artifact, version: 1, enabled: true, title: Transfer artifact,
+     description: Copy an artifact into the handover directory and verify its sha256,
+     category: write, idempotent: true, artifact_operation: transfer,
+     parameters: {artifact: {type: string, required: true, pattern: "^[a-z0-9-]+$", description: Artifact id},
+                  version: {type: string, pattern: "^[0-9a-f]{7,40}$", description: Commit (optional)}},
+     required_scopes: [], timeout_seconds: 60, max_output_bytes: 65536}
+  # artifact.info / artifact.read: like transfer, artifact_operation info / read, category read
+```
+
+Grant the tools to the identity, and give it the scope `artifact:*` (or
+`artifact:<id>` per artifact). The same scope allows the authenticated
+download:
+
+```bash
+curl -fsS -H "Authorization: Bearer $TOKEN" -D - -o adapter.tar.gz \
+  https://gatekeeper.example/artifacts/hermes-recovery-adapter
+```
+
+The `X-Artifact-SHA256` and `X-Artifact-Commit` headers name what was sent.
+The files the image serves are also attached to the GitHub release
+(`gatekeeper-<version>-artifacts.json` is the manifest).
+
 ## Behind a reverse proxy
 
 `gatekeeper serve` runs directly under uvicorn, which by default trusts

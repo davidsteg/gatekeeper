@@ -556,6 +556,59 @@ They never carry prompts.
 immediately, `/recovery/*` answers 404, and no hold is enforced.
 `recovery.yaml` can be deleted afterwards.
 
+## Release-bound artifacts (`artifacts.py`, `artifact` executor)
+
+Some files Gatekeeper serves to agents: the Hermes adapter contract
+(`docs/HERMES_ADAPTER.md`) and the adapter itself
+(`contrib/hermes-recovery-adapter/`). Each is bound to exactly one commit.
+
+**Git is the only source.** Nothing is uploaded. The image build runs
+`python -m gatekeeper.artifacts`, which packages those fixed repository paths
+into `/opt/gatekeeper/artifacts/`, together with a `manifest.json` (schema,
+release, commit, and per file its sha256, size and source path). The commit
+comes from CI (`GATEKEEPER_COMMIT`); a local build says `unknown`. The tar.gz
+is deterministic: entries sorted, mtime 0, owner root, line endings
+normalized. The release job copies those exact files out of the published
+image for the GitHub release; it does not rebuild them, because gzip output
+depends on the zlib build. One image carries the artifacts of its own release
+only.
+
+**Serving.** `ArtifactStore` reads the directory read-only and verifies every
+file against the manifest at load; a mismatching file is disabled. All bytes
+leave through one function, `ArtifactStore.stream`, which re-verifies the
+sha256 over exactly the bytes it hands on.
+
+| Surface | What it does |
+|---|---|
+| `artifact.list` / `artifact.info` | release, commit, sha256, size, download path |
+| `artifact.read` | text artifacts inline (the contract), within `max_output_bytes` |
+| `artifact.transfer` | copies into the toolkit's `handover_dir` (see below) |
+| `GET /artifacts/{id}[/{version}]` | authenticated download (bearer token); `X-Artifact-SHA256`, `X-Artifact-Commit`, ETag |
+
+**Gates.** Every surface requires all three of:
+
+1. The artifact must be in an `artifact` toolkit's `allowed_artifacts`.
+2. The caller must hold the scope `artifact:<id>`.
+3. A version, if given, must be the commit or a prefix of at least 7 hex
+   digits.
+
+Anything else, including an unknown id or a missing scope, is one
+indistinguishable answer (FR-7.7). The tools have no path, URL or target
+parameter; `catalog.py` refuses a tool that declares one.
+
+**Transfer.** `artifact.transfer` writes to
+`<handover_dir>/<id>/<version>/<file>`. `handover_dir` is Tier 1; the rest of
+the path comes from the manifest. The transfer:
+
+- reads through `ArtifactStore.stream`, the same path the HTTP download uses;
+- writes to a temp file, verifies the sha256 and only then renames;
+- writes nothing when verification fails;
+- leaves a target with the same sha256 alone (idempotent);
+- refuses a different existing file instead of overwriting it.
+
+Files belong to the Gatekeeper process user; `run_as` is not supported on
+`artifact` toolkits and is refused at load. No credential is involved anywhere.
+
 ## Project structure
 
 ```
@@ -660,6 +713,10 @@ src/gatekeeper/
   ui.py                Operations console at /ui -- no JavaScript,
                        CSP-locked, server-rendered SVG diagrams
   errors.py            DenialReason enum, opaque denial for catalog info
+  artifacts.py         Release-bound artifacts: deterministic build from repo
+                       paths (image build), read-only store with sha256
+                       verification -- see "Release-bound artifacts"
+  execute_artifact.py  `artifact` executor: list/info/read/transfer
   recovery.py          Recovery supervisor (feature-flagged): incidents in
                        recovery.yaml, classification, cooldowns, rescue
                        consultation, Hermes continuation -- see "Recovery

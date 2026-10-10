@@ -1,3 +1,17 @@
+## 0.50.0
+
+Release-bound artifacts: Homelab gets the Hermes adapter contract and the adapter package from Gatekeeper itself, bound to the release commit, with no manual transfer.
+
+### Added
+
+- **`artifact` executor** (`artifacts.py`, `execute_artifact.py`). It has four operations, `list`, `info`, `read` (text artifacts) and `transfer`, and no path, URL or target parameter. `transfer` copies an artifact into the toolkit's Tier 1 `handover_dir` as `<id>/<version>/<file>`. It writes to a temp file, verifies the sha256 before the rename, is idempotent for identical content, and refuses to overwrite a different file. Access requires the artifact to be in `allowed_artifacts` and the caller to hold the scope `artifact:<id>`; otherwise the answer is indistinguishable from an unknown artifact.
+- **`GET /artifacts/{id}[/{version}]`**: an authenticated download with the same gates, serving the bytes through the same verified read as `transfer`, with `X-Artifact-SHA256` and `X-Artifact-Commit` headers. Every download is audited.
+- **Artifacts built from the repository into the image.** `docs/HERMES_ADAPTER.md` and `contrib/hermes-recovery-adapter/` (the adapter now lives in this repo) are packaged deterministically with a manifest bound to the commit; CI passes the commit as `GATEKEEPER_COMMIT`. The release job copies those exact files out of the published image and attaches them to the GitHub release. Nothing is uploaded; git is the only source.
+
+### Changed
+
+- **CI collects the adapter's regression tests** (`contrib/hermes-recovery-adapter/tests`).
+
 ## 0.49.0
 
 Recovery contract v1.1: correlation for MCP clients without per-call `_meta`, integrity checks on every link that can lead to a continuation, Hermes recovery ownership, and durable proof that a continuation started. Recovery stays off by default.

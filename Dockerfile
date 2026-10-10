@@ -20,6 +20,19 @@ RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip install --upgrade pip \
  && /opt/venv/bin/pip install . -c constraints.txt
 
+# Release-bound artifacts (artifacts.py): the Hermes adapter contract and
+# the adapter, built from exactly these sources and stamped with the commit
+# CI passes in. The release job copies these exact files out of the
+# published image for the GitHub release -- one build, one set of bytes.
+# Without a commit (a local
+# `docker build`), the manifest says "unknown" and versioned downloads 404.
+ARG GATEKEEPER_COMMIT=unknown
+COPY docs/HERMES_ADAPTER.md ./docs/HERMES_ADAPTER.md
+COPY contrib ./contrib
+RUN /opt/venv/bin/python -m gatekeeper.artifacts --root . --out /opt/artifacts \
+      --commit "$GATEKEEPER_COMMIT" \
+      --release "$(/opt/venv/bin/python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+
 # --- Docker CLI + Compose plugin ------------------------------------------
 # Only the client, no daemon. gatekeeper talks to the host's Docker daemon
 # via the mounted socket.
@@ -97,6 +110,9 @@ RUN apt-get update \
 COPY --from=docker-cli /usr/bin/docker /usr/bin/docker
 COPY --from=docker-cli /usr/local/lib/docker/cli-plugins /usr/local/lib/docker/cli-plugins
 COPY --from=build /opt/venv /opt/venv
+# Read-only: the server verifies every file against manifest.json at load.
+COPY --from=build /opt/artifacts /opt/gatekeeper/artifacts
+ARG GATEKEEPER_COMMIT=unknown
 
 # RELEASE.md is not part of the Python package (it lives at repo root, not
 # under src/gatekeeper/) -- the console's release-notes popup reads it from
@@ -157,6 +173,8 @@ RUN groupadd -g 568 apps && useradd -u 568 -g 568 -M -s /usr/sbin/nologin apps \
 # then Tier 1 cannot be made immutable at runtime. Only the default for a
 # fresh 'init'; an existing toolkits.yaml keeps whatever it already says.
 ENV PATH="/opt/venv/bin:${PATH}" \
+    GATEKEEPER_COMMIT=${GATEKEEPER_COMMIT} \
+    GATEKEEPER_ARTIFACT_DIR=/opt/gatekeeper/artifacts \
     HOME=/home/apps \
     DOCKER_CONFIG=/home/apps/.docker \
     GATEKEEPER_CONFIG_DIR=/etc/gatekeeper \

@@ -34,6 +34,11 @@ No shell injection. No command confusion. No hidden side effects.
   `agent.read_messages` collects your own. The sender is your authenticated
   identity, never an argument; delivery is on the recipient's next call, because
   MCP has no way to push into a running session
+- **Release-bound artifacts** — the Hermes adapter contract and adapter
+  package ship inside the image, bound to the release commit. They are
+  available over MCP (`artifact.list`/`info`/`read`/`transfer` into a fixed
+  handover directory, sha256-verified) and over an authenticated download; see
+  [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - **Recovery after repeated Gatekeeper failures (opt-in, Gatekeeper side
   only)** — a feature-flagged supervisor tracks failures per Hermes task,
   honors cooldowns and user stops, holds back re-runs of operations with an

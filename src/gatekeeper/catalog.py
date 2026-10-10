@@ -56,6 +56,16 @@ OPENCODE_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = 
 #: `service.call`, neither settable by an agent. `mailbox_status` reads
 #: no parameters at all -- its count is over the caller's own mailbox --
 #: so a tool for it that declares any is refused at load time.
+#: `artifact` executor: what each operation reads. `artifact` is an id from
+#: the image's manifest, `version` an optional commit prefix. There is no
+#: path, URL or target parameter -- `handover_dir` is Tier 1.
+ARTIFACT_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "list": ((), ()),
+    "info": (("artifact",), ("version",)),
+    "read": (("artifact",), ("version",)),
+    "transfer": (("artifact",), ("version",)),
+}
+
 AGENT_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "send_message": (("to", "body"), ("subject",)),
     "read_messages": ((), ("limit", "peek")),
@@ -238,6 +248,9 @@ class ToolDef:
     #: file it acts on is Tier 1 (`Toolkit.mailbox_path`), never a
     #: parameter.
     agent_operation: str | None = None
+    #: The `artifact` executor's operation, fixed per tool like
+    #: `agent_operation`.
+    artifact_operation: str | None = None
 
     #: Per-tool override of the toolkit's ``run_as`` (file executor only).
     #: ``None`` -- the default -- means "use the toolkit's ``run_as``", so a
@@ -406,6 +419,25 @@ def _validate_opencode_params(
         )
 
 
+def _validate_op_params(
+    executor: str, table: dict[str, tuple[tuple[str, ...], tuple[str, ...]]], operation: str,
+    parameters: dict[str, Parameter], where: str,
+) -> None:
+    """Both directions of an operation's fixed parameter contract: every
+    required name declared and required, nothing it does not read."""
+    required, optional = table[operation]
+    for name in required:
+        param = parameters.get(name)
+        if param is None or not param.required:
+            raise ConfigError(
+                f"{where}: {executor} operation {operation!r} needs a required {name!r} parameter")
+    unknown = sorted(set(parameters) - set(required) - set(optional))
+    if unknown:
+        raise ConfigError(
+            f"{where}: {executor} operation {operation!r} does not read {unknown} -- it reads "
+            f"{sorted(set(required) | set(optional)) or 'no parameters'}.")
+
+
 def _validate_agent_params(
     operation: str, parameters: dict[str, Parameter], where: str
 ) -> None:
@@ -571,6 +603,14 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
             raise Tier1Violation(
                 f"{where}: declares a 'directory' parameter, but toolkit "
                 f"{toolkit.name!r} has no path_roots to validate it against"
+            )
+
+    elif toolkit.executor == "artifact":
+        if not toolkit.allows_artifact_operation(tool.artifact_operation or ""):
+            raise Tier1Violation(
+                f"{where}: artifact operation {tool.artifact_operation!r} is not in "
+                f"the allowlist {list(toolkit.allowed_artifact_operations)} of "
+                f"toolkit {toolkit.name!r}"
             )
 
     elif toolkit.executor == "agent":
@@ -741,6 +781,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     microsoft_args_val: dict[str, dict[str, Any]] | None = None
     opencode_operation: str | None = None
     agent_operation: str | None = None
+    artifact_operation: str | None = None
     #: Per-tool base_url override -- only the `http` branch sets this
     #: (0.45.5); every other executor leaves it at None.
     tool_base_url: str | None = None
@@ -893,6 +934,18 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
             )
         _validate_agent_params(agent_operation, parameters, where)
 
+    elif toolkit.executor == "artifact":
+        artifact_operation = spec.get("artifact_operation") or spec.get("operation")
+        if not isinstance(artifact_operation, str) or not artifact_operation:
+            raise ConfigError(f"{where}: field 'artifact_operation' is missing")
+        if artifact_operation not in ARTIFACT_OPERATION_PARAMS:
+            raise ConfigError(
+                f"{where}: artifact_operation {artifact_operation!r} is unknown "
+                f"(known: {sorted(ARTIFACT_OPERATION_PARAMS)})"
+            )
+        _validate_op_params("artifact", ARTIFACT_OPERATION_PARAMS, artifact_operation,
+                            parameters, where)
+
     # Every placeholder must point to a declared parameter. A typo
     # in the template would otherwise only surface at runtime -- and
     # then land as an unresolvable placeholder in the request.
@@ -935,6 +988,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         microsoft_args=microsoft_args_val,
         opencode_operation=opencode_operation,
         agent_operation=agent_operation,
+        artifact_operation=artifact_operation,
         run_as=tool_run_as,
         base_url=tool_base_url,
     )

@@ -1,0 +1,14 @@
+{
+  "session": "orch-1791621335",
+  "cooldown_until_before": 1791621399.4995975,
+  "cooldown_until_after": 1791621399.4995975,
+  "outcome": "recovered",
+  "continuations": [
+    {
+      "continuation_id": "cont-26f4941d061044be",
+      "state": "finished",
+      "deliveries": 1
+    }
+  ],
+  "continuation_inputs_in_transcript": 1
+}
