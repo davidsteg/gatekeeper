@@ -1,3 +1,10 @@
+## 1.5.2
+
+### Fixed
+
+- **Approving a request no longer looks stuck.** An approval takes a few seconds (the change is applied, the store reloads, and the console refreshes), and all the button did meanwhile was grey out. It now spins and says **Approving…**, the other buttons on that card are locked so a second decision cannot start, and a line under it says the decision is being applied. Reject, Approve all, Approve and deploy, and a credential approval do the same.
+- The same busy state on every other slow console write: saving or creating a tool or identity, enabling or disabling a tool, creating or rotating a credential, changing your password, and the **Yes, …** button of a delete or rotate confirmation.
+
 ## 1.5.0
 
 A rejected `/mcp` call now says where it came from, so a client with a stale token can be found.

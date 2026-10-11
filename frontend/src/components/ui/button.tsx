@@ -1,7 +1,8 @@
 // shadcn/ui-style primitives, copied in rather than depended on: the
 // console carries no component library at runtime.
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Link, type LinkProps } from "react-router";
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type Variant = "default" | "outline" | "ghost" | "destructive";
@@ -26,14 +27,37 @@ export function buttonClass(variant: Variant = "default", size: Size = "md", cla
   );
 }
 
+/** `busy` is a write in flight: the button is disabled, spins, and says
+ *  what it is doing (`busyLabel`, e.g. "Approving…"). An approval can take
+ *  seconds (the store reloads and every open console refetches); a button
+ *  that only greys out reads as stuck. */
 export function Button({
   className,
   variant = "default",
   size = "md",
   type = "button",
+  busy = false,
+  busyLabel,
+  disabled,
+  children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size }) {
-  return <button type={type} className={buttonClass(variant, size, className)} {...props} />;
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: Variant;
+  size?: Size;
+  busy?: boolean;
+  busyLabel?: ReactNode;
+}) {
+  return (
+    <button
+      type={type}
+      className={buttonClass(variant, size, cn(busy && "disabled:opacity-80", className))}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
+      {...props}
+    >
+      {busy ? <><Loader2 className="size-3.5 animate-spin" aria-hidden />{busyLabel ?? children}</> : children}
+    </button>
+  );
 }
 
 /** A link that looks like a button. Not a <button> inside an <a>: that is

@@ -73,7 +73,7 @@ function PasswordForm({ onReload }: { onReload: () => void }) {
           <Label text="New password, again">
             <Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
           </Label>
-          <Button type="submit" disabled={save.isPending}>Change password</Button>
+          <Button type="submit" busy={save.isPending} busyLabel="Saving…">Change password</Button>
         </form>
       </CardBody>
     </Card>

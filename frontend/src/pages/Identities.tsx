@@ -225,7 +225,7 @@ function IdentityEditor({ current, onDone, onReload }: {
             <Textarea className="font-mono text-xs" spellCheck={false} value={scopes} onChange={(e) => setScopes(e.target.value)} />
           </Label>
           <div className="flex gap-2">
-            <Button type="submit" disabled={save.isPending}>{current ? "Save" : "Create and issue token"}</Button>
+            <Button type="submit" busy={save.isPending} busyLabel={current ? "Saving…" : "Creating…"}>{current ? "Save" : "Create and issue token"}</Button>
             <Button type="button" variant="ghost" onClick={() => onDone()}>Cancel</Button>
           </div>
         </form>

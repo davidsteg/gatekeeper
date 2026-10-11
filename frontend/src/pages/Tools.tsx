@@ -215,7 +215,8 @@ export function ToolDetail() {
               <div className="flex flex-wrap items-start gap-1">
                 <LinkButton to={`${self}/edit`} size="sm"><Pencil className="size-3.5" /> Edit</LinkButton>
                 <Button
-                  size="sm" variant="outline" disabled={toggle.isPending}
+                  size="sm" variant="outline" busy={toggle.isPending}
+                  busyLabel={query.data.enabled ? "Disabling…" : "Enabling…"}
                   onClick={() => toggle.mutate(!query.data.enabled)}
                 >
                   {query.data.enabled ? "Disable" : "Enable"}
@@ -369,7 +370,7 @@ export function ToolEditor() {
             onChange={(e) => setText(e.target.value)}
           />
           <div className="flex gap-2">
-            <Button type="submit" disabled={save.isPending}>{editing ? "Save" : "Create"}</Button>
+            <Button type="submit" busy={save.isPending} busyLabel={editing ? "Saving…" : "Creating…"}>{editing ? "Save" : "Create"}</Button>
             <LinkButton to={editing ? self : "/tools"} variant="ghost">Cancel</LinkButton>
           </div>
         </form>
