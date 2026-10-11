@@ -1,9 +1,8 @@
-import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "@/api/client";
 import { PageHeader } from "@/components/Layout";
 import { Badge, Pills } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { CodeBlock, CopyButton } from "@/components/ui/copy";
 import { Loading, Notice, QueryError } from "@/components/ui/notice";
@@ -19,7 +18,7 @@ export function Toolkits() {
       <PageHeader
         title="Toolkits"
         subtitle="Tier 1 boundaries from toolkits.yaml. Read-only: change them by editing the file and redeploying."
-        actions={<Link to="/toolkits/reference"><Button variant="outline" size="sm">Reference YAML</Button></Link>}
+        actions={<LinkButton to="/toolkits/reference" variant="outline" size="sm">Reference YAML</LinkButton>}
       />
       {query.isPending ? <Loading /> : query.isError ? <QueryError error={query.error} /> : (
         query.data.toolkits.length === 0 ? (

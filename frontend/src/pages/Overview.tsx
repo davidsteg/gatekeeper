@@ -14,6 +14,19 @@ import { describeEvent } from "./events";
 
 export const POLL_MS = 15_000;
 
+/** Recharts draws its tooltip white on white-ish text in dark mode unless
+ *  told otherwise; the theme tokens follow prefers-color-scheme. */
+export const TOOLTIP_STYLE = {
+  contentStyle: {
+    background: "var(--color-card)",
+    border: "1px solid var(--color-border)",
+    borderRadius: 6,
+    color: "var(--color-card-foreground)",
+    fontSize: 12,
+  },
+  labelStyle: { color: "var(--color-muted-foreground)" },
+} as const;
+
 export function Overview() {
   const query = useQuery({
     queryKey: ["overview"],
@@ -62,11 +75,11 @@ export function Overview() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat to="/tools" icon={SlidersHorizontal} n={data.stats.tools_active} label="tools active" />
-        <Stat to="/identities" icon={KeyRound} n={data.stats.identities} label="identities" />
-        <Stat to="/toolkits" icon={Lock} n={data.stats.protected_resources} label="protected resources" />
+        <Stat to="/tools" icon={SlidersHorizontal} n={data.stats.tools_active} label={plural(data.stats.tools_active, "tool active", "tools active")} />
+        <Stat to="/identities" icon={KeyRound} n={data.stats.identities} label={plural(data.stats.identities, "identity", "identities")} />
+        <Stat to="/toolkits" icon={Lock} n={data.stats.protected_resources} label={plural(data.stats.protected_resources, "protected resource", "protected resources")} />
         <Stat
-          to="/tools" icon={Ban} n={data.stats.tools_disabled} label="tools disabled"
+          to="/tools" icon={Ban} n={data.stats.tools_disabled} label={plural(data.stats.tools_disabled, "tool disabled", "tools disabled")}
           tone={data.stats.tools_disabled ? "deny" : undefined}
         />
       </div>
@@ -94,8 +107,8 @@ export function Overview() {
               return (
                 <div key={i} className="flex items-start gap-2 text-sm">
                   <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", event.dot)} />
-                  <span className="flex-1 break-all">{event.text}</span>
-                  <span className="font-mono text-xs text-muted-foreground">{formatTime(record.ts)}</span>
+                  <span className="min-w-0 flex-1 wrap-break-word">{event.text}</span>
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground">{formatTime(record.ts)}</span>
                 </div>
               );
             })}
@@ -106,6 +119,10 @@ export function Overview() {
       <AccessMatrix access={data.access} />
     </>
   );
+}
+
+function plural(n: number, one: string, many: string): string {
+  return n === 1 ? one : many;
 }
 
 function Stat({ to, icon: Icon, n, label, tone }: {
@@ -135,7 +152,7 @@ function ActivityChart({ activity }: { activity: Schemas["ActivityBucket"][] }) 
           <CartesianGrid vertical={false} strokeOpacity={0.15} />
           <XAxis dataKey="hour" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
           <YAxis allowDecimals={false} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-          <Tooltip cursor={{ fillOpacity: 0.08 }} />
+          <Tooltip cursor={{ fillOpacity: 0.08 }} {...TOOLTIP_STYLE} />
           <Bar dataKey="ok" stackId="a" fill="var(--color-ok)" />
           <Bar dataKey="not ok" stackId="a" fill="var(--color-deny)" radius={[3, 3, 0, 0]} />
         </BarChart>

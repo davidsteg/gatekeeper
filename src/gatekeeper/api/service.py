@@ -50,8 +50,13 @@ def read_audit(
     identity: str = "",
     tool: str = "",
     outcome: str = "",
+    since: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Reads the most recent entries of the current log file.
+
+    `since` stops the walk at the first record older than it: the log is
+    append-only, so everything before that one is older too. Stats use it
+    to read exactly their window instead of a fixed number of records.
 
     Returns `(entries, truncated)`. `truncated` indicates that older
     material exists that is not visible here -- either because the file
@@ -85,9 +90,10 @@ def read_audit(
     records: list[dict[str, Any]] = []
     carry = b""  # Start of the line that straddles the boundary, held back.
     pos = size
+    reached_since = False
 
     with open(path, "rb") as handle:
-        while pos > floor and len(records) < wanted:
+        while pos > floor and len(records) < wanted and not reached_since:
             chunk_start = max(floor, pos - AUDIT_CHUNK_BYTES)
             handle.seek(chunk_start)
             blob = handle.read(pos - chunk_start) + carry
@@ -113,6 +119,11 @@ def read_audit(
                     continue
                 if not isinstance(record, dict):
                     continue
+                if since is not None:
+                    stamp = _parse_ts(record.get("ts"))
+                    if stamp is not None and stamp < since:
+                        reached_since = True
+                        break
                 if identity and record.get("identity") != identity:
                     continue
                 if tool and record.get("tool") != tool:
@@ -123,7 +134,9 @@ def read_audit(
                 if len(records) >= wanted:
                     break
 
-    truncated = floor > 0 or len(records) > limit
+    # Reaching `since` means the whole asked-for span was read, however
+    # long the file is.
+    truncated = (floor > 0 and not reached_since) or len(records) > limit
     return records[:limit], truncated
 
 
@@ -1119,7 +1132,12 @@ _DOC_FILES = (
 )
 
 
-_STATS_WINDOWS = (("24h", "Last 24 hours", 24, 200), ("7d", "Last 7 days", 7, 1000), ("30d", "Last 30 days", 30, 2000))
+_STATS_WINDOWS = (("24h", "Last 24 hours", 24), ("7d", "Last 7 days", 7), ("30d", "Last 30 days", 30))
+
+#: Not a sample size: stats read their whole time window, and the
+#: `AUDIT_READ_BYTES` floor is what bounds the work. This only keeps
+#: `read_audit`'s "one more than asked" bookkeeping finite.
+_STATS_MAX_RECORDS = 1_000_000
 
 
 def stats_view(service: Any, window: str) -> dict[str, Any]:
@@ -1127,8 +1145,17 @@ def stats_view(service: Any, window: str) -> dict[str, Any]:
     daily otherwise), and per-toolkit, per-identity, latency and admin
     tables. Best-effort over the tail of the current audit log."""
     spec = next((w for w in _STATS_WINDOWS if w[0] == window), _STATS_WINDOWS[0])
-    key, label, span, limit = spec
-    records, truncated = read_audit(audit_path(service), limit=limit)
+    key, label, span = spec
+    # The window itself, not the newest N records: "Last 24 hours" counted
+    # only the latest 200 calls before, and the 7- and 30-day windows took
+    # in records older than they claimed to cover.
+    now = _local_now()
+    start = (
+        now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=span - 1)
+        if key == "24h"
+        else now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=span - 1)
+    )
+    records, truncated = read_audit(audit_path(service), limit=_STATS_MAX_RECORDS, since=start)
     tools_by_kit: dict[str, set[str]] = {name: set() for name in service.tier1.toolkits}
     for tool in service.catalog.tools.values():
         tools_by_kit.setdefault(tool.toolkit, set()).add(tool.id)
