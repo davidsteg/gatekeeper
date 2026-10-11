@@ -76,6 +76,23 @@ describe("sign-in", () => {
     await waitFor(() => expect(posted).toEqual({ identity: "eye", password: "viewer-console-password" }));
     expect(await screen.findByText("Could not load this page.")).toBeInTheDocument();
   });
+
+  it("returns to the page it was opened at, query included, after sign-in", async () => {
+    serve((url, init) => {
+      if (url.endsWith("/session") && !init.method) return json(401, { error: "Not signed in." });
+      if (url.endsWith("/session") && init.method === "POST") return json(200, SESSION);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, []);
+      if (url.includes("/requests/decided")) return json(200, { entries: [], next_cursor: null, total: 0 });
+      if (url.endsWith("/requests/toolkits")) return json(200, []);
+      return json(200, {});
+    });
+    renderAt("/requests?tab=toolkit");
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("Identity"), "eye");
+    await user.type(screen.getByLabelText("Password"), "viewer-console-password");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("tab", { name: "Toolkit", selected: true })).toBeInTheDocument();
+  });
 });
 
 describe("credentials page", () => {

@@ -40,11 +40,13 @@ GONE_MESSAGE = (
 )
 
 
-def app_path_for(path: str) -> str:
-    """`/ui/<rest>` -> `/app/<rest>`. The target always starts with `/app/`,
-    so no request can turn it into a redirect to another origin."""
+def app_path_for(path: str, query: str = "") -> str:
+    """`/ui/<rest>?<query>` -> `/app/<rest>?<query>`. The target always
+    starts with `/app/`, so no request can turn it into a redirect to
+    another origin; the query is kept because pages read it
+    (`/ui/requests?tab=toolkit`)."""
     rest = path[len(UI_PREFIX):].lstrip("/")
-    return f"{APP_PREFIX}/{rest}"
+    return f"{APP_PREFIX}/{rest}" + (f"?{query}" if query else "")
 
 
 def build_ui_routes(
@@ -54,7 +56,9 @@ def build_ui_routes(
     async def to_app(request: Request) -> Response:
         if request.method not in ("GET", "HEAD"):
             return PlainTextResponse(GONE_MESSAGE, status_code=410)
-        return RedirectResponse(app_path_for(request.url.path), status_code=308)
+        return RedirectResponse(
+            app_path_for(request.url.path, request.url.query), status_code=308
+        )
 
     async def root(_request: Request) -> Response:
         return RedirectResponse(f"{APP_PREFIX}/", status_code=303)
