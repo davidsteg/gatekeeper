@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { apiGet, apiSend, type Schemas } from "@/api/client";
+import { apiGet, apiSend, etagFor, type Schemas } from "@/api/client";
 import { useAuth, useCanWrite } from "@/auth";
 import { ConfirmButton, OneTimeSecret, Textarea, useWrite, WriteError } from "@/components/forms";
 import { PageHeader } from "@/components/Layout";
@@ -46,14 +46,14 @@ export function Identities() {
           {editing === "" && (
             <IdentityEditor
               onDone={(token) => { setEditing(null); if (token) setIssued(token); }}
-              onReload={() => void query.refetch()}
+              onReload={() => query.refetch()}
             />
           )}
           {query.data.map((ident) =>
             editing === ident.id ? (
               <IdentityEditor
                 key={ident.id} current={ident}
-                onDone={() => setEditing(null)} onReload={() => void query.refetch()}
+                onDone={() => setEditing(null)} onReload={() => query.refetch()}
               />
             ) : (
               <IdentityCard
@@ -136,7 +136,7 @@ function IdentityCard({ ident, canWrite, onEdit, onToken }: {
 function IdentityEditor({ current, onDone, onReload }: {
   current?: Identity;
   onDone: (token?: TokenIssued) => void;
-  onReload: () => void;
+  onReload: () => Promise<unknown>;
 }) {
   const { session } = useAuth();
   const tools = useQuery({ queryKey: ["tools"], queryFn: () => apiGet("/tools") });
@@ -145,6 +145,10 @@ function IdentityEditor({ current, onDone, onReload }: {
   const [granted, setGranted] = useState<Set<string>>(new Set(current?.tools ?? []));
   const [scopes, setScopes] = useState((current?.scopes ?? []).join("\n"));
   const [password, setPassword] = useState("");
+  // The revision this form was opened on, not whatever the list was last
+  // refetched at: a live update rereads the list while the form is open,
+  // and saving the form's older view on top of it must answer 412.
+  const [etag, setEtag] = useState(() => etagFor(LIST));
   const save = useWrite(
     () => {
       const body = {
@@ -152,8 +156,8 @@ function IdentityEditor({ current, onDone, onReload }: {
         scopes: scopes.split("\n").map((s) => s.trim()).filter(Boolean), password,
       };
       return current
-        ? apiSend("PUT", `${LIST}/${encodeURIComponent(current.id)}`, { body, ifMatchOf: LIST }).then(() => undefined)
-        : apiSend<TokenIssued>("POST", LIST, { body, ifMatchOf: LIST });
+        ? apiSend("PUT", `${LIST}/${encodeURIComponent(current.id)}`, { body, ifMatch: etag }).then(() => undefined)
+        : apiSend<TokenIssued>("POST", LIST, { body, ifMatch: etag });
     },
     // Editing yourself (a new password, say) may end your own session.
     current?.id === session?.identity ? [...INVALIDATES, ["session"]] : INVALIDATES,
@@ -169,7 +173,12 @@ function IdentityEditor({ current, onDone, onReload }: {
           className="space-y-3"
           onSubmit={(e) => { e.preventDefault(); save.mutate(undefined); }}
         >
-          <WriteError error={save.error} onReload={onReload} />
+          <WriteError
+            error={save.error}
+            // Reload means "I have seen the change": the next save is
+            // based on the reread list.
+            onReload={() => void onReload().then(() => { setEtag(etagFor(LIST)); save.reset(); })}
+          />
           <div className="grid gap-3 sm:grid-cols-2">
             <Label text="ID">
               <Input value={id} onChange={(e) => setId(e.target.value)} required maxLength={64} autoComplete="off" />

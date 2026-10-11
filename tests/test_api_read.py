@@ -140,7 +140,7 @@ async def test_no_route_ever_returns_a_credential_value(env, monkeypatch):
         assert meta["name"] == "demo-key" and meta["kind"] == "bearer"
         assert "value" not in meta
         assert listing.headers["etag"] == f'"{credentials.revision()}"'
-        for path in _get_paths() + ["/openapi.json"]:
+        for path in _get_paths(streams=False) + ["/openapi.json"]:
             response = await c.get(f"{API}{path}")
             assert response.status_code == 200, path
             assert plaintext not in response.text, path
@@ -263,7 +263,7 @@ async def test_reads_work_in_read_only_mode(tmp_path, tier1, tool_specs):
 
     async with client(env["app"]) as c:
         await login(c, "eye")
-        for path in _get_paths():
+        for path in _get_paths(streams=False):
             assert (await c.get(f"{API}{path}")).status_code == 200, path
         account = (await c.get(f"{API}/account")).json()
         assert account["can_change_password"] is False
@@ -276,6 +276,6 @@ async def test_reads_write_no_audit_records(env):
         before = len(audit_records(env))
         from test_api_auth import _get_paths
 
-        for path in _get_paths():
+        for path in _get_paths(streams=False):
             await c.get(f"{API}{path}")
     assert len(audit_records(env)) == before

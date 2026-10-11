@@ -17,12 +17,12 @@ import { CodeBlock } from "@/components/ui/copy";
 import { Input, Label } from "@/components/ui/input";
 import { Loading, Notice, QueryError } from "@/components/ui/notice";
 import { cn, formatTime } from "@/lib/utils";
+import { usePollInterval } from "@/live";
 import { Row } from "./Identities";
 
 type Pending = Schemas["PendingItem"];
 type Proposal = Schemas["ToolkitProposalOut"];
 
-const POLL_MS = 15_000;
 const ARCHIVE_PAGE = 25;
 const DONE_CHANGE = new Set(["approved", "rejected", "stale"]);
 const DONE_TOOLKIT = new Set(["deployed", "rejected"]);
@@ -37,7 +37,7 @@ function usePending() {
     queryKey: ["requests", "pending"],
     // Open items only; decided ones come a page at a time from /requests/decided.
     queryFn: () => apiGet("/requests/pending", { query: { status: "pending" } }),
-    refetchInterval: POLL_MS,
+    refetchInterval: usePollInterval(),
   });
 }
 
@@ -45,7 +45,7 @@ function useToolkitProposals() {
   return useQuery({
     queryKey: ["requests", "toolkits"],
     queryFn: () => apiGet("/requests/toolkits"),
-    refetchInterval: POLL_MS,
+    refetchInterval: usePollInterval(),
   });
 }
 

@@ -10,9 +10,9 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Loading, Notice, QueryError } from "@/components/ui/notice";
 import { cn, formatTime } from "@/lib/utils";
+import { usePollInterval } from "@/live";
 import { describeEvent } from "./events";
 
-export const POLL_MS = 15_000;
 
 /** Recharts draws its tooltip white on white-ish text in dark mode unless
  *  told otherwise; the theme tokens follow prefers-color-scheme. */
@@ -31,7 +31,7 @@ export function Overview() {
   const query = useQuery({
     queryKey: ["overview"],
     queryFn: () => apiGet("/overview"),
-    refetchInterval: POLL_MS,
+    refetchInterval: usePollInterval(),
   });
   if (query.isPending) return <Loading />;
   if (query.isError) return <QueryError error={query.error} />;

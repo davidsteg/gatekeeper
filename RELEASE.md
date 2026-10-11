@@ -1,4 +1,25 @@
-<<<<<<< HEAD
+## 1.3.0
+
+The console updates itself. A new change request, a tool call, or a change someone else made shows up on the page you have open, without a reload.
+
+### Added
+
+- **Live updates.** `GET /api/v1/events` is a Server-Sent Events stream for a signed-in console. When something is audited (a call, a proposal from `/admin/mcp`, a decision, a sign-in, a tool or identity change), it sends the names of the pages that are now out of date, such as `requests` or `audit`, and the console refetches those through the normal API. The stream carries topic names only, never IDs, values or agent text.
+- The sidebar says **Live** while the stream is up and **Polling** when it is not. While live, pages stop their 15-second polling (a two-minute safety poll stays); without the stream they poll as before. After a dropped connection the console refetches everything once it is back.
+
+### Changed
+
+- `gatekeeper serve` gives open requests five seconds on shutdown (`timeout_graceful_shutdown`) and then closes them. Without that, an open console tab would hold up every shutdown, because its stream never ends by itself.
+- The stream ends when its session does (sign-out, expiry, a password change, a deleted identity), checked every 15 seconds, and is reopened by the browser every ten minutes. At most 64 streams are open at once; beyond that the console polls.
+
+### Fixed
+
+- **An open edit form could overwrite a change made elsewhere.** The identity and tool editors sent the ETag of the latest read of the list, and anything that reread the list while the form was open (a window refocus before, live updates now) moved it forward, so a save based on an older view went through instead of answering "Changed elsewhere". They now send the revision the form was opened on.
+
+### Upgrading
+
+- Behind a reverse proxy, the stream needs response buffering off for `text/event-stream` and a read timeout above 15 seconds. nginx honours the `X-Accel-Buffering: no` header gatekeeper sends. If the proxy cannot stream, the console falls back to polling. See docs/DEPLOYMENT.md, "Behind a reverse proxy".
+
 ## 1.2.0
 
 A credential slot with the wrong header or kind can be repaired in place, keeping its stored secret.
@@ -10,7 +31,7 @@ A credential slot with the wrong header or kind can be repaired in place, keepin
 - A rename is refused while any toolkit or destination references the slot, at proposal time and again at approval, because the binding is Tier 1 and would dangle. Changing kind or header on a bound slot is allowed, since the binding is by name.
 - An approved update clears the slot's `suspect_status` and probe result, which described the old header, and probes again when a probe URL is set. It is audited as `credential_update` with the changed field names, the kind and the header name, never the value.
 - The proposal is checked for staleness against that one slot's kind, header, probe URL and creation time. Another approved change to the slot makes it stale; a failing call marking the slot suspect, or a rotation, does not. Listing the queue closes it when the slot has been deleted, or when a rename's new name has been taken.
-=======
+
 ## 1.1.2
 
 A review of every console page on a desktop browser, with the bugs it found fixed. Nothing about configuration, the API's shape or `/mcp` changes.
@@ -38,7 +59,6 @@ A review of every console page on a desktop browser, with the bugs it found fixe
 
 - **An old `/ui` link keeps its query.** `/ui/requests?tab=toolkit` used to redirect to `/app/requests` and drop `?tab=toolkit`; it now lands on `/app/requests?tab=toolkit`. The target still always starts with `/app/`.
 - **Sign-in returns to the page you opened.** Opening any console page while signed out goes to the sign-in form, and signing in used to land on Overview. It now goes back to the page you opened, query included.
->>>>>>> origin/main
 
 ## 1.1.0
 
