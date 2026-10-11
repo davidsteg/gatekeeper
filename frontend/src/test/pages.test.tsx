@@ -599,6 +599,20 @@ describe("ui review fixes", () => {
     expect(describeEvent(failure).text).toBe("Sign-in failed (unknown_token) from 10.10.110.102");
   });
 
+  it("shows the address next to the identity on every audited call", async () => {
+    const call = {
+      ts: "2026-10-11T18:10:00Z", kind: "call", identity: "homelab", tool: "file.write",
+      outcome: "ok", client: "10.10.110.5",
+    };
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.includes("/audit")) return json(200, { entries: [call], next_cursor: null, window_truncated: false });
+      return undefined;
+    });
+    renderAt("/audit");
+    expect(await screen.findByText("homelab (10.10.110.5)")).toBeInTheDocument();
+  });
+
   it("names what an agent proposed in the overview feed, not its random ID", async () => {
     const { describeEvent } = await import("@/pages/events");
     expect(describeEvent({

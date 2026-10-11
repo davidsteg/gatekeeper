@@ -129,7 +129,7 @@ class AuthMiddleware:
             "method": scope.get("method", "?"),
             "path": path,
         }
-        agent = _header(scope, b"user-agent")
+        agent = _header(scope, "user-agent")
         if agent:
             # Names the client program (an MCP SDK, curl, a browser); capped
             # so a hostile header cannot bloat the log.
@@ -222,11 +222,12 @@ def _header(scope: Scope, name: str) -> str | None:
     return None
 
 
-def _header(scope: Scope, wanted: bytes) -> str:
-    for name, value in scope.get("headers", ()):
-        if name == wanted:
-            return value.decode("latin-1")
-    return ""
+def _client_of(ctx: Any) -> str | None:
+    """The caller's address from an MCP request context: the peer, or the
+    forwarded address behind a trusted proxy (`--trusted-proxies`)."""
+    scope = getattr(getattr(ctx, "request", None), "scope", None) or {}
+    peer = scope.get("client")
+    return peer[0] if peer else None
 
 
 def _bearer_token(scope: Scope) -> str | None:
@@ -309,7 +310,9 @@ def build_mcp_server(service: Service, notifier: CatalogNotifier) -> Server[None
     ) -> types.CallToolResult:
         identity = _identity_from(ctx)
         try:
-            result = await service.call(identity, params.name, params.arguments or {})
+            result = await service.call(
+                identity, params.name, params.arguments or {}, client=_client_of(ctx)
+            )
         except Denied as denial:
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=denial.agent_message)],

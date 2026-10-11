@@ -154,6 +154,7 @@ class AuditLog:
         denial_reason: str | None = None,
         detail: str | None = None,
         credential_names: list[str] | None = None,
+        client: str | None = None,
     ) -> None:
         """A call -- successful, denied, or with unclear outcome.
 
@@ -177,6 +178,9 @@ class AuditLog:
                 "detail": detail,
                 # FR-10.7: names of used credentials, never their values.
                 "credentials": credential_names or [],
+                # The caller's address, so a call can be traced to a machine
+                # as well as to an identity. Absent when not called over HTTP.
+                **({"client": client} if client else {}),
             }
         )
 
