@@ -1,9 +1,25 @@
-## 1.3.1
+## 1.3.2
 
 ### Fixed
 
 - **One click on "Yes, rotate token" now rotates once.** After a rotation, the confirm question stayed open under the new token, so a second click issued yet another token without asking again. The token that had just been copied stopped working, which looked like the token had been rotated on its own. The question now closes as soon as the write succeeds, on the Identities, Tools and Credentials pages alike. It stays open with the error when the write fails.
 - **A rotated token now appears in the identity's own card**, right above its buttons, instead of at the top of the page where it went unseen on a long list. Every one-time secret (a rotated token, a new identity's token) scrolls into view and has a **Copy** button. On a plain-HTTP LAN deployment, where browsers withhold the clipboard API, the button selects the token and copies it with the browser's copy command.
+
+## 1.3.1
+
+The console works on a phone. Nothing changes on a desktop browser.
+
+### Changed
+
+- **Navigation on a phone.** The row of eleven links that scrolled sideways at the top is replaced by a tab bar at the bottom (Overview, Requests with its open count, Tools, Audit, More). **More** opens a sheet with every page, the version, who is signed in, and **Sign out**, which a phone could not reach at all before. The bar sits above the home indicator on notched phones (`viewport-fit=cover` plus safe-area padding).
+- **Audit log on a phone** is a list, one entry per block (time, kind and outcome on top, who → what below, the reason underneath), instead of a six-column table squeezed to a few characters per column. The filter fields take the full width.
+- Overview and Stats tiles sit two to a row on a phone instead of one, and the access map keeps the identity column in place while the toolkit columns scroll.
+- Buttons are a little taller on touch screens, and text fields use 16px type below the `sm` breakpoint, so iOS no longer zooms the page when a field gets focus.
+- The browser bar follows light and dark mode (`theme-color` per scheme), and the console opens full-screen when added to the home screen.
+
+### Fixed
+
+- A long tool ID in a change request's review ran past the card on a narrow screen; it wraps now.
 
 ## 1.3.0
 

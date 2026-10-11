@@ -422,7 +422,7 @@ export function ToolEditor() {
           />
           <Textarea
             aria-label="Definition (YAML)"
-            className="min-h-[28rem] w-full font-mono text-xs"
+            className="min-h-[28rem] w-full font-mono text-base sm:text-xs"
             spellCheck={false}
             // YAML: a soft-wrapped line reads as a new key.
             wrap="off"
