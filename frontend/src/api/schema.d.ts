@@ -767,6 +767,8 @@ export interface components {
         CredentialCreate: {
             /** Header */
             header?: string | null;
+            /** Header Format */
+            header_format?: string | null;
             /** Kind */
             kind: string;
             /** Name */
@@ -803,6 +805,8 @@ export interface components {
             created_at: string;
             /** Header */
             header: string | null;
+            /** Header Format */
+            header_format?: string | null;
             /** In Overlap */
             in_overlap: boolean;
             /** Kind */

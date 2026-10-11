@@ -58,8 +58,15 @@ from typing import Any
 from . import __version__
 from .api.service import credential_summaries, read_audit, toolkit_summaries
 from .catalog import normalize_tool_entry, parse_tool_spec
-from .credentials import HEADER_KINDS, HEADER_NAME_RE, VALUE_SHAPES, CredentialStore
+from .credentials import (
+    HEADER_KINDS,
+    HEADER_NAME_RE,
+    VALUE_SHAPES,
+    CredentialStore,
+    check_header_format,
+)
 from .credentials import KINDS as CREDENTIAL_KINDS
+from .credentials import WriteRefused as CredentialWriteRefused
 from .errors import ConfigError
 from .identity import ROLES, UI_ROLES
 from .pending import PendingAction, PendingStore
@@ -727,13 +734,23 @@ class AdminService:
             raise AdminActionError("'probe_url' must be an http(s) URL if given.")
         if kind in ("api_key_header", "url_query") and not header:
             raise AdminActionError(f"kind {kind!r} requires a 'header' (header/param name).")
+        header_format = args.get("header_format")
+        if header_format is not None and not isinstance(header_format, str):
+            raise AdminActionError("'header_format' must be a string if given.")
+        try:
+            header_format = check_header_format(kind, header_format)
+        except CredentialWriteRefused as exc:
+            raise AdminActionError(str(exc)) from None
         existing_names = {meta.name for meta in self.credentials.names()}
         if name in existing_names:
             raise AdminActionError(f"A credential named {name!r} already exists.")
         item = self.pending.propose(
             action="cred_propose",
             actor=actor,
-            payload={"name": name, "kind": kind, "header": header, "probe_url": probe_url},
+            payload={
+                "name": name, "kind": kind, "header": header, "probe_url": probe_url,
+                **({"header_format": header_format} if header_format else {}),
+            },
             base_rev=self.credentials.revision(),
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
@@ -786,7 +803,7 @@ class AdminService:
                 f"No credential slot named {name!r} exists "
                 f"(known credentials: {known}). Check admin.cred_list."
             )
-        for field in ("new_name", "kind", "header", "probe_url"):
+        for field in ("new_name", "kind", "header", "header_format", "probe_url"):
             if field in args and args[field] is not None and not isinstance(args[field], str):
                 raise AdminActionError(f"'{field}' must be a string if given.")
 
@@ -837,6 +854,16 @@ class AdminService:
             )
         if header is not None and not HEADER_NAME_RE.match(header):
             raise AdminActionError(f"{header!r} is not a valid header/param name.")
+        if "header_format" in args:
+            header_format = args.get("header_format") or None
+        else:
+            # Kept only while the slot stays an `api_key_header`: the
+            # format wraps that header's value and means nothing elsewhere.
+            header_format = current.header_format if kind == "api_key_header" else None
+        try:
+            header_format = check_header_format(kind, header_format)
+        except CredentialWriteRefused as exc:
+            raise AdminActionError(str(exc)) from None
         if "probe_url" in args:
             probe_url = (args.get("probe_url") or "").strip() or None
         else:
@@ -844,8 +871,15 @@ class AdminService:
         if probe_url and not probe_url.startswith(("http://", "https://")):
             raise AdminActionError("'probe_url' must be an http(s) URL if given.")
 
-        prev = {"kind": current.kind, "header": current.header, "probe_url": current.probe_url}
-        if new_name is None and prev == {"kind": kind, "header": header, "probe_url": probe_url}:
+        prev = {
+            "kind": current.kind, "header": current.header,
+            "header_format": current.header_format, "probe_url": current.probe_url,
+        }
+        proposed = {
+            "kind": kind, "header": header, "header_format": header_format,
+            "probe_url": probe_url,
+        }
+        if new_name is None and prev == proposed:
             raise AdminActionError(
                 f"Nothing to change: {name!r} already has kind {kind!r}"
                 + (f", header {header!r}" if header else "")
@@ -859,6 +893,7 @@ class AdminService:
                 "new_name": new_name,
                 "kind": kind,
                 "header": header,
+                "header_format": header_format,
                 "probe_url": probe_url,
                 # Snapshotted for the reviewer's diff, like `grant_set`'s
                 # `prev_tools`: an archived item still shows what it changed.
@@ -983,6 +1018,7 @@ def _apply_cred_update(
         kind=payload["kind"],
         header=payload.get("header"),
         probe_url=payload.get("probe_url"),
+        header_format=payload.get("header_format"),
         new_name=new_name,
         actor=item.actor,
         rev=credentials.revision(),

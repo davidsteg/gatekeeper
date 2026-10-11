@@ -186,6 +186,34 @@ async def test_url_query_credential_injected_as_query_param(toolkit, tmp_path, m
     assert "X-Api-Key" not in payload["headers"]
 
 
+async def test_header_format_wraps_the_secret(toolkit, tmp_path, monkeypatch):
+    """Jellyfin wants `Authorization: MediaBrowser Token="<token>"`, not the
+    bare token: an `api_key_header` slot's `header_format` puts the secret
+    where `{value}` is and sends the rest as written."""
+    tk, tier1 = toolkit
+    monkeypatch.setenv(KEY_ENV, generate_master_key())
+    from gatekeeper.audit import AuditLog
+
+    store = CredentialStore(
+        path=str(tmp_path / "credentials5.yaml"), audit=AuditLog(str(tmp_path / "logs5"))
+    )
+    store.create(
+        "demo_cred", kind="api_key_header", header="Authorization",
+        header_format='MediaBrowser Token="{value}"',
+        value="jf-token-123", actor="test", rev="",
+    )
+    tool = _tool(tier1)
+    method, path, query, body = validate.build_http_request(tool, {"name": "widgets"}, tk)
+    result = await execute_http.run(
+        method=method, path=path, query=query, body=body, toolkit=tk,
+        credentials=store, timeout_seconds=5, max_output_bytes=65536,
+        idempotent=True,
+    )
+    assert result.outcome == OUTCOME_OK
+    headers = json.loads(result.stdout)["headers"]
+    assert headers.get("Authorization") == 'MediaBrowser Token="jf-token-123"'
+
+
 async def test_credential_masked_when_redacted(toolkit, credentials):
     tk, tier1 = toolkit
     tool = _tool(tier1)

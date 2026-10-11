@@ -259,3 +259,107 @@ async def test_console_approves_it_and_shows_the_diff(make):
         assert r.json()["status"] == "approved"
         assert SECRET not in r.text
     assert _meta(env).header == "Authorization"
+
+
+# -- header_format: a header value that wraps the secret (Jellyfin) ---------
+
+
+def test_header_format_is_proposed_and_applied_with_the_header(make):
+    env = make()
+    result = env["admin"].cred_update(
+        "hermes",
+        {
+            "name": "jellyfin", "header": "Authorization",
+            "header_format": 'MediaBrowser Token="{value}"',
+        },
+    )
+    _approve(env, result["pending_id"])
+    meta = _meta(env)
+    assert (meta.header, meta.header_format) == (
+        "Authorization", 'MediaBrowser Token="{value}"',
+    )
+    assert env["credentials"]._resolve("jellyfin").value == SECRET
+    (update,) = [line for line in _audit(env) if line.get("action") == "credential_update"]
+    assert update["changed"] == ["header", "header_format"]
+    assert all(SECRET not in json.dumps(line) for line in _audit(env))
+
+
+@pytest.mark.parametrize(
+    ("header_format", "reason"),
+    [
+        ("MediaBrowser Token=x", "exactly once"),
+        ("{value} {value}", "exactly once"),
+        ('MediaBrowser Token="{value}"\r\nX-Evil: 1', "one line"),
+    ],
+)
+def test_a_header_format_must_be_one_line_with_one_placeholder(make, header_format, reason):
+    env = make()
+    with pytest.raises(AdminActionError, match=reason):
+        env["admin"].cred_update(
+            "hermes", {"name": "jellyfin", "header_format": header_format}
+        )
+    assert env["pending"].list() == []
+
+
+def test_a_header_format_only_fits_an_api_key_header(make):
+    env = make()
+    with pytest.raises(AdminActionError, match="api_key_header"):
+        env["admin"].cred_update(
+            "hermes",
+            {"name": "jellyfin", "kind": "bearer", "header_format": "Token {value}"},
+        )
+
+
+def test_switching_away_from_api_key_header_drops_the_format(make):
+    env = make()
+    first = env["admin"].cred_update(
+        "hermes", {"name": "jellyfin", "header_format": "Token {value}"}
+    )
+    _approve(env, first["pending_id"])
+    second = env["admin"].cred_update("hermes", {"name": "jellyfin", "kind": "bearer"})
+    assert env["pending"].get(second["pending_id"]).payload["header_format"] is None
+    _approve(env, second["pending_id"])
+    assert _meta(env).header_format is None
+
+
+def test_cred_propose_carries_a_header_format_to_the_created_slot(make):
+    env = make()
+    result = env["admin"].cred_propose(
+        "hermes",
+        {
+            "name": "emby", "kind": "api_key_header", "header": "Authorization",
+            "header_format": 'MediaBrowser Token="{value}"',
+        },
+    )
+    item = env["pending"].get(result["pending_id"])
+    assert item.payload["header_format"] == 'MediaBrowser Token="{value}"'
+    with pytest.raises(AdminActionError, match="exactly once"):
+        env["admin"].cred_propose(
+            "hermes",
+            {"name": "emby2", "kind": "api_key_header", "header": "X", "header_format": "x"},
+        )
+
+
+async def test_console_fill_creates_the_slot_with_its_header_format(make):
+    env = make()
+    result = env["admin"].cred_propose(
+        "hermes",
+        {
+            "name": "emby", "kind": "api_key_header", "header": "Authorization",
+            "header_format": 'MediaBrowser Token="{value}"',
+        },
+    )
+    async with client(env["app"]) as c:
+        info = await login(c, "root")
+        items = (await c.get(f"{API}/requests/pending")).json()
+        (item,) = [i for i in items if i["id"] == result["pending_id"]]
+        assert 'value format MediaBrowser Token="{value}"' in item["review"]["headline"]
+        r = await c.post(
+            f"{API}/requests/pending/{result['pending_id']}/credential",
+            json={"value": "emby-secret"}, headers={"X-CSRF-Token": info["csrf"]},
+        )
+        assert r.status_code == 200, r.text
+        listed = (await c.get(f"{API}/credentials")).json()
+    (emby,) = [m for m in listed["credentials"] if m["name"] == "emby"]
+    assert emby["header_format"] == 'MediaBrowser Token="{value}"'
+    assert "emby-secret" not in json.dumps(listed)

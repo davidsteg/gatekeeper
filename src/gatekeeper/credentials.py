@@ -106,11 +106,52 @@ VALUE_SHAPES: dict[str, str] = {
 #: smuggle a second header line into a request.
 HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 
+#: The placeholder a `header_format` must contain exactly once.
+VALUE_PLACEHOLDER = "{value}"
+
+
+def check_header_format(kind: str, header_format: str | None) -> str | None:
+    """Validates an `api_key_header` slot's optional header value format and
+    returns it normalized (`None` for empty), or raises `WriteRefused`.
+
+    Some services want more than the bare token in their header: Jellyfin
+    takes `Authorization: MediaBrowser Token="<token>"`. The format is the
+    header's value with `{value}` where the secret goes. It is metadata, not
+    a secret -- the reviewer sees it -- so it is refused if it is anything
+    but one line with the placeholder exactly once.
+    """
+    header_format = header_format or None
+    if header_format is None:
+        return None
+    if kind != "api_key_header":
+        raise WriteRefused(
+            f"A header format only applies to kind 'api_key_header', not {kind!r}."
+        )
+    if len(header_format) > 256:
+        raise WriteRefused("A header format must be at most 256 characters.")
+    if header_format.count(VALUE_PLACEHOLDER) != 1:
+        raise WriteRefused(
+            f"A header format must contain {VALUE_PLACEHOLDER} exactly once, "
+            'e.g. MediaBrowser Token="{value}".'
+        )
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in header_format):
+        raise WriteRefused("A header format must be one line without control characters.")
+    return header_format
+
+
+def format_header_value(header_format: str | None, value: str) -> str:
+    """The header value a request carries: the secret, or the format with
+    the secret in place of `{value}`."""
+    if not header_format:
+        return value
+    return header_format.replace(VALUE_PLACEHOLDER, value, 1)
+
+
 #: The fields that make up a slot's identity -- what `record_revision`
 #: fingerprints. Probe and suspect metadata are left out on purpose: a call
 #: failing with 401 marks the slot suspect, and that must not turn a
 #: pending repair of that very slot stale.
-_IDENTITY_FIELDS = ("kind", "header", "probe_url", "created_at")
+_IDENTITY_FIELDS = ("kind", "header", "header_format", "probe_url", "created_at")
 
 PROBE_STATUSES = frozenset({"no_probe_url", "verified", "auth_failed", "unreachable"})
 
@@ -180,6 +221,7 @@ class CredentialMeta:
     rotated_at: str | None
     in_overlap: bool
     probe_url: str | None = None
+    header_format: str | None = None
     probe_status: str = "no_probe_url"
     probe_checked_at: str | None = None
     suspect_status: str | None = None
@@ -196,6 +238,7 @@ class ResolvedCredential:
     header: str | None
     value: str
     previous_value: str | None = None
+    header_format: str | None = None
 
 
 def _now() -> str:
@@ -322,6 +365,7 @@ class CredentialStore:
                     rotated_at=spec.get("rotated_at"),
                     in_overlap=bool(spec.get("previous_ciphertext")),
                     probe_url=spec.get("probe_url"),
+                    header_format=spec.get("header_format"),
                     probe_status=str(spec.get("probe_status") or "no_probe_url"),
                     probe_checked_at=spec.get("probe_checked_at"),
                     suspect_status=spec.get("suspect_status"),
@@ -339,6 +383,7 @@ class CredentialStore:
         value: str,
         header: str | None = None,
         probe_url: str | None = None,
+        header_format: str | None = None,
         actor: str,
         rev: str,
     ) -> None:
@@ -346,6 +391,7 @@ class CredentialStore:
             raise WriteRefused(f"Unknown credential kind {kind!r} (allowed: {sorted(KINDS)})")
         if kind in ("api_key_header", "url_query") and not header:
             raise WriteRefused(f"kind {kind!r} requires a header/param name")
+        header_format = check_header_format(kind, header_format)
         if not value:
             raise WriteRefused("A credential needs a value")
         probe_url = (probe_url or "").strip() or None
@@ -359,6 +405,7 @@ class CredentialStore:
             section[name] = {
                 "kind": kind,
                 "header": header,
+                "header_format": header_format,
                 "ciphertext": self._encrypt(value),
                 "created_at": _now(),
                 "rotated_at": None,
@@ -379,6 +426,7 @@ class CredentialStore:
                 "action": "credential_create",
                 "target": name,
                 "credential_kind": kind,
+                **({"header_format": header_format} if header_format else {}),
             }
         )
 
@@ -436,6 +484,7 @@ class CredentialStore:
         header: str | None,
         probe_url: str | None,
         new_name: str | None = None,
+        header_format: str | None = None,
         actor: str,
         rev: str,
     ) -> None:
@@ -455,6 +504,7 @@ class CredentialStore:
             raise WriteRefused(f"kind {kind!r} requires a header/param name")
         if header is not None and not HEADER_NAME_RE.match(header):
             raise WriteRefused(f"{header!r} is not a valid header/param name")
+        header_format = check_header_format(kind, header_format)
         probe_url = (probe_url or "").strip() or None
         if probe_url and not probe_url.startswith(("http://", "https://")):
             raise WriteRefused("probe_url must be an http(s) URL")
@@ -477,7 +527,10 @@ class CredentialStore:
                 raise WriteRefused(f"A credential named {target!r} already exists.")
             changed = [
                 field
-                for field, new in (("kind", kind), ("header", header), ("probe_url", probe_url))
+                for field, new in (
+                    ("kind", kind), ("header", header), ("header_format", header_format),
+                    ("probe_url", probe_url),
+                )
                 if existing.get(field) != new
             ]
             if target != name:
@@ -486,6 +539,7 @@ class CredentialStore:
                 **existing,
                 "kind": kind,
                 "header": header,
+                "header_format": header_format,
                 "probe_url": probe_url,
                 # The old verdicts were about the old header/kind; keeping
                 # them would leave a repaired slot flagged `auth_failed`.
@@ -510,6 +564,7 @@ class CredentialStore:
             "target": name,
             "credential_kind": kind,
             "header": header,
+            "header_format": header_format,
             "changed": changed,
         }
         if target != name:
@@ -635,4 +690,5 @@ class CredentialStore:
             header=spec.get("header"),
             value=self._decrypt(spec["ciphertext"]),
             previous_value=previous_value,
+            header_format=spec.get("header_format"),
         )

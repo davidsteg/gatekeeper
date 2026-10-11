@@ -581,6 +581,8 @@ src/gatekeeper/
                        caps, resource locks
   execute_http.py      The `http` executor: SSRF-safe target resolution,
                        no-redirect-follow, credential-as-header injection
+                       (optionally wrapped by an api_key_header
+                       slot's header_format, e.g. MediaBrowser Token="{value}")
   execute_microsoft.py The `microsoft` executor: the `google` one with
                        Microsoft Graph behind it -- runs
                        `_microsoft_api/microsoft_api.py` (stdlib only,

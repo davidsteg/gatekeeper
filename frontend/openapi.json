@@ -208,6 +208,18 @@
             ],
             "title": "Header"
           },
+          "header_format": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Format"
+          },
           "kind": {
             "maxLength": 32,
             "title": "Kind",
@@ -306,6 +318,17 @@
               }
             ],
             "title": "Header"
+          },
+          "header_format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Format"
           },
           "in_overlap": {
             "title": "In Overlap",
