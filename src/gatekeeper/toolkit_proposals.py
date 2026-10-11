@@ -79,12 +79,11 @@ import tempfile
 import threading
 from typing import Any
 
-import yaml
-
 from ._atomic import atomic_write as _atomic_write
 from ._atomic import dump as _dump
 from ._atomic import load_cached as _load_cached
 from ._atomic import revision as _revision
+from ._atomic import safe_load as _yaml_load
 from ._atomic import writable as _writable
 from ._runas import RunAsError, parse_run_as
 from .audit import AuditLog
@@ -167,7 +166,7 @@ def _tools_referencing_toolkit(tools_path: str, toolkit_name: str) -> set[str]:
     if not os.path.exists(tools_path):
         return set()
     with open(tools_path, encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle.read()) or {}
+        raw = _yaml_load(handle.read()) or {}
     entries = raw.get("tools")
     if not isinstance(entries, list):
         return set()
@@ -421,7 +420,7 @@ class ToolkitProposalStore:
                     "file or its directory is mounted read-only."
                 )
             with open(self.toolkits_path, encoding="utf-8") as handle:
-                raw = yaml.safe_load(handle.read()) or {}
+                raw = _yaml_load(handle.read()) or {}
             toolkit_section = raw.get("toolkits")
             if toolkit_section is None:
                 toolkit_section = {}

@@ -16,8 +16,7 @@ from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
-import yaml
-
+from ._atomic import safe_load as _yaml_load
 from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, read_config_file
 
@@ -935,7 +934,7 @@ def load_tier1(path: str) -> Tier1:
             "no safe default -- create it before starting. A starting point "
             "sits in config/examples/toolkits.yaml, or run 'gatekeeper init'."
         )
-    raw = yaml.safe_load(
+    raw = _yaml_load(
         read_config_file(path, "A starting point sits in config/examples/toolkits.yaml.")
     ) or {}
 
