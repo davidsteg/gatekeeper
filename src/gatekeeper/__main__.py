@@ -893,40 +893,6 @@ def cmd_token(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_integration(args: argparse.Namespace) -> int:
-    """Prints the same toolkit YAML the `/app/toolkits/reference` page shows.
-
-    A terminal formatter around `integrations.INTEGRATIONS`, nothing more -- useful
-    right after 'gatekeeper init', before --ui is even reachable, or for
-    anyone who would rather copy from a shell than a browser.
-    """
-    from .integrations import INTEGRATIONS
-
-    if args.integration_action == "list":
-        for key in sorted(INTEGRATIONS):
-            integration = INTEGRATIONS[key]
-            print(f"{key:<14} {integration.display_name}")
-        return 0
-
-    integration = INTEGRATIONS.get(args.key)
-    if integration is None:
-        print(
-            f"ERROR: no integration named {args.key!r}. Run 'gatekeeper integration list' "
-            "to see the available ones.",
-            file=sys.stderr,
-        )
-        return 1
-    print(f"# {integration.display_name} -- paste under 'toolkits:' in toolkits.yaml,")
-    print("# fill in the CHANGEME placeholders, then redeploy (FR-4.11).")
-    if integration.notes:
-        print(f"# {integration.notes}")
-    print(integration.toolkit_yaml, end="")
-    print(f"\n# {len(integration.tool_specs)} starter tool(s), created via /app/tools/integrations:")
-    for spec in integration.tool_specs:
-        print(f"#   {spec['id']}: {spec.get('title', '')}")
-    return 0
-
-
 def main() -> int:
     # Before argparse, before logging, before any file is touched. A
     # `gatekeeper init` that ran as root would leave root-owned config
@@ -1024,18 +990,6 @@ def main() -> int:
         "credential-key", help="Generate the credential store's master key"
     )
     credential_key.set_defaults(func=cmd_credential_key)
-
-    integration = sub.add_parser(
-        "integration", help="Print starter toolkit YAML for a known service"
-    )
-    integration_sub = integration.add_subparsers(dest="integration_action", required=True)
-    integration_list = integration_sub.add_parser("list", help="List available integrations")
-    integration_list.set_defaults(func=cmd_integration)
-    integration_show = integration_sub.add_parser(
-        "show", help="Print one integration's toolkit YAML and starter tools"
-    )
-    integration_show.add_argument("key", help="Integration key, e.g. sonarr (see 'integration list')")
-    integration_show.set_defaults(func=cmd_integration)
 
     token = sub.add_parser("token", help="Generate an API token")
     token.add_argument("--token", help="Hash an existing token instead of generating one")

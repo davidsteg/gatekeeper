@@ -196,8 +196,6 @@ gatekeeper init                        # empty config + one admin
 gatekeeper token                       # generate an API token
 gatekeeper password --identity <id>    # set a console password
 gatekeeper credential-key              # generate the credential-store master key
-gatekeeper integration list             # list available service integrations
-gatekeeper integration show <key>       # print one integration's toolkit YAML + starter tools
 gatekeeper serve --ui                  # start the server with the admin console
 ```
 

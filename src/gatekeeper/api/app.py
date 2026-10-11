@@ -242,32 +242,6 @@ def build_api_app(context: ApiContext | None) -> FastAPI:
             set_etag(response, context.store.tools_revision())
         return detail
 
-    @app.get("/integrations", response_model=list[models.Integration], tags=["tools"])
-    def integrations(
-        _s: Session = Depends(require_viewer), context: ApiContext = Depends(ctx)
-    ) -> Any:
-        return rm.integrations_view(context.service)
-
-    @app.get(
-        "/integrations/{key}/logo.svg", tags=["tools"],
-        response_class=Response, responses={200: {"content": {"image/svg+xml": {}}}},
-    )
-    def integration_logo(key: str, _s: Session = Depends(require_viewer)) -> Response:
-        """The brand mark as an image, for `<img src>`. An SVG loaded as an
-        image never runs script, so the SPA needs no `innerHTML` for it."""
-        from ..integrations import INTEGRATIONS
-
-        integration = INTEGRATIONS.get(key)
-        if integration is None:
-            raise ApiError(404, f"No integration {key!r}.")
-        return Response(
-            integration.logo_svg, media_type="image/svg+xml",
-            headers={
-                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-                "Cache-Control": "private, max-age=3600",
-            },
-        )
-
     # -- Identities --------------------------------------------------------------
 
     @app.get("/identities", response_model=list[models.IdentityOut], tags=["identities"])

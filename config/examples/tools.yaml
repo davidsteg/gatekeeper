@@ -810,6 +810,36 @@ tools:
     timeout_seconds: 30
     max_output_bytes: 8192
 
+  - id: drive.search
+    toolkit: drive
+    version: 1
+    title: Search files
+    description: Searches Google Drive. By default the query is matched as full text; set raw_query to pass it as a Drive API query.
+    category: read
+    idempotent: true
+    enabled: false
+    google_action: drive search
+    google_args:
+      query:
+        positional: true
+      # google_api.py's --raw-query is an argparse store_true: present or
+      # absent, never valued. A switch: is the only mapping that emits it.
+      raw_query:
+        switch: --raw-query
+    parameters:
+      query:
+        type: string
+        required: true
+        pattern: "^.{1,500}$"
+        description: Drive search query.
+      raw_query:
+        type: boolean
+        required: false
+        description: Treat the query as a raw Drive API query instead of a full-text search.
+    required_scopes: ["drive.metadata.readonly"]
+    timeout_seconds: 30
+    max_output_bytes: 65536
+
   - id: drive.upload
     toolkit: drive
     version: 1

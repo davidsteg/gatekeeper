@@ -28,7 +28,7 @@ No shell injection. No command confusion. No hidden side effects.
   reach outside APIs, remote hosts, and a headless coding agent the same way, with
   SSRF-safe target checks, mandatory SSH
   host-key pinning, and secrets kept in a write-only credential store; see
-  [Integrations](#integrations-add-sonarr-pfsense-and-18-others-without-writing-yaml) below
+  [Reaching other services](#reaching-other-services-http-ssh-truenas-opencode) below
 - **Agents can leave each other messages** — the `agent` executor is a mailbox
   between identities: `agent.send_message` addresses another identity,
   `agent.read_messages` collects your own. The sender is your authenticated
@@ -89,28 +89,13 @@ The console is a React single-page app served from the image, backed by a typed 
 
 Toggle between **Cards** (grouped by toolkit, one card per tool with parameters, scopes, and limits) and **Matrix** (a dense table: status, category, idempotency, and who may call each tool).
 
-Each tool is a template — a fixed action, not a free-form command. For a local binary that's a program path, arguments, and parameter rules; for an HTTP service (see Integrations below) it's a method and path instead, shown as `REQUEST` on the card. Either way the editor shows the Tier 1 limits it has to stay inside, so you know what's allowed before you save. Defining and granting are two steps — a tool with no grantees exists but is invisible to every agent.
+Each tool is a template — a fixed action, not a free-form command. For a local binary that's a program path, arguments, and parameter rules; for an HTTP service (see Reaching other services below) it's a method and path instead, shown as `REQUEST` on the card. Either way the editor shows the Tier 1 limits it has to stay inside, so you know what's allowed before you save. Defining and granting are two steps — a tool with no grantees exists but is invisible to every agent.
 
-### Integrations: add Sonarr, pfSense, and 20 others without writing YAML
+### Reaching other services: http, ssh, truenas, opencode
 
-![](.readme-assets/integrations.png)
+Reaching an outside service (Sonarr, Home Assistant, pfSense, TrueNAS, a plain Linux host over SSH, a headless opencode server, …) takes two steps. First a **toolkit**: which host, which address range, which credential. That is a deploy-time decision you paste into `toolkits.yaml` by hand and redeploy. The console can create *tools*, never *toolkits*, on purpose: that boundary is what keeps a compromised admin session from reaching an address nobody approved. **Toolkits → Reference YAML** has a copy-pasteable starting block for every executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`, `google`, `microsoft`, `opencode`, `agent`) with the safe defaults already in place, and `config/examples/toolkits.yaml` is the long form with the reasoning.
 
-Reaching an outside service (Sonarr, Radarr, Home Assistant, pfSense, n8n, TrueNAS, a plain Linux host over SSH, a headless opencode server, …) used to mean nothing — gatekeeper could only run local commands and Docker. Now it has `http`, `truenas`, `ssh`, and `opencode` executors alongside `docker`, and a library of 22 starter integrations for common homelab/SaaS services so you don't have to write the request shapes by hand:
-
-```
- 1. Pick a card                2. Paste its YAML once           3. Create a tool
- ┌─────────────┐               (deploy-time, one-time)          ┌─────────────┐
- │  So Sonarr   │  ───────►    toolkits.yaml + redeploy  ──────►│ ✓ list_series │
- └─────────────┘               (never done by the console)      └─────────────┘
-```
-
-The toolkit itself (which host, which address range, which credential) is still a
-deploy-time decision you paste into `toolkits.yaml` by hand and redeploy — the
-console can create *tools*, never *toolkits*, on purpose (that boundary is what
-keeps a compromised admin session from reaching an address nobody approved).
-Once a toolkit exists, picking one of its starter tools drops you straight into
-the same editor as above, pre-filled instead of blank — still checked against
-the same limits before it's saved.
+Then the **tools**: a method and a path under the toolkit's allowed prefixes, written in the tool editor or created by an admin agent over `/admin/mcp` (`admin.tool_validate`, `admin.tool_create`). Either way each one is checked against the toolkit's limits before it's saved.
 
 ### Credentials: store a secret without ever showing it again
 

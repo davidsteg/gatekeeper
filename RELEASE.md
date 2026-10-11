@@ -1,9 +1,28 @@
-## 1.3.2
+## 1.4.1
 
 ### Fixed
 
 - **One click on "Yes, rotate token" now rotates once.** After a rotation, the confirm question stayed open under the new token, so a second click issued yet another token without asking again. The token that had just been copied stopped working, which looked like the token had been rotated on its own. The question now closes as soon as the write succeeds, on the Identities, Tools and Credentials pages alike. It stays open with the error when the write fails.
 - **A rotated token now appears in the identity's own card**, right above its buttons, instead of at the top of the page where it went unseen on a long list. Every one-time secret (a rotated token, a new identity's token) scrolls into view and has a **Copy** button. On a plain-HTTP LAN deployment, where browsers withhold the clipboard API, the button selects the token and copies it with the browser's copy command.
+
+## 1.4.0
+
+The Integrations library is gone. gatekeeper builds tools from an HTTP API (or a binary, a JSON-RPC method, an opencode operation) directly; a hard-coded list of 25 products with starter tools added nothing an admin agent or the tool editor needed, and every upstream API change made it a little more wrong.
+
+### Removed
+
+- **`/app/tools/integrations`** and its **Integrations** button on the Tools page, along with `GET /api/v1/integrations` and `GET /api/v1/integrations/{key}/logo.svg`.
+- **`gatekeeper integration list` / `gatekeeper integration show <key>`.**
+- `integrations.py` (the 25 service definitions and their logos) and the README screenshot.
+
+### Changed
+
+- **Toolkits → Reference YAML** now shows one starting block per executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`, `google`, `microsoft`, `opencode`, `agent`) instead of one per product. Each keeps the safe defaults the old blocks had: a header credential, a `CHANGEME` host, and an `allowed_cidrs` placeholder that matches no real host, so an unedited paste fails closed. `config/examples/toolkits.yaml` stays the long form.
+- `config/examples/tools.yaml` gains `drive.search`, the worked example of a `switch:` mapping that used to live only in the Drive integration.
+
+### Upgrading
+
+Nothing to change in a deployment: tools created from an integration are ordinary tools in `tools.yaml` and keep working. A bookmark to `/app/tools/integrations` now finds no such tool; scripts calling `gatekeeper integration` get a usage error.
 
 ## 1.3.1
 

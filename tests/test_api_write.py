@@ -208,14 +208,12 @@ async def test_tier1_still_decides(env):
     assert "demo.hello" not in env["service"].catalog.tools
 
 
-async def test_scaffold_and_integration_yaml_prefill_the_editor(env):
+async def test_scaffold_prefills_the_editor(env):
     async with client(env["app"]) as c:
         await login(c, "eye")
         scaffold = (await c.get(f"{API}/tool-scaffold")).json()["yaml"]
         assert yaml.safe_load(scaffold)["toolkit"] == "demo"
-        integrations = (await c.get(f"{API}/integrations")).json()
-        first = integrations[0]["tools"][0]
-        assert yaml.safe_load(first["yaml"])["id"] == first["id"]
+        assert (await c.get(f"{API}/integrations")).status_code == 404
 
 
 # -- Identities ----------------------------------------------------------------------------

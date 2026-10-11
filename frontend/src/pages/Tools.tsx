@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, LayoutGrid, Pencil, Plus, Search, Table2 } from "lucide-react";
-import { API_BASE, apiGet, apiSend, etagFor, type Schemas } from "@/api/client";
+import { apiGet, apiSend, etagFor, type Schemas } from "@/api/client";
 import { useCanWrite } from "@/auth";
 import { ConfirmButton, Textarea, useWrite, WriteError } from "@/components/forms";
 import { PageHeader } from "@/components/Layout";
@@ -49,7 +49,6 @@ export function Tools() {
             {canWrite && toolkits.length > 0 && (
               <LinkButton to="/tools/new" size="sm"><Plus className="size-3.5" /> New tool</LinkButton>
             )}
-            <LinkButton to="/tools/integrations" variant="outline" size="sm">Integrations</LinkButton>
             <Button size="sm" variant={matrix ? "outline" : "default"} onClick={() => setParams(filter ? { q: filter } : {})}>
               <LayoutGrid className="size-3.5" /> Cards
             </Button>
@@ -298,71 +297,16 @@ function ToolSummary({ tool }: { tool: Tool }) {
   );
 }
 
-export function Integrations() {
-  const canWrite = useCanWrite();
-  const query = useQuery({ queryKey: ["integrations"], queryFn: () => apiGet("/integrations") });
-  return (
-    <>
-      <PageHeader
-        title="Integrations"
-        subtitle="Starter tools per service. Picking one only pre-fills the tool editor; the toolkit itself always stays a deploy-time edit (FR-4.11)."
-      />
-      {query.isPending ? <Loading /> : query.isError ? <QueryError error={query.error} /> : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {query.data.map((it) => (
-            <Card key={it.key}>
-              <CardBody className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <img src={`${API_BASE}/integrations/${encodeURIComponent(it.key)}/logo.svg`} alt="" className="size-7" />
-                  <span className="font-medium">{it.display_name}</span>
-                  <span className="flex-1" />
-                  <Badge tone={it.toolkit_configured ? "ok" : "neutral"}>
-                    {it.toolkit_configured ? "toolkit configured" : "no toolkit"}
-                  </Badge>
-                </div>
-                {it.notes && <p className="text-xs text-muted-foreground">{it.notes}</p>}
-                {canWrite && it.toolkit_configured ? (
-                  <ul className="space-y-1 text-sm">
-                    {it.tools.map((t) => (
-                      <li key={t.id} className="flex items-center gap-2">
-                        <code className="flex-1 truncate text-xs">{t.id}</code>
-                        {t.exists ? <Badge tone="ok">added</Badge> : (
-                          <Link
-                            className="text-xs text-primary hover:underline"
-                            to={`/tools/new?integration=${encodeURIComponent(it.key)}&tool=${encodeURIComponent(t.id)}`}
-                          >
-                            Add
-                          </Link>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <Pills values={it.tools.map((t) => t.id)} />
-                )}
-              </CardBody>
-            </Card>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
 /** The YAML editor for a new definition or an existing one. The server
- *  checks it against Tier 1 on save, exactly as the classic form does; an
- *  integration only pre-fills it. */
+ *  checks it against Tier 1 on save, exactly as the classic form does. */
 export function ToolEditor() {
   const { toolId } = useParams();
-  const [params] = useSearchParams();
   const navigate = useNavigate();
   const editing = toolId !== undefined;
   const self = editing ? `/tools/${encodeURIComponent(toolId)}` : "/tools";
-  const integration = params.get("integration");
-  const fromTool = params.get("tool");
 
   const source = useQuery({
-    queryKey: ["tool-editor", toolId ?? "", integration ?? "", fromTool ?? ""],
+    queryKey: ["tool-editor", toolId ?? ""],
     // Also the read whose ETag the save sends back as If-Match.
     // The ETag is kept with the text it belongs to. The shared one in the
     // client moves whenever another query rereads the same URL, and live
@@ -375,11 +319,6 @@ export function ToolEditor() {
       }
       await apiGet("/tools");
       const etag = etagFor(self);
-      if (integration && fromTool) {
-        const all = await apiGet("/integrations");
-        const spec = all.find((i) => i.key === integration)?.tools.find((t) => t.id === fromTool);
-        if (spec) return { yaml: spec.yaml, etag };
-      }
       return { yaml: (await apiGet("/tool-scaffold")).yaml, etag };
     },
     staleTime: Infinity,
@@ -391,7 +330,7 @@ export function ToolEditor() {
   const save = useWrite(
     (yaml: string) =>
       apiSend<Schemas["ToolSaved"]>(editing ? "PUT" : "POST", self, { body: { yaml }, ifMatch: source.data?.etag }),
-    [["tools"], ["tool"], ["overview"], ["integrations"]],
+    [["tools"], ["tool"], ["overview"]],
     (saved) => void navigate(`/tools/${encodeURIComponent(saved.id)}`),
   );
 
