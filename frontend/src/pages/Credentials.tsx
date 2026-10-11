@@ -149,7 +149,7 @@ function CredentialForm({ dangling, onDone, onReload }: {
             <Input type="url" value={probeUrl} onChange={(e) => setProbeUrl(e.target.value)} autoComplete="off" />
           </Label>
           <div className="flex gap-2">
-            <Button type="submit" disabled={save.isPending}>Create</Button>
+            <Button type="submit" busy={save.isPending} busyLabel="Creating…">Create</Button>
             <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
           </div>
         </form>
@@ -184,7 +184,7 @@ function CredentialActions({ meta, onReload }: { meta: Schemas["CredentialMeta"]
             </Label>
           </div>
           <div className="flex gap-2">
-            <Button size="sm" type="submit" disabled={rotate.isPending}>Rotate</Button>
+            <Button size="sm" type="submit" busy={rotate.isPending} busyLabel="Rotating…">Rotate</Button>
             <Button size="sm" type="button" variant="ghost" onClick={() => setRotating(false)}>Cancel</Button>
           </div>
         </form>

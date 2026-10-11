@@ -224,8 +224,9 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
     INVALIDATES, () => setValue(""),
   );
   const open = item.status === "pending" && canDecide;
+  const working = approve.isPending || reject.isPending || fill.isPending;
   return (
-    <Card>
+    <Card aria-busy={working || undefined}>
       <CardHeader
         title={<span className="font-mono">{item.action}</span>}
         actions={
@@ -244,11 +245,11 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
             {item.action === "cred_propose" ? (
               <Button size="sm" onClick={() => setMode("fill")}><Check className="size-3.5" /> Approve</Button>
             ) : (
-              <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate(undefined)}>
+              <Button size="sm" busy={approve.isPending} busyLabel="Approving…" onClick={() => approve.mutate(undefined)}>
                 <Check className="size-3.5" /> Approve
               </Button>
             )}
-            <Button size="sm" variant="outline" onClick={() => setMode("reject")}><X className="size-3.5" /> Reject</Button>
+            <Button size="sm" variant="outline" disabled={working} onClick={() => setMode("reject")}><X className="size-3.5" /> Reject</Button>
           </div>
         )}
         {open && mode === "reject" && (
@@ -256,8 +257,8 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
             <Label text="Reason (optional)">
               <Input autoFocus value={reason} maxLength={240} onChange={(e) => setReason(e.target.value)} />
             </Label>
-            <Button size="sm" variant="destructive" type="submit" disabled={reject.isPending}>Reject</Button>
-            <Button size="sm" variant="ghost" type="button" onClick={() => setMode("")}>Cancel</Button>
+            <Button size="sm" variant="destructive" type="submit" busy={reject.isPending} busyLabel="Rejecting…">Reject</Button>
+            <Button size="sm" variant="ghost" type="button" disabled={working} onClick={() => setMode("")}>Cancel</Button>
           </form>
         )}
         {open && mode === "fill" && (
@@ -269,11 +270,12 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
               <Input autoFocus type="password" autoComplete="off" required value={value} onChange={(e) => setValue(e.target.value)} />
             </Label>
             <div className="flex gap-2">
-              <Button size="sm" type="submit" disabled={fill.isPending}>Approve with this value</Button>
-              <Button size="sm" variant="ghost" type="button" onClick={() => setMode("")}>Cancel</Button>
+              <Button size="sm" type="submit" busy={fill.isPending} busyLabel="Approving…">Approve with this value</Button>
+              <Button size="sm" variant="ghost" type="button" disabled={working} onClick={() => setMode("")}>Cancel</Button>
             </div>
           </form>
         )}
+        <Working active={working} />
         <WriteError error={approve.error ?? reject.error ?? fill.error} />
       </CardBody>
     </Card>
@@ -310,8 +312,8 @@ function ApproveAll({ items }: { items: Pending[] }) {
               ))}
             </ul>
             <div className="flex gap-2">
-              <Button size="sm" disabled={run.isPending} onClick={() => run.mutate(undefined)}>Approve all {items.length}</Button>
-              <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>Cancel</Button>
+              <Button size="sm" busy={run.isPending} busyLabel={`Approving ${items.length}…`} onClick={() => run.mutate(undefined)}>Approve all {items.length}</Button>
+              <Button size="sm" variant="ghost" disabled={run.isPending} onClick={() => setAsking(false)}>Cancel</Button>
             </div>
           </>
         )}
@@ -323,6 +325,7 @@ function ApproveAll({ items }: { items: Pending[] }) {
             </ul>
           </Notice>
         )}
+        <Working active={run.isPending} />
         <WriteError error={run.error} />
       </CardBody>
     </Card>
@@ -412,8 +415,9 @@ function ProposalCard({ item, canDecide }: { item: Proposal; canDecide: boolean 
   const open = item.status === "pending" && canDecide;
   const current = item.current?.credential ?? null;
   const warning = deployWarning(item);
+  const working = deploy.isPending || reject.isPending;
   return (
-    <Card>
+    <Card aria-busy={working || undefined}>
       <CardHeader
         title={<span className="font-mono">{item.name}</span>}
         actions={
@@ -458,8 +462,8 @@ function ProposalCard({ item, canDecide }: { item: Proposal; canDecide: boolean 
               {warning.ack}
             </label>
             <div className="flex gap-2">
-              <Button size="sm" variant="destructive" type="submit" disabled={!ack || deploy.isPending}>{warning.label}</Button>
-              <Button size="sm" variant="ghost" type="button" onClick={() => { setMode(""); setAck(false); }}>Cancel</Button>
+              <Button size="sm" variant="destructive" type="submit" disabled={!ack} busy={deploy.isPending} busyLabel="Deploying…">{warning.label}</Button>
+              <Button size="sm" variant="ghost" type="button" disabled={working} onClick={() => { setMode(""); setAck(false); }}>Cancel</Button>
             </div>
           </form>
         )}
@@ -468,12 +472,25 @@ function ProposalCard({ item, canDecide }: { item: Proposal; canDecide: boolean 
             <Label text="Reason (optional)">
               <Input autoFocus value={reason} maxLength={240} onChange={(e) => setReason(e.target.value)} />
             </Label>
-            <Button size="sm" variant="destructive" type="submit" disabled={reject.isPending}>Reject</Button>
-            <Button size="sm" variant="ghost" type="button" onClick={() => setMode("")}>Cancel</Button>
+            <Button size="sm" variant="destructive" type="submit" busy={reject.isPending} busyLabel="Rejecting…">Reject</Button>
+            <Button size="sm" variant="ghost" type="button" disabled={working} onClick={() => setMode("")}>Cancel</Button>
           </form>
         )}
+        <Working active={working} />
         <WriteError error={deploy.error ?? reject.error} />
       </CardBody>
     </Card>
+  );
+}
+
+/** Said while a decision is in flight. Applying one reloads the store and
+ *  refreshes this page, which takes a few seconds; without a word here the
+ *  greyed-out buttons read as a hung page. */
+function Working({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <p role="status" className="text-xs text-muted-foreground">
+      Applying the decision and refreshing the console. This can take a few seconds.
+    </p>
   );
 }
