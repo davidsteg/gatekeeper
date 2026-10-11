@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import json
 import os
 from datetime import datetime, timedelta
@@ -25,7 +26,7 @@ from typing import Any
 import yaml
 
 from ..identity import UI_ROLES
-from ..pending import STALE_VANISHED_REASON, PendingStore
+from ..pending import STALE_TAKEN_REASON, STALE_VANISHED_REASON, PendingStore
 from ..tier1 import Destination, Toolkit
 from ..toolkit_proposals import ToolkitProposalStore
 
@@ -607,20 +608,80 @@ def identities_view(service: Any, identities: Any) -> list[dict[str, Any]]:
     return out
 
 
-def pending_view(store: Any, pending: PendingStore | None, status: str | None) -> list[dict[str, Any]]:
+def _sweep(store: Any, pending: PendingStore, credentials: Any) -> None:
     # Lazy: `admin_service` imports this module for its own read actions.
     from ..admin_service import sweep_vanished_pendings
 
+    if store is not None:
+        sweep_vanished_pendings(store, pending, credentials=credentials)
+
+
+def _pending_spec(item: Any, store: Any) -> dict[str, Any]:
+    spec = item.to_spec()
+    spec["review"] = pending_review(item, store)
+    return spec
+
+
+def pending_view(
+    store: Any, pending: PendingStore | None, status: str | None, credentials: Any = None,
+) -> list[dict[str, Any]]:
     if pending is None:
         return []
-    if store is not None:
-        sweep_vanished_pendings(store, pending)
-    out = []
-    for item in pending.list(status=status):
-        spec = item.to_spec()
-        spec["review"] = pending_review(item, store)
-        out.append(spec)
-    return out
+    _sweep(store, pending, credentials)
+    return [_pending_spec(item, store) for item in pending.list(status=status)]
+
+
+def _encode_cursor(key: tuple[str, int]) -> str:
+    return base64.urlsafe_b64encode(json.dumps(list(key)).encode()).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: str) -> tuple[str, int]:
+    """Raises `ValueError` on anything this module did not write."""
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        key = json.loads(raw)
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid cursor") from exc
+    if not (
+        isinstance(key, list) and len(key) == 2
+        and isinstance(key[0], str) and type(key[1]) is int
+    ):
+        raise ValueError("invalid cursor")
+    return key[0], key[1]
+
+
+def decided_pending_page(
+    store: Any, pending: PendingStore | None, *, limit: int, cursor: str | None,
+    credentials: Any = None,
+) -> dict[str, Any]:
+    """Decided proposals (anything not `pending`), newest decision first,
+    `limit` at a time. The cursor is the sort key of the last item served,
+    not an offset, so a decision made between two pages does not repeat
+    an item on the next one. Timestamps have second resolution, so the
+    key's second half is the item's position in the queue, which only
+    ever grows at the end. Raises `ValueError` for a bad cursor."""
+    if pending is None:
+        return {"entries": [], "next_cursor": None, "total": 0}
+    _sweep(store, pending, credentials)
+    decided = sorted(
+        (
+            ((item.decided_at or item.created_at, pos), item)
+            for pos, item in enumerate(pending.list())
+            if item.status != "pending"
+        ),
+        key=lambda pair: pair[0], reverse=True,
+    )
+    total = len(decided)
+    if cursor:
+        after = _decode_cursor(cursor)
+        decided = [pair for pair in decided if pair[0] < after]
+    page = decided[:limit]
+    more = len(decided) > limit
+    return {
+        "entries": [_pending_spec(item, store) for _key, item in page],
+        "next_cursor": _encode_cursor(page[-1][0]) if more and page else None,
+        "total": total,
+    }
 
 
 def _review_tool(store: Any, tool_id: str, marker: str = "") -> dict[str, Any]:
@@ -710,12 +771,18 @@ def pending_review(item: Any, store: Any) -> dict[str, Any]:
         headline = json.dumps(payload, default=str)
     stale = None
     if item.status == "stale":
-        stale = (
-            "What this proposal targeted no longer exists, so there is nothing to apply it to."
-            if item.reason == STALE_VANISHED_REASON
-            else "The configuration it referred to changed after it was proposed; "
-            "ask the agent to re-propose from the current state."
-        )
+        if item.reason == STALE_VANISHED_REASON:
+            stale = "What this proposal targeted no longer exists, so there is nothing to apply it to."
+        elif item.reason == STALE_TAKEN_REASON:
+            stale = (
+                f"A credential named {payload.get('name', '')} was created after this was "
+                "proposed. Ask the agent for a new name, or rotate the existing credential."
+            )
+        else:
+            stale = (
+                "The configuration it referred to changed after it was proposed; "
+                "ask the agent to re-propose from the current state."
+            )
     return {"headline": headline, "tools": tools, "unchanged": unchanged, "stale": stale}
 
 

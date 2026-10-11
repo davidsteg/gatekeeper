@@ -324,10 +324,28 @@ def build_api_app(context: ApiContext | None) -> FastAPI:
         _s: Session = Depends(require_viewer),
         context: ApiContext = Depends(ctx),
     ) -> Any:
-        items = rm.pending_view(context.store, context.pending, status)
+        items = rm.pending_view(context.store, context.pending, status, context.credentials)
         if context.pending is not None:
             set_etag(response, context.pending.revision())
         return items
+
+    @app.get("/requests/decided", response_model=models.PendingPage, tags=["requests"])
+    def requests_decided(
+        limit: int = Query(25, ge=1, le=200),
+        cursor: str | None = Query(None, max_length=256),
+        _s: Session = Depends(require_viewer),
+        context: ApiContext = Depends(ctx),
+    ) -> Any:
+        """The archive of change requests: approved, rejected and stale
+        proposals, `limit` at a time. `GET /requests/pending` still returns
+        everything; the console asks it for `status=pending` only."""
+        try:
+            return rm.decided_pending_page(
+                context.store, context.pending, limit=limit, cursor=cursor,
+                credentials=context.credentials,
+            )
+        except ValueError:
+            raise ApiError(400, "Invalid cursor.") from None
 
     @app.get(
         "/requests/toolkits", response_model=list[models.ToolkitProposalOut], tags=["requests"]

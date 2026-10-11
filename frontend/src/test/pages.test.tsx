@@ -261,7 +261,11 @@ describe("requests", () => {
     let approved: RequestInit | undefined;
     serve((url, init) => {
       if (url.endsWith("/session")) return json(200, ADMIN);
-      if (url.endsWith("/requests/pending")) return json(200, approved ? [{ ...PENDING, status: "approved" }] : [PENDING]);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, approved ? [] : [PENDING]);
+      if (url.includes("/requests/decided")) {
+        const entries = approved ? [{ ...PENDING, status: "approved" }] : [];
+        return json(200, { entries, next_cursor: null, total: entries.length });
+      }
       if (url.endsWith("/requests/toolkits")) return json(200, []);
       if (url.endsWith("/requests/pending/p1/approve")) {
         approved = init;
@@ -277,13 +281,39 @@ describe("requests", () => {
     await waitFor(() => expect(approved).toBeDefined());
     expect((approved?.headers as Record<string, string>)["X-CSRF-Token"]).toBe("tok");
     expect(await screen.findByText("Nothing pending.")).toBeInTheDocument();
+    expect(await screen.findByText("Archive (1)")).toBeInTheDocument();
+  });
+
+  it("loads the archive a page at a time from /requests/decided", async () => {
+    const asked: string[] = [];
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, []);
+      if (url.includes("/requests/decided")) {
+        asked.push(url);
+        return url.includes("cursor=c1")
+          ? json(200, { entries: [{ ...PENDING, id: "p2", status: "stale" }], next_cursor: null, total: 2 })
+          : json(200, { entries: [{ ...PENDING, status: "rejected" }], next_cursor: "c1", total: 2 });
+      }
+      if (url.endsWith("/requests/toolkits")) return json(200, []);
+      return json(200, {});
+    });
+    renderAt("/requests");
+    expect(await screen.findByText("Archive (2)")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Show" }));
+    expect(await screen.findByText("rejected")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Older" }));
+    expect(await screen.findByText("stale")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Older" })).not.toBeInTheDocument();
+    expect(asked.at(-1)).toContain("cursor=c1");
   });
 
   it("deploys a toolkit only after the acknowledgement is ticked", async () => {
     let body: unknown;
     serve((url, init) => {
       if (url.endsWith("/session")) return json(200, ADMIN);
-      if (url.endsWith("/requests/pending")) return json(200, []);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, []);
       if (url.endsWith("/requests/toolkits")) return json(200, [PROPOSAL]);
       if (url.endsWith("/requests/toolkits/t1/deploy")) {
         body = JSON.parse(String(init.body));

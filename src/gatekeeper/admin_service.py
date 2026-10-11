@@ -294,7 +294,7 @@ class AdminService:
         self-heal. Nothing whose target still exists is touched, and a
         second list is a no-op.
         """
-        sweep_vanished_pendings(self.store, self.pending)
+        sweep_vanished_pendings(self.store, self.pending, credentials=self.credentials)
         status = args.get("status") or None
         items = self.pending.list(status=status)
         return {"pending": [i.to_spec() for i in items]}
@@ -878,7 +878,8 @@ def _target_rev(store: ConfigStore, item: PendingAction) -> str | None:
 
 
 def sweep_vanished_pendings(
-    store: ConfigStore, pending: PendingStore, *, decided_by: str = "system"
+    store: ConfigStore, pending: PendingStore, *, credentials: Any = None,
+    decided_by: str = "system",
 ) -> list[PendingAction]:
     """Closes every queued proposal whose target record no longer exists.
 
@@ -888,10 +889,18 @@ def sweep_vanished_pendings(
     items `approve`'s guard can only close on a click -- and which nobody
     has a reason to ever click -- do not accumulate as permanent `pending`
     rows. Idempotent; see `PendingStore.close_vanished_targets`.
+
+    With `credentials`, also closes a `cred_propose` whose name has been
+    taken since (`PendingStore.close_taken_credentials`): that one could
+    never be approved either, since the create refuses an existing name.
     """
-    return pending.close_vanished_targets(
+    closed = pending.close_vanished_targets(
         lambda item: _target_rev(store, item), decided_by=decided_by
     )
+    if credentials is not None:
+        taken = {meta.name for meta in credentials.names()}
+        closed += pending.close_taken_credentials(taken, decided_by=decided_by)
+    return closed
 
 
 def apply_pending(

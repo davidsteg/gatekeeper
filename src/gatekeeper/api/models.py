@@ -327,6 +327,16 @@ class PendingItem(_Model):
     review: PendingReview
 
 
+class PendingPage(_Model):
+    """Decided proposals, newest decision first."""
+
+    entries: list[PendingItem]
+    #: Pass as `cursor` for the next, older page; null on the last one.
+    next_cursor: str | None
+    #: Decided proposals in all, across every page.
+    total: int
+
+
 class ToolkitProposalOut(_Model):
     id: str
     name: str

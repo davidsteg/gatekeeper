@@ -1,3 +1,17 @@
+## 1.1.0
+
+The change-request archive is paged by the API, and a credential proposal whose name has been taken no longer sits in the queue forever.
+
+### Added
+
+- `GET /api/v1/requests/decided?limit=&cursor=` returns approved, rejected and stale change requests, newest decision first, with `next_cursor` and `total`. A decision made between two pages does not repeat an item on the next one. `GET /requests/pending` is unchanged and still returns everything.
+- The Requests page polls only the open proposals and loads the archive from the new route a page at a time, instead of fetching the whole queue every 15 seconds.
+
+### Fixed
+
+- **A `cred_propose` whose name was taken in the meantime is closed, not left pending.** When the credential store did not exist yet at propose time, nothing marked such a proposal stale: filling it in was refused with "already exists" on every try, and it stayed pending. Listing the queue (console or `admin.pending_list`) now closes it as `stale` with the reason "A credential with this name exists now", and filling it in answers `409` and closes it. A proposal for a free name is not touched. The old console behaved the same way, so this predates 1.0.0.
+- README: the audit log page never had an export; the text now says what it does (search and filter) and where the log lives.
+
 ## 1.0.0
 
 The console at `/app` is now the only console. The server-rendered HTML console at `/ui` (`ui.py`, about 6,800 lines) is gone. Bookmarks to `/ui` still land on the same page, and nothing in `toolkits.yaml`, `tools.yaml`, `identities.yaml` or the credential store changes.
