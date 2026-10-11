@@ -73,6 +73,7 @@ Once started with `--ui`, gatekeeper hosts an admin console at `/app` where you:
 - **Decide requests as they arrive** — new requests, calls and changes appear without a reload (live updates over Server-Sent Events)
 - **See statistics** — aggregate call stats, success rates, latency, admin activity at `/app/stats`
 - **Change passwords** — rotate console access for people
+- **Use it from a phone** — tabs at the bottom for Overview, Requests, Tools and Audit, everything else under More; add it to the home screen to open it like an app
 
 The console is a React single-page app served from the image, backed by a typed JSON API at `/api/v1`. It signs in with a console password; an API token is refused there. Since 1.0.0 it is the only console: the old server-rendered one at `/ui` is gone, and a `/ui/...` bookmark redirects to the same page under `/app/...`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#console-api-api-apiv1).
 
