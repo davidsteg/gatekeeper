@@ -90,6 +90,7 @@ def test_the_schema_lists_the_phase_3a_writes():
         ("DELETE", "/credentials/demo-key"), ("PUT", "/account/password"),
         ("POST", "/requests/pending/nope/approve"), ("POST", "/requests/pending/nope/reject"),
         ("POST", "/requests/pending/nope/credential"), ("POST", "/requests/pending/approve-all"),
+        ("POST", "/requests/pending/reject-all"),
         ("POST", "/requests/toolkits/nope/deploy"), ("POST", "/requests/toolkits/nope/reject"),
     }
 
@@ -421,6 +422,39 @@ async def test_approve_all_applies_only_the_listed_ids(env):
     assert result.json() == {"applied": 2, "refused": []}
     assert env["pending"].get(late.id).status in ("pending", "stale")
     assert env["pending"].get(late.id).status != "approved"
+
+
+async def test_reject_all_rejects_only_the_listed_ids_with_one_reason(env):
+    first, second = _propose_delete(env), _propose_delete(env, "demo.echo")
+    cred = env["pending"].propose(
+        action="cred_propose", actor="hermes",
+        payload={"name": "sonarr-key", "kind": "bearer", "header": None, "probe_url": None},
+        base_rev=env["credentials"].revision(),
+    )
+    late = env["pending"].propose(
+        action="tool_enable", actor="hermes", payload={"id": "demo.show"},
+        base_rev=env["store"].tool_revision("demo.show"),
+    )
+    tools_before = env["store"].tools_revision()
+    async with client(env["app"]) as c:
+        admin = await login(c, "root")
+        result = await c.post(
+            f"{API}/requests/pending/reject-all",
+            json={"ids": [first.id, second.id, cred.id], "reason": "not this week"},
+            headers=_h(admin),
+        )
+        again = await c.post(
+            f"{API}/requests/pending/reject-all", json={"ids": [first.id]}, headers=_h(admin),
+        )
+    assert result.status_code == 200
+    assert result.json() == {"rejected": 3, "refused": []}
+    for item in (first, second, cred):
+        decided = env["pending"].get(item.id)
+        assert (decided.status, decided.reason, decided.decided_by) == ("rejected", "not this week", "root")
+    assert env["pending"].get(late.id).status == "pending"
+    assert env["store"].tools_revision() == tools_before
+    # Already decided: skipped, not an error.
+    assert again.json() == {"rejected": 0, "refused": []}
 
 
 async def test_a_credential_proposal_is_approved_only_with_a_typed_value(env, monkeypatch):

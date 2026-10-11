@@ -420,6 +420,12 @@ class ApproveAll(_Body):
     ids: list[str] = Field(max_length=1000)
 
 
+class RejectAll(_Body):
+    #: Exactly the proposals the reviewer saw, as for approve-all.
+    ids: list[str] = Field(max_length=1000)
+    reason: str = Field("", max_length=240)
+
+
 class Refusal(_Model):
     id: str
     action: str
@@ -428,6 +434,11 @@ class Refusal(_Model):
 
 class ApproveAllResult(_Model):
     applied: int
+    refused: list[Refusal]
+
+
+class RejectAllResult(_Model):
+    rejected: int
     refused: list[Refusal]
 
 

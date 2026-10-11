@@ -359,6 +359,32 @@ describe("requests", () => {
     expect(screen.queryByText(/This can take a few seconds\./)).not.toBeInTheDocument();
   });
 
+  it("rejects every listed proposal at once, credential proposals included", async () => {
+    const CRED = { ...PENDING, id: "p2", action: "cred_propose" };
+    let sent: unknown;
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, sent ? [] : [PENDING, CRED]);
+      if (url.includes("/requests/decided")) return json(200, { entries: [], next_cursor: null, total: 0 });
+      if (url.endsWith("/requests/toolkits")) return json(200, []);
+      if (url.endsWith("/requests/pending/reject-all")) {
+        sent = JSON.parse(String(init.body));
+        return json(200, { rejected: 2, refused: [] });
+      }
+      return json(200, {});
+    });
+    renderAt("/requests");
+    const user = userEvent.setup();
+    // One credential proposal leaves a single approvable item: no Approve all.
+    expect(await screen.findByRole("button", { name: /Reject all \(2\)/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Approve all/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Reject all \(2\)/ }));
+    await user.type(screen.getByLabelText("Reason (optional)"), "not now");
+    await user.click(screen.getByRole("button", { name: "Reject all 2" }));
+    await waitFor(() => expect(sent).toEqual({ ids: ["p1", "p2"], reason: "not now" }));
+    expect(await screen.findByText(/No proposals yet\./)).toBeInTheDocument();
+  });
+
   it("loads the archive a page at a time from /requests/decided", async () => {
     const asked: string[] = [];
     serve((url) => {
