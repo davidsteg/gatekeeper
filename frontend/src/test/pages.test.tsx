@@ -525,6 +525,26 @@ describe("ui review fixes", () => {
     expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
   });
 
+  it("shows where a failed /mcp sign-in came from, in the audit log and the feed", async () => {
+    const failure = {
+      ts: "2026-10-11T17:05:04Z", kind: "auth_failure", reason: "unknown_token",
+      detail: "POST /mcp from 10.10.110.102", client: "10.10.110.102", fingerprint: "a1b2c3d4e5f6",
+      method: "POST", path: "/mcp", user_agent: "python-httpx/0.28",
+    };
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.includes("/audit")) return json(200, { entries: [failure], next_cursor: null, window_truncated: false });
+      return undefined;
+    });
+    renderAt("/audit");
+    expect(await screen.findByText("unknown_token · from 10.10.110.102 · token a1b2c3d4e5f6 · python-httpx/0.28")).toBeInTheDocument();
+    // Who and What are filled in, not blank.
+    expect(screen.getByText("10.10.110.102")).toBeInTheDocument();
+    expect(screen.getByText("POST /mcp")).toBeInTheDocument();
+    const { describeEvent } = await import("@/pages/events");
+    expect(describeEvent(failure).text).toBe("Sign-in failed (unknown_token) from 10.10.110.102");
+  });
+
   it("names what an agent proposed in the overview feed, not its random ID", async () => {
     const { describeEvent } = await import("@/pages/events");
     expect(describeEvent({

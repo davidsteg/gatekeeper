@@ -28,6 +28,7 @@ from api_env import API, BASE, PASSWORDS, audit_records, client, login, make_env
 from gatekeeper.api.session import SESSION_COOKIE, LoginThrottle, SessionStore
 from gatekeeper.audit import AuditLog
 from gatekeeper.catalog import load_catalog
+from gatekeeper.identity import hash_token_lookup
 from gatekeeper.server import build_app
 from gatekeeper.service import Service
 
@@ -83,6 +84,34 @@ async def test_the_console_password_is_not_an_api_token(env):
             headers={**MCP_ACCEPT, "Authorization": f"Bearer {PASSWORDS['root']}"},
         )
     assert response.status_code == 401
+
+
+async def test_an_mcp_auth_failure_names_the_caller_but_never_the_token(env):
+    """A stale token in some client's config is traceable to a machine: the
+    audit record carries the peer address and a short fingerprint of the
+    presented token (the prefix of its `token_lookup`), never the token."""
+    stale = "gk_" + "x" * 43
+    async with client(env["app"]) as c:
+        for path, token in (("/mcp", stale), ("/mcp", env["tokens"]["root"])):
+            response = await c.post(
+                path, json=MCP_LIST,
+                headers={**MCP_ACCEPT, "Authorization": f"Bearer {token}", "User-Agent": "stale-agent/1.0"},
+            )
+            assert response.status_code == 401
+        await c.post("/mcp", json=MCP_LIST, headers=MCP_ACCEPT)
+    unknown, wrong_role, missing = _auth_failures(env)[-3:]
+    assert unknown["reason"] == "unknown_token"
+    assert unknown["client"] == "127.0.0.1"
+    assert unknown["fingerprint"] == hash_token_lookup(stale)[:12]
+    assert unknown["detail"] == "POST /mcp from 127.0.0.1"
+    assert (unknown["method"], unknown["path"]) == ("POST", "/mcp")
+    assert unknown["user_agent"] == "stale-agent/1.0"
+    assert "identity" not in unknown
+    assert wrong_role["identity"] == "root"
+    assert wrong_role["client"] == "127.0.0.1"
+    assert "from 127.0.0.1" in wrong_role["detail"]
+    assert "fingerprint" not in missing and missing["client"] == "127.0.0.1"
+    assert all(stale not in json.dumps(r) for r in audit_records(env))
 
 
 async def test_similar_prefixes_are_not_console_paths(env):
