@@ -19,7 +19,8 @@ export function buttonClass(variant: Variant = "default", size: Size = "md", cla
     "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors",
     "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
     "disabled:pointer-events-none disabled:opacity-50",
-    size === "sm" ? "h-8 px-2.5 text-xs" : "h-9 px-3.5 text-sm",
+    // A little taller on a touch screen, where a 32px target is easy to miss.
+    size === "sm" ? "h-9 px-3 text-xs sm:h-8 sm:px-2.5" : "h-10 px-3.5 text-sm sm:h-9",
     variants[variant],
     className,
   );

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Label, Select } from "@/components/ui/input";
 import { Loading, Notice, QueryError } from "@/components/ui/notice";
-import { formatTime } from "@/lib/utils";
+import { formatTime, useIsNarrow } from "@/lib/utils";
 import { usePollInterval } from "@/live";
 
 const OUTCOMES = ["", "ok", "denied", "failed", "unknown"] as const;
@@ -48,6 +48,7 @@ export function Audit() {
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   const entries = query.data?.pages.flatMap((p) => p.entries) ?? [];
+  const narrow = useIsNarrow();
   const truncated = query.data?.pages.at(-1)?.window_truncated ?? false;
 
   return (
@@ -63,31 +64,58 @@ export function Audit() {
         identity={identity} tool={tool} outcome={outcome} onApply={(next) => setParams(next)}
       />
       {query.isPending ? <Loading /> : query.isError ? <QueryError error={query.error} /> : (
-        <Card className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs text-muted-foreground">
-              <tr>{["Time", "Kind", "Who", "What", "Outcome", "Detail"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
-            </thead>
-            <tbody>
-              {entries.length === 0 && (
-                <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">No matching entries.</td></tr>
-              )}
-              {entries.map((r, i) => (
-                <tr key={i} className="border-t border-border align-top">
-                  <td className="px-3 py-1.5 font-mono text-xs whitespace-nowrap">{formatTime(r.ts, true)}</td>
-                  <td className="px-3 py-1.5">{s(r.kind)}</td>
-                  <td className="px-3 py-1.5 font-mono">{s(r.identity ?? r.actor)}</td>
-                  <td className="px-3 py-1.5 font-mono wrap-break-word">{s(r.tool ?? r.action ?? r.path)}</td>
-                  <td className="px-3 py-1.5">
-                    {r.outcome ? <Badge tone={TONE[s(r.outcome)] ?? "neutral"}>{s(r.outcome)}</Badge> : null}
-                  </td>
-                  <td className="min-w-48 px-3 py-1.5 font-mono text-xs wrap-anywhere text-muted-foreground">
-                    {s(r.denial_reason ?? r.reason ?? r.target ?? r.detail)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <Card className={narrow ? undefined : "overflow-x-auto"}>
+          {narrow ? (
+            // A phone has no room for six columns: one block per entry,
+            // the outcome and time on top, the reason underneath.
+            <ul className="divide-y divide-border">
+              {entries.length === 0 && <li className="px-3 py-6 text-center text-sm text-muted-foreground">No matching entries.</li>}
+              {entries.map((r, i) => {
+                const detail = s(r.denial_reason ?? r.reason ?? r.target ?? r.detail);
+                return (
+                  <li key={i} className="space-y-1 px-3 py-2.5 text-sm">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span className="font-mono">{formatTime(r.ts, true)}</span>
+                      <span>{s(r.kind)}</span>
+                      <span className="flex-1" />
+                      {r.outcome ? <Badge tone={TONE[s(r.outcome)] ?? "neutral"}>{s(r.outcome)}</Badge> : null}
+                    </div>
+                    <div className="font-mono wrap-anywhere">
+                      {s(r.identity ?? r.actor)}
+                      {(r.tool ?? r.action ?? r.path) ? <span className="text-muted-foreground"> → </span> : null}
+                      {s(r.tool ?? r.action ?? r.path)}
+                    </div>
+                    {detail && <div className="font-mono text-xs wrap-anywhere text-muted-foreground">{detail}</div>}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs text-muted-foreground">
+                <tr>{["Time", "Kind", "Who", "What", "Outcome", "Detail"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {entries.length === 0 && (
+                  <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">No matching entries.</td></tr>
+                )}
+                {entries.map((r, i) => (
+                  <tr key={i} className="border-t border-border align-top">
+                    <td className="px-3 py-1.5 font-mono text-xs whitespace-nowrap">{formatTime(r.ts, true)}</td>
+                    <td className="px-3 py-1.5">{s(r.kind)}</td>
+                    <td className="px-3 py-1.5 font-mono">{s(r.identity ?? r.actor)}</td>
+                    <td className="px-3 py-1.5 font-mono wrap-break-word">{s(r.tool ?? r.action ?? r.path)}</td>
+                    <td className="px-3 py-1.5">
+                      {r.outcome ? <Badge tone={TONE[s(r.outcome)] ?? "neutral"}>{s(r.outcome)}</Badge> : null}
+                    </td>
+                    <td className="min-w-48 px-3 py-1.5 font-mono text-xs wrap-anywhere text-muted-foreground">
+                      {s(r.denial_reason ?? r.reason ?? r.target ?? r.detail)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           <div ref={sentinel} className="p-3 text-center text-xs text-muted-foreground">
             {isFetchingNextPage ? "Loading more…" : hasNextPage ? (
               <Button size="sm" variant="ghost" onClick={() => void fetchNextPage()}>Load more</Button>
@@ -117,7 +145,7 @@ function Filters({ identity, tool, outcome, onApply }: {
     onApply(Object.fromEntries(Object.entries(draft).filter(([, v]) => v)));
   }
   return (
-    <form onSubmit={submit} className="flex flex-wrap items-end gap-3">
+    <form onSubmit={submit} className="grid grid-cols-2 items-end gap-3 sm:flex sm:flex-wrap">
       <Label text="Identity">
         <Input value={draft.identity} onChange={(e) => setDraft({ ...draft, identity: e.target.value })} />
       </Label>

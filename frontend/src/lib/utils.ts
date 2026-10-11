@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -14,4 +15,24 @@ export function formatTime(ts: unknown, withDate = false): string {
   return date.toLocaleString(undefined, withDate
     ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
     : { hour: "2-digit", minute: "2-digit" });
+}
+
+/** True while the media query matches; false where matchMedia is missing
+ *  (tests, very old browsers), which renders the desktop layout. */
+export function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      if (typeof window.matchMedia !== "function") return () => undefined;
+      const list = window.matchMedia(query);
+      list.addEventListener("change", onChange);
+      return () => list.removeEventListener("change", onChange);
+    },
+    () => typeof window.matchMedia === "function" && window.matchMedia(query).matches,
+    () => false,
+  );
+}
+
+/** Below Tailwind's `md` breakpoint: a phone, or a narrow window. */
+export function useIsNarrow(): boolean {
+  return useMediaQuery("(max-width: 767.98px)");
 }

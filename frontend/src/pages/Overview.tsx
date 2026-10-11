@@ -74,7 +74,7 @@ export function Overview() {
         </Notice>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat to="/tools" icon={SlidersHorizontal} n={data.stats.tools_active} label={plural(data.stats.tools_active, "tool active", "tools active")} />
         <Stat to="/identities" icon={KeyRound} n={data.stats.identities} label={plural(data.stats.identities, "identity", "identities")} />
         <Stat to="/toolkits" icon={Lock} n={data.stats.protected_resources} label={plural(data.stats.protected_resources, "protected resource", "protected resources")} />
@@ -134,7 +134,7 @@ function Stat({ to, icon: Icon, n, label, tone }: {
 }) {
   return (
     <Link to={to}>
-      <Card className="flex items-center gap-3 p-4 hover:bg-muted/50">
+      <Card className="flex flex-wrap items-center gap-x-3 gap-y-1 p-3 hover:bg-muted/50 sm:p-4">
         <Icon className={cn("size-5 text-muted-foreground", tone === "deny" && "text-deny")} aria-hidden />
         <span className="text-2xl font-semibold tabular-nums">{n}</span>
         <span className="text-sm text-muted-foreground">{label}</span>
@@ -203,7 +203,7 @@ export function AccessMatrix({ access }: { access: Schemas["AccessMatrix"] }) {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-muted-foreground">
-                <th className="py-2 pr-3 font-medium">Identity</th>
+                <th className="sticky left-0 bg-card py-2 pr-3 font-medium">Identity</th>
                 <th className="py-2 pr-3 font-medium">Role</th>
                 {columns.map((c) => (
                   <th key={c.name} className="px-2 py-2 text-center font-medium">
@@ -216,7 +216,7 @@ export function AccessMatrix({ access }: { access: Schemas["AccessMatrix"] }) {
             <tbody>
               {rows.map((row) => (
                 <tr key={row.identity} className="border-t border-border">
-                  <td className="py-2 pr-3 font-mono">{row.identity}</td>
+                  <td className="sticky left-0 bg-card py-2 pr-3 font-mono whitespace-nowrap">{row.identity}</td>
                   <td className="py-2 pr-3">
                     <Badge tone={row.role === "admin" ? "accent" : "neutral"}>{row.role}</Badge>
                   </td>

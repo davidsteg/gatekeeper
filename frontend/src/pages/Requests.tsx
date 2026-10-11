@@ -202,7 +202,7 @@ function Review({ review }: { review: Pending["review"] }) {
         <div key={`${t.marker}${t.id}`} className="flex flex-wrap items-center gap-1.5 text-xs">
           {t.marker && <Badge tone={t.marker === "+" ? "ok" : "deny"}>{t.marker === "+" ? "+" : "−"}</Badge>}
           <Badge tone={t.state === "enabled" ? "ok" : t.state === "disabled" ? "warn" : "deny"}>{t.state}</Badge>
-          <code>{t.id}</code>
+          <code className="min-w-0 wrap-anywhere">{t.id}</code>
           <span className="text-muted-foreground">
             {t.state === "missing" ? "no such tool in the catalog" : `${t.title} (${t.category})`}
           </span>
