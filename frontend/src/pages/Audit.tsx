@@ -32,9 +32,15 @@ function detailOf(r: Record<string, unknown>): string {
   ].filter(Boolean).join(" · ");
 }
 
-/** Who: the identity, or for a failed sign-in with no known identity the
- *  address it came from. */
-const whoOf = (r: Record<string, unknown>) => s(r.identity ?? r.actor ?? r.client);
+/** Who: the identity and the address it called from, e.g.
+ *  "homelab (10.10.110.5)"; for a failed sign-in with no known identity,
+ *  just the address. Records from before 1.5.3 carry no address on calls. */
+function whoOf(r: Record<string, unknown>): string {
+  const who = s(r.identity ?? r.actor);
+  const client = s(r.client);
+  if (!who) return client;
+  return client ? `${who} (${client})` : who;
+}
 
 /** What: the tool or action, or the request a failed sign-in made. */
 const whatOf = (r: Record<string, unknown>) =>

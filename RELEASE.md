@@ -1,3 +1,9 @@
+## 1.5.3
+
+### Added
+
+- **Every audited call records the caller's address.** A `call` record now carries `client` next to `identity`: the peer address, or the forwarded one behind a trusted proxy (`--trusted-proxies`). The Audit log's Who column reads `homelab (10.10.110.5)` for calls, sign-ins and failed sign-ins alike, so an identity used from an unexpected machine stands out. Records from before this release show the identity alone.
+
 ## 1.5.2
 
 ### Fixed

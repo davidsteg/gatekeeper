@@ -486,8 +486,11 @@ class Service:
         return frozenset(self.identities.identities)
 
     async def call(
-        self, identity: Identity, tool_id: str, arguments: dict[str, Any]
+        self, identity: Identity, tool_id: str, arguments: dict[str, Any],
+        *, client: str | None = None,
     ) -> execute.Result:
+        """`client` is the caller's network address, recorded in the audit
+        log next to the identity; None when the caller is not over HTTP."""
         tool: ToolDef | None = None
         scopes: list[str] = []
         values: dict[str, str] = {}
@@ -602,6 +605,7 @@ class Service:
                 denial_reason=denial.reason.value,
                 detail=denial.detail,
                 credential_names=credential_names,
+                client=client,
             )
             raise
 
@@ -775,6 +779,7 @@ class Service:
             duration_ms=result.duration_ms,
             truncated=result.truncated,
             credential_names=credential_names,
+            client=client,
         )
         return result
 

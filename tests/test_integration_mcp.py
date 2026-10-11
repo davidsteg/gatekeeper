@@ -142,6 +142,27 @@ async def test_call_tool_succeeds(app, identities):
     assert "media-jellyfin" in result.content[0].text
 
 
+async def test_a_call_is_audited_with_the_callers_address(app, identities, tmp_path):
+    """The Audit page shows who *and* from where: every call record carries
+    the address it came over, allowed and denied alike."""
+    import glob
+    import json
+
+    _store, tokens = identities
+    async with connected(app, tokens["narrow"]) as client:
+        await client.call_tool("demo.show", {"stack": "media-jellyfin"})
+        await client.call_tool("demo.echo", {"text": "x"})
+    records = [
+        json.loads(line)
+        for path in glob.glob(str(tmp_path / "logs-int" / "*"))
+        for line in open(path, encoding="utf-8")
+        if line.strip()
+    ]
+    calls = [r for r in records if r.get("kind") == "call"]
+    assert [c["outcome"] for c in calls] == ["ok", "denied"]
+    assert all(c["client"] == "127.0.0.1" for c in calls)
+
+
 async def test_call_tool_denial_is_opaque_over_protocol(app, identities):
     """FR-7.7 in combination: the agent cannot probe the catalog."""
     _store, tokens = identities
