@@ -223,7 +223,7 @@ export function ToolDetail() {
                 </Button>
                 <ConfirmButton
                   label="Delete" question={`Delete ${query.data.id}?`}
-                  busy={remove.isPending} onConfirm={() => remove.mutate(undefined)}
+                  busy={remove.isPending} onConfirm={() => remove.mutateAsync(undefined)}
                 >
                   <span className="text-xs text-muted-foreground">
                     The full definition goes to the audit log.

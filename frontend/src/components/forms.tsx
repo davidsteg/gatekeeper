@@ -63,7 +63,10 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
 export function ConfirmButton({ label, question, onConfirm, busy, children }: {
   label: string;
   question: string;
-  onConfirm: () => void;
+  /** Return the write's promise: the question closes once it succeeds, so
+   *  a second click cannot repeat a write nobody asked for twice. A
+   *  failure leaves it open, with the error shown by the caller. */
+  onConfirm: () => Promise<unknown>;
   busy?: boolean;
   children?: ReactNode;
 }) {
@@ -75,7 +78,9 @@ export function ConfirmButton({ label, question, onConfirm, busy, children }: {
     <div role="group" aria-label={question} className="flex flex-wrap items-center gap-2 rounded-md border border-deny/40 bg-deny/10 p-2 text-sm">
       <span className="font-medium">{question}</span>
       {children}
-      <Button size="sm" variant="destructive" disabled={busy} onClick={onConfirm}>Yes, {label.toLowerCase()}</Button>
+      <Button size="sm" variant="destructive" disabled={busy}
+        onClick={() => { onConfirm().then(() => setAsking(false), () => undefined); }}
+      >Yes, {label.toLowerCase()}</Button>
       <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>Cancel</Button>
     </div>
   );

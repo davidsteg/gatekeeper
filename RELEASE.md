@@ -1,4 +1,10 @@
-<<<<<<< HEAD
+## 1.2.1
+
+### Fixed
+
+- **One click on "Yes, rotate token" now rotates once.** After a rotation, the confirm question stayed open under the new token, so a second click issued yet another token without asking again. The token that had just been copied stopped working, which looked like the token had been rotated on its own. The question now closes as soon as the write succeeds, on the Identities, Tools and Credentials pages alike. It stays open with the error when the write fails.
+- `RELEASE.md` carried leftover merge-conflict markers around the 1.2.0 and 1.1.2 sections. They are removed; the text of both sections is unchanged.
+
 ## 1.2.0
 
 A credential slot with the wrong header or kind can be repaired in place, keeping its stored secret.
@@ -10,7 +16,7 @@ A credential slot with the wrong header or kind can be repaired in place, keepin
 - A rename is refused while any toolkit or destination references the slot, at proposal time and again at approval, because the binding is Tier 1 and would dangle. Changing kind or header on a bound slot is allowed, since the binding is by name.
 - An approved update clears the slot's `suspect_status` and probe result, which described the old header, and probes again when a probe URL is set. It is audited as `credential_update` with the changed field names, the kind and the header name, never the value.
 - The proposal is checked for staleness against that one slot's kind, header, probe URL and creation time. Another approved change to the slot makes it stale; a failing call marking the slot suspect, or a rotation, does not. Listing the queue closes it when the slot has been deleted, or when a rename's new name has been taken.
-=======
+
 ## 1.1.2
 
 A review of every console page on a desktop browser, with the bugs it found fixed. Nothing about configuration, the API's shape or `/mcp` changes.
@@ -38,7 +44,6 @@ A review of every console page on a desktop browser, with the bugs it found fixe
 
 - **An old `/ui` link keeps its query.** `/ui/requests?tab=toolkit` used to redirect to `/app/requests` and drop `?tab=toolkit`; it now lands on `/app/requests?tab=toolkit`. The target still always starts with `/app/`.
 - **Sign-in returns to the page you opened.** Opening any console page while signed out goes to the sign-in form, and signing in used to land on Overview. It now goes back to the page you opened, query included.
->>>>>>> origin/main
 
 ## 1.1.0
 

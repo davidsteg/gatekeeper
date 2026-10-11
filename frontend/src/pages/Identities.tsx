@@ -113,13 +113,13 @@ function IdentityCard({ ident, canWrite, onEdit, onToken }: {
             <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>
             <ConfirmButton
               label="Rotate token" question={`Issue a new token for ${ident.id}?`}
-              busy={rotate.isPending} onConfirm={() => rotate.mutate(undefined)}
+              busy={rotate.isPending} onConfirm={() => rotate.mutateAsync(undefined)}
             >
               <span className="text-xs text-muted-foreground">The current token stops working at once.</span>
             </ConfirmButton>
             <ConfirmButton
               label="Delete" question={`Delete ${ident.id}?`}
-              busy={remove.isPending} onConfirm={() => remove.mutate(undefined)}
+              busy={remove.isPending} onConfirm={() => remove.mutateAsync(undefined)}
             >
               <span className="text-xs text-muted-foreground">
                 Its token stops working immediately; an agent still using it gets an authentication failure.

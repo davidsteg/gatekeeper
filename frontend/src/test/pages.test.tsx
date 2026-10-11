@@ -232,6 +232,30 @@ describe("writes", () => {
     });
   });
 
+  it("closes the rotate question once the new token is shown, so one click rotates once", async () => {
+    const BOT = {
+      id: "bot", role: "agent", console: "api_only", tools: [], scopes: [], unknown_tools: [],
+    };
+    let rotations = 0;
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/identities") && !init.method) return json(200, [BOT], { ETag: `"i${rotations}"` });
+      if (url.endsWith("/identities/bot/token") && init.method === "POST") {
+        rotations += 1;
+        return json(200, { identity: "bot", token: `gk_new${rotations}`, revision: `i${rotations}` }, { ETag: `"i${rotations}"` });
+      }
+      return undefined;
+    });
+    renderAt("/identities");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Rotate token" }));
+    await user.click(screen.getByRole("button", { name: "Yes, rotate token" }));
+    expect(await screen.findByTestId("one-time-secret")).toHaveTextContent("gk_new1");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Yes, rotate token" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Rotate token" })).toBeInTheDocument();
+    expect(rotations).toBe(1);
+  });
+
   it("takes a credential value in a password field and never renders it", async () => {
     let body: Record<string, unknown> = {};
     serve((url, init) => {
