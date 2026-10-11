@@ -94,7 +94,8 @@ async def test_an_mcp_auth_failure_names_the_caller_but_never_the_token(env):
     async with client(env["app"]) as c:
         for path, token in (("/mcp", stale), ("/mcp", env["tokens"]["root"])):
             response = await c.post(
-                path, json=MCP_LIST, headers={**MCP_ACCEPT, "Authorization": f"Bearer {token}"}
+                path, json=MCP_LIST,
+                headers={**MCP_ACCEPT, "Authorization": f"Bearer {token}", "User-Agent": "stale-agent/1.0"},
             )
             assert response.status_code == 401
         await c.post("/mcp", json=MCP_LIST, headers=MCP_ACCEPT)
@@ -103,6 +104,10 @@ async def test_an_mcp_auth_failure_names_the_caller_but_never_the_token(env):
     assert unknown["client"] == "127.0.0.1"
     assert unknown["fingerprint"] == hash_token_lookup(stale)[:12]
     assert unknown["detail"] == "POST /mcp from 127.0.0.1"
+    assert (unknown["method"], unknown["path"]) == ("POST", "/mcp")
+    assert unknown["user_agent"] == "stale-agent/1.0"
+    assert "identity" not in unknown
+    assert wrong_role["identity"] == "root"
     assert wrong_role["client"] == "127.0.0.1"
     assert "from 127.0.0.1" in wrong_role["detail"]
     assert "fingerprint" not in missing and missing["client"] == "127.0.0.1"

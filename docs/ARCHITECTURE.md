@@ -916,7 +916,9 @@ Kinds: `call`, `auth_failure`, `startup`, `admin_change`, `admin_denied`,
 other side, so it is not reported as a failure that would provoke a retry).
 
 An `auth_failure` on `/mcp` or `/admin/mcp` carries `client`, the caller's
-address (the forwarded one when it came through a trusted proxy), and, when
+address (the forwarded one when it came through a trusted proxy), `method`,
+`path`, `user_agent` (capped at 160 characters) when the client sent one,
+`identity` when the token was valid but used on the wrong endpoint, and, when
 a bearer token was sent, `fingerprint`: the first 12 hex digits of that
 token's `token_lookup` (SHA-256). The token itself is never logged. Two
 failures with the same fingerprint are the same stale token, and comparing
@@ -924,7 +926,7 @@ it with the `token_lookup` values in an older `identities.yaml` says whose
 token it was.
 
 ```json
-{"kind": "auth_failure", "reason": "unknown_token", "detail": "POST /mcp from 10.10.110.102", "client": "10.10.110.102", "fingerprint": "a1b2c3d4e5f6", "ts": "..."}
+{"kind": "auth_failure", "reason": "unknown_token", "detail": "POST /mcp from 10.10.110.102", "client": "10.10.110.102", "method": "POST", "path": "/mcp", "user_agent": "python-httpx/0.28", "fingerprint": "a1b2c3d4e5f6", "ts": "..."}
 ```
 
 ## Telling connected agents the catalog changed

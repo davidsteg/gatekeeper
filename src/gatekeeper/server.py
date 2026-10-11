@@ -124,7 +124,16 @@ class AuthMiddleware:
         # traced to a machine. `scope["client"]` is the peer address, or the
         # forwarded one when it came through a trusted proxy (--trusted-proxies).
         peer = scope.get("client")
-        caller = {"client": peer[0] if peer else "unknown"}
+        caller: dict[str, str] = {
+            "client": peer[0] if peer else "unknown",
+            "method": scope.get("method", "?"),
+            "path": path,
+        }
+        agent = _header(scope, b"user-agent")
+        if agent:
+            # Names the client program (an MCP SDK, curl, a browser); capped
+            # so a hostile header cannot bloat the log.
+            caller["user_agent"] = agent[:160]
         if identity is None:
             if token:
                 # The presented token's lookup index, shortened: the same
@@ -160,6 +169,8 @@ class AuthMiddleware:
             self.audit.auth_failure(
                 reason=DenialReason.UNKNOWN_TOKEN.value,
                 detail=f"role {identity.role!r} on {path} ({identity.id!r}) from {caller['client']}",
+                # The token was valid, just on the wrong endpoint: say whose.
+                identity=identity.id,
                 **caller,
             )
             response = JSONResponse(
@@ -209,6 +220,13 @@ def _header(scope: Scope, name: str) -> str | None:
         if key == wanted:
             return value.decode("latin-1")
     return None
+
+
+def _header(scope: Scope, wanted: bytes) -> str:
+    for name, value in scope.get("headers", ()):
+        if name == wanted:
+            return value.decode("latin-1")
+    return ""
 
 
 def _bearer_token(scope: Scope) -> str | None:

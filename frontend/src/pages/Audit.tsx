@@ -17,15 +17,28 @@ const TONE: Record<string, Tone> = { ok: "ok", denied: "deny", failed: "deny", u
 
 const s = (v: unknown) => (v === undefined || v === null ? "" : typeof v === "string" ? v : JSON.stringify(v));
 
-/** The detail column: the reason, and for a failed sign-in also its own
- *  detail, which names the request and the caller's address. */
+/** The detail column. A failed sign-in spells out where it came from:
+ *  address, token fingerprint and client program. Records written before
+ *  1.5.0 have none of these and fall back to their own `detail`. */
 function detailOf(r: Record<string, unknown>): string {
   const primary = s(r.denial_reason ?? r.reason ?? r.target);
-  const extra = r.kind === "auth_failure" ? s(r.detail) : "";
-  const fingerprint = r.kind === "auth_failure" && r.fingerprint ? ` · token ${s(r.fingerprint)}` : "";
-  if (!primary) return s(r.detail);
-  return `${primary}${extra ? ` · ${extra}` : ""}${fingerprint}`;
+  if (r.kind !== "auth_failure") return primary || s(r.detail);
+  if (!r.client) return [primary, s(r.detail)].filter(Boolean).join(" · ");
+  return [
+    primary,
+    `from ${s(r.client)}`,
+    r.fingerprint ? `token ${s(r.fingerprint)}` : "no token sent",
+    r.user_agent ? s(r.user_agent) : "",
+  ].filter(Boolean).join(" · ");
 }
+
+/** Who: the identity, or for a failed sign-in with no known identity the
+ *  address it came from. */
+const whoOf = (r: Record<string, unknown>) => s(r.identity ?? r.actor ?? r.client);
+
+/** What: the tool or action, or the request a failed sign-in made. */
+const whatOf = (r: Record<string, unknown>) =>
+  r.tool ?? r.action ? s(r.tool ?? r.action) : r.path ? [s(r.method), s(r.path)].filter(Boolean).join(" ") : "";
 
 export function Audit() {
   const [params, setParams] = useSearchParams();
@@ -91,9 +104,9 @@ export function Audit() {
                       {r.outcome ? <Badge tone={TONE[s(r.outcome)] ?? "neutral"}>{s(r.outcome)}</Badge> : null}
                     </div>
                     <div className="font-mono wrap-anywhere">
-                      {s(r.identity ?? r.actor)}
-                      {(r.tool ?? r.action ?? r.path) ? <span className="text-muted-foreground"> → </span> : null}
-                      {s(r.tool ?? r.action ?? r.path)}
+                      {whoOf(r)}
+                      {whatOf(r) ? <span className="text-muted-foreground"> → </span> : null}
+                      {whatOf(r)}
                     </div>
                     {detail && <div className="font-mono text-xs wrap-anywhere text-muted-foreground">{detail}</div>}
                   </li>
@@ -113,8 +126,8 @@ export function Audit() {
                   <tr key={i} className="border-t border-border align-top">
                     <td className="px-3 py-1.5 font-mono text-xs whitespace-nowrap">{formatTime(r.ts, true)}</td>
                     <td className="px-3 py-1.5">{s(r.kind)}</td>
-                    <td className="px-3 py-1.5 font-mono">{s(r.identity ?? r.actor)}</td>
-                    <td className="px-3 py-1.5 font-mono wrap-break-word">{s(r.tool ?? r.action ?? r.path)}</td>
+                    <td className="px-3 py-1.5 font-mono">{whoOf(r)}</td>
+                    <td className="px-3 py-1.5 font-mono wrap-break-word">{whatOf(r)}</td>
                     <td className="px-3 py-1.5">
                       {r.outcome ? <Badge tone={TONE[s(r.outcome)] ?? "neutral"}>{s(r.outcome)}</Badge> : null}
                     </td>

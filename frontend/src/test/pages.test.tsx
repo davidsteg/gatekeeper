@@ -529,6 +529,7 @@ describe("ui review fixes", () => {
     const failure = {
       ts: "2026-10-11T17:05:04Z", kind: "auth_failure", reason: "unknown_token",
       detail: "POST /mcp from 10.10.110.102", client: "10.10.110.102", fingerprint: "a1b2c3d4e5f6",
+      method: "POST", path: "/mcp", user_agent: "python-httpx/0.28",
     };
     serve((url) => {
       if (url.endsWith("/session")) return json(200, SESSION);
@@ -536,7 +537,10 @@ describe("ui review fixes", () => {
       return undefined;
     });
     renderAt("/audit");
-    expect(await screen.findByText("unknown_token · POST /mcp from 10.10.110.102 · token a1b2c3d4e5f6")).toBeInTheDocument();
+    expect(await screen.findByText("unknown_token · from 10.10.110.102 · token a1b2c3d4e5f6 · python-httpx/0.28")).toBeInTheDocument();
+    // Who and What are filled in, not blank.
+    expect(screen.getByText("10.10.110.102")).toBeInTheDocument();
+    expect(screen.getByText("POST /mcp")).toBeInTheDocument();
     const { describeEvent } = await import("@/pages/events");
     expect(describeEvent(failure).text).toBe("Sign-in failed (unknown_token) from 10.10.110.102");
   });
