@@ -288,7 +288,9 @@ def register_write_routes(app: FastAPI) -> None:
         probe_url = (body.probe_url or "").strip() or None
         await _call(
             store.create, name, kind=body.kind, header=(body.header or "").strip() or None,
-            value=body.value, probe_url=probe_url, actor=session.identity, rev=rev,
+            value=body.value, probe_url=probe_url,
+            header_format=(body.header_format or "").strip() or None,
+            actor=session.identity, rev=rev,
         )
         if probe_url:
             rm._schedule_credential_probe(store, name)
@@ -429,6 +431,7 @@ def register_request_routes(app: FastAPI) -> None:
             apply=lambda i: credentials.create(
                 i.payload["name"], kind=i.payload["kind"], header=i.payload.get("header"),
                 value=body.value, probe_url=i.payload.get("probe_url"),
+                header_format=i.payload.get("header_format"),
                 actor=session.identity, rev=credentials.revision(),
             ),
         )

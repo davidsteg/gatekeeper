@@ -392,6 +392,7 @@ def credential_summaries(credentials: Any, tier1: Any) -> list[dict[str, Any]]:
             "name": meta.name,
             "kind": meta.kind,
             "header": meta.header,
+            "header_format": meta.header_format,
             "created_at": meta.created_at,
             "rotated_at": meta.rotated_at,
             "in_overlap": meta.in_overlap,
@@ -770,6 +771,10 @@ def pending_review(item: Any, store: Any) -> dict[str, Any]:
         headline = (
             f"credential {payload.get('name', '')}: kind {payload.get('kind', '')}"
             + (f", header {header}" if header else "")
+            + (
+                f", value format {payload.get('header_format')}"
+                if payload.get("header_format") else ""
+            )
             + " (no value: typed by a human on approval)"
         )
     elif action == "cred_update":
@@ -777,7 +782,7 @@ def pending_review(item: Any, store: Any) -> dict[str, Any]:
         changes = []
         if payload.get("new_name"):
             changes.append(f"rename to {payload.get('new_name')}")
-        for field in ("kind", "header", "probe_url"):
+        for field in ("kind", "header", "header_format", "probe_url"):
             if prev.get(field) != payload.get(field):
                 before, after = prev.get(field) or "none", payload.get(field) or "none"
                 changes.append(f"{field.replace('_', ' ')} {before} -> {after}")

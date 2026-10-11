@@ -1,3 +1,14 @@
+## 1.8.0
+
+An API-key credential can wrap its secret in a fixed header value, so Jellyfin's `Authorization: MediaBrowser Token="<token>"` works.
+
+### Added
+
+- **`header_format` on `api_key_header` credentials.** It is the header's value with `{value}` where the secret goes, for example `MediaBrowser Token="{value}"`. Without it the header carries the bare secret, as before. The `http` executor fills it in per request; the secret is still never written anywhere but the encrypted store, and audit masking covers it as before.
+- `admin.cred_propose` and `admin.cred_update` take `header_format`, so the Jellyfin slot from 1.2.0 can be repaired in one proposal: `{"name": "jellyfin", "header": "Authorization", "header_format": "MediaBrowser Token=\"{value}\""}`. The reviewer sees the format in the request headline. An empty string clears it; changing the slot to another kind drops it.
+- `POST /api/v1/credentials` accepts `header_format`, and `GET /api/v1/credentials` and `admin.cred_list` report it. The console's create form does not show it yet.
+- A format must contain `{value}` exactly once, fit on one line (no control characters, so it cannot add a second header) and stay under 256 characters. It applies only to `api_key_header`.
+
 ## 1.7.0
 
 ### Added

@@ -218,6 +218,9 @@ class CredentialMeta(_Model):
     name: str
     kind: str
     header: str | None
+    #: The header's value with `{value}` where the secret goes, when the
+    #: service wants more than the bare secret. Metadata, not a secret.
+    header_format: str | None = None
     created_at: str
     rotated_at: str | None
     in_overlap: bool
@@ -389,6 +392,7 @@ class CredentialCreate(_Body):
     name: str = Field(max_length=128)
     kind: str = Field(max_length=32)
     header: str | None = Field(None, max_length=256)
+    header_format: str | None = Field(None, max_length=256)
     value: str = Field(max_length=65536)
     probe_url: str | None = Field(None, max_length=2048)
 

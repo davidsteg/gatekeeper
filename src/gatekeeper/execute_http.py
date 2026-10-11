@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .credentials import CredentialStore, ResolvedCredential
+from .credentials import CredentialStore, ResolvedCredential, format_header_value
 from .errors import DenialReason, Denied
 from .execute import OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN, Result
 from .tier1 import Toolkit
@@ -160,7 +160,9 @@ def _credential_headers(credential: ResolvedCredential | None) -> dict[str, str]
     if credential is None:
         return {}
     if credential.kind == "api_key_header" and credential.header:
-        return {credential.header: credential.value}
+        return {
+            credential.header: format_header_value(credential.header_format, credential.value)
+        }
     if credential.kind == "bearer":
         return {"Authorization": f"Bearer {credential.value}"}
     if credential.kind == "basic":

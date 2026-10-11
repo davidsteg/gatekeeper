@@ -327,6 +327,15 @@ _TOOLS: list[types.Tool] = [
                 "name": {"type": "string"},
                 "kind": {"type": "string", "enum": sorted(CREDENTIAL_KINDS)},
                 "header": {"type": "string"},
+                "header_format": {
+                    "type": "string",
+                    "description": (
+                        "api_key_header only: the header value with {value} "
+                        "where the secret goes, for a service that wants more "
+                        'than the bare token -- e.g. MediaBrowser Token="{value}" '
+                        "for Jellyfin's Authorization header. Empty clears it."
+                    ),
+                },
                 "probe_url": {"type": "string"},
             },
             "required": ["name", "kind"],
@@ -338,7 +347,7 @@ _TOOLS: list[types.Tool] = [
         title="Propose changing a credential slot, keeping its value",
         description=(
             "Proposes changing an existing credential slot's kind, "
-            "header/param name, probe URL and/or name, while the stored "
+            "header/param name, header value format, probe URL and/or name, while the stored "
             "secret stays exactly as it is -- the in-place repair for a "
             "slot whose header or kind is wrong (a token sent as "
             "X-Emby-Token to a server that wants Authorization), without "
@@ -373,6 +382,15 @@ _TOOLS: list[types.Tool] = [
                     "description": (
                         "Header name (api_key_header) or query parameter name "
                         "(url_query)"
+                    ),
+                },
+                "header_format": {
+                    "type": "string",
+                    "description": (
+                        "api_key_header only: the header value with {value} "
+                        "where the secret goes, for a service that wants more "
+                        'than the bare token -- e.g. MediaBrowser Token="{value}" '
+                        "for Jellyfin's Authorization header. Empty clears it."
                     ),
                 },
                 "probe_url": {
