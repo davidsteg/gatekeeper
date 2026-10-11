@@ -40,6 +40,7 @@ from .deps import (
     require_viewer,
     set_etag,
 )
+from .events import register_event_routes
 from .extras import register_extra_routes
 from .session import SESSION_COOKIE, Session
 from .writes import register_request_routes, register_write_routes
@@ -398,6 +399,7 @@ def build_api_app(context: ApiContext | None) -> FastAPI:
     register_write_routes(app)
     register_request_routes(app)
     register_extra_routes(app)
+    register_event_routes(app, context)
 
     # -- Schema --------------------------------------------------------------------------------
 

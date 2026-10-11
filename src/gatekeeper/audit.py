@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 #: Substrings that mark a field name as secret-bearing -- regardless of
@@ -98,7 +100,14 @@ class AuditLog:
         self._keep = keep_files
         self._redact = redactor or Redactor()
         self._lock = threading.Lock()
+        self._listeners: list[Callable[[dict[str, Any]], None]] = []
         os.makedirs(directory, exist_ok=True)
+
+    def add_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        """Called with every record after it is on disk (the console's live
+        updates, `api/events.py`). A listener gets the scrubbed record and
+        must not raise or block: it runs on the writer's thread."""
+        self._listeners.append(listener)
 
     def _rotate_if_needed(self) -> None:
         try:
@@ -116,11 +125,19 @@ class AuditLog:
 
     def write(self, event: dict[str, Any]) -> None:
         record = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **event}
-        line = json.dumps(_scrub(record, self._redact), ensure_ascii=False)
+        scrubbed = _scrub(record, self._redact)
+        line = json.dumps(scrubbed, ensure_ascii=False)
         with self._lock:
             self._rotate_if_needed()
             with open(self._path, "a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
+        for listener in self._listeners:
+            try:
+                listener(scrubbed)
+            except Exception:
+                # The record is on disk; telling a browser about it is
+                # best-effort and must never fail the audited action.
+                logging.getLogger(__name__).exception("audit listener failed")
 
     def call(
         self,

@@ -5,6 +5,7 @@ import {
 import { useAuth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { LiveProvider, useLiveState } from "@/live";
 import { useOpenRequestCount } from "@/pages/Requests";
 
 const NAV = [
@@ -22,6 +23,32 @@ const NAV = [
 ] as const;
 
 export function Layout() {
+  return (
+    <LiveProvider>
+      <Shell />
+    </LiveProvider>
+  );
+}
+
+/** Whether new requests and calls arrive by themselves right now. */
+function LiveIndicator() {
+  const state = useLiveState();
+  const label = state === "live" ? "Live" : state === "connecting" ? "Connecting" : "Polling";
+  const title = state === "live"
+    ? "Changes appear as they happen."
+    : "No live connection: pages refresh every 15 seconds.";
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground" title={title} role="status">
+      <span
+        aria-hidden
+        className={cn("size-2 rounded-full", state === "live" ? "bg-ok" : state === "connecting" ? "bg-warn" : "bg-muted-foreground")}
+      />
+      {label}
+    </span>
+  );
+}
+
+function Shell() {
   const { session, signOut } = useAuth();
   const open = useOpenRequestCount();
   return (
@@ -30,7 +57,10 @@ export function Layout() {
         <div className="flex items-center gap-2 px-4 py-4">
           <ScrollText className="size-5 text-primary" aria-hidden />
           <span className="font-semibold">gatekeeper</span>
-          <Badge className="ml-auto font-mono">{session?.version}</Badge>
+          <span className="ml-auto flex items-center gap-2">
+            <LiveIndicator />
+            <Badge className="font-mono">{session?.version}</Badge>
+          </span>
         </div>
         <nav aria-label="Main" className="flex gap-1 overflow-x-auto px-2 pb-2 md:min-h-0 md:flex-1 md:flex-col md:overflow-x-visible md:overflow-y-auto">
           {NAV.map(({ to, label, icon: Icon, ...rest }) => (

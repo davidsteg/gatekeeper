@@ -35,11 +35,19 @@ def ro_env(tmp_path, tier1, tool_specs):
     return make_env(tmp_path, tier1, tool_specs, read_only=True)
 
 
-def _get_paths() -> list[str]:
-    """Every GET route in the schema, with path parameters filled in."""
+def _get_paths(*, streams: bool = True) -> list[str]:
+    """Every GET route in the schema, with path parameters filled in.
+
+    `streams=False` leaves out the event stream (`/events`): signed in, it
+    never ends, and `ASGITransport` waits for a whole body. Its signed-in
+    behaviour is tested over a real socket in `test_api_events.py`; the
+    refusals (no session, a bearer token) still go through every route."""
     schema = openapi_schema(build_api_app(None))
     paths = []
     for path, ops in schema["paths"].items():
+        content = ops.get("get", {}).get("responses", {}).get("200", {}).get("content", {})
+        if not streams and "text/event-stream" in content:
+            continue
         if "get" in ops:
             paths.append(
                 path.replace("{tool_id}", "demo.show").replace("{key}", "sonarr")
@@ -56,7 +64,7 @@ def test_the_schema_lists_the_phase_one_reads():
         "/integrations", "/identities", "/credentials", "/toolkits",
         "/toolkits/reference", "/requests/pending", "/requests/toolkits",
         "/audit", "/release-notes", "/stats", "/documents", "/documents/readme",
-        "/oauth/providers",
+        "/oauth/providers", "/events",
     }
 
 

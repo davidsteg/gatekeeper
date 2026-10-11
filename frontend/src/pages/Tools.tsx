@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, LayoutGrid, Pencil, Plus, Search, Table2 } from "lucide-react";
-import { API_BASE, apiGet, apiSend, type Schemas } from "@/api/client";
+import { API_BASE, apiGet, apiSend, etagFor, type Schemas } from "@/api/client";
 import { useCanWrite } from "@/auth";
 import { ConfirmButton, Textarea, useWrite, WriteError } from "@/components/forms";
 import { PageHeader } from "@/components/Layout";
@@ -364,25 +364,33 @@ export function ToolEditor() {
   const source = useQuery({
     queryKey: ["tool-editor", toolId ?? "", integration ?? "", fromTool ?? ""],
     // Also the read whose ETag the save sends back as If-Match.
+    // The ETag is kept with the text it belongs to. The shared one in the
+    // client moves whenever another query rereads the same URL, and live
+    // updates do that while this editor is open: saving with it would
+    // overwrite a concurrent change instead of answering 412.
     queryFn: async () => {
-      if (editing) return (await apiGet("/tools/{tool_id}", { path: { tool_id: toolId } })).yaml;
+      if (editing) {
+        const yaml = (await apiGet("/tools/{tool_id}", { path: { tool_id: toolId } })).yaml;
+        return { yaml, etag: etagFor(self) };
+      }
       await apiGet("/tools");
+      const etag = etagFor(self);
       if (integration && fromTool) {
         const all = await apiGet("/integrations");
         const spec = all.find((i) => i.key === integration)?.tools.find((t) => t.id === fromTool);
-        if (spec) return spec.yaml;
+        if (spec) return { yaml: spec.yaml, etag };
       }
-      return (await apiGet("/tool-scaffold")).yaml;
+      return { yaml: (await apiGet("/tool-scaffold")).yaml, etag };
     },
     staleTime: Infinity,
     gcTime: 0,
   });
 
   const [text, setText] = useState<string | null>(null);
-  const value = text ?? source.data ?? "";
+  const value = text ?? source.data?.yaml ?? "";
   const save = useWrite(
     (yaml: string) =>
-      apiSend<Schemas["ToolSaved"]>(editing ? "PUT" : "POST", self, { body: { yaml }, ifMatchOf: self }),
+      apiSend<Schemas["ToolSaved"]>(editing ? "PUT" : "POST", self, { body: { yaml }, ifMatch: source.data?.etag }),
     [["tools"], ["tool"], ["overview"], ["integrations"]],
     (saved) => void navigate(`/tools/${encodeURIComponent(saved.id)}`),
   );
