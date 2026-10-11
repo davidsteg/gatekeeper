@@ -40,10 +40,9 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-import yaml
-
 from ._atomic import atomic_write as _atomic_write
 from ._atomic import dump as _dump
+from ._atomic import safe_load as _yaml_load
 from .catalog import now_iso
 from .errors import GatekeeperError
 from .tier1 import DEFAULT_MAILBOX_LIMIT
@@ -130,7 +129,7 @@ class MessageStore:
         if not os.path.exists(self.path):
             return []
         with open(self.path, encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle.read()) or {}
+            raw = _yaml_load(handle.read()) or {}
         entries = raw.get("messages")
         if entries is None:
             entries = []

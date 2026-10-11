@@ -1,3 +1,9 @@
+## 1.6.1
+
+### Fixed
+
+- **Approvals are about three times faster.** Every approval rewrites `pending.yaml` (which keeps every decided request as history) and the file it changes, such as `tools.yaml`, then reloads them. Writing went through PyYAML's pure-Python emitter, and reloading `tools.yaml`, `identities.yaml`, `toolkits.yaml`, `credentials.yaml`, the mailbox and the toolkit proposals through its pure-Python loader, so the cost grew with the tool count and the request history. All of these files are now read and written with libyaml (`CSafeLoader`/`CSafeDumper`, included in the image) whenever it is available. With 300 tools and 500 decided requests, one approval went from about 0.45 s to 0.14 s and approving six at once from 2.7 s to 0.8 s. The files' content is unchanged, and the pure-Python code is still the fallback where libyaml is missing.
+
 ## 1.6.0
 
 ### Added

@@ -827,3 +827,28 @@ def test_load_cached_sees_every_rewrite_and_hands_out_copies(tmp_path):
     assert load_cached(path) == {"pending": [{"id": "a"}]}
     atomic_write(path, dump({"pending": [{"id": "a"}, {"id": "b"}]}))
     assert [e["id"] for e in load_cached(path)["pending"]] == ["a", "b"]
+
+
+def test_store_files_use_libyaml_and_write_what_pure_python_would(tmp_path):
+    """Every approval rewrites pending.yaml with its whole history, so the
+    stores read and write through libyaml when PyYAML has it. Swapping
+    the emitter must not change a single byte of what lands on disk."""
+    from gatekeeper import _atomic
+
+    assert _atomic._SafeDumper is getattr(yaml, "CSafeDumper", yaml.SafeDumper)
+    assert _atomic._SafeLoader is getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    payload = {
+        "pending": [
+            {
+                "id": "a",
+                "payload": {"argv": ["--flag", "Grüße", ""], "n": 3, "on": True},
+                "reason": None,
+                "note": "a line\nand another: with a colon",
+            }
+        ]
+    }
+    text = _atomic.dump(payload)
+    assert text == _atomic.HEADER + yaml.safe_dump(
+        payload, sort_keys=False, allow_unicode=True
+    )
+    assert _atomic.safe_load(text) == payload
