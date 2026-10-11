@@ -105,7 +105,7 @@ def _resolve_script(toolkit: Toolkit, *, warn: bool) -> str:
 #:
 #: Narrower than google_api.py's own grammar, which also dispatches
 #: `contacts`, `sheets` and `docs`: these three are the services the
-#: shipped toolkits and starter integrations are named after. An action on
+#: shipped example toolkits are named after. An action on
 #: one of the others has to name its service itself (`sheets get`) on a
 #: toolkit whose name matches none of these three -- `_action_argv` hands
 #: such an action to the CLI unchanged, since `_service_prefix` has no
@@ -118,7 +118,7 @@ def _service_prefix(toolkit: Toolkit) -> str | None:
 
     Taken from the toolkit name -- `gmail` -> gmail, `calendar` ->
     calendar, `drive` -> drive -- because the toolkit *is* the service
-    (one toolkit per Google API, the same 1:1 model integrations.py
+    (one toolkit per Google API, the same 1:1 model config/examples/toolkits.yaml
     ships). Names carrying a qualifier (`google-calendar`,
     `gmail-personal`) still resolve: the name is split on non-alphanumeric
     separators and the first part naming a known service wins.

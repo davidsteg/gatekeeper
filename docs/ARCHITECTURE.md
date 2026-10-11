@@ -246,40 +246,24 @@ Masking: known credential values are scrubbed (`***`) out of tool output and
 audit log entries via `audit.Redactor`, refreshed whenever a credential is
 created or rotated.
 
-## Integrations
+## Reaching other services
 
-`integrations.py` — a small library of starter definitions (toolkit YAML block +
-2-7 starter tools + an inline-SVG logo) for 22 services: Sonarr, Radarr,
-Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n, Uptime Kuma, Immich,
-Telegram, Google API (static-key subset), TrueNAS, pfSense, Jellystat,
-Jellyseerr, Netdata, SABnzbd, Paperless-ngx, Docker, Linux-over-SSH, and
-opencode. Most are
-`http`-shaped; Docker reuses the `docker` executor's own toolkit/tool shape
-(binaries/denied_args/path_roots, mirroring `config/examples/toolkits.yaml`)
-and Linux reuses the `ssh` executor's, via `_tool_argv()` rather than the
-http-shaped `_tool()` helper; opencode uses `_opencode_tool()`, whose tools
-carry an `opencode_operation` and no request shape at all. Reachable from `/app/tools/integrations` —
-picking an integration's tool pre-fills the *existing* tool editor, then
-goes through the exact same Tier 1 validation as hand-written YAML.
-Integrations never create a toolkit; `/app/toolkits/reference` (or
-`gatekeeper integration show <key>`) prints the YAML block for a human to
-paste into `toolkits.yaml` by hand.
+A toolkit for an outside service is pasted into `toolkits.yaml` by a human
+(FR-4.11). `toolkit_reference.py` holds one copy-pasteable starting block
+per executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`,
+`google`, `microsoft`, `opencode`, `agent`) with the safe defaults in
+place: a header credential, a `CHANGEME` host and an `allowed_cidrs` of
+203.0.113.1/32 (RFC 5737 TEST-NET-3), so an unedited block parses and
+fails closed. `/app/toolkits/reference` shows them; tools are then
+written in the tool editor or created by an admin agent over
+`/admin/mcp`. `tests/test_toolkit_reference.py` loads every block as
+Tier 1.
 
-Logos are each service's real mark (not a generic monogram), sourced from
-[homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
-(Apache License 2.0, attributed in `integrations.py`'s `_BRAND_LOGOS`) —
-Tdarr and Jellystat are the two exceptions (Jellystat's only available mark
-there turned out to be a raster PNG wrapped in an `<image>` tag, rejected
-by the same "no embedded bitmap" rule as an external one), and fall back to
-a plain colored-circle monogram. Every fetched SVG has its `style=""`
-attributes and any `<style>` block resolved into plain presentation
-attributes (`fill="#hex"`, not CSS) and its ids/classes namespaced per
-integration. Both rules date from the pre-1.0 `/ui` console, which inlined
-every logo into one page under a `style-src` that no `style` attribute
-matched; they are kept because they make each mark self-contained. The `/app` console loads each
-logo as an image (`GET /api/v1/integrations/<key>/logo.svg`, served with
-a `sandbox` CSP), so a logo never shares a document with another one and
-never runs script.
+Until 1.4.0 an `integrations.py` library carried 25 service-specific
+starter toolkits, tools and logos (`/app/tools/integrations`,
+`gatekeeper integration list/show`). It was removed: its only job was
+pre-filling the tool editor, which the admin agent never used, and its
+per-product request shapes went stale with every upstream API change.
 
 No OAuth2 in the `http` executor — it supports static credentials only
 (bearer, API-key header, basic). Services that require an authorization-code
@@ -380,7 +364,7 @@ outcome for a name nobody vetted.
 
 There is no counterpart table on the `google` side: a `google_action` is
 expected to be the CLI's own spelling already, which every shipped google
-tool and starter integration uses. What both executors do supply is the
+tool uses. What both executors do supply is the
 *service* token when the action ID omits it (`labels` → `gmail labels`),
 and both take it from the toolkit's name.
 `execute_google._service_prefix` recognizes `gmail`/`calendar`/`drive`
@@ -444,8 +428,7 @@ flag from a declaration nobody could satisfy. `catalog._parse_cli_args`
 rejects a switch that also sets `flag`/`positional`, one whose parameter
 is absent or not `type: boolean`, and one whose flag is not a single
 option token (`SWITCH_RE`: no whitespace, no `=`, no `{placeholder}`).
-`config/examples/tools.yaml` and the `google` integration's
-`drive.search` starter tool carry the worked example.
+`config/examples/tools.yaml`'s `drive.search` carries the worked example.
 
 tests/test_cli_arg_contract.py pins all of this: the argv for both
 providers, the rejected declarations, a census holding every shipped
@@ -534,7 +517,7 @@ src/gatekeeper/
   __init__.py       __version__, derived from pyproject.toml at import
                       time -- never a second hardcoded string to drift
   __main__.py        Entry point: CLI (serve/check/init/token/password/
-                      credential-key/integration), bootstrap, SIGHUP handler
+                      credential-key), bootstrap, SIGHUP handler
   release_notes.py    Where RELEASE.md is and how it splits into versions
                        -- one copy, read by /api/v1/release-notes (the
                        console's Release notes page), /release and
@@ -623,8 +606,8 @@ src/gatekeeper/
   execute_ssh.py        The `ssh` executor: binary+argv over an SSH exec
                        channel, mandatory host-key pinning
   credentials.py       The write-only, encrypted credential store
-  integrations.py      Starter toolkit/tool definitions + logos for 22
-                       services, used by /app/tools/integrations
+  toolkit_reference.py One copy-pasteable toolkit block per executor,
+                       shown at /app/toolkits/reference
   identity.py          scrypt token hashing, constant-time verify,
                        IdentityStore, roles
   audit.py             JSON Lines audit log with rotation and redaction
@@ -674,7 +657,7 @@ tests/
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_credentials.py, test_execute_http.py,
   test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py,
-  test_integrations.py, test_agent_messaging.py, test_admin_mcp.py,
+  test_toolkit_reference.py, test_agent_messaging.py, test_admin_mcp.py,
   test_catalog_versioning.py, test_pending.py, test_notifications.py,
   test_mcp_live_catalog.py, conftest.py
 ```
@@ -728,9 +711,7 @@ writes through these routes.
   `/admin/mcp` (FR-2.8).
 - **Headers.** Every API response carries `Content-Security-Policy:
   default-src 'none'; frame-ancestors 'none'; base-uri 'none'`,
-  `nosniff`, `no-referrer` and `Cache-Control: no-store`. Integration
-  logos are served as `image/svg+xml` with a `sandbox` CSP, for use as an
-  `<img>`, so the SPA never needs `innerHTML` for them.
+  `nosniff`, `no-referrer` and `Cache-Control: no-store`.
 - **Schema.** `GET /api/v1/openapi.json` is admin-only; there are no
   interactive docs pages. `python -m gatekeeper.api` prints the same
   schema with sorted keys and a fixed `v1` version, so generated client
@@ -753,8 +734,7 @@ writes through these routes.
   password; a wrong one is audited as `ui_password_change_failed`). Each
   answers `{"revision"}` plus the new `ETag`, so a second edit needs no
   reload. Request bodies forbid unknown fields. Store calls run on a
-  thread (scrypt). `GET /tool-scaffold` returns the new-tool starting YAML
-  and each integration tool carries its YAML for the editor.
+  thread (scrypt). `GET /tool-scaffold` returns the new-tool starting YAML.
 
 - **Request decisions (phase 3b).** `POST
   /requests/pending/{id}/approve` (`apply_pending`, which refuses a stale
@@ -860,7 +840,6 @@ gatekeeper itself at `/app` (`api/web.py`). It is a pure client of
   Markdown subset (headings, lists, fenced code, tables, and links, which
   become `<a>` only for `http(s)://` and `#` targets) is built as React
   elements (`pages/markdown.tsx`) for release notes and the Docs page.
-  Integration logos are `<img src="/api/v1/integrations/<key>/logo.svg">`.
 - **Serving.** `index.html` is `no-store`; hashed files under
   `/app/assets/` are `immutable`; any other `/app/...` path without a file
   falls back to `index.html` (client routes, including dotted tool IDs),
@@ -875,7 +854,7 @@ gatekeeper itself at `/app` (`api/web.py`). It is a pure client of
   `[tool.setuptools.package-data]` ships it. The runtime image has no Node.
 
 Phase 2 (0.54.0) was read-only. Since phase 3a (0.55.0) tools (YAML
-editor, enable/disable, delete, add from an integration), identities
+editor, enable/disable, delete), identities
 (create with a one-time token, edit, rotate, delete), credentials
 (create, rotate with overlap, delete; values only in password fields) and
 one's own password are edited here too. Writes go through
@@ -909,7 +888,7 @@ may still send there, and none of it renders a page:
   `/ui/oauth/microsoft/callback` (`oauth.build_callback_routes`) keep
   their 0.x paths because they are the redirect URIs operators registered
   with Google and Microsoft. They always answer 303 to `/app/credentials`
-  with a result code (see "Integrations" above).
+  with a result code (see "Reaching other services" above).
 - **`has_ui_identity`**, the `--ui` startup check that at least one
   identity can sign in (console role *and* password).
 

@@ -8,7 +8,7 @@ item.
 
 - Console JSON API at `/api/v1`: session sign-in with the console password, CSRF, ETag /
   If-Match, viewer/admin roles, bearer tokens refused; overview, tools,
-  integrations, identities, credential metadata, toolkits, requests, audit,
+  identities, credential metadata, toolkits, requests, audit,
   stats, bundled docs and release notes, plus every console write and
   OAuth sign-in (`api/`)
 - The console at `/app` (the only console since 1.0.0): Vite + React + TypeScript,
@@ -69,15 +69,10 @@ item.
   into destination-qualified, independently-grantable IDs
   (`docker.compose_up@nas1`) — REQUIREMENTS.md FR-8.3g-j (`tier1.py`,
   `catalog.py`)
-- Integrations — starter toolkit YAML + tools + logo for 22 services
-  (Sonarr, Radarr, Jellyfin, Bazarr, Tdarr, Prowlarr, Home Assistant, n8n,
-  Uptime Kuma, Immich, Telegram, Google API, TrueNAS, pfSense, Jellystat,
-  Netdata, SABnzbd, Paperless-ngx, Docker, Linux-over-SSH, opencode), reachable
-  from `/app/tools/integrations` (`integrations.py`). TrueNAS's starter set
-  covers pool listing, dataset listing, snapshot listing, and snapshot
-  deletion (`pool.query`/`pool.dataset.query`/`zfs.snapshot.query`/
-  `zfs.snapshot.delete`) — snapshot *creation* isn't included; see
-  "Not implemented" below.
+- Toolkit reference — one copy-pasteable toolkit block per executor at
+  `/app/toolkits/reference` (`toolkit_reference.py`). The per-service
+  Integrations library (`integrations.py`, `/app/tools/integrations`,
+  `gatekeeper integration`) was removed in 1.4.0.
 - `write_external` category — distinct rate-limit bucket, agent-facing
   "cannot be undone" warning, requires an explicit grant
 - **Live catalog change notification (FR-1.5)** — `/mcp` advertises
@@ -130,12 +125,11 @@ item.
   `params_template` (`validate.py`'s `build_rpc_call`) only substitutes
   flat string placeholders into a positional argument list; it cannot
   build a single positional argument that is itself an object. This is
-  why the TrueNAS starter integration ships `zfs.snapshot.delete` (single
-  string `id` argument) but not `zfs.snapshot.create`, whose real
+  why `config/examples/tools.yaml` has a TrueNAS `zfs.snapshot.delete`
+  (single string `id` argument) but no `zfs.snapshot.create`, whose real
   signature takes one nested object (`{dataset, name, recursive}`).
   Extending `params_template` to accept nested dict values, substituting
-  their leaves the same way, would close this — not done here to avoid
-  changing shared validation code alongside an integrations-only change.
+  their leaves the same way, would close this.
 - **OAuth2 — done for Google Workspace (0.38.0).** The `google` executor
   runs `google_api.py` as a local subprocess, materializes an `oauth2`
   credential bundle (client_id/client_secret/refresh_token, plus the

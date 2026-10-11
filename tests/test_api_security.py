@@ -423,7 +423,7 @@ async def test_ui_paths_redirect_to_the_same_page_under_app(env):
     async with client(env["app"]) as c:
         for path, target in (
             ("/ui", "/app/"), ("/ui/", "/app/"), ("/ui/requests", "/app/requests"),
-            ("/ui/tools/integrations", "/app/tools/integrations"),
+            ("/ui/tools/new", "/app/tools/new"),
             ("/ui//evil.example/x", "/app/evil.example/x"),
             # The query rides along: pages read it.
             ("/ui/requests?tab=change", "/app/requests?tab=change"),
