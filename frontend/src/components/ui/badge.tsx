@@ -37,7 +37,9 @@ export function Pills({ values, tone = "neutral", empty = "none" }: {
   return (
     <span className="flex flex-wrap gap-1">
       {values.map((v) => (
-        <Badge key={v} tone={tone} className="font-mono">{v}</Badge>
+        // A path root or a long tool ID may be wider than the card: let
+        // that one pill wrap instead of running off the edge.
+        <Badge key={v} tone={tone} className="max-w-full font-mono break-all whitespace-normal">{v}</Badge>
       ))}
     </span>
   );

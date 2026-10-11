@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/Layout";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Loading, Notice, QueryError } from "@/components/ui/notice";
 import { cn } from "@/lib/utils";
-import { POLL_MS } from "./Overview";
+import { POLL_MS, TOOLTIP_STYLE } from "./Overview";
 
 type Stats = Schemas["Stats"];
 type Window = "24h" | "7d" | "30d";
@@ -154,7 +154,7 @@ function SeriesChart({ data }: { data: Stats }) {
           <CartesianGrid vertical={false} strokeOpacity={0.15} />
           <XAxis dataKey="at" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
           <YAxis allowDecimals={false} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-          <Tooltip cursor={{ fillOpacity: 0.08 }} />
+          <Tooltip cursor={{ fillOpacity: 0.08 }} {...TOOLTIP_STYLE} />
           <Bar dataKey="ok" stackId="a" fill="var(--color-ok)" />
           <Bar dataKey="not ok" stackId="a" fill="var(--color-deny)" radius={[3, 3, 0, 0]} />
         </BarChart>

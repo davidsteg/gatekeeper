@@ -435,3 +435,72 @@ describe("oauth", () => {
     expect(screen.queryByText(/evil/)).toBeNull();
   });
 });
+
+describe("ui review fixes", () => {
+  it("shows what a tool does and who holds it before the YAML, and says when it takes no parameters", async () => {
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/tools/demo.show")) return json(200, DETAIL, { ETag: '"r1"' });
+      return undefined;
+    });
+    renderAt("/tools/demo.show");
+    expect(await screen.findByText(/None: the agent calls it without arguments/)).toBeInTheDocument();
+    expect(screen.getByText("Show")).toBeInTheDocument();
+    expect(screen.getByText("bot")).toBeInTheDocument();
+    // Edit is a link styled as a button, not a <button> nested in an <a>.
+    const edit = screen.getByRole("link", { name: "Edit" });
+    expect(edit).toHaveAttribute("href", "/tools/demo.show/edit");
+    expect(edit.querySelector("button")).toBeNull();
+  });
+
+  it("filters the tool list and keeps the filter in the URL", async () => {
+    const other = { ...TOOL, id: "demo.restart", title: "Restart", category: "write", grantees: [] };
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.endsWith("/tools")) {
+        return json(200, {
+          tools: [TOOL, other], rejected: [], disabled_by_tier1: [],
+          toolkits: [{ name: "demo", executor: "local" }],
+        });
+      }
+      return undefined;
+    });
+    renderAt("/tools");
+    const user = userEvent.setup();
+    expect(await screen.findByText("demo.restart")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Filter tools"), "restart");
+    expect(screen.queryByText("demo.show")).toBeNull();
+    expect(screen.getByText("demo.restart")).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Filter tools"));
+    await user.type(screen.getByLabelText("Filter tools"), "nothing-like-this");
+    expect(screen.getByText(/No tool matches/)).toBeInTheDocument();
+  });
+
+  it("clears the audit filter", async () => {
+    const asked: string[] = [];
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.includes("/audit")) {
+        asked.push(url);
+        return json(200, { entries: [], next_cursor: null, window_truncated: false });
+      }
+      return undefined;
+    });
+    renderAt("/audit?identity=bot");
+    const user = userEvent.setup();
+    expect(await screen.findByLabelText("Identity")).toHaveValue("bot");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(screen.getByLabelText("Identity")).toHaveValue(""));
+    expect(asked.at(-1)).not.toContain("identity=");
+    expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+  });
+
+  it("names what an agent proposed in the overview feed, not its random ID", async () => {
+    const { describeEvent } = await import("@/pages/events");
+    expect(describeEvent({
+      kind: "admin_change", actor: "orchestrator", action: "pending_propose", target: "W62JG2Wr01", proposed_action: "tool_enable",
+    }).text).toBe("orchestrator proposed tool_enable");
+    expect(describeEvent({ kind: "admin_change", actor: "root", action: "toolkit_deploy", target: "paperless" }).text)
+      .toBe("root deployed toolkit paperless");
+  });
+});

@@ -22,9 +22,11 @@ export function CardHeader({
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-center gap-2 border-b border-border px-4 py-3", className)}>
+    // Wraps rather than overflows: a long ID plus three badges does not fit
+    // a phone's width, and the badges went off the card's edge.
+    <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-4 py-3", className)}>
       {icon}
-      <h3 className="text-sm font-semibold">{title}</h3>
+      <h3 className="min-w-0 text-sm font-semibold wrap-break-word">{title}</h3>
       <span className="flex-1" />
       {actions}
     </div>

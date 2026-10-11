@@ -77,6 +77,30 @@ async def test_stats_count_tool_calls(env):
     assert body["identities"][0]["name"] == "bot"
 
 
+async def test_stats_read_their_whole_window_and_nothing_older(env):
+    # 250 calls inside the last hour (more than the 200 records the 24 h
+    # window used to stop at), then one from two days ago appended before
+    # them: the 24 h window counts every one of the 250 and not the old
+    # one, and the 7 d window counts all 251.
+    from datetime import datetime, timedelta
+
+    now = datetime.now().astimezone()
+    old = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    recent = now.strftime("%Y-%m-%dT%H:%M:%S%z")
+    with open(env["audit_path"], "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"ts": old, "kind": "call", "identity": "bot", "tool": "demo.show", "outcome": "ok"}) + "\n")
+        for _ in range(250):
+            handle.write(json.dumps({"ts": recent, "kind": "call", "identity": "bot", "tool": "demo.show", "outcome": "ok"}) + "\n")
+    async with _client(env["app"]) as c:
+        await login(c, "eye")
+        day = (await c.get(f"{API}/stats")).json()
+        week = (await c.get(f"{API}/stats", params={"window": "7d"})).json()
+    assert day["totals"]["total"] == 250
+    assert day["truncated"] is False
+    assert sum(b["ok"] for b in day["series"]) == 250
+    assert week["totals"]["total"] == 251
+
+
 async def test_documents_are_a_fixed_list(env, tmp_path, monkeypatch):
     # Found next to the package, not through the working directory.
     monkeypatch.chdir(tmp_path)

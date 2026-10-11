@@ -254,7 +254,7 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
         {open && mode === "reject" && (
           <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); reject.mutate(undefined); }}>
             <Label text="Reason (optional)">
-              <Input value={reason} maxLength={240} onChange={(e) => setReason(e.target.value)} />
+              <Input autoFocus value={reason} maxLength={240} onChange={(e) => setReason(e.target.value)} />
             </Label>
             <Button size="sm" variant="destructive" type="submit" disabled={reject.isPending}>Reject</Button>
             <Button size="sm" variant="ghost" type="button" onClick={() => setMode("")}>Cancel</Button>
@@ -266,7 +266,7 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
               The agent proposed the name and kind only. The value is typed here, encrypted, and never shown again.
             </p>
             <Label text="Credential value">
-              <Input type="password" autoComplete="off" required value={value} onChange={(e) => setValue(e.target.value)} />
+              <Input autoFocus type="password" autoComplete="off" required value={value} onChange={(e) => setValue(e.target.value)} />
             </Label>
             <div className="flex gap-2">
               <Button size="sm" type="submit" disabled={fill.isPending}>Approve with this value</Button>
@@ -466,7 +466,7 @@ function ProposalCard({ item, canDecide }: { item: Proposal; canDecide: boolean 
         {open && mode === "reject" && (
           <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); reject.mutate(undefined); }}>
             <Label text="Reason (optional)">
-              <Input value={reason} maxLength={240} onChange={(e) => setReason(e.target.value)} />
+              <Input autoFocus value={reason} maxLength={240} onChange={(e) => setReason(e.target.value)} />
             </Label>
             <Button size="sm" variant="destructive" type="submit" disabled={reject.isPending}>Reject</Button>
             <Button size="sm" variant="ghost" type="button" onClick={() => setMode("")}>Cancel</Button>

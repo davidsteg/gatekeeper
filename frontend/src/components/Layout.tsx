@@ -26,13 +26,13 @@ export function Layout() {
   const open = useOpenRequestCount();
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
-      <aside className="border-b border-border bg-card md:sticky md:top-0 md:h-screen md:w-56 md:border-r md:border-b-0">
+      <aside className="border-b border-border bg-card md:sticky md:top-0 md:flex md:h-screen md:w-56 md:shrink-0 md:flex-col md:border-r md:border-b-0">
         <div className="flex items-center gap-2 px-4 py-4">
           <ScrollText className="size-5 text-primary" aria-hidden />
           <span className="font-semibold">gatekeeper</span>
           <Badge className="ml-auto font-mono">{session?.version}</Badge>
         </div>
-        <nav aria-label="Main" className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-col md:overflow-visible">
+        <nav aria-label="Main" className="flex gap-1 overflow-x-auto px-2 pb-2 md:min-h-0 md:flex-1 md:flex-col md:overflow-x-visible md:overflow-y-auto">
           {NAV.map(({ to, label, icon: Icon, ...rest }) => (
             <NavLink
               key={to}
@@ -68,7 +68,7 @@ export function Layout() {
           </button>
         </div>
       </aside>
-      <main className="mx-auto w-full max-w-6xl flex-1 space-y-4 p-4 md:p-6">
+      <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 space-y-4 p-4 md:p-6">
         <Outlet />
       </main>
     </div>
@@ -82,7 +82,7 @@ export function PageHeader({ title, subtitle, actions }: {
 }) {
   return (
     <header className="flex flex-wrap items-end gap-3">
-      <div className="flex-1">
+      <div className="min-w-[min(100%,16rem)] flex-1">
         <h1 className="text-xl font-semibold">{title}</h1>
         {subtitle && <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{subtitle}</p>}
       </div>
