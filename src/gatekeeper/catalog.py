@@ -13,8 +13,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-import yaml
-
+from ._atomic import safe_load as _yaml_load
 from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, Tier1Violation, read_config_file
 from .tier1 import Tier1, Toolkit, _validate_http_base_url
@@ -1392,7 +1391,7 @@ def load_catalog(path: str, tier1: Tier1, *, strict: bool = False) -> Catalog:
     if not os.path.exists(path):
         return Catalog(tools={}, disabled_by_tier1=[], raw=[], rejected=[])
 
-    raw = yaml.safe_load(read_config_file(path)) or {}
+    raw = _yaml_load(read_config_file(path)) or {}
 
     entries = raw.get("tools")
     if entries is None:

@@ -20,6 +20,9 @@ import yaml
 #: libyaml when the PyYAML build has it (the manylinux wheels do) -- about
 #: 8x faster than the pure-Python loader, and just as safe.
 _SafeLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+#: Same for writing: the pure-Python emitter was the larger half of an
+#: approval's cost, since one rewrites pending.yaml with all its history.
+_SafeDumper = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
 
 _cache: dict[str, tuple[str, Any]] = {}
 _cache_lock = threading.Lock()
@@ -40,6 +43,16 @@ def revision(path: str) -> str:
             return hashlib.sha256(handle.read()).hexdigest()[:16]
     except OSError:
         return ""
+
+
+def safe_load(text: str | bytes) -> Any:
+    """`yaml.safe_load`, through libyaml when available.
+
+    For whole config files. `yaml.safe_load` itself always takes the
+    pure-Python loader, which costs seconds per approval once tools.yaml
+    and pending.yaml hold a few hundred entries.
+    """
+    return yaml.load(text, Loader=_SafeLoader)
 
 
 def load_cached(path: str) -> Any:
@@ -65,7 +78,7 @@ def load_cached(path: str) -> Any:
     with _cache_lock:
         hit = _cache.get(key)
     if hit is None or hit[0] != digest:
-        hit = (digest, yaml.load(data.decode("utf-8"), Loader=_SafeLoader))
+        hit = (digest, safe_load(data.decode("utf-8")))
         with _cache_lock:
             _cache[key] = hit
     return copy.deepcopy(hit[1])
@@ -91,7 +104,9 @@ def atomic_write(path: str, text: str) -> None:
 
 
 def dump(payload: dict[str, Any]) -> str:
-    return HEADER + yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+    return HEADER + yaml.dump(
+        payload, Dumper=_SafeDumper, sort_keys=False, allow_unicode=True
+    )
 
 
 def writable(path: str) -> bool:

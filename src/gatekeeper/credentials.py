@@ -27,10 +27,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
-import yaml
 from cryptography.fernet import Fernet, InvalidToken
 
 from ._atomic import atomic_write, dump, revision, writable
+from ._atomic import safe_load as _yaml_load
 from .audit import AuditLog
 from .errors import ConfigError
 
@@ -240,7 +240,7 @@ class CredentialStore:
         if not os.path.exists(self.path):
             return {}
         with open(self.path, encoding="utf-8") as handle:
-            data = yaml.safe_load(handle.read()) or {}
+            data = _yaml_load(handle.read()) or {}
         section = data.get("credentials") or {}
         if not isinstance(section, dict):
             raise ConfigError(f"{self.path}: section 'credentials' must be a mapping")

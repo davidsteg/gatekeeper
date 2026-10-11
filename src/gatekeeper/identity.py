@@ -32,8 +32,7 @@ import re
 import secrets
 from typing import Any
 
-import yaml
-
+from ._atomic import safe_load as _yaml_load
 from .errors import ConfigError, read_config_file
 
 #: scrypt parameters. n=2**15 costs about 32 MB and ~50 ms -- plenty for a
@@ -289,7 +288,7 @@ def load_identities(path: str) -> IdentityStore:
             f"{path} not found. Without identities nobody can authenticate -- "
             "run 'gatekeeper init' to create one administrator."
         )
-    raw = yaml.safe_load(
+    raw = _yaml_load(
         read_config_file(path, "Run 'gatekeeper init' to create one.")
     ) or {}
 
