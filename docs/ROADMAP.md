@@ -102,10 +102,6 @@ item.
   finished (JSON API 0.53.0, SPA 0.54.0, writes 0.55.0, request decisions
   0.56.0, parity 0.57.0, cutover 1.0.0), and vitest covers the pages, but a
   Playwright run against the built image is not in CI yet.
-- **Paging for decided requests in the API.** `GET /requests/pending`
-  returns every item (filterable by `status`); the console pages the
-  archive itself. Fine at today's sizes; see "Retention for decided
-  proposals" below.
 
 - **Artifact transfers as another user (`run_as`) and older artifact
   versions.** A transfer writes as the Gatekeeper process user. An image

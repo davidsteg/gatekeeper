@@ -20,7 +20,7 @@ from conftest import PYTHON
 from gatekeeper.catalog import load_catalog
 from gatekeeper.credentials import KEY_ENV, generate_master_key
 from gatekeeper.integrations import INTEGRATIONS
-from gatekeeper.pending import STALE_VANISHED_REASON
+from gatekeeper.pending import STALE_TAKEN_REASON, STALE_VANISHED_REASON
 from gatekeeper.store import tool_to_yaml
 from gatekeeper.tier1 import load_tier1
 
@@ -261,12 +261,83 @@ async def test_credential_fill_stale_when_name_taken_meanwhile(cred_env):
             f"{API}/requests/pending/{item.id}/credential", json={"value": SECRET_VALUE},
             headers=_h(admin),
         )
-    assert r.status_code == 400, r.text
-    assert "already exists" in r.json()["error"]
+    assert r.status_code == 409, r.text
+    assert "exists now" in r.json()["error"]
     assert SECRET_VALUE not in r.text
     (meta,) = credentials.names()
     assert meta.name == "sonarr" and meta.kind == "bearer"
-    assert cred_env["pending"].get(item.id).status != "approved"
+    # Closed, not left pending: it could never be approved.
+    closed = cred_env["pending"].get(item.id)
+    assert closed.status == "stale" and closed.reason == STALE_TAKEN_REASON
+
+
+async def test_listing_closes_a_credential_proposal_whose_name_was_taken(cred_env):
+    """The read-path sweep closes it before anyone clicks, with a review
+    that says why. A proposal for a free name is left alone."""
+    credentials = cred_env["credentials"]
+    taken = _propose_credential(cred_env, "sonarr")
+    free = _propose_credential(cred_env, "radarr")
+    credentials.create("sonarr", kind="bearer", value="x", actor="root", rev="")
+    async with client(cred_env["app"]) as c:
+        await login(c, "root")
+        item = await _pending(c, taken.id)
+        again = await _pending(c, taken.id)
+    assert item["status"] == "stale"
+    assert "sonarr was created after" in item["review"]["stale"]
+    assert again["decided_at"] == item["decided_at"]  # idempotent
+    assert cred_env["pending"].get(free.id).status == "pending"
+
+
+def test_admin_pending_list_closes_a_taken_credential_proposal(cred_env):
+    from gatekeeper.admin_service import sweep_vanished_pendings
+
+    item = _propose_credential(cred_env)
+    cred_env["credentials"].create("sonarr", kind="bearer", value="x", actor="root", rev="")
+    sweep_vanished_pendings(cred_env["store"], cred_env["pending"])
+    assert cred_env["pending"].get(item.id).status == "pending"  # no credentials passed
+    sweep_vanished_pendings(
+        cred_env["store"], cred_env["pending"], credentials=cred_env["credentials"]
+    )
+    assert cred_env["pending"].get(item.id).status == "stale"
+
+
+# -- Paging decided requests -------------------------------------------------------------
+
+
+async def test_decided_requests_page_newest_first_without_repeats(env):
+    pending = env["pending"]
+    ids = []
+    for n in range(5):
+        item = pending.propose(
+            action="tool_enable", actor="hermes", payload={"id": f"demo.t{n}"}, base_rev="",
+        )
+        pending.reject(item.id, decided_by="root", reason=str(n))
+        ids.append(item.id)
+    open_item = pending.propose(
+        action="tool_enable", actor="hermes", payload={"id": "demo.open"}, base_rev="",
+    )
+    async with client(env["app"]) as c:
+        await login(c, "eye")
+        first = (await c.get(f"{API}/requests/decided", params={"limit": 2})).json()
+        # A decision between two pages must not shift the next one.
+        late = pending.propose(
+            action="tool_enable", actor="hermes", payload={"id": "demo.late"}, base_rev="",
+        )
+        pending.reject(late.id, decided_by="root")
+        seen = [e["id"] for e in first["entries"]]
+        cursor = first["next_cursor"]
+        while cursor:
+            page = (await c.get(
+                f"{API}/requests/decided", params={"limit": 2, "cursor": cursor}
+            )).json()
+            seen += [e["id"] for e in page["entries"]]
+            cursor = page["next_cursor"]
+        bad = await c.get(f"{API}/requests/decided", params={"cursor": "not-a-cursor"})
+    assert first["total"] == 5
+    assert seen == list(reversed(ids))
+    assert open_item.id not in seen
+    assert all(e["review"]["headline"] for e in first["entries"])
+    assert bad.status_code == 400
 
 
 # -- Credential metadata (test_ui_credentials) ------------------------------------------

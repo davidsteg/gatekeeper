@@ -49,6 +49,15 @@ STALE_CHANGED_REASON = (
     "Configuration changed since this was proposed. "
     "Re-propose from the current state."
 )
+#: A `cred_propose` whose name was taken after it was proposed. Its
+#: `base_rev` is a whole-file revision, which is "" while the credential
+#: store does not exist yet, so the staleness gate in `approve` cannot
+#: catch this case; the create would refuse on every approval and the item
+#: would stay `pending` forever.
+STALE_TAKEN_REASON = (
+    "A credential with this name exists now. "
+    "Propose a new name, or rotate the existing credential."
+)
 
 
 class PendingWriteRefused(ConfigError):
@@ -268,6 +277,45 @@ class PendingStore:
                 )
             return closed
 
+    def close_taken_credentials(
+        self, taken: set[str], *, decided_by: str = "system"
+    ) -> list[PendingAction]:
+        """Marks `stale` every still-`pending` `cred_propose` whose name is
+        in `taken`, and returns the ones it closed. Same shape and audit
+        record as `close_vanished_targets`; idempotent the same way."""
+        if not taken or not _writable(self.path):
+            return []
+        with self._lock:
+            entries = self._load()
+            closed: list[PendingAction] = []
+            for entry in entries:
+                if entry.get("status") != "pending" or entry.get("action") != "cred_propose":
+                    continue
+                payload = entry.get("payload")
+                if not isinstance(payload, dict) or payload.get("name") not in taken:
+                    continue
+                entry["status"] = "stale"
+                entry["decided_by"] = decided_by
+                entry["decided_at"] = now_iso()
+                entry["reason"] = STALE_TAKEN_REASON
+                closed.append(_from_spec(entry))
+            if not closed:
+                return []
+            self._write(entries)
+            for item in closed:
+                self.audit.write(
+                    {
+                        "kind": "admin_change",
+                        "actor": decided_by,
+                        "action": "pending_stale",
+                        "target": item.id,
+                        "proposed_action": item.action,
+                        "original_actor": item.actor,
+                        "reason": STALE_TAKEN_REASON,
+                    }
+                )
+            return closed
+
     def approve(
         self,
         action_id: str,
@@ -364,6 +412,7 @@ __all__ = [
     "PendingStore",
     "PendingWriteRefused",
     "STALE_CHANGED_REASON",
+    "STALE_TAKEN_REASON",
     "STALE_VANISHED_REASON",
     "STATUSES",
 ]

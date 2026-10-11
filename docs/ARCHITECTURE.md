@@ -768,7 +768,15 @@ writes through these routes.
   `review` on each pending item (a plain-text headline, the tools it names
   resolved against the catalog as enabled, disabled or missing, a
   `grant_set` diffed against its `prev_tools`, and why a stale item cannot
-  apply) and `spec_yaml` on each toolkit proposal.
+  apply) and `spec_yaml` on each toolkit proposal. `GET /requests/decided`
+  pages the change-request archive (approved, rejected, stale), newest
+  decision first, with a cursor (the last item's decision time and queue
+  position, so a decision between two pages repeats nothing) and a
+  `total`; the console polls `GET /requests/pending?status=pending` and
+  loads the archive from there a page at a time. Both reads sweep first:
+  a proposal whose target vanished, and a `cred_propose` whose name has
+  since been taken, are closed as `stale` with a reason that says why --
+  neither could ever be approved.
 
 - **Stats, documents, OAuth sign-in (`api/extras.py`, 0.57.0).** `GET
   /stats?window=24h|7d|30d` (`service.stats_view`:
