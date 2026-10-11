@@ -35,7 +35,7 @@ from .api.web import APP_PREFIX, build_web_routes
 from .audit import AuditLog
 from .errors import DenialReason, Denied
 from .execute import OUTCOME_OK, OUTCOME_UNKNOWN
-from .identity import ADMIN_ROLE, IdentityStore
+from .identity import ADMIN_ROLE, IdentityStore, hash_token_lookup
 from .notifications import SESSION_ID_HEADER, CatalogNotifier
 from .oauth import OAuthStateStore
 from .service import Service
@@ -120,10 +120,23 @@ class AuthMiddleware:
 
         token = _bearer_token(scope)
         identity = self.identities.authenticate(token) if token else None
+        # Who knocked, so a stale token in some client's config can be
+        # traced to a machine. `scope["client"]` is the peer address, or the
+        # forwarded one when it came through a trusted proxy (--trusted-proxies).
+        peer = scope.get("client")
+        caller = {"client": peer[0] if peer else "unknown"}
         if identity is None:
+            if token:
+                # The presented token's lookup index, shortened: the same
+                # SHA-256 `token_lookup` holds, so it can be matched against
+                # an older identities.yaml to say whose token it was, and two
+                # failures with the same value are the same stale token. Not
+                # a secret: 48 bits of a hash of 256 random bits.
+                caller["fingerprint"] = hash_token_lookup(token)[:12]
             self.audit.auth_failure(
                 reason=DenialReason.UNKNOWN_TOKEN.value,
-                detail=f"{scope.get('method', '?')} {path}",
+                detail=f"{scope.get('method', '?')} {path} from {caller['client']}",
+                **caller,
             )
             response = JSONResponse(
                 {"error": "unauthorized"},
@@ -146,7 +159,8 @@ class AuthMiddleware:
         if role_mismatch:
             self.audit.auth_failure(
                 reason=DenialReason.UNKNOWN_TOKEN.value,
-                detail=f"role {identity.role!r} on {path} ({identity.id!r})",
+                detail=f"role {identity.role!r} on {path} ({identity.id!r}) from {caller['client']}",
+                **caller,
             )
             response = JSONResponse(
                 {"error": "unauthorized"},

@@ -46,7 +46,10 @@ export function describeEvent(record: Record<string, unknown>): { text: string; 
       return { text: `${s(record.actor)} ${verb} ${s(record.target)}`, dot: "bg-primary" };
     }
     case "auth_failure":
-      return { text: `Sign-in failed (${s(record.reason)})`, dot: "bg-deny" };
+      return {
+        text: `Sign-in failed (${s(record.reason)})${record.client ? ` from ${s(record.client)}` : ""}`,
+        dot: "bg-deny",
+      };
     case "ui_login":
       return { text: `${s(record.identity)} signed in`, dot: "bg-ok" };
     default:

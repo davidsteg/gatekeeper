@@ -17,6 +17,16 @@ const TONE: Record<string, Tone> = { ok: "ok", denied: "deny", failed: "deny", u
 
 const s = (v: unknown) => (v === undefined || v === null ? "" : typeof v === "string" ? v : JSON.stringify(v));
 
+/** The detail column: the reason, and for a failed sign-in also its own
+ *  detail, which names the request and the caller's address. */
+function detailOf(r: Record<string, unknown>): string {
+  const primary = s(r.denial_reason ?? r.reason ?? r.target);
+  const extra = r.kind === "auth_failure" ? s(r.detail) : "";
+  const fingerprint = r.kind === "auth_failure" && r.fingerprint ? ` · token ${s(r.fingerprint)}` : "";
+  if (!primary) return s(r.detail);
+  return `${primary}${extra ? ` · ${extra}` : ""}${fingerprint}`;
+}
+
 export function Audit() {
   const [params, setParams] = useSearchParams();
   const identity = params.get("identity") ?? "";
@@ -71,7 +81,7 @@ export function Audit() {
             <ul className="divide-y divide-border">
               {entries.length === 0 && <li className="px-3 py-6 text-center text-sm text-muted-foreground">No matching entries.</li>}
               {entries.map((r, i) => {
-                const detail = s(r.denial_reason ?? r.reason ?? r.target ?? r.detail);
+                const detail = detailOf(r);
                 return (
                   <li key={i} className="space-y-1 px-3 py-2.5 text-sm">
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -109,7 +119,7 @@ export function Audit() {
                       {r.outcome ? <Badge tone={TONE[s(r.outcome)] ?? "neutral"}>{s(r.outcome)}</Badge> : null}
                     </td>
                     <td className="min-w-48 px-3 py-1.5 font-mono text-xs wrap-anywhere text-muted-foreground">
-                      {s(r.denial_reason ?? r.reason ?? r.target ?? r.detail)}
+                      {detailOf(r)}
                     </td>
                   </tr>
                 ))}

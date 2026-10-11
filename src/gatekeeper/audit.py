@@ -196,8 +196,10 @@ class AuditLog:
         """
         return self._redact(text)
 
-    def auth_failure(self, *, reason: str, detail: str = "") -> None:
-        self.write({"kind": "auth_failure", "reason": reason, "detail": detail})
+    def auth_failure(self, *, reason: str, detail: str = "", **extra: Any) -> None:
+        """`extra` carries optional metadata such as the caller's address --
+        never a secret, and `write` would mask a secret-named key anyway."""
+        self.write({"kind": "auth_failure", "reason": reason, "detail": detail, **extra})
 
     def startup(self, payload: dict[str, Any]) -> None:
         self.write({"kind": "startup", **payload})

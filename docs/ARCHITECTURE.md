@@ -915,6 +915,18 @@ Kinds: `call`, `auth_failure`, `startup`, `admin_change`, `admin_denied`,
 (timeout on a non-idempotent tool — the operation may have completed on the
 other side, so it is not reported as a failure that would provoke a retry).
 
+An `auth_failure` on `/mcp` or `/admin/mcp` carries `client`, the caller's
+address (the forwarded one when it came through a trusted proxy), and, when
+a bearer token was sent, `fingerprint`: the first 12 hex digits of that
+token's `token_lookup` (SHA-256). The token itself is never logged. Two
+failures with the same fingerprint are the same stale token, and comparing
+it with the `token_lookup` values in an older `identities.yaml` says whose
+token it was.
+
+```json
+{"kind": "auth_failure", "reason": "unknown_token", "detail": "POST /mcp from 10.10.110.102", "client": "10.10.110.102", "fingerprint": "a1b2c3d4e5f6", "ts": "..."}
+```
+
 ## Telling connected agents the catalog changed
 
 A Tier 2 write reloads the state it wrote, synchronously and in-process, so

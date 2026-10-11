@@ -1,3 +1,12 @@
+## 1.5.0
+
+A rejected `/mcp` call now says where it came from, so a client with a stale token can be found.
+
+### Added
+
+- **`auth_failure` records on `/mcp` and `/admin/mcp` name the caller.** `client` is the caller's address (the forwarded one behind a trusted proxy, see `--trusted-proxies`), and `detail` ends in `from <address>`. When a bearer token was sent, `fingerprint` holds the first 12 hex digits of its `token_lookup` (SHA-256), never the token. Repeated failures with one fingerprint are one stale token; matching it against the `token_lookup` values in an older `identities.yaml` says which identity it belonged to. Before this, only console sign-in failures recorded an address, and an agent somewhere on the LAN with an old token showed up as an anonymous `unknown_token` loop.
+- The Audit log's detail column shows a failed sign-in's request, address and fingerprint, and the Overview feed reads "Sign-in failed (unknown_token) from 10.10.110.102".
+
 ## 1.4.1
 
 ### Fixed
