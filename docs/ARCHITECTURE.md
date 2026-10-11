@@ -920,7 +920,7 @@ other side, so it is not reported as a failure that would provoke a retry).
 
 A `call` record carries `client`, the address the call came over (the
 forwarded one behind a trusted proxy), next to `identity`. Records written
-before 1.6.1 have none.
+before 1.7.0 have none.
 
 An `auth_failure` on `/mcp` or `/admin/mcp` carries `client`, the caller's
 address (the forwarded one when it came through a trusted proxy), `method`,

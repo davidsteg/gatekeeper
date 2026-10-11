@@ -129,7 +129,7 @@ class AuthMiddleware:
             "method": scope.get("method", "?"),
             "path": path,
         }
-        agent = _header(scope, b"user-agent")
+        agent = _header(scope, "user-agent")
         if agent:
             # Names the client program (an MCP SDK, curl, a browser); capped
             # so a hostile header cannot bloat the log.
@@ -228,13 +228,6 @@ def _client_of(ctx: Any) -> str | None:
     scope = getattr(getattr(ctx, "request", None), "scope", None) or {}
     peer = scope.get("client")
     return peer[0] if peer else None
-
-
-def _header(scope: Scope, wanted: bytes) -> str:
-    for name, value in scope.get("headers", ()):
-        if name == wanted:
-            return value.decode("latin-1")
-    return ""
 
 
 def _bearer_token(scope: Scope) -> str | None:

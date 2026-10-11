@@ -1,8 +1,17 @@
-## 1.6.1
+## 1.7.0
 
 ### Added
 
 - **Every audited call records the caller's address.** A `call` record now carries `client` next to `identity`: the peer address, or the forwarded one behind a trusted proxy (`--trusted-proxies`). The Audit log's Who column reads `homelab (10.10.110.5)` for calls, sign-ins and failed sign-ins alike, so an identity used from an unexpected machine stands out. Records from before this release show the identity alone.
+- **`X-Real-IP` from a trusted proxy.** `--trusted-proxies` (`GATEKEEPER_TRUSTED_PROXIES`) now also covers proxies that send `X-Real-IP` instead of `X-Forwarded-For`. It counts only from a listed proxy, and only when no `X-Forwarded-For` came along.
+
+### Fixed
+
+- **Ending an MCP session with `DELETE /mcp` forgot nothing since 1.5.0.** A second header helper shadowed the first, and the session-ID lookup never matched, so a terminated session stayed tracked until the notifier's size bound pushed it out. It is dropped again on the DELETE.
+
+### Documentation
+
+- DEPLOYMENT.md, "Every caller shows the same `172.x.x.1`": why Docker can hide the caller's address (a same-host container through the published port, `docker-proxy`, a Kubernetes NodePort), what to change for each, and why trusting the bridge gateway is not the fix.
 
 ## 1.6.0
 

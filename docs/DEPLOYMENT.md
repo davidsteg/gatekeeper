@@ -19,7 +19,7 @@ workflow, see [AGENTS.md](../AGENTS.md).
 | `GATEKEEPER_UI_READ_ONLY` | `1`/`true` disables console writes regardless of role |
 | `GATEKEEPER_NO_BOOTSTRAP` | `1`/`true` disables first-start auto-bootstrap |
 | `GATEKEEPER_HOST` / `GATEKEEPER_PORT` | Bind address for `serve` |
-| `GATEKEEPER_TRUSTED_PROXIES` | Comma-separated IPs/CIDRs of reverse proxies allowed to set `X-Forwarded-For`/`X-Forwarded-Proto` (or `*` to trust any peer). See [Behind a reverse proxy](#behind-a-reverse-proxy) below — unset is not safe for the common container topology |
+| `GATEKEEPER_TRUSTED_PROXIES` | Comma-separated IPs/CIDRs of reverse proxies allowed to set `X-Forwarded-For`/`X-Forwarded-Proto`, or `X-Real-IP` when no `X-Forwarded-For` is sent (or `*` to trust any peer). See [Behind a reverse proxy](#behind-a-reverse-proxy) below — unset is not safe for the common container topology |
 | `GATEKEEPER_NOTIFY_URL` | If set, every `agent.send_message` delivery POSTs the message (JSON) to this URL as a best-effort webhook — signed for the Hermes webhook adapter (generic HMAC V2): X-Webhook-Timestamp (unix seconds) + X-Webhook-Signature-V2 = hex HMAC-SHA256 of <timestamp>.<body>, 3s timeout, failures only logged and never failing the delivery. Unset (the default) means no POST at all |
 | `GATEKEEPER_NOTIFY_SECRET` | HMAC-SHA256 secret for X-Webhook-Signature-V2 on the delivery webhook; empty when unset, which still signs (with the empty secret) |
 | `GATEKEEPER_BASE_URL` | Public origin of the console (e.g. `https://gatekeeper.example.com`), used to build the Google OAuth `redirect_uri`. Only needed behind a proxy that rewrites the host and does not forward it — unset, the request's own base URL is used. See [Google OAuth sign-in](#google-oauth-sign-in) |
@@ -402,6 +402,42 @@ gatekeeper-specific mechanism — it configures uvicorn's own
 needs to change. Only name proxies gatekeeper actually shares a network
 with; `*` trusts any peer and should stay reserved for a network gatekeeper
 does not share with anything untrusted.
+
+A proxy that sends `X-Real-IP` instead of `X-Forwarded-For` (nginx's common
+`proxy_set_header X-Real-IP $remote_addr;`, some ingress controllers) works
+with the same list since 1.7.0: the header counts only from a trusted proxy,
+and only when no `X-Forwarded-For` came along.
+
+### Every caller shows the same `172.x.x.1`
+
+If the audit log's Who column shows one address such as `172.16.29.1` for
+every caller, that is the Docker bridge gateway of gatekeeper's own
+network, not a proxy. Docker rewrote the source address on the way in, and
+the caller's real address never reached gatekeeper in any form: there is
+no header to trust. **Do not** put that gateway in
+`GATEKEEPER_TRUSTED_PROXIES` to fix it. Nothing behind it sends a
+forwarding header, and any caller could then claim any address by sending
+one itself.
+
+The address is rewritten when:
+
+- **The caller is another container on the same host** that reaches
+  gatekeeper through the host's address and published port
+  (`http://10.0.0.10:30221/mcp`). The hairpin goes through Docker's NAT and
+  arrives masqueraded. Put both containers on one user-defined network
+  (`docker network create agents`, then `--network agents` or `networks:`
+  in compose for each) and point the caller at
+  `http://gatekeeper:8080/mcp`. Each container then shows its own address.
+- **Docker's userland proxy (`docker-proxy`) carries the connection**
+  instead of iptables, which is how connections from the host itself, IPv6
+  connections to an IPv4-only container, and hosts with Docker's iptables
+  management off are served.
+  Use IPv4 to reach gatekeeper, or run it with `--network host` (and
+  `serve --port 30221`, without `-p`), which removes the NAT entirely.
+- **A Kubernetes `NodePort` or `LoadBalancer` Service** forwards with the
+  default `externalTrafficPolicy: Cluster`, which SNATs. Set
+  `externalTrafficPolicy: Local` on the Service, or put an ingress in front
+  that sends `X-Forwarded-For` and list the ingress's address here.
 
 The console lives at `/app` and talks to `/api/v1`, both on the same port
 as `/mcp`. A proxy must forward `/app`, `/api/v1` and `/ui/oauth/*` (the
