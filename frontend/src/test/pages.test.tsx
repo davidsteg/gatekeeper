@@ -76,6 +76,23 @@ describe("sign-in", () => {
     await waitFor(() => expect(posted).toEqual({ identity: "eye", password: "viewer-console-password" }));
     expect(await screen.findByText("Could not load this page.")).toBeInTheDocument();
   });
+
+  it("returns to the page it was opened at, query included, after sign-in", async () => {
+    serve((url, init) => {
+      if (url.endsWith("/session") && !init.method) return json(401, { error: "Not signed in." });
+      if (url.endsWith("/session") && init.method === "POST") return json(200, SESSION);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, []);
+      if (url.includes("/requests/decided")) return json(200, { entries: [], next_cursor: null, total: 0 });
+      if (url.endsWith("/requests/toolkits")) return json(200, []);
+      return json(200, {});
+    });
+    renderAt("/requests?tab=toolkit");
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("Identity"), "eye");
+    await user.type(screen.getByLabelText("Password"), "viewer-console-password");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("tab", { name: "Toolkit", selected: true })).toBeInTheDocument();
+  });
 });
 
 describe("credentials page", () => {
@@ -416,5 +433,74 @@ describe("oauth", () => {
     renderAt("/credentials?oauth=%3Cb%3Eevil%3C%2Fb%3E&provider=google&credential=gmail");
     expect(await screen.findByText(/The sign-in did not complete/)).toBeInTheDocument();
     expect(screen.queryByText(/evil/)).toBeNull();
+  });
+});
+
+describe("ui review fixes", () => {
+  it("shows what a tool does and who holds it before the YAML, and says when it takes no parameters", async () => {
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/tools/demo.show")) return json(200, DETAIL, { ETag: '"r1"' });
+      return undefined;
+    });
+    renderAt("/tools/demo.show");
+    expect(await screen.findByText(/None: the agent calls it without arguments/)).toBeInTheDocument();
+    expect(screen.getByText("Show")).toBeInTheDocument();
+    expect(screen.getByText("bot")).toBeInTheDocument();
+    // Edit is a link styled as a button, not a <button> nested in an <a>.
+    const edit = screen.getByRole("link", { name: "Edit" });
+    expect(edit).toHaveAttribute("href", "/tools/demo.show/edit");
+    expect(edit.querySelector("button")).toBeNull();
+  });
+
+  it("filters the tool list and keeps the filter in the URL", async () => {
+    const other = { ...TOOL, id: "demo.restart", title: "Restart", category: "write", grantees: [] };
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.endsWith("/tools")) {
+        return json(200, {
+          tools: [TOOL, other], rejected: [], disabled_by_tier1: [],
+          toolkits: [{ name: "demo", executor: "local" }],
+        });
+      }
+      return undefined;
+    });
+    renderAt("/tools");
+    const user = userEvent.setup();
+    expect(await screen.findByText("demo.restart")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Filter tools"), "restart");
+    expect(screen.queryByText("demo.show")).toBeNull();
+    expect(screen.getByText("demo.restart")).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Filter tools"));
+    await user.type(screen.getByLabelText("Filter tools"), "nothing-like-this");
+    expect(screen.getByText(/No tool matches/)).toBeInTheDocument();
+  });
+
+  it("clears the audit filter", async () => {
+    const asked: string[] = [];
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.includes("/audit")) {
+        asked.push(url);
+        return json(200, { entries: [], next_cursor: null, window_truncated: false });
+      }
+      return undefined;
+    });
+    renderAt("/audit?identity=bot");
+    const user = userEvent.setup();
+    expect(await screen.findByLabelText("Identity")).toHaveValue("bot");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(screen.getByLabelText("Identity")).toHaveValue(""));
+    expect(asked.at(-1)).not.toContain("identity=");
+    expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+  });
+
+  it("names what an agent proposed in the overview feed, not its random ID", async () => {
+    const { describeEvent } = await import("@/pages/events");
+    expect(describeEvent({
+      kind: "admin_change", actor: "orchestrator", action: "pending_propose", target: "W62JG2Wr01", proposed_action: "tool_enable",
+    }).text).toBe("orchestrator proposed tool_enable");
+    expect(describeEvent({ kind: "admin_change", actor: "root", action: "toolkit_deploy", target: "paperless" }).text)
+      .toBe("root deployed toolkit paperless");
   });
 });

@@ -225,9 +225,9 @@ function IdentityEditor({ current, onDone, onReload }: {
 
 export function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid gap-1 sm:grid-cols-[10rem_1fr]">
+    <div className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)]">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div>{children}</div>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }

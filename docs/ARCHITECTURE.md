@@ -784,7 +784,10 @@ writes through these routes.
 - **Stats, documents, OAuth sign-in (`api/extras.py`, 0.57.0).** `GET
   /stats?window=24h|7d|30d` (`service.stats_view`:
   tiles, an hourly or daily series, per-toolkit, per-identity, latency
-  and admin-action tables, over the same audit tail). `GET /documents`
+  and admin-action tables). Since 1.1.2 each window reads exactly its own
+  span: `read_audit(since=...)` walks back until the first older record,
+  bounded by the same 2 MiB tail, and `truncated` means that tail ended
+  before the window's start. `GET /documents`
   and `GET /documents/{slug}` serve the bundled README, REQUIREMENTS,
   AGENTS and RELEASE as Markdown source; the slug picks from a fixed
   list, so no request path reaches the filesystem. (`/docs` stays
@@ -873,8 +876,9 @@ The server-rendered console that lived at `/ui` (0.x) was removed in
 may still send there, and none of it renders a page:
 
 - **Redirects.** `GET`/`HEAD` on `/ui` or `/ui/<x>` answer 308 to
-  `/app/<x>`, so a bookmark or an installed shortcut lands on the same
-  page. `GET /` answers 303 to `/app/`, and `/favicon.ico` 308 to
+  `/app/<x>` with the query kept, so a bookmark or an installed shortcut
+  lands on the same page (and, signed out, comes back to it after
+  sign-in). `GET /` answers 303 to `/app/`, and `/favicon.ico` 308 to
   `/app/favicon.svg`. The target always starts with `/app/`, so no request
   can turn this into a redirect to another origin.
 - **410 for everything else.** Any other method under `/ui` (a form posted
