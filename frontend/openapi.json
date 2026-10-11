@@ -1203,6 +1203,51 @@
         "title": "Refusal",
         "type": "object"
       },
+      "RejectAll": {
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Ids",
+            "type": "array"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 240,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "RejectAll",
+        "type": "object"
+      },
+      "RejectAllResult": {
+        "properties": {
+          "refused": {
+            "items": {
+              "$ref": "#/components/schemas/Refusal"
+            },
+            "title": "Refused",
+            "type": "array"
+          },
+          "rejected": {
+            "title": "Rejected",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rejected",
+          "refused"
+        ],
+        "title": "RejectAllResult",
+        "type": "object"
+      },
       "RejectBody": {
         "additionalProperties": false,
         "properties": {
@@ -4180,6 +4225,118 @@
           }
         },
         "summary": "Pending Approve All",
+        "tags": [
+          "requests"
+        ]
+      }
+    },
+    "/requests/pending/reject-all": {
+      "post": {
+        "description": "Rejects exactly the listed proposals, oldest first, each with the\nsame reason. Unlike approve-all, credential proposals are included:\nrejecting one needs no value. One decided meanwhile is a refusal,\nnot a stop.",
+        "operationId": "pending_reject_all_requests_pending_reject_all_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectAll"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejectAllResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The store refused the write."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not signed in, or a bearer token was sent."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Role, CSRF or read-only refusal."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "If-Match is stale."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "If-Match is missing."
+          }
+        },
+        "summary": "Pending Reject All",
         "tags": [
           "requests"
         ]

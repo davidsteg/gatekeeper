@@ -476,6 +476,30 @@ def register_request_routes(app: FastAPI) -> None:
                 refused.append({"id": item.id, "action": item.action, "reason": str(exc)})
         return {"applied": applied, "refused": refused}
 
+    @app.post("/requests/pending/reject-all", response_model=models.RejectAllResult,
+              tags=["requests"], responses=_WRITE_ERRORS)
+    async def pending_reject_all(
+        body: models.RejectAll, session: Session = Depends(require_admin),
+        context: ApiContext = Depends(ctx),
+    ) -> Any:
+        """Rejects exactly the listed proposals, oldest first, each with the
+        same reason. Unlike approve-all, credential proposals are included:
+        rejecting one needs no value. One decided meanwhile is a refusal,
+        not a stop."""
+        queue = _pending(context)
+        wanted = set(body.ids)
+        batch = [i for i in queue.list() if i.id in wanted and i.status == "pending"]
+        rejected, refused = 0, []
+        for item in batch:
+            try:
+                await asyncio.to_thread(
+                    queue.reject, item.id, decided_by=session.identity, reason=body.reason
+                )
+                rejected += 1
+            except ConfigError as exc:
+                refused.append({"id": item.id, "action": item.action, "reason": str(exc)})
+        return {"rejected": rejected, "refused": refused}
+
     @app.post("/requests/toolkits/{proposal_id}/deploy", response_model=models.Decided,
               tags=["requests"], responses=_WRITE_ERRORS)
     async def toolkit_deploy(

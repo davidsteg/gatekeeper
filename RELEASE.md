@@ -1,8 +1,15 @@
-## 1.5.3
+## 1.6.1
 
 ### Added
 
 - **Every audited call records the caller's address.** A `call` record now carries `client` next to `identity`: the peer address, or the forwarded one behind a trusted proxy (`--trusted-proxies`). The Audit log's Who column reads `homelab (10.10.110.5)` for calls, sign-ins and failed sign-ins alike, so an identity used from an unexpected machine stands out. Records from before this release show the identity alone.
+
+## 1.6.0
+
+### Added
+
+- **Reject all** on the Change tab of Requests, next to **Approve all**. It lists every pending proposal it will reject, takes one optional reason for all of them, and shows the same "Rejecting…" progress as a single decision. Credential proposals are included, because rejecting one needs no value. A proposal filed after the page loaded stays pending. The button appears whenever two or more proposals are pending, even when they are all credential proposals, which Approve all cannot take.
+- `POST /api/v1/requests/pending/reject-all` with `{"ids": [...], "reason": "..."}`: exactly the listed proposals, oldest first. One decided meanwhile is skipped, and the answer counts what was rejected and lists any refusal.
 
 ## 1.5.2
 
