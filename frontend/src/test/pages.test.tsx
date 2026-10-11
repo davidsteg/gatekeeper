@@ -232,7 +232,7 @@ describe("writes", () => {
     });
   });
 
-  it("closes the rotate question once the new token is shown, so one click rotates once", async () => {
+  it("shows a rotated token in its own card with a copy button, and rotates once per click", async () => {
     const BOT = {
       id: "bot", role: "agent", console: "api_only", tools: [], scopes: [], unknown_tools: [],
     };
@@ -250,7 +250,13 @@ describe("writes", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Rotate token" }));
     await user.click(screen.getByRole("button", { name: "Yes, rotate token" }));
-    expect(await screen.findByTestId("one-time-secret")).toHaveTextContent("gk_new1");
+    const secret = await screen.findByTestId("one-time-secret");
+    expect(secret).toHaveTextContent("gk_new1");
+    // In the card that was clicked, not at the top of the page.
+    expect(secret.closest("div.shadow-xs")).toHaveTextContent("Granted tools");
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    expect(await navigator.clipboard.readText()).toBe("gk_new1");
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("button", { name: "Yes, rotate token" })).toBeNull());
     expect(screen.getByRole("button", { name: "Rotate token" })).toBeInTheDocument();
     expect(rotations).toBe(1);

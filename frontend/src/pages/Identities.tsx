@@ -59,7 +59,6 @@ export function Identities() {
               <IdentityCard
                 key={ident.id} ident={ident} canWrite={canWrite}
                 onEdit={() => { setIssued(null); setEditing(ident.id); }}
-                onToken={setIssued}
               />
             ),
           )}
@@ -69,18 +68,20 @@ export function Identities() {
   );
 }
 
-function IdentityCard({ ident, canWrite, onEdit, onToken }: {
+function IdentityCard({ ident, canWrite, onEdit }: {
   ident: Identity;
   canWrite: boolean;
   onEdit: () => void;
-  onToken: (token: TokenIssued) => void;
 }) {
   const { session } = useAuth();
+  // A rotated token is shown in this card, where the button was clicked --
+  // at the top of a long list it went unseen.
+  const [rotated, setRotated] = useState<string | null>(null);
   const console = CONSOLE[ident.console];
   const self = `${LIST}/${encodeURIComponent(ident.id)}`;
   const rotate = useWrite(
     () => apiSend<TokenIssued>("POST", `${self}/token`, { ifMatchOf: LIST }),
-    INVALIDATES, onToken,
+    INVALIDATES, (issued) => setRotated(issued.token),
   );
   const remove = useWrite(
     () => apiSend("DELETE", self, { ifMatchOf: LIST }),
@@ -100,6 +101,7 @@ function IdentityCard({ ident, canWrite, onEdit, onToken }: {
         }
       />
       <CardBody className="space-y-2 text-sm">
+        {rotated && <OneTimeSecret title={`New API token for ${ident.id}`} value={rotated} />}
         <Row label="Granted tools"><Pills values={ident.tools} tone="ok" /></Row>
         <Row label="Scopes"><Pills values={ident.scopes} tone="accent" /></Row>
         {ident.unknown_tools.length > 0 && (
