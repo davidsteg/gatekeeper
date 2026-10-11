@@ -527,7 +527,7 @@ def test_approving_last_admin_deletion_still_refused(tmp_path, tier1, tool_specs
     # guard the way a hand-built "identity_delete" pending item would.
     from gatekeeper import admin_service as admin_service_mod
 
-    def _apply_identity_delete(store, item):
+    def _apply_identity_delete(store, item, _credentials):
         return store.delete_identity(item.payload["id"], actor=item.actor, rev=store.identities_revision())
 
     admin_service_mod._APPLIERS["identity_delete"] = (
@@ -622,12 +622,22 @@ def test_pending_list_self_heal_leaves_a_live_target_pending(tmp_path, tier1, to
     assert pending.get(moved.id).status == "pending"
 
 
-def test_pending_list_self_heal_covers_every_target_based_kind(tmp_path, tier1, tool_specs):
+def test_pending_list_self_heal_covers_every_target_based_kind(
+    tmp_path, tier1, tool_specs, monkeypatch
+):
     """Driven by `_APPLIERS`, not by a hand-written list of kinds -- so a
     vanished identity closes a `grant_set`/`role_set` exactly as a vanished
-    tool closes a `tool_delete`/`tool_enable`/`tool_update`.
+    tool closes a `tool_delete`/`tool_enable`/`tool_update`, and a vanished
+    credential slot a `cred_update`.
     """
+    from gatekeeper.credentials import KEY_ENV, CredentialStore, generate_master_key
+
+    monkeypatch.setenv(KEY_ENV, generate_master_key())
     store, pending, tools_path, _ip = _env(tmp_path, tier1, tool_specs)
+    credentials = CredentialStore(
+        path=str(tmp_path / "credentials.yaml"), audit=AuditLog(str(tmp_path / "cred-logs"))
+    )
+    credentials.create("sonarr", kind="bearer", value="v", actor="root", rev="")
     spec = dict(store.service.catalog.flat_spec_of("demo.show"))
     items = {
         "tool_delete": pending.propose(
@@ -655,13 +665,22 @@ def test_pending_list_self_heal_covers_every_target_based_kind(tmp_path, tier1, 
             payload={"identity_id": "bot", "role": "viewer", "tools": [], "scopes": []},
             base_rev=store.identity_revision("bot"),
         ),
+        "cred_update": pending.propose(
+            action="cred_update", actor="hermes",
+            payload={"name": "sonarr", "new_name": None, "kind": "api_key_header",
+                     "header": "X-Api-Key", "probe_url": None},
+            base_rev=credentials.record_revision("sonarr"),
+        ),
     }
     assert set(items) == set(_APPLIERS), "a registry kind is missing from this test"
 
     _remove_tool_entry(store, tools_path, tier1, "demo.show")
     store.delete_identity("bot", actor="root", rev=store.identities_revision())
+    credentials.delete("sonarr", actor="root", rev=credentials.revision())
 
-    closed = {i.action for i in _sweep(store, pending)}
+    closed = {
+        i.action for i in sweep_vanished_pendings(store, pending, credentials=credentials)
+    }
     assert closed == set(_APPLIERS)
     for item in items.values():
         assert pending.get(item.id).status == "stale"

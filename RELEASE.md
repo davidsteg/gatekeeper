@@ -1,3 +1,15 @@
+## 1.2.0
+
+A credential slot with the wrong header or kind can be repaired in place, keeping its stored secret.
+
+### Added
+
+- **`admin.cred_update`** proposes a new `kind`, `header`, `probe_url` and/or name (`new_name`) for an existing credential slot. Fields left out stay as they are. It always waits in `/app/requests` (Change tab), where the reviewer sees the before and after, and a normal Approve applies it: the encrypted value, its rotation overlap and the slot's bindings are untouched, so nobody pastes the secret again. Before this, a slot with a wrong header (a `jellyfin` token sent as `X-Emby-Token` to a server that wants `Authorization`) could only be fixed with a throwaway anchor slot, two `credential_bind` approvals, a delete, a new `cred_propose` and a second paste of the same token.
+- Nothing value-shaped is accepted (`value`, `secret`, `token`, ...). A kind only changes within one value shape: the token kinds `api_key_header`, `bearer`, `url_path`, `url_query` and `ws_api_key` are interchangeable, while `basic`, `docker_tls`, `oauth2`, `ssh_private_key` and `ssh_password` stay what they are, since the value cannot be read back to check it. A header must be a valid header name, so it cannot carry a line break into a request.
+- A rename is refused while any toolkit or destination references the slot, at proposal time and again at approval, because the binding is Tier 1 and would dangle. Changing kind or header on a bound slot is allowed, since the binding is by name.
+- An approved update clears the slot's `suspect_status` and probe result, which described the old header, and probes again when a probe URL is set. It is audited as `credential_update` with the changed field names, the kind and the header name, never the value.
+- The proposal is checked for staleness against that one slot's kind, header, probe URL and creation time. Another approved change to the slot makes it stale; a failing call marking the slot suspect, or a rotation, does not. Listing the queue closes it when the slot has been deleted, or when a rename's new name has been taken.
+
 ## 1.1.0
 
 The change-request archive is paged by the API, and a credential proposal whose name has been taken no longer sits in the queue forever.

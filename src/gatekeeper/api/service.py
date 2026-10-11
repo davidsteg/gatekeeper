@@ -759,6 +759,20 @@ def pending_review(item: Any, store: Any) -> dict[str, Any]:
             + (f", header {header}" if header else "")
             + " (no value: typed by a human on approval)"
         )
+    elif action == "cred_update":
+        prev = payload.get("prev") or {}
+        changes = []
+        if payload.get("new_name"):
+            changes.append(f"rename to {payload.get('new_name')}")
+        for field in ("kind", "header", "probe_url"):
+            if prev.get(field) != payload.get(field):
+                before, after = prev.get(field) or "none", payload.get(field) or "none"
+                changes.append(f"{field.replace('_', ' ')} {before} -> {after}")
+        headline = (
+            f"credential {payload.get('name', '')}: "
+            + (", ".join(changes) or "no change")
+            + " (stored value kept)"
+        )
     elif action == "role_set":
         identity_id = payload.get("identity_id", "")
         new_role = payload.get("role", "")
@@ -775,7 +789,8 @@ def pending_review(item: Any, store: Any) -> dict[str, Any]:
             stale = "What this proposal targeted no longer exists, so there is nothing to apply it to."
         elif item.reason == STALE_TAKEN_REASON:
             stale = (
-                f"A credential named {payload.get('name', '')} was created after this was "
+                f"A credential named {payload.get('new_name') or payload.get('name', '')} "
+                "was created after this was "
                 "proposed. Ask the agent for a new name, or rotate the existing credential."
             )
         else:

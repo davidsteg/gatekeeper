@@ -563,9 +563,12 @@ src/gatekeeper/
                        are not methods here and not reachable from
                        /admin/mcp -- see pending.py
   pending.py            The pending-actions queue (pending.yaml) an
-                       admin-role agent's higher-risk admin.* calls land in;
-                       approved only via /api/v1 (/app/requests, Change
-                       tab; human session + admin + CSRF)
+                       admin-role agent's higher-risk admin.* calls land in
+                       (admin.cred_update too: kind/header/name of a slot,
+                       value kept, gated per slot by
+                       CredentialStore.record_revision); approved only via
+                       /api/v1 (/app/requests, Change tab; human session +
+                       admin + CSRF)
   toolkit_proposals.py  ToolkitProposalStore (toolkit_proposals.yaml) --
                        admin.toolkit_propose (new toolkit, kind="create"),
                        admin.toolkit_update (executor/binaries/
