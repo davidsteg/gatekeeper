@@ -8,7 +8,7 @@ import { resetClientState } from "@/api/client";
 import { App } from "@/App";
 import { AuthProvider } from "@/auth";
 
-type Handler = (url: string, init: RequestInit) => Response | undefined;
+type Handler = (url: string, init: RequestInit) => Response | Promise<Response> | undefined;
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
@@ -329,6 +329,34 @@ describe("requests", () => {
     expect((approved?.headers as Record<string, string>)["X-CSRF-Token"]).toBe("tok");
     expect(await screen.findByText("Nothing pending.")).toBeInTheDocument();
     expect(await screen.findByText("Archive (1)")).toBeInTheDocument();
+  });
+
+  it("says it is approving while a slow approval is in flight", async () => {
+    let finish: (() => void) | undefined;
+    let approved = false;
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, approved ? [] : [PENDING]);
+      if (url.includes("/requests/decided")) return json(200, { entries: [], next_cursor: null, total: 0 });
+      if (url.endsWith("/requests/toolkits")) return json(200, []);
+      if (url.endsWith("/requests/pending/p1/approve")) {
+        return new Promise<Response>((resolve) => {
+          finish = () => { approved = true; resolve(json(200, { id: "p1", status: "approved" })); };
+        });
+      }
+      return json(200, {});
+    });
+    renderAt("/requests");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+    const busy = await screen.findByRole("button", { name: "Approving…" });
+    expect(busy).toBeDisabled();
+    expect(busy).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
+    expect(screen.getByText(/This can take a few seconds\./)).toHaveAttribute("role", "status");
+    finish?.();
+    expect(await screen.findByText(/No proposals yet\./)).toBeInTheDocument();
+    expect(screen.queryByText(/This can take a few seconds\./)).not.toBeInTheDocument();
   });
 
   it("loads the archive a page at a time from /requests/decided", async () => {
