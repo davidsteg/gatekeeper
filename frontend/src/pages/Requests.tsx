@@ -4,7 +4,7 @@
 // rendered as text.
 import { useState } from "react";
 import { useSearchParams } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Check, X } from "lucide-react";
 import { apiGet, apiSend, type Schemas } from "@/api/client";
 import { useCanWrite } from "@/auth";
@@ -35,7 +35,8 @@ const STATUS_TONE: Record<string, Tone> = {
 function usePending() {
   return useQuery({
     queryKey: ["requests", "pending"],
-    queryFn: () => apiGet("/requests/pending"),
+    // Open items only; decided ones come a page at a time from /requests/decided.
+    queryFn: () => apiGet("/requests/pending", { query: { status: "pending" } }),
     refetchInterval: POLL_MS,
   });
 }
@@ -131,12 +132,50 @@ function Archive<T extends { id: string }>({ items, render }: { items: T[]; rend
 
 // -- Change tab ---------------------------------------------------------------------------
 
+function useDecided() {
+  return useInfiniteQuery({
+    queryKey: ["requests", "decided"],
+    queryFn: ({ pageParam }) =>
+      apiGet("/requests/decided", { query: { limit: ARCHIVE_PAGE, cursor: pageParam ?? undefined } }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor,
+  });
+}
+
+function ChangeArchive({ decided }: { decided: ReturnType<typeof useDecided> }) {
+  const [open, setOpen] = useState(false);
+  const total = decided.data?.pages[0]?.total ?? 0;
+  if (!total) return null;
+  const entries = decided.data?.pages.flatMap((p) => p.entries) ?? [];
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center gap-2">
+        <h2 className="text-sm font-semibold">Archive ({total})</h2>
+        <Button size="sm" variant={open ? "ghost" : "outline"} onClick={() => setOpen(!open)}>
+          {open ? "Hide" : "Show"}
+        </Button>
+      </div>
+      {open && entries.map((item) => <PendingCard key={item.id} item={item} canDecide={false} />)}
+      {open && decided.hasNextPage && (
+        <Button
+          size="sm" variant="outline" disabled={decided.isFetchingNextPage}
+          onClick={() => void decided.fetchNextPage()}
+        >
+          Older
+        </Button>
+      )}
+    </section>
+  );
+}
+
 function ChangeTab({ items }: { items: Pending[] }) {
   const canWrite = useCanWrite();
+  const decided = useDecided();
   const live = items.filter((i) => !DONE_CHANGE.has(i.status));
-  const archived = items.filter((i) => DONE_CHANGE.has(i.status));
   const batchable = live.filter((i) => i.status === "pending" && i.action !== "cred_propose");
-  if (!items.length) {
+  if (decided.isError) return <QueryError error={decided.error} />;
+  if (decided.isPending) return <Loading />;
+  if (!live.length && !decided.data.pages[0]?.total) {
     return (
       <Notice>
         No proposals yet. This fills up when an admin-role agent on /admin/mcp proposes enabling,
@@ -150,7 +189,7 @@ function ChangeTab({ items }: { items: Pending[] }) {
       {live.length === 0 ? <p className="text-sm text-muted-foreground">Nothing pending.</p> : (
         [...live].reverse().map((item) => <PendingCard key={item.id} item={item} canDecide={canWrite} />)
       )}
-      <Archive items={archived} render={(item) => <PendingCard key={item.id} item={item} canDecide={false} />} />
+      <ChangeArchive decided={decided} />
     </>
   );
 }

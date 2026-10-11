@@ -1167,6 +1167,40 @@
         "title": "PendingItem",
         "type": "object"
       },
+      "PendingPage": {
+        "description": "Decided proposals, newest decision first.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/PendingItem"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entries",
+          "next_cursor",
+          "total"
+        ],
+        "title": "PendingPage",
+        "type": "object"
+      },
       "PendingReview": {
         "description": "What to judge a proposal by, as plain text and data -- rendered as\ntext, never as markup.",
         "properties": {
@@ -4016,6 +4050,89 @@
         "summary": "Notes",
         "tags": [
           "release-notes"
+        ]
+      }
+    },
+    "/requests/decided": {
+      "get": {
+        "description": "The archive of change requests: approved, rejected and stale\nproposals, `limit` at a time. `GET /requests/pending` still returns\neverything; the console asks it for `status=pending` only.",
+        "operationId": "requests_decided_requests_decided_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not signed in, or a bearer token was sent."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Role, CSRF or read-only refusal."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Requests Decided",
+        "tags": [
+          "requests"
         ]
       }
     },

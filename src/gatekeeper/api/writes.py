@@ -407,6 +407,16 @@ def register_request_routes(app: FastAPI) -> None:
         item = _item(queue, item_id)
         if item.action != "cred_propose":
             raise ApiError(400, "Only a credential proposal takes a value.")
+        name = str(item.payload.get("name") or "")
+        if item.status == "pending" and name in {meta.name for meta in credentials.names()}:
+            # Taken since it was proposed: the create below would refuse on
+            # every try, so close it now instead of leaving it pending.
+            await asyncio.to_thread(
+                queue.close_taken_credentials, {name}, decided_by=session.identity
+            )
+            raise ApiError(
+                409, f"A credential named {name!r} exists now; this proposal was marked stale."
+            )
         await _call(
             queue.approve, item_id, decided_by=session.identity,
             current_rev=lambda _item: credentials.revision(),

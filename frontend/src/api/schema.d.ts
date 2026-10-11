@@ -333,6 +333,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/requests/decided": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Requests Decided
+         * @description The archive of change requests: approved, rejected and stale
+         *     proposals, `limit` at a time. `GET /requests/pending` still returns
+         *     everything; the console asks it for `status=pending` only.
+         */
+        get: operations["requests_decided_requests_decided_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/requests/pending": {
         parameters: {
             query?: never;
@@ -1094,6 +1116,18 @@ export interface components {
             review: components["schemas"]["PendingReview"];
             /** Status */
             status: string;
+        };
+        /**
+         * PendingPage
+         * @description Decided proposals, newest decision first.
+         */
+        PendingPage: {
+            /** Entries */
+            entries: components["schemas"]["PendingItem"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Total */
+            total: number;
         };
         /**
          * PendingReview
@@ -2822,6 +2856,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReleaseNotes"];
+                };
+            };
+            /** @description Not signed in, or a bearer token was sent. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Role, CSRF or read-only refusal. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    requests_decided_requests_decided_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingPage"];
                 };
             };
             /** @description Not signed in, or a bearer token was sent. */

@@ -147,7 +147,7 @@ Create agents, viewers, admins. Each gets a token (for `/mcp`) and/or password (
 
 ![](.readme-assets/audit.png)
 
-Every call logged—granted and denied. Real denial reasons stored, opaque message sent to agent. Search by identity, tool, timestamp. Export for compliance.
+Every call logged—granted and denied. Real denial reasons stored, opaque message sent to agent. Search by identity, tool and outcome. The log itself is a JSON Lines file on disk (`audit.dir`), ready for any log shipper.
 
 ---
 
@@ -302,7 +302,7 @@ From the console at `/app` (when logged in):
 - **Create/edit/delete identities** — manage users and agents
 - **Grant/revoke tool access** — assign permissions and scopes
 - **Change passwords and rotate tokens** — via Identities view or personal account
-- **View audit log** — search, filter, export
+- **View audit log** — search and filter
 
 ### What they can't do (by design)
 
