@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Input, Label, Select } from "@/components/ui/input";
 import { Loading, Notice, QueryError } from "@/components/ui/notice";
 import { formatTime } from "@/lib/utils";
-import { POLL_MS } from "./Overview";
+import { usePollInterval } from "@/live";
 
 const OUTCOMES = ["", "ok", "denied", "failed", "unknown"] as const;
 type Outcome = (typeof OUTCOMES)[number];
@@ -31,7 +31,7 @@ export function Audit() {
       apiGet("/audit", { query: { identity, tool, outcome, limit: 100, cursor: pageParam ?? undefined } }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor,
-    refetchInterval: POLL_MS,
+    refetchInterval: usePollInterval(),
   });
 
   // Infinite scroll: load the next page when the sentinel scrolls into view.

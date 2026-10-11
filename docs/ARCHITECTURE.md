@@ -781,6 +781,26 @@ writes through these routes.
   since been taken, are closed as `stale` with a reason that says why --
   neither could ever be approved.
 
+- **Live updates (`api/events.py`, 1.3.0).** `GET /events` (any console
+  session) is a Server-Sent Events stream. Every change gatekeeper makes is
+  audited first, so `AuditLog.add_listener` is the one hook: `EventHub`
+  maps each record to topics (`requests`, `audit`, `tools`, ...; an
+  approval, a deploy or an unknown action means all of them) and sends
+  `event: change` with `{"topics": [...]}`, coalesced over half a second.
+  The stream carries topic names only, never a record's content; the page
+  refetches through the ordinary reads, so authorisation stays where it
+  is. It re-checks the session cookie at every 15-second heartbeat and
+  ends when the session has gone, closes after ten minutes (the browser
+  reconnects and re-checks), and refuses a 65th stream with 503. Because a
+  stream never finishes on its own, `serve` gives uvicorn
+  `timeout_graceful_shutdown=5`, or a shutdown would wait for every open
+  tab. In the browser, `src/live.tsx` holds one `EventSource`, turns
+  topics into query invalidations, refetches everything after a
+  reconnect, and drops the pages' 15-second polling to a two-minute safety
+  poll while the stream is up. Editors keep the ETag of the revision they
+  were opened on, so a live reread under an open form cannot turn a
+  conflicting save into a silent overwrite.
+
 - **Stats, documents, OAuth sign-in (`api/extras.py`, 0.57.0).** `GET
   /stats?window=24h|7d|30d` (`service.stats_view`:
   tiles, an hourly or daily series, per-toolkit, per-identity, latency

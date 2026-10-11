@@ -78,6 +78,10 @@ def _config_path(name: str, args_value: str | None) -> str:
     return os.path.join(base, name)
 
 
+#: How long `serve` lets open requests finish on shutdown.
+SHUTDOWN_GRACE_SECONDS = 5
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     logging.basicConfig(
         level=os.environ.get("GATEKEEPER_LOG_LEVEL", "INFO"),
@@ -488,6 +492,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     uvicorn.run(
         app, host=args.host, port=args.port, log_level="info",
         forwarded_allow_ips=trusted_proxies,
+        # A console's live-update stream (`/api/v1/events`) never ends by
+        # itself, and uvicorn would otherwise wait for it forever on
+        # shutdown. Five seconds, then open requests are cancelled -- well
+        # inside `docker stop`'s ten.
+        timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
     )
     return 0
 

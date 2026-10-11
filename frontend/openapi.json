@@ -3153,6 +3153,47 @@
         ]
       }
     },
+    "/events": {
+      "get": {
+        "description": "Server-Sent Events: `event: change` with `{\"topics\": [...]}` when\nsomething an open console page shows has changed. Topics only --\nthe page refetches through the ordinary reads.",
+        "operationId": "events_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "`change` events naming stale topics, never data."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not signed in, or a bearer token was sent."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Role, CSRF or read-only refusal."
+          },
+          "503": {
+            "description": "Too many open streams."
+          }
+        },
+        "summary": "Events",
+        "tags": [
+          "session"
+        ]
+      }
+    },
     "/identities": {
       "get": {
         "operationId": "identities_identities_get",
