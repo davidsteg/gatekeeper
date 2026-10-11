@@ -1,3 +1,10 @@
+## 1.1.1
+
+### Fixed
+
+- **An old `/ui` link keeps its query.** `/ui/requests?tab=toolkit` used to redirect to `/app/requests` and drop `?tab=toolkit`; it now lands on `/app/requests?tab=toolkit`. The target still always starts with `/app/`.
+- **Sign-in returns to the page you opened.** Opening any console page while signed out goes to the sign-in form, and signing in used to land on Overview. It now goes back to the page you opened, query included.
+
 ## 1.1.0
 
 The change-request archive is paged by the API, and a credential proposal whose name has been taken no longer sits in the queue forever.

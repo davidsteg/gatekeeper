@@ -870,8 +870,9 @@ The server-rendered console that lived at `/ui` (0.x) was removed in
 may still send there, and none of it renders a page:
 
 - **Redirects.** `GET`/`HEAD` on `/ui` or `/ui/<x>` answer 308 to
-  `/app/<x>`, so a bookmark or an installed shortcut lands on the same
-  page. `GET /` answers 303 to `/app/`, and `/favicon.ico` 308 to
+  `/app/<x>` with the query kept, so a bookmark or an installed shortcut
+  lands on the same page (and, signed out, comes back to it after
+  sign-in). `GET /` answers 303 to `/app/`, and `/favicon.ico` 308 to
   `/app/favicon.svg`. The target always starts with `/app/`, so no request
   can turn this into a redirect to another origin.
 - **410 for everything else.** Any other method under `/ui` (a form posted

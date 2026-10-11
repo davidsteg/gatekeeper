@@ -425,6 +425,9 @@ async def test_ui_paths_redirect_to_the_same_page_under_app(env):
             ("/ui", "/app/"), ("/ui/", "/app/"), ("/ui/requests", "/app/requests"),
             ("/ui/tools/integrations", "/app/tools/integrations"),
             ("/ui//evil.example/x", "/app/evil.example/x"),
+            # The query rides along: pages read it.
+            ("/ui/requests?tab=change", "/app/requests?tab=change"),
+            ("/ui//evil.example?next=//x", "/app/evil.example?next=//x"),
         ):
             response = await c.get(path)
             assert response.status_code == 308, path
