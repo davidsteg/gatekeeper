@@ -1,16 +1,18 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, LayoutGrid, Pencil, Plus, Table2 } from "lucide-react";
+import { ArrowLeft, LayoutGrid, Pencil, Plus, Search, Table2 } from "lucide-react";
 import { API_BASE, apiGet, apiSend, type Schemas } from "@/api/client";
 import { useCanWrite } from "@/auth";
 import { ConfirmButton, Textarea, useWrite, WriteError } from "@/components/forms";
 import { PageHeader } from "@/components/Layout";
 import { Badge, Pills } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, LinkButton } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { CodeBlock, CopyButton } from "@/components/ui/copy";
 import { Loading, Notice, QueryError } from "@/components/ui/notice";
+import { Input } from "@/components/ui/input";
+import { Row } from "./Identities";
 
 type Tool = Schemas["Tool"];
 
@@ -18,10 +20,17 @@ export function Tools() {
   const canWrite = useCanWrite();
   const [params, setParams] = useSearchParams();
   const matrix = params.get("view") === "matrix";
+  const filter = params.get("q") ?? "";
   const query = useQuery({ queryKey: ["tools"], queryFn: () => apiGet("/tools") });
   if (query.isPending) return <Loading />;
   if (query.isError) return <QueryError error={query.error} />;
-  const { tools, rejected, toolkits } = query.data;
+  const { rejected, toolkits } = query.data;
+  const tools = filterTools(query.data.tools, filter);
+  const setFilter = (q: string) => {
+    const next = new URLSearchParams(params);
+    if (q) next.set("q", q); else next.delete("q");
+    setParams(next, { replace: true });
+  };
 
   const byToolkit = new Map<string, Tool[]>();
   for (const tool of tools) {
@@ -38,13 +47,13 @@ export function Tools() {
         actions={
           <div className="flex gap-1">
             {canWrite && toolkits.length > 0 && (
-              <Link to="/tools/new"><Button size="sm"><Plus className="size-3.5" /> New tool</Button></Link>
+              <LinkButton to="/tools/new" size="sm"><Plus className="size-3.5" /> New tool</LinkButton>
             )}
-            <Link to="/tools/integrations"><Button variant="outline" size="sm">Integrations</Button></Link>
-            <Button size="sm" variant={matrix ? "outline" : "default"} onClick={() => setParams({})}>
+            <LinkButton to="/tools/integrations" variant="outline" size="sm">Integrations</LinkButton>
+            <Button size="sm" variant={matrix ? "outline" : "default"} onClick={() => setParams(filter ? { q: filter } : {})}>
               <LayoutGrid className="size-3.5" /> Cards
             </Button>
-            <Button size="sm" variant={matrix ? "default" : "outline"} onClick={() => setParams({ view: "matrix" })}>
+            <Button size="sm" variant={matrix ? "default" : "outline"} onClick={() => setParams(filter ? { view: "matrix", q: filter } : { view: "matrix" })}>
               <Table2 className="size-3.5" /> Matrix
             </Button>
           </div>
@@ -58,11 +67,22 @@ export function Tools() {
           </ul>
         </Notice>
       )}
+      {query.data.tools.length > 0 && (
+        <span className="relative block max-w-sm">
+          <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted-foreground" aria-hidden />
+          <Input
+            type="search" aria-label="Filter tools" placeholder="Filter by ID, title, toolkit or grantee…"
+            className="w-full pl-8" value={filter} onChange={(e) => setFilter(e.target.value)}
+          />
+        </span>
+      )}
       {toolkits.length === 0 ? (
         <Notice>
           <strong>No toolkits configured.</strong> A tool always binds to a Tier 1 toolkit, and toolkits
           are a deploy-time decision (FR-4.11).
         </Notice>
+      ) : query.data.tools.length > 0 && tools.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No tool matches “{filter}”.</p>
       ) : tools.length === 0 ? (
         <Notice>
           <strong>No tools yet.</strong> gatekeeper ships an empty catalog on purpose: every capability is a
@@ -87,6 +107,13 @@ export function Tools() {
       )}
     </>
   );
+}
+
+function filterTools(tools: Tool[], filter: string): Tool[] {
+  const q = filter.trim().toLowerCase();
+  if (!q) return tools;
+  return tools.filter((t) =>
+    [t.id, t.title, t.toolkit, t.category, ...t.grantees].some((v) => v.toLowerCase().includes(q)));
 }
 
 /** The definition ID a concrete tool came from -- `x.y@dest` -> `x.y`. */
@@ -187,7 +214,7 @@ export function ToolDetail() {
             subtitle={`Version ${query.data.current_version ?? "?"}${query.data.enabled ? "" : " · disabled"}`}
             actions={canWrite && (
               <div className="flex flex-wrap items-start gap-1">
-                <Link to={`${self}/edit`}><Button size="sm"><Pencil className="size-3.5" /> Edit</Button></Link>
+                <LinkButton to={`${self}/edit`} size="sm"><Pencil className="size-3.5" /> Edit</LinkButton>
                 <Button
                   size="sm" variant="outline" disabled={toggle.isPending}
                   onClick={() => toggle.mutate(!query.data.enabled)}
@@ -207,30 +234,7 @@ export function ToolDetail() {
             )}
           />
           <WriteError error={toggle.error ?? remove.error} onReload={() => void query.refetch()} />
-          {query.data.tools.map((tool) => (
-            <Card key={tool.id}>
-              <CardHeader title={<span className="font-mono">{tool.id}</span>} />
-              <CardBody>
-                <table className="w-full text-sm">
-                  <thead className="text-left text-xs text-muted-foreground">
-                    <tr>{["Parameter", "Type", "Rule", "Description"].map((h) => <th key={h} className="py-1 pr-3 font-medium">{h}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {tool.parameters.map((p) => (
-                      <tr key={p.name} className="border-t border-border align-top">
-                        <td className="py-1.5 pr-3 font-mono">{p.name}{p.required && " *"}</td>
-                        <td className="py-1.5 pr-3">{p.type}</td>
-                        <td className="py-1.5 pr-3 font-mono text-xs break-all">
-                          {p.derived ? <Badge tone="ok">derived</Badge> : p.pattern ?? (p.values.length ? p.values.join(" | ") : "")}
-                        </td>
-                        <td className="py-1.5 text-muted-foreground">{p.description}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </CardBody>
-            </Card>
-          ))}
+          {query.data.tools.map((tool) => <ToolSummary key={tool.id} tool={tool} />)}
           <Card>
             <CardHeader title="Definition (YAML)" actions={<CopyButton text={query.data.yaml} />} />
             <CardBody><CodeBlock text={query.data.yaml} /></CardBody>
@@ -238,6 +242,59 @@ export function ToolDetail() {
         </>
       )}
     </>
+  );
+}
+
+/** What a reviewer wants before the YAML: what it does, who holds it, and
+ *  what an agent must pass. */
+function ToolSummary({ tool }: { tool: Tool }) {
+  return (
+    <Card>
+      <CardHeader
+        title={<span className="font-mono">{tool.id}</span>}
+        actions={
+          <span className="flex flex-wrap gap-1">
+            <Badge tone={tool.category === "read" ? "ok" : "warn"}>{tool.category}</Badge>
+            {!tool.enabled && <Badge tone="deny">disabled</Badge>}
+          </span>
+        }
+      />
+      <CardBody className="space-y-2 text-sm">
+        <p className="font-medium">{tool.title}</p>
+        {tool.description && <p className="text-muted-foreground">{tool.description}</p>}
+        <Row label="Toolkit"><code>{tool.toolkit}</code>{tool.destination && <> → <code>{tool.destination}</code></>}</Row>
+        <Row label="Granted to"><Pills values={tool.grantees} tone="ok" empty="nobody" /></Row>
+        {tool.required_scopes.length > 0 && <Row label="Scopes"><Pills values={tool.required_scopes} tone="accent" /></Row>}
+        <Row label="Limits">
+          <Pills values={[`timeout ${tool.timeout_seconds}s`, `output ≤ ${tool.max_output_bytes} B`, tool.idempotent ? "idempotent" : "not idempotent"]} />
+        </Row>
+        <Row label="Parameters">
+          {tool.parameters.length === 0 ? (
+            <span className="text-muted-foreground">None: the agent calls it without arguments.</span>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-muted-foreground">
+                  <tr>{["Parameter", "Type", "Rule", "Description"].map((h) => <th key={h} className="py-1 pr-3 font-medium">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {tool.parameters.map((p) => (
+                    <tr key={p.name} className="border-t border-border align-top">
+                      <td className="py-1.5 pr-3 font-mono whitespace-nowrap">{p.name}{p.required && " *"}</td>
+                      <td className="py-1.5 pr-3">{p.type}</td>
+                      <td className="py-1.5 pr-3 font-mono text-xs wrap-anywhere">
+                        {p.derived ? <Badge tone="ok">derived</Badge> : p.pattern ?? (p.values.length ? p.values.join(" | ") : "")}
+                      </td>
+                      <td className="py-1.5 text-muted-foreground">{p.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Row>
+      </CardBody>
+    </Card>
   );
 }
 
@@ -359,12 +416,14 @@ export function ToolEditor() {
             aria-label="Definition (YAML)"
             className="min-h-[28rem] w-full font-mono text-xs"
             spellCheck={false}
+            // YAML: a soft-wrapped line reads as a new key.
+            wrap="off"
             value={value}
             onChange={(e) => setText(e.target.value)}
           />
           <div className="flex gap-2">
             <Button type="submit" disabled={save.isPending}>{editing ? "Save" : "Create"}</Button>
-            <Link to={editing ? self : "/tools"}><Button type="button" variant="ghost">Cancel</Button></Link>
+            <LinkButton to={editing ? self : "/tools"} variant="ghost">Cancel</LinkButton>
           </div>
         </form>
       )}

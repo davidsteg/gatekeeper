@@ -1,3 +1,24 @@
+## 1.1.2
+
+A review of every console page on a desktop browser, with the bugs it found fixed. Nothing about configuration, the API's shape or `/mcp` changes.
+
+### Fixed
+
+- **Stats counted the wrong span.** "Last 24 hours" counted only the newest 200 records and showed the "most recent part only" notice on any busy day; 7 and 30 days stopped at 1,000 and 2,000 records and could include records older than the window. Each window now reads exactly its own span from the audit log (bounded by the same 2 MiB tail as before), and the notice only appears when that tail really ends inside the window.
+- **Badges and long values ran off their card.** A card header with a long ID and three badges (Identities), or a long path root (Toolkits), went past the card's edge on a narrow window. Headers wrap now, and a single long value wraps inside its pill.
+- **Audit log columns.** The tool column broke IDs mid-word (`stacks.res` / `tart`) while the detail column had room to spare. IDs now stay whole and the detail column takes the wrapping. The filter form follows the URL on back/forward, and a **Clear** button resets it.
+- **Tool page.** It showed an empty parameter table with only a header for a tool without parameters, and nothing about the tool besides its YAML. It now shows the title, description, toolkit, who it is granted to, scopes and limits first, and says "None" when the tool takes no arguments.
+- **Links that looked like buttons were a button inside a link** (New tool, Integrations, Edit, Reference YAML, Cancel): invalid HTML that took two Tab stops. They are plain links styled as buttons now. Buttons default to `type="button"`, so none can submit a form by accident.
+- **Sidebar on a short window.** The navigation did not scroll, so on a laptop screen with little height the identity and **Sign out** could sit below the fold with no way to reach them.
+- **Chart tooltips in dark mode** were a white box; they follow the theme now.
+- **Overview feed.** A change request showed as `pending_propose W62JG2Wr01` (a random ID, broken mid-word); it now reads "orchestrator proposed tool_enable". Toolkit proposals, deploys and credential changes read as sentences too. Stat tiles say "1 identity", not "1 identities".
+
+### Added
+
+- **Filter on the Tools page** by ID, title, toolkit, category or grantee. The filter is kept in the URL (`?q=`).
+- The YAML editor no longer soft-wraps long lines, which made a wrapped value look like a new key.
+- The reason field of a Reject, and the value field of a credential approval, take the focus when they open.
+
 ## 1.1.1
 
 ### Fixed

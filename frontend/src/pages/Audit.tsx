@@ -56,7 +56,12 @@ export function Audit() {
         title="Audit log"
         subtitle="The real reason for a denial is recorded here in full, even when the agent only received an opaque answer. Admin changes land here too."
       />
-      <Filters identity={identity} tool={tool} outcome={outcome} onApply={(next) => setParams(next)} />
+      {/* Keyed on the URL: back/forward or a link from another page changes
+          the filter, and the form has to show that, not its stale draft. */}
+      <Filters
+        key={`${identity}\n${tool}\n${outcome}`}
+        identity={identity} tool={tool} outcome={outcome} onApply={(next) => setParams(next)}
+      />
       {query.isPending ? <Loading /> : query.isError ? <QueryError error={query.error} /> : (
         <Card className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -72,11 +77,11 @@ export function Audit() {
                   <td className="px-3 py-1.5 font-mono text-xs whitespace-nowrap">{formatTime(r.ts, true)}</td>
                   <td className="px-3 py-1.5">{s(r.kind)}</td>
                   <td className="px-3 py-1.5 font-mono">{s(r.identity ?? r.actor)}</td>
-                  <td className="px-3 py-1.5 font-mono break-all">{s(r.tool ?? r.action ?? r.path)}</td>
+                  <td className="px-3 py-1.5 font-mono wrap-break-word">{s(r.tool ?? r.action ?? r.path)}</td>
                   <td className="px-3 py-1.5">
                     {r.outcome ? <Badge tone={TONE[s(r.outcome)] ?? "neutral"}>{s(r.outcome)}</Badge> : null}
                   </td>
-                  <td className="px-3 py-1.5 font-mono text-xs break-all text-muted-foreground">
+                  <td className="min-w-48 px-3 py-1.5 font-mono text-xs wrap-anywhere text-muted-foreground">
                     {s(r.denial_reason ?? r.reason ?? r.target ?? r.detail)}
                   </td>
                 </tr>
@@ -125,6 +130,9 @@ function Filters({ identity, tool, outcome, onApply }: {
         </Select>
       </Label>
       <Button type="submit" variant="outline">Filter</Button>
+      {(identity || tool || outcome) && (
+        <Button variant="ghost" onClick={() => onApply({})}>Clear</Button>
+      )}
     </form>
   );
 }
