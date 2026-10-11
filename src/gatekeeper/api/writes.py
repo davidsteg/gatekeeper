@@ -387,9 +387,15 @@ def register_request_routes(app: FastAPI) -> None:
         if item.action == "cred_propose":
             raise ApiError(400, "A credential proposal needs a value; approve it with POST .../credential.")
         try:
-            await _call(apply_pending, context.store, queue, item_id, decided_by=session.identity)
+            await _call(
+                apply_pending, context.store, queue, item_id, decided_by=session.identity,
+                credentials=context.credentials,
+            )
         except (KeyError, TypeError, ValueError) as exc:
             raise ApiError(400, f"The proposal's payload is malformed: {exc}") from None
+        if item.action == "cred_update" and item.payload.get("probe_url") and context.credentials:
+            name = item.payload.get("new_name") or item.payload.get("name")
+            rm._schedule_credential_probe(context.credentials, str(name or ""))
         return {"id": item_id, "status": _item(queue, item_id).status}
 
     @app.post("/requests/pending/{item_id}/credential", response_model=models.Decided,
@@ -460,7 +466,8 @@ def register_request_routes(app: FastAPI) -> None:
         for item in batch:
             try:
                 await asyncio.to_thread(
-                    apply_pending, context.store, queue, item.id, decided_by=session.identity
+                    apply_pending, context.store, queue, item.id, decided_by=session.identity,
+                    credentials=context.credentials,
                 )
                 applied += 1
             except (ConfigError, KeyError, TypeError, ValueError) as exc:
