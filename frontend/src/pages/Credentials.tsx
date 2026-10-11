@@ -193,7 +193,7 @@ function CredentialActions({ meta, onReload }: { meta: Schemas["CredentialMeta"]
           <Button size="sm" variant="outline" onClick={() => setRotating(true)}>Rotate</Button>
           <ConfirmButton
             label="Delete" question={`Delete ${meta.name}?`}
-            busy={remove.isPending} onConfirm={() => remove.mutate(undefined)}
+            busy={remove.isPending} onConfirm={() => remove.mutateAsync(undefined)}
           >
             <span className="text-xs text-muted-foreground">
               A toolkit that references it can no longer authenticate; its tools fail at call time.

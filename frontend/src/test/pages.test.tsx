@@ -232,6 +232,36 @@ describe("writes", () => {
     });
   });
 
+  it("shows a rotated token in its own card with a copy button, and rotates once per click", async () => {
+    const BOT = {
+      id: "bot", role: "agent", console: "api_only", tools: [], scopes: [], unknown_tools: [],
+    };
+    let rotations = 0;
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/identities") && !init.method) return json(200, [BOT], { ETag: `"i${rotations}"` });
+      if (url.endsWith("/identities/bot/token") && init.method === "POST") {
+        rotations += 1;
+        return json(200, { identity: "bot", token: `gk_new${rotations}`, revision: `i${rotations}` }, { ETag: `"i${rotations}"` });
+      }
+      return undefined;
+    });
+    renderAt("/identities");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Rotate token" }));
+    await user.click(screen.getByRole("button", { name: "Yes, rotate token" }));
+    const secret = await screen.findByTestId("one-time-secret");
+    expect(secret).toHaveTextContent("gk_new1");
+    // In the card that was clicked, not at the top of the page.
+    expect(secret.closest("div.shadow-xs")).toHaveTextContent("Granted tools");
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    expect(await navigator.clipboard.readText()).toBe("gk_new1");
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Yes, rotate token" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Rotate token" })).toBeInTheDocument();
+    expect(rotations).toBe(1);
+  });
+
   it("takes a credential value in a password field and never renders it", async () => {
     let body: Record<string, unknown> = {};
     serve((url, init) => {
