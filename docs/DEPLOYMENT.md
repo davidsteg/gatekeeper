@@ -414,6 +414,14 @@ rewrite or drop gatekeeper's `Content-Security-Policy` header. `/app`
 depends on it (REQUIREMENTS.md FR-11.9), and a proxy that adds its own CSP
 must not loosen it.
 
+The console's live updates (1.3.0) are one long-lived `GET /api/v1/events`
+per open tab, a Server-Sent Events stream. gatekeeper sends
+`X-Accel-Buffering: no`, which nginx honours; another proxy must not buffer
+`text/event-stream` responses, and its read timeout must be longer than
+15 seconds (the stream's heartbeat). A proxy that cannot stream only costs
+the live part: the console notices the stream is not up, says "Polling" in
+the sidebar, and refreshes every 15 seconds as before.
+
 ## Deploy (example container)
 
 ```bash

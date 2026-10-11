@@ -6,7 +6,8 @@ import { PageHeader } from "@/components/Layout";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Loading, Notice, QueryError } from "@/components/ui/notice";
 import { cn } from "@/lib/utils";
-import { POLL_MS, TOOLTIP_STYLE } from "./Overview";
+import { usePollInterval } from "@/live";
+import { TOOLTIP_STYLE } from "./Overview";
 
 type Stats = Schemas["Stats"];
 type Window = "24h" | "7d" | "30d";
@@ -19,7 +20,7 @@ export function Stats() {
   const query = useQuery({
     queryKey: ["stats", window],
     queryFn: () => apiGet("/stats", { query: { window } }),
-    refetchInterval: POLL_MS,
+    refetchInterval: usePollInterval(),
   });
   return (
     <>
