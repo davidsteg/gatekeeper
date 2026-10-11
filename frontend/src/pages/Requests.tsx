@@ -172,7 +172,10 @@ function ChangeTab({ items }: { items: Pending[] }) {
   const canWrite = useCanWrite();
   const decided = useDecided();
   const live = items.filter((i) => !DONE_CHANGE.has(i.status));
-  const batchable = live.filter((i) => i.status === "pending" && i.action !== "cred_propose");
+  const open = live.filter((i) => i.status === "pending");
+  // A credential proposal needs a typed value, so it cannot be approved in
+  // a batch; rejecting one needs nothing, so Reject all takes it too.
+  const batchable = open.filter((i) => i.action !== "cred_propose");
   if (decided.isError) return <QueryError error={decided.error} />;
   if (decided.isPending) return <Loading />;
   if (!live.length && !decided.data.pages[0]?.total) {
@@ -185,7 +188,7 @@ function ChangeTab({ items }: { items: Pending[] }) {
   }
   return (
     <>
-      {canWrite && batchable.length >= 2 && <ApproveAll items={batchable} />}
+      {canWrite && open.length >= 2 && <DecideAll approvable={batchable} rejectable={open} />}
       {live.length === 0 ? <p className="text-sm text-muted-foreground">Nothing pending.</p> : (
         [...live].reverse().map((item) => <PendingCard key={item.id} item={item} canDecide={canWrite} />)
       )}
@@ -282,53 +285,93 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
   );
 }
 
-function ApproveAll({ items }: { items: Pending[] }) {
-  const [asking, setAsking] = useState(false);
-  const run = useWrite(
+function DecideAll({ approvable, rejectable }: { approvable: Pending[]; rejectable: Pending[] }) {
+  const [asking, setAsking] = useState<"" | "approve" | "reject">("");
+  const [reason, setReason] = useState("");
+  const approve = useWrite(
     () => apiSend<Schemas["ApproveAllResult"]>("POST", "/requests/pending/approve-all", {
       // Exactly what is listed here; anything filed meanwhile stays pending.
-      body: { ids: items.map((i) => i.id) },
+      body: { ids: approvable.map((i) => i.id) },
     }),
     INVALIDATES,
-    () => setAsking(false),
+    () => setAsking(""),
   );
+  const reject = useWrite(
+    () => apiSend<Schemas["RejectAllResult"]>("POST", "/requests/pending/reject-all", {
+      body: { ids: rejectable.map((i) => i.id), reason },
+    }),
+    INVALIDATES,
+    () => { setAsking(""); setReason(""); },
+  );
+  const working = approve.isPending || reject.isPending;
+  const start = (mode: "approve" | "reject") => { approve.reset(); reject.reset(); setAsking(mode); };
+  const items = asking === "reject" ? rejectable : approvable;
   return (
-    <Card>
+    <Card aria-busy={working || undefined}>
       <CardBody className="space-y-2 text-sm">
-        {!asking ? (
-          <Button size="sm" onClick={() => { run.reset(); setAsking(true); }}>
-            <Check className="size-3.5" /> Approve all ({items.length})
-          </Button>
+        {asking === "" ? (
+          <div className="flex flex-wrap gap-1">
+            {approvable.length >= 2 && (
+              <Button size="sm" onClick={() => start("approve")}>
+                <Check className="size-3.5" /> Approve all ({approvable.length})
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={() => start("reject")}>
+              <X className="size-3.5" /> Reject all ({rejectable.length})
+            </Button>
+          </div>
         ) : (
           <>
-            <p className="font-medium">Approve all {items.length} pending proposals?</p>
+            <p className="font-medium">
+              {asking === "approve" ? "Approve" : "Reject"} all {items.length} pending proposals?
+            </p>
             <p className="text-xs text-muted-foreground">
-              Each is applied on its own, oldest first. A refusal (a stale proposal, say) does not stop the rest.
-              Credential proposals are not included; each needs its value.
+              {asking === "approve"
+                ? "Each is applied on its own, oldest first. A refusal (a stale proposal, say) does not stop the rest. Credential proposals are not included; each needs its value."
+                : "Each is rejected with the same reason, credential proposals included. Nothing is applied. A proposal filed after this page loaded stays pending."}
             </p>
             <ul className="space-y-1">
               {items.map((i) => (
                 <li key={i.id} className="flex gap-2"><code className="text-xs">{i.action}</code><span>{i.review.headline}</span></li>
               ))}
             </ul>
-            <div className="flex gap-2">
-              <Button size="sm" busy={run.isPending} busyLabel={`Approving ${items.length}…`} onClick={() => run.mutate(undefined)}>Approve all {items.length}</Button>
-              <Button size="sm" variant="ghost" disabled={run.isPending} onClick={() => setAsking(false)}>Cancel</Button>
-            </div>
+            {asking === "approve" ? (
+              <div className="flex gap-2">
+                <Button size="sm" busy={approve.isPending} busyLabel={`Approving ${items.length}…`} onClick={() => approve.mutate(undefined)}>
+                  Approve all {items.length}
+                </Button>
+                <Button size="sm" variant="ghost" disabled={working} onClick={() => setAsking("")}>Cancel</Button>
+              </div>
+            ) : (
+              <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); reject.mutate(undefined); }}>
+                <Label text="Reason (optional)">
+                  <Input autoFocus value={reason} maxLength={240} onChange={(e) => setReason(e.target.value)} />
+                </Label>
+                <Button size="sm" variant="destructive" type="submit" busy={reject.isPending} busyLabel={`Rejecting ${items.length}…`}>
+                  Reject all {items.length}
+                </Button>
+                <Button size="sm" variant="ghost" type="button" disabled={working} onClick={() => setAsking("")}>Cancel</Button>
+              </form>
+            )}
           </>
         )}
-        {run.data && run.data.refused.length > 0 && (
-          <Notice tone="bad">
-            <strong>Applied {run.data.applied}. Refused {run.data.refused.length}.</strong>
-            <ul>
-              {run.data.refused.map((r) => <li key={r.id}><code>{r.action}</code> {r.id}: {r.reason}</li>)}
-            </ul>
-          </Notice>
-        )}
-        <Working active={run.isPending} />
-        <WriteError error={run.error} />
+        <Working active={working} />
+        {approve.data && approve.data.refused.length > 0 && <BatchRefusals verb="Applied" done={approve.data.applied} refused={approve.data.refused} />}
+        {reject.data && reject.data.refused.length > 0 && <BatchRefusals verb="Rejected" done={reject.data.rejected} refused={reject.data.refused} />}
+        <WriteError error={approve.error ?? reject.error} />
       </CardBody>
     </Card>
+  );
+}
+
+function BatchRefusals({ verb, done, refused }: { verb: string; done: number; refused: Schemas["Refusal"][] }) {
+  return (
+    <Notice tone="bad">
+      <strong>{verb} {done}. Refused {refused.length}.</strong>
+      <ul>
+        {refused.map((r) => <li key={r.id}><code>{r.action}</code> {r.id}: {r.reason}</li>)}
+      </ul>
+    </Notice>
   );
 }
 

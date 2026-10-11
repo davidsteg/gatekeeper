@@ -742,7 +742,9 @@ writes through these routes.
   human types; the agent proposed only name and kind), `.../reject`
   (optional reason), `POST /requests/pending/approve-all` (exactly the IDs
   the reviewer saw, oldest first, each on its own; credential proposals
-  are never batched; the answer lists what was refused and why), and
+  are never batched; the answer lists what was refused and why),
+  `POST /requests/pending/reject-all` (the same ID list plus one reason;
+  credential proposals included, since rejecting needs no value), and
   `POST /requests/toolkits/{id}/deploy` (body `{"confirm": true}`, Tier 1
   written and reloaded at once) and `.../reject`. They take no `If-Match`:
   each acts on one proposal by ID and the stores refuse one that is no
@@ -864,7 +866,8 @@ controls are hidden unless `can_write`; the server checks every write
 regardless. Since phase 3b (0.56.0) the Requests page decides proposals
 too: two tabs (Change, Toolkit) polled every 15 s with an open count in
 the sidebar, approve and reject per card, an inline value form for a
-credential proposal, an "Approve all" that lists what it will apply, and
+credential proposal, an "Approve all" and a "Reject all" that list what
+they will decide, and
 a toolkit deploy that spells out what changes and needs a ticked
 acknowledgement. Everything an agent wrote is rendered as text.
 

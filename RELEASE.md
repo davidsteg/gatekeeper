@@ -1,3 +1,10 @@
+## 1.6.0
+
+### Added
+
+- **Reject all** on the Change tab of Requests, next to **Approve all**. It lists every pending proposal it will reject, takes one optional reason for all of them, and shows the same "Rejecting…" progress as a single decision. Credential proposals are included, because rejecting one needs no value. A proposal filed after the page loaded stays pending. The button appears whenever two or more proposals are pending, even when they are all credential proposals, which Approve all cannot take.
+- `POST /api/v1/requests/pending/reject-all` with `{"ids": [...], "reason": "..."}`: exactly the listed proposals, oldest first. One decided meanwhile is skipped, and the answer counts what was rejected and lists any refusal.
+
 ## 1.5.2
 
 ### Fixed
