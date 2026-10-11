@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Navigate } from "react-router";
+import { Navigate, useLocation, type Location } from "react-router";
 import { ShieldCheck } from "lucide-react";
 import { useAuth } from "@/auth";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,11 @@ export function Login() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (session) return <Navigate to="/" replace />;
+  const from = (useLocation().state as { from?: Location } | null)?.from;
+
+  // Router state is set only by this app (`RequireSession`), and a
+  // `Location` is a path inside the router's basename: no way off /app.
+  if (session) return <Navigate to={from ? `${from.pathname}${from.search}` : "/"} replace />;
 
   async function submit(event: FormEvent) {
     event.preventDefault();

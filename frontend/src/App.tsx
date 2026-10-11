@@ -1,4 +1,4 @@
-import { Navigate, Outlet, Route, Routes } from "react-router";
+import { Navigate, Outlet, Route, Routes, useLocation } from "react-router";
 import { useAuth } from "@/auth";
 import { Layout } from "@/components/Layout";
 import { Loading } from "@/components/ui/notice";
@@ -17,8 +17,11 @@ import { Integrations, ToolDetail, ToolEditor, Tools } from "@/pages/Tools";
 
 function RequireSession() {
   const { session, loading } = useAuth();
+  const location = useLocation();
   if (loading) return <div className="p-6"><Loading label="Checking session" /></div>;
-  if (!session) return <Navigate to="/login" replace />;
+  // Back to this page after sign-in, query included (an old /ui bookmark
+  // such as /ui/requests?tab=toolkit lands here signed out).
+  if (!session) return <Navigate to="/login" replace state={{ from: location }} />;
   return <Outlet />;
 }
 
