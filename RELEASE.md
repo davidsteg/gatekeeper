@@ -1,3 +1,10 @@
+## 1.4.1
+
+### Fixed
+
+- **One click on "Yes, rotate token" now rotates once.** After a rotation, the confirm question stayed open under the new token, so a second click issued yet another token without asking again. The token that had just been copied stopped working, which looked like the token had been rotated on its own. The question now closes as soon as the write succeeds, on the Identities, Tools and Credentials pages alike. It stays open with the error when the write fails.
+- **A rotated token now appears in the identity's own card**, right above its buttons, instead of at the top of the page where it went unseen on a long list. Every one-time secret (a rotated token, a new identity's token) scrolls into view and has a **Copy** button. On a plain-HTTP LAN deployment, where browsers withhold the clipboard API, the button selects the token and copies it with the browser's copy command.
+
 ## 1.4.0
 
 The Integrations library is gone. gatekeeper builds tools from an HTTP API (or a binary, a JSON-RPC method, an opencode operation) directly; a hard-coded list of 25 products with starter tools added nothing an admin agent or the tool editor needed, and every upstream API change made it a little more wrong.
