@@ -1,3 +1,22 @@
+## 1.4.0
+
+The Integrations library is gone. gatekeeper builds tools from an HTTP API (or a binary, a JSON-RPC method, an opencode operation) directly; a hard-coded list of 25 products with starter tools added nothing an admin agent or the tool editor needed, and every upstream API change made it a little more wrong.
+
+### Removed
+
+- **`/app/tools/integrations`** and its **Integrations** button on the Tools page, along with `GET /api/v1/integrations` and `GET /api/v1/integrations/{key}/logo.svg`.
+- **`gatekeeper integration list` / `gatekeeper integration show <key>`.**
+- `integrations.py` (the 25 service definitions and their logos) and the README screenshot.
+
+### Changed
+
+- **Toolkits → Reference YAML** now shows one starting block per executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`, `google`, `microsoft`, `opencode`, `agent`) instead of one per product. Each keeps the safe defaults the old blocks had: a header credential, a `CHANGEME` host, and an `allowed_cidrs` placeholder that matches no real host, so an unedited paste fails closed. `config/examples/toolkits.yaml` stays the long form.
+- `config/examples/tools.yaml` gains `drive.search`, the worked example of a `switch:` mapping that used to live only in the Drive integration.
+
+### Upgrading
+
+Nothing to change in a deployment: tools created from an integration are ordinary tools in `tools.yaml` and keep working. A bookmark to `/app/tools/integrations` now finds no such tool; scripts calling `gatekeeper integration` get a usage error.
+
 ## 1.3.1
 
 The console works on a phone. Nothing changes on a desktop browser.

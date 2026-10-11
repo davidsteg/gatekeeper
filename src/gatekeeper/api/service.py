@@ -882,44 +882,17 @@ def audit_page(
     }
 
 
-def integrations_view(service: Any) -> list[dict[str, Any]]:
-    from ..integrations import INTEGRATIONS
-    from ..store import tool_to_yaml
-
-    configured = set(service.tier1.toolkits)
-    return [
-        {
-            "key": it.key,
-            "display_name": it.display_name,
-            "notes": it.notes,
-            "credential_kind": it.credential_kind,
-            "toolkit_configured": it.key in configured,
-            "tools": [
-                {
-                    "id": str(spec["id"]),
-                    "category": str(spec.get("category", "")),
-                    "description": str(spec.get("description", "")),
-                    "exists": service.catalog.raw_of(spec["id"]) is not None,
-                    "yaml": tool_to_yaml(spec),
-                }
-                for spec in it.tool_specs
-            ],
-        }
-        for it in sorted(INTEGRATIONS.values(), key=lambda i: i.display_name)
-    ]
-
-
 def toolkit_reference_view() -> list[dict[str, Any]]:
-    """Copy-pasteable Tier 1 YAML per integration. Text for a human to paste
+    """Copy-pasteable Tier 1 YAML per executor. Text for a human to paste
     into toolkits.yaml by hand -- nothing here writes it (FR-4.11)."""
-    from ..integrations import INTEGRATIONS
+    from ..toolkit_reference import REFERENCES
 
     return [
         {
             "key": it.key, "display_name": it.display_name,
             "notes": it.notes, "toolkit_yaml": it.toolkit_yaml,
         }
-        for it in sorted(INTEGRATIONS.values(), key=lambda i: i.display_name)
+        for it in REFERENCES.values()
     ]
 
 
@@ -930,7 +903,7 @@ def _tool_scaffold(service: Any) -> str:
     """Scaffold for a new definition, built from the real Tier 1.
 
     This used to contain a finished Docker tool with foreign paths. That was
-    doubly wrong: it looked like an integration, and on a system
+    doubly wrong: it looked like a finished tool, and on a system
     without this toolkit it could not even be saved. The scaffold now
     takes the first configured toolkit and its actual values -- it
     is thus a valid starting point on every deployment.

@@ -50,7 +50,7 @@ def _get_paths(*, streams: bool = True) -> list[str]:
             continue
         if "get" in ops:
             paths.append(
-                path.replace("{tool_id}", "demo.show").replace("{key}", "sonarr")
+                path.replace("{tool_id}", "demo.show")
                 .replace("{slug}", "readme")
             )
     return sorted(paths)
@@ -61,7 +61,7 @@ def test_the_schema_lists_the_phase_one_reads():
     # iterates `_get_paths()`, so it cannot ship without the auth checks.
     assert set(_get_paths()) >= {
         "/session", "/account", "/overview", "/tools", "/tools/demo.show",
-        "/integrations", "/identities", "/credentials", "/toolkits",
+        "/identities", "/credentials", "/toolkits",
         "/toolkits/reference", "/requests/pending", "/requests/toolkits",
         "/audit", "/release-notes", "/stats", "/documents", "/documents/readme",
         "/oauth/providers", "/events",

@@ -24,7 +24,7 @@ const TOPIC_KEYS: Record<string, string[]> = {
   overview: ["overview"],
   stats: ["stats"],
   requests: ["requests", "overview"],
-  tools: ["tools", "tool", "integrations", "overview"],
+  tools: ["tools", "tool", "overview"],
   identities: ["identities", "overview"],
   credentials: ["credentials", "oauth-providers"],
   toolkits: ["toolkits", "overview"],

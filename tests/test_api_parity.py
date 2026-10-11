@@ -19,10 +19,9 @@ from conftest import PYTHON
 
 from gatekeeper.catalog import load_catalog
 from gatekeeper.credentials import KEY_ENV, generate_master_key
-from gatekeeper.integrations import INTEGRATIONS
 from gatekeeper.pending import STALE_TAKEN_REASON, STALE_VANISHED_REASON
-from gatekeeper.store import tool_to_yaml
 from gatekeeper.tier1 import load_tier1
+from gatekeeper.toolkit_reference import REFERENCES
 
 SECRET_VALUE = "super-secret-sonarr-key-xyz"
 
@@ -486,76 +485,27 @@ async def test_decided_requests_are_listed_by_status(env):
         assert await ids() == [approved.id, rejected.id, waiting.id]
 
 
-# -- Integrations (test_ui_integrations) -------------------------------------------------
+# -- Toolkit reference (test_ui_integrations) ---------------------------------------------
 
 
 @pytest.fixture
-def integrations_env(tmp_path):
-    """A toolkit matching the 'sonarr' integration, so it becomes actionable."""
+def reference_env(tmp_path):
+    """The http reference block, pasted unedited, as the only toolkit."""
     path = tmp_path / "toolkits.yaml"
     path.write_text(
-        "toolkits:\n" + INTEGRATIONS["sonarr"].toolkit_yaml
+        "toolkits:\n" + REFERENCES["http"].toolkit_yaml
         + f"\naudit:\n  dir: {tmp_path / 'logs'}\n",
         encoding="utf-8",
     )
     return make_env(tmp_path, load_tier1(str(path)), [])
 
 
-async def test_only_a_configured_toolkits_integration_can_be_created(integrations_env):
-    """was test_gallery_shows_all_integrations, test_only_configured_toolkit_
-    offers_create_action, test_pick_lists_starter_tools, test_new_from_
-    integration_prefills_editor_and_saves and test_toolkit_not_configured_
-    blocks_integration_creation"""
-    env = integrations_env
-    async with client(env["app"]) as c:
-        admin = await login(c, "root")
-        listing = {i["key"]: i for i in (await c.get(f"{API}/integrations")).json()}
-        assert set(listing) == set(INTEGRATIONS)
-        assert listing["sonarr"]["toolkit_configured"] is True
-        assert listing["radarr"]["toolkit_configured"] is False
-        sonarr_tools = {t["id"]: t for t in listing["sonarr"]["tools"]}
-        assert {"sonarr.list_series", "sonarr.add_series"} <= set(sonarr_tools)
-
-        etag = (await c.get(f"{API}/tools")).headers["etag"]
-        saved = await c.post(
-            f"{API}/tools", json={"yaml": sonarr_tools["sonarr.list_series"]["yaml"]},
-            headers=_h(admin, etag),
-        )
-        assert saved.status_code == 201, saved.text
-        assert "sonarr.list_series" in env["service"].catalog.tools
-
-        radarr = next(t for t in listing["radarr"]["tools"] if t["id"] == "radarr.list_movies")
-        refused = await c.post(
-            f"{API}/tools", json={"yaml": radarr["yaml"]},
-            headers=_h(admin, saved.headers["etag"]),
-        )
-        assert refused.status_code == 400
-    assert "radarr.list_movies" not in env["service"].catalog.tools
-
-
-async def test_a_broken_integration_spec_is_still_rejected(integrations_env):
-    """was test_a_broken_integration_spec_is_still_rejected: an integration
-    only pre-fills the editor; the save is the full Tier 1 path."""
-    env = integrations_env
-    broken = dict(INTEGRATIONS["sonarr"].tool_specs[0])
-    broken["method"] = "DELETE"  # not in sonarr's allowed_methods
-    async with client(env["app"]) as c:
-        admin = await login(c, "root")
-        etag = (await c.get(f"{API}/tools")).headers["etag"]
-        r = await c.post(
-            f"{API}/tools", json={"yaml": tool_to_yaml(broken)}, headers=_h(admin, etag)
-        )
-    assert r.status_code == 400
-    assert r.json()["error"]
-    assert broken["id"] not in env["service"].catalog.tools
-
-
-async def test_reference_lists_every_integrations_toolkit_yaml(integrations_env):
+async def test_reference_lists_one_toolkit_yaml_per_executor(reference_env):
     """was test_reference_page_lists_all_toolkit_yaml_blocks"""
-    async with client(integrations_env["app"]) as c:
+    async with client(reference_env["app"]) as c:
         await login(c, "eye")
         reference = (await c.get(f"{API}/toolkits/reference")).json()
-    assert {r["key"] for r in reference} == set(INTEGRATIONS)
+    assert [r["key"] for r in reference] == list(REFERENCES)
     blocks = "\n".join(r["toolkit_yaml"] for r in reference)
     assert "executor: http" in blocks
     assert "executor: truenas" in blocks

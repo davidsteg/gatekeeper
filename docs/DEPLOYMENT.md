@@ -188,10 +188,10 @@ name it with `credential:` on the toolkit — it is then sent as an
 `Authorization: Basic` header, and never appears in a tool definition, a
 response, or the audit log.
 
-**5. Create the tools, enable them, grant them.** Either from
-`/app/tools/integrations` (the *opencode* card carries all seven starter
-tools) or by copying the entries from
-[`config/examples/tools.yaml`](../config/examples/tools.yaml). They ship
+**5. Create the tools, enable them, grant them.** Copy the entries from
+[`config/examples/tools.yaml`](../config/examples/tools.yaml) into the tool
+editor at `/app/tools/new`, or have an admin agent create them over
+`/admin/mcp`. They ship
 `enabled: false`, like every other starter definition.
 
 **6. Reconnect the agent, do not restart the container** — see the next
