@@ -378,6 +378,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/requests/pending/reject-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pending Reject All
+         * @description Rejects exactly the listed proposals, oldest first, each with the
+         *     same reason. Unlike approve-all, credential proposals are included:
+         *     rejecting one needs no value. One decided meanwhile is a refusal,
+         *     not a stop.
+         */
+        post: operations["pending_reject_all_requests_pending_reject_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/requests/pending/{item_id}/approve": {
         parameters: {
             query?: never;
@@ -1116,6 +1139,23 @@ export interface components {
             id: string;
             /** Reason */
             reason: string;
+        };
+        /** RejectAll */
+        RejectAll: {
+            /** Ids */
+            ids: string[];
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+        };
+        /** RejectAllResult */
+        RejectAllResult: {
+            /** Refused */
+            refused: components["schemas"]["Refusal"][];
+            /** Rejected */
+            rejected: number;
         };
         /** RejectBody */
         RejectBody: {
@@ -2920,6 +2960,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApproveAllResult"];
+                };
+            };
+            /** @description The store refused the write. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not signed in, or a bearer token was sent. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Role, CSRF or read-only refusal. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is stale. */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description If-Match is missing. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    pending_reject_all_requests_pending_reject_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectAll"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RejectAllResult"];
                 };
             };
             /** @description The store refused the write. */
