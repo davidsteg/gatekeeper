@@ -50,7 +50,7 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
   return (
     <textarea
       className={cn(
-        "min-h-24 rounded-md border border-border bg-background p-3 text-sm",
+        "min-h-24 rounded-md border border-border bg-background p-3 text-base sm:text-sm",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
         className,
       )}

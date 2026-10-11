@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,7 +78,7 @@ describe("live updates", () => {
     const source = FakeEventSource.last;
     expect(source?.url).toBe("/api/v1/events");
     act(() => source?.emit("ready"));
-    expect(await screen.findByText("Live")).toBeInTheDocument();
+    expect((await screen.findAllByText("Live")).length).toBeGreaterThan(0);
 
     proposals = [PENDING];
     // A topic the page does not show refetches nothing visible.
@@ -87,7 +87,7 @@ describe("live updates", () => {
     act(() => source?.emit("change", { topics: ["requests"] }));
     expect(await screen.findByText("enable tool demo.restart")).toBeInTheDocument();
     // The sidebar count follows too.
-    await waitFor(() => expect(screen.getByLabelText("1 open")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByLabelText("1 open").length).toBeGreaterThan(0));
   });
 
   it("falls back to polling and re-checks the session when the stream is refused", async () => {
@@ -142,5 +142,29 @@ describe("live updates", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Changed elsewhere.")).toBeInTheDocument();
     expect(sent?.["If-Match"]).toBe('"i1"');
+  });
+});
+
+describe("phone navigation", () => {
+  it("opens every page and Sign out from More, and closes on Escape", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/account")) return json(200, { identity: "root", role: "admin", can_change_password: true });
+      if (url.includes("/requests/")) return json(200, []);
+      throw new Error(`unexpected request ${url}`);
+    }));
+    renderAt("/account");
+    const user = userEvent.setup();
+    const tabs = await screen.findByRole("navigation", { name: "Tabs" });
+    expect(tabs).toHaveTextContent("Requests");
+    await user.click(screen.getByRole("button", { name: "More" }));
+    const sheet = screen.getByRole("dialog", { name: "All pages" });
+    for (const page of ["Identities", "Credentials", "Toolkits", "Stats", "Docs", "Release notes", "Account"]) {
+      expect(within(sheet).getByRole("link", { name: page })).toBeInTheDocument();
+    }
+    expect(within(sheet).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

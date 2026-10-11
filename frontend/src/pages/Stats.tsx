@@ -57,7 +57,7 @@ function StatsBody({ data }: { data: Stats }) {
           Counted over the most recent part of the audit log only; older records in this window are not included.
         </Notice>
       )}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <Tile n={data.totals.total} label="calls" />
         <Tile n={`${data.success_rate}%`} label="succeeded" />
         <Tile n={data.totals.denied} label="denied" tone={data.totals.denied ? "deny" : undefined} />
@@ -131,7 +131,7 @@ function StatsBody({ data }: { data: Stats }) {
 
 function Tile({ n, label, tone }: { n: number | string; label: string; tone?: "deny" }) {
   return (
-    <Card className="flex items-baseline gap-2 p-4">
+    <Card className="flex flex-wrap items-baseline gap-x-2 p-3 sm:p-4">
       <span className={cn("text-2xl font-semibold tabular-nums", tone === "deny" && "text-deny")}>{n}</span>
       <span className="text-sm text-muted-foreground">{label}</span>
     </Card>
