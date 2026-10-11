@@ -144,18 +144,93 @@ def test_deploy_rejects_name_collision_and_leaves_toolkits_yaml_untouched(tmp_pa
     before = open(toolkits_path, encoding="utf-8").read()
     old_tier1 = service.tier1
 
-    # 'demo' already exists in toolkits.yaml.
-    item = store.propose(name="demo", spec=_toolkit_spec(sandbox), actor="hermes")
+    # propose() refuses an existing name, so the collision has to appear
+    # while the proposal waits -- a redeploy adding the same name.
+    item = store.propose(name="late", spec=_toolkit_spec(sandbox), actor="hermes")
+    raw = yaml.safe_load(before)
+    raw["toolkits"]["late"] = _toolkit_spec(sandbox)
+    before = yaml.safe_dump(raw)
+    with open(toolkits_path, "w", encoding="utf-8") as handle:
+        handle.write(before)
 
     try:
         store.deploy(item.id, decided_by="root")
         assert False, "expected ToolkitProposalWriteRefused (name collision)"
     except ToolkitProposalWriteRefused as exc:
         assert "already exists" in str(exc)
+        assert "Reject this proposal" in str(exc)
 
     assert open(toolkits_path, encoding="utf-8").read() == before
     assert service.tier1 is old_tier1
     assert store.get(item.id).status == "pending"
+
+
+# -- Propose: collision at submit time ---------------------------------------
+
+
+def test_propose_refuses_an_existing_name_and_queues_nothing(tmp_path, sandbox):
+    store, _service, _tp = _env(tmp_path, sandbox)
+    with pytest.raises(ToolkitProposalWriteRefused) as exc:
+        store.propose(name="demo", spec=_toolkit_spec(sandbox), actor="hermes")
+    message = str(exc.value)
+    assert "already exists" in message
+    # Both ways forward: a second toolkit, or changing the existing one --
+    # through an update proposal or, for prefixes/limits, the file.
+    assert "different name" in message
+    assert "admin.toolkit_update" in message
+    assert "reload" in message
+    assert store.list() == []
+
+
+def test_propose_refuses_a_second_pending_create_for_one_name(tmp_path, sandbox):
+    store, _service, _tp = _env(tmp_path, sandbox)
+    first = store.propose(name="zfs", spec=_toolkit_spec(sandbox), actor="hermes")
+    with pytest.raises(ToolkitProposalWriteRefused) as exc:
+        store.propose(name="zfs", spec=_toolkit_spec(sandbox), actor="hermes")
+    assert first.id in str(exc.value)
+    # Once the first is out of the queue, the name is free to propose again.
+    store.withdraw(first.id, actor="hermes")
+    store.propose(name="zfs", spec=_toolkit_spec(sandbox), actor="hermes")
+
+
+# -- Withdraw -------------------------------------------------------------------
+
+
+def test_withdraw_by_proposer_closes_it_and_leaves_toolkits_yaml_alone(tmp_path, sandbox):
+    store, _service, toolkits_path = _env(tmp_path, sandbox)
+    before = open(toolkits_path, encoding="utf-8").read()
+    item = store.propose(name="zfs", spec=_toolkit_spec(sandbox), actor="hermes")
+
+    withdrawn = store.withdraw(item.id, actor="hermes")
+    assert withdrawn.status == "withdrawn"
+    assert withdrawn.decided_by == "hermes"
+    assert store.list(status="pending") == []
+    assert open(toolkits_path, encoding="utf-8").read() == before
+    with pytest.raises(ToolkitProposalWriteRefused):
+        store.deploy(item.id, decided_by="root")
+
+    lines = (tmp_path / "logs" / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    records = [json.loads(line) for line in lines]
+    assert any(r.get("action") == "toolkit_withdraw" and r.get("proposal_id") == item.id
+               for r in records)
+
+
+def test_withdraw_refuses_someone_elses_proposal(tmp_path, sandbox):
+    store, _service, _tp = _env(tmp_path, sandbox)
+    item = store.propose(name="zfs", spec=_toolkit_spec(sandbox), actor="hermes")
+    with pytest.raises(ToolkitProposalWriteRefused) as exc:
+        store.withdraw(item.id, actor="other-agent")
+    assert "only the proposer" in str(exc.value)
+    assert store.get(item.id).status == "pending"
+
+
+def test_withdraw_refuses_a_decided_proposal(tmp_path, sandbox):
+    store, _service, _tp = _env(tmp_path, sandbox)
+    item = store.propose(name="zfs", spec=_toolkit_spec(sandbox), actor="hermes")
+    store.reject(item.id, decided_by="root")
+    with pytest.raises(ToolkitProposalWriteRefused):
+        store.withdraw(item.id, actor="hermes")
+    assert store.get(item.id).status == "rejected"
 
 
 # -- Deploy: Tier-1 validation failure --------------------------------------

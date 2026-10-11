@@ -31,6 +31,12 @@ and only a human clicking "Approve & Deploy" at `/app/requests` (Toolkit
 tab) writes it into `toolkits.yaml` and reloads it into the running
 process (`Service.reload_config`, no restart). See
 [`toolkit_proposals.py`](../src/gatekeeper/toolkit_proposals.py).
+A `"create"` for a name already in `toolkits.yaml` (or already pending as
+a create) is refused when proposed, and again at deploy for a name a
+redeploy added in between. The agent side can read the queue
+(`admin.proposal_list`) and withdraw its *own* pending proposal
+(`admin.proposal_withdraw`, status `withdrawn`); deploying and rejecting
+stay with the console.
 
 **Key invariant:** `store.py` (`ConfigStore`, Tier 2 writes) has no function
 that writes `toolkits.yaml`. The console can create tools, identities, and

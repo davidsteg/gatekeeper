@@ -30,6 +30,7 @@ from .credentials import KINDS as CREDENTIAL_KINDS
 from .errors import ConfigError
 from .identity import ROLES
 from .store import WriteRefused
+from .toolkit_proposals import KINDS, STATUSES
 
 _OPEN_OBJECT: dict[str, Any] = {"type": "object", "additionalProperties": True}
 _ID_ONLY: dict[str, Any] = {
@@ -215,6 +216,25 @@ _TOOLS: list[types.Tool] = [
         inputSchema={
             "type": "object",
             "properties": {"status": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.proposal_list",
+        title="List toolkit proposals",
+        description=(
+            "Lists the toolkit-proposal queue -- what admin.toolkit_propose, "
+            "toolkit_update, toolkit_delete and credential_bind filed, which "
+            "admin.pending_list does not show. Optionally filtered by kind "
+            "(create/update/delete/bind) and status "
+            "(pending/deployed/rejected/withdrawn). Read-only."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": sorted(KINDS)},
+                "status": {"type": "string", "enum": sorted(STATUSES)},
+            },
             "additionalProperties": False,
         },
     ),
@@ -460,7 +480,10 @@ _TOOLS: list[types.Tool] = [
             "gatekeeper validates, writes toolkits.yaml, and reloads it "
             "into the running process itself -- no redeploy needed, but "
             "also no way for this call to make it live on its own. Editing "
-            "an existing toolkit is not supported here; the name must be new."
+            "an existing toolkit is not supported here: a name that already "
+            "exists is refused right away, with the way to change that "
+            "toolkit instead (admin.toolkit_update, or toolkits.yaml and a "
+            "reload for path_roots/protected_resources/limits)."
         ),
         inputSchema={
             "type": "object",
@@ -549,6 +572,24 @@ _TOOLS: list[types.Tool] = [
             "type": "object",
             "properties": {"name": {"type": "string", "description": "Toolkit name"}},
             "required": ["name"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.proposal_withdraw",
+        title="Withdraw your own toolkit proposal",
+        description=(
+            "Takes a still-pending toolkit proposal off the queue -- only "
+            "one you filed yourself (proposal_id from admin.toolkit_propose/"
+            "toolkit_update/toolkit_delete/credential_bind, or "
+            "admin.proposal_list). Approves nothing and never touches "
+            "toolkits.yaml; deploying or rejecting someone's proposal stays "
+            "with a human at /app/requests (Toolkit tab)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"proposal_id": {"type": "string"}},
+            "required": ["proposal_id"],
             "additionalProperties": False,
         },
     ),

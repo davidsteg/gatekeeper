@@ -763,6 +763,68 @@ async def test_toolkit_propose_always_lands_in_proposal_store(admin_mcp_env):
     assert pending.list() == []
 
 
+async def test_toolkit_propose_refuses_an_existing_name_at_submit(admin_mcp_env):
+    """The collision is an error on the call, with the way to change the
+    existing toolkit instead -- never a queued proposal that can only fail
+    at review and that the agent cannot take back.
+    """
+    app, _store, _pending, toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.toolkit_propose",
+            {"name": "demo", "spec": {"executor": "local", "binaries": [_python()]}},
+        )
+    assert result.is_error
+    text = result.content[0].text
+    assert "already exists" in text and "admin.toolkit_update" in text
+    assert toolkit_proposals.list() == []
+
+
+async def test_proposal_list_and_withdraw_round_trip(admin_mcp_env):
+    """An agent can see its own toolkit proposals and take one back --
+    and only its own: another admin identity's withdraw is refused.
+    """
+    app, _store, pending, toolkit_proposals = admin_mcp_env["build"]()
+    tokens = admin_mcp_env["tokens"]
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        created = json.loads((await client.call_tool(
+            "admin.toolkit_propose",
+            {"name": "zfs", "spec": {"executor": "local", "binaries": [_python()]}},
+        )).content[0].text)
+        await client.call_tool("admin.toolkit_delete", {"name": "demo"})
+
+        listed = json.loads(
+            (await client.call_tool("admin.proposal_list", {"kind": "create"})).content[0].text
+        )
+        assert [p["id"] for p in listed["proposals"]] == [created["proposal_id"]]
+        everything = json.loads((await client.call_tool("admin.proposal_list", {})).content[0].text)
+        assert {p["kind"] for p in everything["proposals"]} == {"create", "delete"}
+
+    # One lifespan per app instance: a fresh build over the same files.
+    app, _store, pending, toolkit_proposals = admin_mcp_env["build"]()
+    async with connected(app, tokens["root"], "/admin/mcp") as client:
+        refused = await client.call_tool(
+            "admin.proposal_withdraw", {"proposal_id": created["proposal_id"]}
+        )
+    assert refused.is_error
+    assert toolkit_proposals.get(created["proposal_id"]).status == "pending"
+
+    app, _store, pending, toolkit_proposals = admin_mcp_env["build"]()
+    async with connected(app, tokens["hermes"], "/admin/mcp") as client:
+        result = await client.call_tool(
+            "admin.proposal_withdraw", {"proposal_id": created["proposal_id"]}
+        )
+        assert not result.is_error
+        assert json.loads(result.content[0].text)["withdrawn"] is True
+        left = json.loads((await client.call_tool(
+            "admin.proposal_list", {"status": "withdrawn"}
+        )).content[0].text)
+    assert [p["id"] for p in left["proposals"]] == [created["proposal_id"]]
+    assert toolkit_proposals.get(created["proposal_id"]).status == "withdrawn"
+    assert pending.list() == []
+
+
 async def test_toolkit_update_accepts_run_as(admin_mcp_env):
     """`run_as` has to reach the queue through the real MCP surface, not
 

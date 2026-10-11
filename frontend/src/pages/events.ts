@@ -26,6 +26,7 @@ const ADMIN_VERBS: Record<string, string> = {
   toolkit_delete_deploy: "deleted toolkit",
   credential_bind_deploy: "deployed a credential binding for toolkit",
   toolkit_reject: "rejected the proposal for toolkit",
+  toolkit_withdraw: "withdrew its proposal for toolkit",
 };
 
 const s = (v: unknown) => (v === undefined || v === null ? "" : String(v));
