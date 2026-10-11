@@ -38,7 +38,7 @@ import pytest
 import yaml
 from conftest import PYTHON
 
-from gatekeeper import execute_google, execute_microsoft, integrations, validate
+from gatekeeper import execute_google, execute_microsoft, validate
 from gatekeeper.catalog import parse_tool_spec
 from gatekeeper.errors import ConfigError, Denied
 from gatekeeper.tier1 import load_tier1
@@ -593,8 +593,7 @@ def test_a_well_formed_switch_loads(tier1, make_bad):
 
 
 def _shipped_specs():
-    """Every tool spec this repo ships: the example YAML files and the
-    starter tools `gatekeeper integration show` prints."""
+    """Every tool spec this repo ships: the example YAML files."""
     specs = []
     paths = sorted(glob.glob(str(EXAMPLES / "*tools*.yaml")))
     assert paths, f"no example tool files under {EXAMPLES}"
@@ -602,9 +601,6 @@ def _shipped_specs():
         with open(path, encoding="utf-8") as handle:
             for spec in yaml.safe_load(handle).get("tools") or []:
                 specs.append((str(Path(path).relative_to(REPO_ROOT)), spec))
-    for integration in integrations.INTEGRATIONS.values():
-        for spec in integration.tool_specs:
-            specs.append(("integrations.py", spec))
     return specs
 
 

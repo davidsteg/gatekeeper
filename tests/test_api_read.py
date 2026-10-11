@@ -171,19 +171,6 @@ async def test_toolkits_are_readable(env):
         assert all(r["toolkit_yaml"] for r in reference)
 
 
-async def test_integrations_and_logo(env):
-    async with client(env["app"]) as c:
-        await login(c, "eye")
-        body = (await c.get(f"{API}/integrations")).json()
-        assert body and all(not i["toolkit_configured"] for i in body)
-        key = body[0]["key"]
-        logo = await c.get(f"{API}/integrations/{key}/logo.svg")
-        assert logo.status_code == 200
-        assert logo.headers["content-type"].startswith("image/svg+xml")
-        assert "sandbox" in logo.headers["content-security-policy"]
-        assert (await c.get(f"{API}/integrations/nope/logo.svg")).status_code == 404
-
-
 async def test_pending_requests(env):
     pending = env["pending"]
     item = pending.propose(

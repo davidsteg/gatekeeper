@@ -246,44 +246,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/integrations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Integrations */
-        get: operations["integrations_integrations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/integrations/{key}/logo.svg": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Integration Logo
-         * @description The brand mark as an image, for `<img src>`. An SVG loaded as an
-         *     image never runs script, so the SPA needs no `innerHTML` for it.
-         */
-        get: operations["integration_logo_integrations__key__logo_svg_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/oauth/providers": {
         parameters: {
             query?: never;
@@ -924,34 +886,6 @@ export interface components {
             scopes?: string[];
             /** Tools */
             tools?: string[];
-        };
-        /** Integration */
-        Integration: {
-            /** Credential Kind */
-            credential_kind: string;
-            /** Display Name */
-            display_name: string;
-            /** Key */
-            key: string;
-            /** Notes */
-            notes: string;
-            /** Toolkit Configured */
-            toolkit_configured: boolean;
-            /** Tools */
-            tools: components["schemas"]["IntegrationTool"][];
-        };
-        /** IntegrationTool */
-        IntegrationTool: {
-            /** Category */
-            category: string;
-            /** Description */
-            description: string;
-            /** Exists */
-            exists: boolean;
-            /** Id */
-            id: string;
-            /** Yaml */
-            yaml: string;
         };
         /** Latency */
         Latency: {
@@ -2656,93 +2590,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    integrations_integrations_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Integration"][];
-                };
-            };
-            /** @description Not signed in, or a bearer token was sent. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description Role, CSRF or read-only refusal. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    integration_logo_integrations__key__logo_svg_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                key: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "image/svg+xml": unknown;
-                };
-            };
-            /** @description Not signed in, or a bearer token was sent. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description Role, CSRF or read-only refusal. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -194,25 +194,6 @@ class ToolDetail(_Model):
     tools: list[Tool]
 
 
-class IntegrationTool(_Model):
-    id: str
-    category: str
-    description: str
-    exists: bool
-    #: The definition as YAML, for pre-filling the new-tool editor. It is
-    #: saved through the same `POST /tools` as a hand-written one.
-    yaml: str
-
-
-class Integration(_Model):
-    key: str
-    display_name: str
-    notes: str
-    credential_kind: str
-    toolkit_configured: bool
-    tools: list[IntegrationTool]
-
-
 # -- Identities --------------------------------------------------------------------
 
 
