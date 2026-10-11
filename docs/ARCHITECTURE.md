@@ -918,6 +918,10 @@ Kinds: `call`, `auth_failure`, `startup`, `admin_change`, `admin_denied`,
 (timeout on a non-idempotent tool — the operation may have completed on the
 other side, so it is not reported as a failure that would provoke a retry).
 
+A `call` record carries `client`, the address the call came over (the
+forwarded one behind a trusted proxy), next to `identity`. Records written
+before 1.7.0 have none.
+
 An `auth_failure` on `/mcp` or `/admin/mcp` carries `client`, the caller's
 address (the forwarded one when it came through a trusted proxy), `method`,
 `path`, `user_agent` (capped at 160 characters) when the client sent one,

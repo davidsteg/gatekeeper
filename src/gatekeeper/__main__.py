@@ -38,6 +38,7 @@ from .identity import (
     load_identities,
 )
 from .pending import PendingStore
+from .realip import RealIpMiddleware
 from .server import build_app, log_startup
 from .service import Service
 from .store import ConfigStore, set_password_in_file
@@ -489,6 +490,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
         if args.trusted_proxies
         else None
     )
+    # X-Real-IP, for proxies that send it instead of X-Forwarded-For; the
+    # same trust list, applied after uvicorn's own middleware.
+    app = RealIpMiddleware(app, trusted_proxies)
     uvicorn.run(
         app, host=args.host, port=args.port, log_level="info",
         forwarded_allow_ips=trusted_proxies,
@@ -947,7 +951,8 @@ def main() -> int:
         default=os.environ.get("GATEKEEPER_TRUSTED_PROXIES"),
         help=(
             "Comma-separated IPs/CIDRs of reverse proxies allowed to set "
-            "X-Forwarded-For/X-Forwarded-Proto (or '*' to trust any peer -- "
+            "X-Forwarded-For/X-Forwarded-Proto, or X-Real-IP when no "
+            "X-Forwarded-For is sent (or '*' to trust any peer -- "
             "only inside a network gatekeeper does not share with anything "
             "untrusted). Unset means uvicorn's own default: only a proxy "
             "on 127.0.0.1 is trusted, which a container's own reverse-proxy "
