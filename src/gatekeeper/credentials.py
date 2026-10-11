@@ -17,7 +17,10 @@ which never assert its return value crosses back out through
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import os
+import re
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -74,6 +77,40 @@ KINDS = frozenset(
         "url_query", "docker_tls", "ssh_private_key", "ssh_password", "oauth2",
     }
 )
+
+#: Kinds whose `header` field is required: the header name for
+#: api_key_header, the query parameter name for url_query.
+HEADER_KINDS = frozenset({"api_key_header", "url_query"})
+
+#: What shape of value each kind expects. `update` may change a slot's kind
+#: only within one shape: the stored value cannot be read back (FR-10.2), so
+#: nobody can check that a token entered for `bearer` is a valid
+#: `docker_tls` JSON bundle -- and it never is. The plain-token kinds differ
+#: only in where the same string goes (a header, the URL, the JSON-RPC
+#: auth call), which is exactly the defect a wrong kind usually is.
+VALUE_SHAPES: dict[str, str] = {
+    "api_key_header": "token",
+    "bearer": "token",
+    "url_path": "token",
+    "url_query": "token",
+    "ws_api_key": "token",
+    "basic": "user:password",
+    "docker_tls": "docker TLS bundle",
+    "ssh_private_key": "SSH private key",
+    "ssh_password": "SSH password",
+    "oauth2": "OAuth2 bundle",
+}
+
+#: An HTTP header name (RFC 9110 `token`), which is also a safe query
+#: parameter name. Refuses CR/LF and spaces, so an edited header cannot
+#: smuggle a second header line into a request.
+HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+
+#: The fields that make up a slot's identity -- what `record_revision`
+#: fingerprints. Probe and suspect metadata are left out on purpose: a call
+#: failing with 401 marks the slot suspect, and that must not turn a
+#: pending repair of that very slot stale.
+_IDENTITY_FIELDS = ("kind", "header", "probe_url", "created_at")
 
 PROBE_STATUSES = frozenset({"no_probe_url", "verified", "auth_failed", "unreachable"})
 
@@ -219,6 +256,18 @@ class CredentialStore:
 
     def writable(self) -> bool:
         return writable(self.path)
+
+    def record_revision(self, name: str) -> str:
+        """Fingerprint of one slot's identity fields, "" if it does not
+        exist -- the per-record staleness gate for a pending `cred_update`,
+        same idea as `ConfigStore.tool_revision`. Never covers the
+        ciphertext: a rotation does not conflict with a header repair."""
+        spec = self._raw().get(name)
+        if spec is None:
+            return ""
+        record = {field: spec.get(field) for field in _IDENTITY_FIELDS}
+        encoded = json.dumps(record, sort_keys=True, default=str).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()[:16]
 
     def _check(self, supplied: str) -> None:
         current = self.revision()
@@ -378,6 +427,94 @@ class CredentialStore:
                 "overlap_seconds": overlap_seconds,
             }
         )
+
+    def update(
+        self,
+        name: str,
+        *,
+        kind: str,
+        header: str | None,
+        probe_url: str | None,
+        new_name: str | None = None,
+        actor: str,
+        rev: str,
+    ) -> None:
+        """Changes a slot's name, kind, header and probe URL in place,
+        keeping its value (and any rotation overlap) untouched. The value
+        is never decrypted here: this is metadata only, which is why it
+        needs no human to type anything (FR-10.2).
+
+        Binding checks are the caller's business -- this module has no
+        Tier 1 dependency -- so renaming a slot a toolkit still names must
+        be refused before this is called.
+        """
+        if kind not in KINDS:
+            raise WriteRefused(f"Unknown credential kind {kind!r} (allowed: {sorted(KINDS)})")
+        header = header or None
+        if kind in HEADER_KINDS and not header:
+            raise WriteRefused(f"kind {kind!r} requires a header/param name")
+        if header is not None and not HEADER_NAME_RE.match(header):
+            raise WriteRefused(f"{header!r} is not a valid header/param name")
+        probe_url = (probe_url or "").strip() or None
+        if probe_url and not probe_url.startswith(("http://", "https://")):
+            raise WriteRefused("probe_url must be an http(s) URL")
+        target = new_name or name
+        with self._lock:
+            self._check(rev)
+            section = self._raw()
+            existing = section.get(name)
+            if existing is None:
+                raise WriteRefused(f"No credential named {name!r}.")
+            old_kind = str(existing.get("kind", ""))
+            if VALUE_SHAPES.get(old_kind) != VALUE_SHAPES.get(kind):
+                raise WriteRefused(
+                    f"Cannot change {name!r} from {old_kind!r} to {kind!r}: the "
+                    f"stored value is a {VALUE_SHAPES.get(old_kind, 'value')}, and "
+                    f"{kind!r} needs a {VALUE_SHAPES[kind]}. Create a new "
+                    "credential for that instead."
+                )
+            if target != name and target in section:
+                raise WriteRefused(f"A credential named {target!r} already exists.")
+            changed = [
+                field
+                for field, new in (("kind", kind), ("header", header), ("probe_url", probe_url))
+                if existing.get(field) != new
+            ]
+            if target != name:
+                changed.insert(0, "name")
+            updated = {
+                **existing,
+                "kind": kind,
+                "header": header,
+                "probe_url": probe_url,
+                # The old verdicts were about the old header/kind; keeping
+                # them would leave a repaired slot flagged `auth_failed`.
+                "probe_status": "no_probe_url" if not probe_url else "unreachable",
+                "probe_checked_at": None,
+                "suspect_status": None,
+                "suspect_at": None,
+            }
+            # Rebuilt rather than `del`/insert so a rename keeps the slot's
+            # place in the file.
+            section = {
+                (target if key == name else key): (updated if key == name else spec)
+                for key, spec in section.items()
+            }
+            self._write(section)
+        # Metadata only: a header or parameter name is not secret, and the
+        # value is never read here at all (FR-10.7).
+        entry: dict[str, Any] = {
+            "kind": "admin_change",
+            "actor": actor,
+            "action": "credential_update",
+            "target": name,
+            "credential_kind": kind,
+            "header": header,
+            "changed": changed,
+        }
+        if target != name:
+            entry["new_name"] = target
+        self.audit.write(entry)
 
     def delete(self, name: str, *, actor: str, rev: str) -> None:
         with self._lock:

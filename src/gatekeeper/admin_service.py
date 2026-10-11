@@ -28,6 +28,10 @@ whether a change applies immediately or is written to the pending queue:
 * `cred_propose` always goes to the pending queue too, but is never applied
   through `apply_pending`/`_APPLIERS` below -- see its own docstring. It
   proposes a credential's name/kind/header only, never a value.
+* `cred_update` always goes to the pending queue and applies through
+  `apply_pending` like `grant_set` does: it changes a slot's name, kind,
+  header and probe URL -- whether a call authenticates at all -- but never
+  its value, so a plain approval is enough and nobody re-types the secret.
 * `credential_bind` goes to the *toolkit*-proposal queue, not the pending
   one: binding a toolkit to a credential name writes `toolkits.yaml`, which
   is Tier 1 (FR-10.4), so it shares `toolkit_propose`/`toolkit_update`'s
@@ -54,8 +58,8 @@ from typing import Any
 from . import __version__
 from .api.service import credential_summaries, read_audit, toolkit_summaries
 from .catalog import normalize_tool_entry, parse_tool_spec
+from .credentials import HEADER_KINDS, HEADER_NAME_RE, VALUE_SHAPES, CredentialStore
 from .credentials import KINDS as CREDENTIAL_KINDS
-from .credentials import CredentialStore
 from .errors import ConfigError
 from .identity import ROLES, UI_ROLES
 from .pending import PendingAction, PendingStore
@@ -734,6 +738,136 @@ class AdminService:
         )
         return {"applied": False, "pending": True, "pending_id": item.id}
 
+    def cred_update(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Proposes changing an existing slot's kind, header, probe URL
+        and/or name -- keeping the stored value (FR-10.2/10.8).
+
+        The repair `cred_delete` + `cred_propose` could only do by throwing
+        a working secret away: a slot whose header is wrong (a token sent
+        as `X-Emby-Token` to a server that wants `Authorization`) had to be
+        deleted, which is refused while bound, so the way out was a
+        throwaway anchor slot, two binds and a human pasting the same
+        secret again. The value was never the problem; this changes only
+        what is around it.
+
+        Always pending, never auto-applied: kind and header decide whether
+        a call authenticates at all, and a header is where a request could
+        be pointed somewhere a human did not expect. Unlike `cred_propose`
+        it goes through `apply_pending`, because approving it needs no
+        input beyond the click -- the value stays where it is.
+
+        Fields left out keep their current value. A kind change stays
+        within one value shape (`credentials.VALUE_SHAPES`): a token can
+        move between `api_key_header`, `bearer`, `url_query` and the like,
+        but never become a `docker_tls` bundle, since nobody can read the
+        value back to check it. A rename is refused while the slot is
+        bound, because the binding is Tier 1 and would dangle; changing
+        kind or header is not, since the binding is by name.
+        """
+        if self.credentials is None:
+            raise AdminActionError(
+                "No credential store is configured on this deployment -- "
+                "there is no credential slot to update."
+            )
+        smuggled = sorted(set(args) & _BIND_VALUE_ARGS)
+        if smuggled:
+            raise AdminActionError(
+                f"{smuggled} {'is' if len(smuggled) == 1 else 'are'} not a "
+                "valid argument here -- this changes a credential's "
+                "name/kind/header and keeps its stored value. No operation on "
+                "/admin/mcp ever carries secret material (FR-10.2/10.8); a new "
+                "value is a rotation, typed by a human in /app/credentials."
+            )
+        name = _require_str(args, "name")
+        current = next((m for m in self.credentials.names() if m.name == name), None)
+        if current is None:
+            known = sorted(meta.name for meta in self.credentials.names())
+            raise AdminActionError(
+                f"No credential slot named {name!r} exists "
+                f"(known credentials: {known}). Check admin.cred_list."
+            )
+        for field in ("new_name", "kind", "header", "probe_url"):
+            if field in args and args[field] is not None and not isinstance(args[field], str):
+                raise AdminActionError(f"'{field}' must be a string if given.")
+
+        new_name = args.get("new_name") or None
+        if new_name == name:
+            new_name = None
+        if new_name is not None:
+            if not _CREDENTIAL_NAME_RE.match(new_name):
+                raise AdminActionError(
+                    f"{new_name!r} is not a valid credential name -- must match "
+                    f"{_CREDENTIAL_NAME_RE.pattern!r}."
+                )
+            if new_name in {meta.name for meta in self.credentials.names()}:
+                raise AdminActionError(f"A credential named {new_name!r} already exists.")
+            used_by = self.store.service.tier1.credential_references().get(name, ())
+            if used_by:
+                raise AdminActionError(
+                    f"Credential {name!r} is still referenced by {sorted(used_by)} "
+                    "-- renaming it would leave those pointing at a slot that no "
+                    "longer exists, and the binding is Tier 1 (FR-10.4). Kind and "
+                    "header can be changed without a rename: leave out 'new_name'."
+                )
+
+        kind = args.get("kind") or current.kind
+        if kind not in CREDENTIAL_KINDS:
+            raise AdminActionError(
+                f"Unknown credential kind {kind!r} (allowed: {sorted(CREDENTIAL_KINDS)})."
+            )
+        if VALUE_SHAPES.get(kind) != VALUE_SHAPES.get(current.kind):
+            raise AdminActionError(
+                f"Cannot change {name!r} from {current.kind!r} to {kind!r}: the "
+                f"stored value is a {VALUE_SHAPES.get(current.kind, 'value')}, and "
+                f"{kind!r} needs a {VALUE_SHAPES[kind]}. The value cannot be read "
+                "back to convert it -- propose a new slot with admin.cred_propose."
+            )
+        if "header" in args:
+            header = args.get("header") or None
+        else:
+            # A kind that takes no header drops the old one, rather than
+            # carrying a stale `X-Api-Key` along on a `bearer` slot.
+            header = current.header if kind in HEADER_KINDS else None
+        if kind in HEADER_KINDS and not header:
+            raise AdminActionError(f"kind {kind!r} requires a 'header' (header/param name).")
+        if header is not None and kind not in HEADER_KINDS:
+            raise AdminActionError(
+                f"kind {kind!r} takes no 'header' -- it builds its own "
+                "(bearer, basic) or is not sent as a header at all."
+            )
+        if header is not None and not HEADER_NAME_RE.match(header):
+            raise AdminActionError(f"{header!r} is not a valid header/param name.")
+        if "probe_url" in args:
+            probe_url = (args.get("probe_url") or "").strip() or None
+        else:
+            probe_url = current.probe_url
+        if probe_url and not probe_url.startswith(("http://", "https://")):
+            raise AdminActionError("'probe_url' must be an http(s) URL if given.")
+
+        prev = {"kind": current.kind, "header": current.header, "probe_url": current.probe_url}
+        if new_name is None and prev == {"kind": kind, "header": header, "probe_url": probe_url}:
+            raise AdminActionError(
+                f"Nothing to change: {name!r} already has kind {kind!r}"
+                + (f", header {header!r}" if header else "")
+                + "."
+            )
+        item = self.pending.propose(
+            action="cred_update",
+            actor=actor,
+            payload={
+                "name": name,
+                "new_name": new_name,
+                "kind": kind,
+                "header": header,
+                "probe_url": probe_url,
+                # Snapshotted for the reviewer's diff, like `grant_set`'s
+                # `prev_tools`: an archived item still shows what it changed.
+                "prev": prev,
+            },
+            base_rev=self.credentials.record_revision(name),
+        )
+        return {"applied": False, "pending": True, "pending_id": item.id}
+
 
 #: The complete, fixed set of `admin.*` actions reachable from `/admin/mcp`
 #: (FR-2.8/2.9). `admin_server.py`'s tool list is asserted to match this
@@ -760,6 +894,7 @@ _EXPOSED: tuple[str, ...] = (
     "toolkit_update",
     "toolkit_delete",
     "cred_propose",
+    "cred_update",
     "credential_bind",
 )
 
@@ -769,7 +904,9 @@ EXPOSED_ACTIONS: frozenset[str] = frozenset(_EXPOSED)
 # -- Applying an approved pending action (called only from api/writes.py) ---
 
 
-def _apply_tool_update(store: ConfigStore, item: PendingAction) -> Any:
+def _apply_tool_update(
+    store: ConfigStore, item: PendingAction, _credentials: CredentialStore | None
+) -> Any:
     payload = item.payload
     return store.save_tool(
         payload["spec"], actor=item.actor, rev=store.tools_revision(),
@@ -777,17 +914,23 @@ def _apply_tool_update(store: ConfigStore, item: PendingAction) -> Any:
     )
 
 
-def _apply_tool_enable(store: ConfigStore, item: PendingAction) -> Any:
+def _apply_tool_enable(
+    store: ConfigStore, item: PendingAction, _credentials: CredentialStore | None
+) -> Any:
     return store.set_tool_enabled(
         item.payload["id"], True, actor=item.actor, rev=store.tools_revision()
     )
 
 
-def _apply_tool_delete(store: ConfigStore, item: PendingAction) -> Any:
+def _apply_tool_delete(
+    store: ConfigStore, item: PendingAction, _credentials: CredentialStore | None
+) -> Any:
     return store.delete_tool(item.payload["id"], actor=item.actor, rev=store.tools_revision())
 
 
-def _apply_grant_set(store: ConfigStore, item: PendingAction) -> Any:
+def _apply_grant_set(
+    store: ConfigStore, item: PendingAction, _credentials: CredentialStore | None
+) -> Any:
     payload = item.payload
     return store.save_identity(
         identity_id=payload["identity_id"],
@@ -800,7 +943,9 @@ def _apply_grant_set(store: ConfigStore, item: PendingAction) -> Any:
     )
 
 
-def _apply_role_set(store: ConfigStore, item: PendingAction) -> Any:
+def _apply_role_set(
+    store: ConfigStore, item: PendingAction, _credentials: CredentialStore | None
+) -> Any:
     payload = item.payload
     return store.save_identity(
         identity_id=payload["identity_id"],
@@ -810,6 +955,37 @@ def _apply_role_set(store: ConfigStore, item: PendingAction) -> Any:
         actor=item.actor,
         rev=store.identities_revision(),
         replaces=payload["identity_id"],
+    )
+
+
+def _apply_cred_update(
+    store: ConfigStore, item: PendingAction, credentials: CredentialStore | None
+) -> Any:
+    if credentials is None:
+        raise WriteRefused("No credential store is configured on this deployment.")
+    payload = item.payload
+    name = payload["name"]
+    new_name = payload.get("new_name") or None
+    if new_name is not None:
+        # Checked again here, not only at propose time: a toolkit may have
+        # been bound to this slot (an approved `credential_bind`) while the
+        # rename waited in the queue, and the bind lives in Tier 1, which
+        # this slot's own revision does not cover.
+        used_by = store.service.tier1.credential_references().get(name, ())
+        if used_by:
+            raise WriteRefused(
+                f"Credential {name!r} is now referenced by {sorted(used_by)}; "
+                "renaming it would leave that binding dangling. Reject this "
+                "and ask for the change without a rename."
+            )
+    return credentials.update(
+        name,
+        kind=payload["kind"],
+        header=payload.get("header"),
+        probe_url=payload.get("probe_url"),
+        new_name=new_name,
+        actor=item.actor,
+        rev=credentials.revision(),
     )
 
 
@@ -825,7 +1001,11 @@ def _target_id_identity(payload: dict[str, Any]) -> str:
     return payload["identity_id"]
 
 
-#: proposed_action -> (applier, "tools"|"identities" -- which store's
+def _target_id_name(payload: dict[str, Any]) -> str:
+    return payload["name"]
+
+
+#: proposed_action -> (applier, "tools"|"identities"|"credentials" -- which store's
 #: per-record fingerprint `PendingStore.approve` re-checks the proposal's
 #: `base_rev` against, and a function that pulls the specific tool/identity
 #: id a proposal targets out of its own payload). Staleness is checked at
@@ -835,18 +1015,21 @@ def _target_id_identity(payload: dict[str, Any]) -> str:
 #: `store.save_tool`/`save_identity`/etc. still perform their own
 #: whole-file `_check()` at the moment of writing (see store.py) as the
 #: real atomic-write safety net; that is unrelated to this gate.
-_APPLIERS: dict[
-    str, tuple[Callable[[ConfigStore, PendingAction], Any], str, Callable[[dict[str, Any]], str]]
-] = {
+_Applier = Callable[[ConfigStore, PendingAction, CredentialStore | None], Any]
+
+_APPLIERS: dict[str, tuple[_Applier, str, Callable[[dict[str, Any]], str]]] = {
     "tool_update": (_apply_tool_update, "tools", _target_id_tool_update),
     "tool_enable": (_apply_tool_enable, "tools", _target_id_tool_id_field),
     "tool_delete": (_apply_tool_delete, "tools", _target_id_tool_id_field),
     "grant_set": (_apply_grant_set, "identities", _target_id_identity),
     "role_set": (_apply_role_set, "identities", _target_id_identity),
+    "cred_update": (_apply_cred_update, "credentials", _target_id_name),
 }
 
 
-def _target_rev(store: ConfigStore, item: PendingAction) -> str | None:
+def _target_rev(
+    store: ConfigStore, item: PendingAction, credentials: CredentialStore | None = None
+) -> str | None:
     """The live per-record revision of what one pending item targets, or
     `None` if it targets no record this module can resolve.
 
@@ -859,8 +1042,8 @@ def _target_rev(store: ConfigStore, item: PendingAction) -> str | None:
     record is gone"), `None` means "not a question about a record" -- an
     action with no applier (`cred_propose`, whose `base_rev` is the
     credential file's whole-file revision and whose target is a slot that
-    must *not* exist yet), or a payload missing the field naming its own
-    target.
+    must *not* exist yet), a payload missing the field naming its own
+    target, or a `cred_update` on a deployment with no credential store.
     """
     entry = _APPLIERS.get(item.action)
     if entry is None:
@@ -874,6 +1057,8 @@ def _target_rev(store: ConfigStore, item: PendingAction) -> str | None:
         return None
     if kind == "tools":
         return store.tool_revision(target_id)
+    if kind == "credentials":
+        return None if credentials is None else credentials.record_revision(target_id)
     return store.identity_revision(target_id)
 
 
@@ -890,12 +1075,13 @@ def sweep_vanished_pendings(
     has a reason to ever click -- do not accumulate as permanent `pending`
     rows. Idempotent; see `PendingStore.close_vanished_targets`.
 
-    With `credentials`, also closes a `cred_propose` whose name has been
-    taken since (`PendingStore.close_taken_credentials`): that one could
-    never be approved either, since the create refuses an existing name.
+    With `credentials`, also closes a `cred_update` whose slot is gone, and
+    a `cred_propose` (or renaming `cred_update`) whose name has been taken
+    since (`PendingStore.close_taken_credentials`): that one could never be
+    approved either, since the write refuses an existing name.
     """
     closed = pending.close_vanished_targets(
-        lambda item: _target_rev(store, item), decided_by=decided_by
+        lambda item: _target_rev(store, item, credentials), decided_by=decided_by
     )
     if credentials is not None:
         taken = {meta.name for meta in credentials.names()}
@@ -904,7 +1090,8 @@ def sweep_vanished_pendings(
 
 
 def apply_pending(
-    store: ConfigStore, pending: PendingStore, action_id: str, *, decided_by: str
+    store: ConfigStore, pending: PendingStore, action_id: str, *, decided_by: str,
+    credentials: CredentialStore | None = None,
 ) -> Any:
     """Approves and applies one pending action -- the only function in this
     codebase that turns a proposal into a live change. Called only
@@ -920,7 +1107,11 @@ def apply_pending(
     entry = _APPLIERS.get(item.action)
     if entry is None:
         raise WriteRefused(f"Unknown pending action type {item.action!r}.")
-    applier, _kind, _target_id_of = entry
+    applier, kind, _target_id_of = entry
+    if kind == "credentials" and credentials is None:
+        # Refused before the staleness gate, which would otherwise read the
+        # unanswerable revision as "the slot is gone" and close the item.
+        raise WriteRefused("No credential store is configured on this deployment.")
 
     def _current_rev(pending_item: PendingAction) -> str:
         # `_target_rev` answering `None` here means the payload does not
@@ -929,13 +1120,13 @@ def apply_pending(
         # staleness gate rather than raising `KeyError` out of the approve
         # route -- an unhandled 500 leaves the item `pending`, which is the
         # exact zombie shape this whole guard exists to prevent.
-        return _target_rev(store, pending_item) or ""
+        return _target_rev(store, pending_item, credentials) or ""
 
     return pending.approve(
         action_id,
         decided_by=decided_by,
         current_rev=_current_rev,
-        apply=lambda _item: applier(store, _item),
+        apply=lambda _item: applier(store, _item, credentials),
     )
 
 

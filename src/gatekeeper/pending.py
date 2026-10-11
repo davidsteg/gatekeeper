@@ -49,7 +49,8 @@ STALE_CHANGED_REASON = (
     "Configuration changed since this was proposed. "
     "Re-propose from the current state."
 )
-#: A `cred_propose` whose name was taken after it was proposed. Its
+#: A `cred_propose` (or a renaming `cred_update`) whose name was taken
+#: after it was proposed. Its
 #: `base_rev` is a whole-file revision, which is "" while the credential
 #: store does not exist yet, so the staleness gate in `approve` cannot
 #: catch this case; the create would refuse on every approval and the item
@@ -281,7 +282,8 @@ class PendingStore:
         self, taken: set[str], *, decided_by: str = "system"
     ) -> list[PendingAction]:
         """Marks `stale` every still-`pending` `cred_propose` whose name is
-        in `taken`, and returns the ones it closed. Same shape and audit
+        in `taken` -- and every renaming `cred_update` whose new name is --
+        and returns the ones it closed. Same shape and audit
         record as `close_vanished_targets`; idempotent the same way."""
         if not taken or not _writable(self.path):
             return []
@@ -289,10 +291,21 @@ class PendingStore:
             entries = self._load()
             closed: list[PendingAction] = []
             for entry in entries:
-                if entry.get("status") != "pending" or entry.get("action") != "cred_propose":
+                if entry.get("status") != "pending":
                     continue
                 payload = entry.get("payload")
-                if not isinstance(payload, dict) or payload.get("name") not in taken:
+                if not isinstance(payload, dict):
+                    continue
+                # The name the write would create: a new slot's, or a
+                # rename's target. A `cred_update` that keeps its name
+                # targets a slot that exists on purpose.
+                if entry.get("action") == "cred_propose":
+                    wanted = payload.get("name")
+                elif entry.get("action") == "cred_update":
+                    wanted = payload.get("new_name")
+                else:
+                    continue
+                if not wanted or wanted not in taken:
                     continue
                 entry["status"] = "stale"
                 entry["decided_by"] = decided_by

@@ -287,6 +287,8 @@ _TOOLS: list[types.Tool] = [
             "as 'bearer' for a service that wants 'api_key_header' is "
             "deleted here and proposed again with the right kind via "
             "admin.cred_propose -- where a human still types the value. "
+            "To fix a wrong kind or header while keeping the value, use "
+            "admin.cred_update instead. "
             "Audited by name; no value is accepted or returned."
         ),
         inputSchema={
@@ -328,6 +330,57 @@ _TOOLS: list[types.Tool] = [
                 "probe_url": {"type": "string"},
             },
             "required": ["name", "kind"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name="admin.cred_update",
+        title="Propose changing a credential slot, keeping its value",
+        description=(
+            "Proposes changing an existing credential slot's kind, "
+            "header/param name, probe URL and/or name, while the stored "
+            "secret stays exactly as it is -- the in-place repair for a "
+            "slot whose header or kind is wrong (a token sent as "
+            "X-Emby-Token to a server that wants Authorization), without "
+            "deleting it or having a human paste the value again. Fields "
+            "left out keep their current value. There is no 'value' "
+            "property and anything value-shaped is explicitly refused "
+            "(FR-10.2/10.8); a new value is a rotation in /app/credentials. "
+            "Always written to the pending queue and never auto-applies: a "
+            "human approves it at /app/requests (Change tab), where the "
+            "before/after is shown. A kind can only change within the same "
+            "value shape (the token kinds api_key_header, bearer, url_path, "
+            "url_query and ws_api_key are interchangeable; a token never "
+            "becomes a docker_tls or oauth2 bundle). 'new_name' is refused "
+            "while any toolkit or destination still references the slot "
+            "(admin.cred_list's 'used_by'), since the binding is Tier 1; "
+            "kind and header changes are not, because the binding is by name."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Existing credential slot (admin.cred_list)",
+                },
+                "new_name": {
+                    "type": "string",
+                    "description": "Rename the slot; only while nothing references it",
+                },
+                "kind": {"type": "string", "enum": sorted(CREDENTIAL_KINDS)},
+                "header": {
+                    "type": "string",
+                    "description": (
+                        "Header name (api_key_header) or query parameter name "
+                        "(url_query)"
+                    ),
+                },
+                "probe_url": {
+                    "type": "string",
+                    "description": "http(s) URL, or an empty string to clear it",
+                },
+            },
+            "required": ["name"],
             "additionalProperties": False,
         },
     ),
@@ -536,7 +589,7 @@ def build_admin_mcp_server(admin_service: AdminService) -> Server[None]:
             "tool, disabling a tool, enabling/updating a read-category "
             "tool) apply immediately. Anything that expands what an agent "
             "can do -- enabling/updating a write tool, deleting a tool, "
-            "granting access -- is written to a pending queue and takes "
+            "granting access, changing a credential -- is written to a pending queue and takes "
             "effect only once a human approves it at /app/requests (Change tab). There is "
             "no way to approve your own proposal from this endpoint."
         ),
