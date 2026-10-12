@@ -350,6 +350,11 @@ every routine change.
   config with the same loader startup uses, writes it atomically, and
   reloads it into the running process immediately — no redeploy, no
   restart, and still no path from `/admin/mcp` to make it happen on its own.
+  A `toolkit_propose` for a name that already exists is refused on the
+  call, with the way to change that toolkit instead. `admin.proposal_list`
+  shows the toolkit-proposal queue (which `admin.pending_list` does not),
+  and `admin.proposal_withdraw` lets the proposer take its own pending
+  proposal back. A withdrawal decides nothing, so it is no self-approval.
 
 - **The deployment's own release notes are readable from here.**
   `admin.release_notes` returns RELEASE.md — every version's notes, newest

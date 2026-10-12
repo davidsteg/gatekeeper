@@ -11,7 +11,9 @@ One dispatch table (`_EXPOSED`, enforced by `call`) decides, per action,
 whether a change applies immediately or is written to the pending queue:
 
 * read-only queries (`tool_list`, `tool_get`, `tool_validate`, `grant_list`,
-  `audit_query`, `pending_list`) always execute directly.
+  `audit_query`, `pending_list`, `proposal_list`) always execute directly.
+* `proposal_withdraw` always auto-applies: it only takes a still-pending
+  toolkit proposal off the queue, and only one the caller filed itself.
 * `tool_create` always auto-applies, but forces the new definition
   `enabled: false` -- creation is always inert (FR-3.x): an admin or a
   later `tool_enable` call is a separate, auditable decision.
@@ -73,7 +75,7 @@ from .pending import PendingAction, PendingStore
 from .release_notes import query as _release_query
 from .release_notes import read_full as _release_full
 from .store import ConfigStore, WriteRefused
-from .toolkit_proposals import BIND_FIELD, ToolkitProposalStore
+from .toolkit_proposals import BIND_FIELD, KINDS, STATUSES, ToolkitProposalStore
 
 #: Same cause as the console popup's fallback, phrased for a caller with no
 #: browser: a build that shipped without RELEASE.md (a bare `pip install`
@@ -309,6 +311,26 @@ class AdminService:
         status = args.get("status") or None
         items = self.pending.list(status=status)
         return {"pending": [i.to_spec() for i in items]}
+
+    def proposal_list(self, _actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Lists the toolkit-proposal queue -- the Tier 1 counterpart of
+        `pending_list`, which never shows these (they live in their own
+        store, see `toolkit_proposals.py`). Without it an agent could file
+        a proposal and then never see what became of it. Optionally
+        filtered by `kind` and `status`. Read-only.
+        """
+        kind = args.get("kind") or None
+        status = args.get("status") or None
+        if kind is not None and kind not in KINDS:
+            raise AdminActionError(f"Unknown proposal kind {kind!r} (one of {sorted(KINDS)}).")
+        if status is not None and status not in STATUSES:
+            raise AdminActionError(
+                f"Unknown proposal status {status!r} (one of {sorted(STATUSES)})."
+            )
+        items = self.toolkit_proposals.list(status=status)
+        if kind is not None:
+            items = [i for i in items if i.kind == kind]
+        return {"proposals": [i.to_spec() for i in items]}
 
     def toolkit_list(self, _actor: str, _args: dict[str, Any]) -> dict[str, Any]:
         """Lists live Tier 1 toolkits + destinations, so Hermes can check
@@ -583,6 +605,17 @@ class AdminService:
         name = _require_str(args, "name")
         item = self.toolkit_proposals.propose(name=name, spec={}, actor=actor, kind="delete")
         return {"applied": False, "pending": True, "proposal_id": item.id}
+
+    def proposal_withdraw(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Takes back a still-pending toolkit proposal the caller filed
+        itself. A withdrawal approves nothing and writes nothing to
+        toolkits.yaml, and the store refuses anyone's proposal but the
+        caller's own, so FR-2.8's separation holds: deploying and
+        rejecting stay with a human at /app/requests.
+        """
+        proposal_id = _require_str(args, "proposal_id")
+        item = self.toolkit_proposals.withdraw(proposal_id, actor=actor)
+        return {"withdrawn": True, "proposal_id": item.id, "name": item.name}
 
     def credential_bind(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
         """Proposes pointing an existing toolkit at an existing credential
@@ -921,6 +954,7 @@ _EXPOSED: tuple[str, ...] = (
     "role_set",
     "audit_query",
     "pending_list",
+    "proposal_list",
     "release_notes",
     "toolkit_list",
     "cred_list",
@@ -928,6 +962,7 @@ _EXPOSED: tuple[str, ...] = (
     "toolkit_propose",
     "toolkit_update",
     "toolkit_delete",
+    "proposal_withdraw",
     "cred_propose",
     "cred_update",
     "credential_bind",

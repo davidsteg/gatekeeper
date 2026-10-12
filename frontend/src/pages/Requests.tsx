@@ -25,11 +25,11 @@ type Proposal = Schemas["ToolkitProposalOut"];
 
 const ARCHIVE_PAGE = 25;
 const DONE_CHANGE = new Set(["approved", "rejected", "stale"]);
-const DONE_TOOLKIT = new Set(["deployed", "rejected"]);
+const DONE_TOOLKIT = new Set(["deployed", "rejected", "withdrawn"]);
 const INVALIDATES = [["requests"], ["overview"], ["tools"], ["identities"], ["credentials"], ["toolkits"]];
 
 const STATUS_TONE: Record<string, Tone> = {
-  pending: "warn", approved: "ok", deployed: "ok", rejected: "neutral", stale: "deny",
+  pending: "warn", approved: "ok", deployed: "ok", rejected: "neutral", withdrawn: "neutral", stale: "deny",
 };
 
 function usePending() {

@@ -16,7 +16,8 @@ Four proposal ``kind``s share this one queue and one review surface
 ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
 
 - ``"create"`` (`admin.toolkit_propose`) -- drafts a brand-new toolkit.
-  ``spec`` is the toolkit's full body; the name must not already exist.
+  ``spec`` is the toolkit's full body; the name must not already exist,
+  checked when it is proposed and again at deploy.
 - ``"update"`` (`admin.toolkit_update`) -- narrowly-scoped edits to an
   *existing* toolkit's ``executor``/``binaries``/``denied_args``/``run_as``
   only (``UPDATE_WRITABLE_FIELDS``); ``spec`` holds just the changed fields,
@@ -96,7 +97,9 @@ from .tier1 import load_tier1
 #: `deploy` re-validates the *entire* merged configuration fresh at deploy
 #: time (not just a revision fingerprint) -- a moved toolkits.yaml simply
 #: surfaces as a collision or a Tier-1 validation error instead.
-STATUSES = frozenset({"pending", "deployed", "rejected"})
+#: ``"withdrawn"`` is the proposer taking its own proposal back
+#: (`withdraw`) -- not a decision, so it is kept apart from ``"rejected"``.
+STATUSES = frozenset({"pending", "deployed", "rejected", "withdrawn"})
 
 #: The four shapes a proposal can take -- see the module docstring.
 KINDS = frozenset({"create", "update", "delete", "bind"})
@@ -154,6 +157,28 @@ _DEPLOY_ACTION_NAMES = {
 
 class ToolkitProposalWriteRefused(ConfigError):
     """A toolkit-proposal write was refused -- with a human-readable reason."""
+
+
+def name_collision_message(name: str) -> str:
+    """Why a ``"create"`` proposal for an existing toolkit name is refused.
+
+    One text for both places that refuse it: `propose()`, so the agent
+    learns now and nothing reaches the review queue, and `deploy()`, for a
+    name that a redeploy added while the proposal was waiting. It names
+    both ways forward, because "pick another name" is only right when a
+    second toolkit was the goal -- a fix to the existing one goes through
+    an update proposal or, for the fields that have none, the file itself.
+    """
+    return (
+        f"A toolkit named {name!r} already exists in toolkits.yaml -- a "
+        "'create' proposal only adds a new toolkit, and deploying this one "
+        "would silently overwrite it. If a second, separate toolkit is "
+        "what you want, propose it under a different name. If you meant to "
+        "change the existing one: executor, binaries, denied_args and "
+        "run_as go through admin.toolkit_update; path_roots, "
+        "protected_resources and limits have no proposal path -- edit "
+        "toolkits.yaml and reload (SIGHUP or restart)."
+    )
 
 
 def _tools_referencing_toolkit(tools_path: str, toolkit_name: str) -> set[str]:
@@ -299,7 +324,8 @@ class ToolkitProposalStore:
                     f"Cannot propose changing {sorted(illegal)} -- only "
                     f"{sorted(UPDATE_WRITABLE_FIELDS)} are writable via an "
                     "update proposal. path_roots, protected_resources, and "
-                    "limits require a redeploy."
+                    "limits have no proposal path -- edit toolkits.yaml and "
+                    "reload (SIGHUP or restart)."
                 )
         if "run_as" in spec and spec["run_as"] is not None:
             # Shape only, and only for immediate feedback -- `deploy()` is
@@ -342,6 +368,25 @@ class ToolkitProposalStore:
                 )
         with self._lock:
             entries = self._load()
+            if kind == "create":
+                if name in self._live_toolkit_names():
+                    raise ToolkitProposalWriteRefused(name_collision_message(name))
+                queued = next(
+                    (
+                        e for e in entries
+                        if e.get("name") == name
+                        and (e.get("kind") or "create") == "create"
+                        and e.get("status") == "pending"
+                    ),
+                    None,
+                )
+                if queued is not None:
+                    raise ToolkitProposalWriteRefused(
+                        f"A 'create' proposal for toolkit {name!r} is already "
+                        f"pending ({queued.get('id')}). Only one of the two "
+                        "could ever deploy. Withdraw it first with "
+                        "admin.proposal_withdraw if this one replaces it."
+                    )
             item = ToolkitProposal(
                 id=secrets.token_urlsafe(12),
                 name=name,
@@ -363,6 +408,59 @@ class ToolkitProposalStore:
                 }
             )
             return item
+
+    def _live_toolkit_names(self) -> set[str]:
+        """Toolkit names in toolkits.yaml as `deploy()` will see them -- the
+        file, not the running Tier 1, so the submit-time collision check
+        and the deploy-time guard read the same source. A missing or
+        malformed file is `deploy()`'s to report; here it just means
+        nothing to collide with.
+        """
+        if not os.path.exists(self.toolkits_path):
+            return set()
+        with open(self.toolkits_path, encoding="utf-8") as handle:
+            raw = _yaml_load(handle.read()) or {}
+        section = raw.get("toolkits") if isinstance(raw, dict) else None
+        return set(section) if isinstance(section, dict) else set()
+
+    def withdraw(self, proposal_id: str, *, actor: str) -> ToolkitProposal:
+        """The proposer takes its own still-pending proposal back.
+
+        Not a decision: nothing in toolkits.yaml is read or written, and
+        only the identity that filed the proposal may withdraw it -- so this
+        can only ever shrink the queue that identity itself added to, never
+        approve, and never touch anyone else's proposal. That is why it may
+        be reachable from `/admin/mcp` while `reject`/`deploy` are not.
+        """
+        with self._lock:
+            entries = self._load()
+            match = next((e for e in entries if e.get("id") == proposal_id), None)
+            if match is None:
+                raise ToolkitProposalWriteRefused(f"No toolkit proposal {proposal_id!r}.")
+            if match.get("actor") != actor:
+                raise ToolkitProposalWriteRefused(
+                    f"Toolkit proposal {proposal_id!r} was filed by "
+                    f"{match.get('actor')!r}; only the proposer can withdraw "
+                    "it. A human can reject it at /app/requests (Toolkit tab)."
+                )
+            if match.get("status") != "pending":
+                raise ToolkitProposalWriteRefused(
+                    f"Toolkit proposal {proposal_id!r} is already {match.get('status')!r}."
+                )
+            match["status"] = "withdrawn"
+            match["decided_by"] = actor
+            match["decided_at"] = now_iso()
+            self._write(entries)
+            self.audit.write(
+                {
+                    "kind": "admin_change",
+                    "actor": actor,
+                    "action": "toolkit_withdraw",
+                    "target": match.get("name"),
+                    "proposal_id": proposal_id,
+                }
+            )
+            return _from_spec(match)
 
     def reject(
         self, proposal_id: str, *, decided_by: str, reason: str = ""
@@ -490,13 +588,10 @@ class ToolkitProposalStore:
                 del merged_toolkits[item.name]
             else:
                 if item.name in toolkit_section:
+                    # `propose()` refuses this already; getting here means a
+                    # redeploy added the name while the proposal waited.
                     raise ToolkitProposalWriteRefused(
-                        f"A toolkit named {item.name!r} already exists in "
-                        "toolkits.yaml -- deploying this proposal would silently "
-                        "overwrite it. Reject this proposal and have it "
-                        "re-proposed under a different name (adding a new "
-                        "toolkit is all a 'create' proposal supports; use an "
-                        "update proposal to edit an existing one)."
+                        f"{name_collision_message(item.name)} Reject this proposal."
                     )
                 merged_toolkits[item.name] = item.spec
 
@@ -600,4 +695,5 @@ __all__ = [
     "ToolkitProposal",
     "ToolkitProposalStore",
     "ToolkitProposalWriteRefused",
+    "name_collision_message",
 ]

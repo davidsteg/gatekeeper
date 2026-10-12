@@ -1,3 +1,15 @@
+## 1.9.0
+
+### Added
+
+- **`admin.proposal_list`** shows the toolkit-proposal queue on `/admin/mcp`, filtered by `kind` (`create`/`update`/`delete`/`bind`) and `status`. `admin.pending_list` never showed these, so an agent could not see what became of its own toolkit proposals.
+- **`admin.proposal_withdraw`** lets the identity that filed a toolkit proposal take it back while it is still pending. Anyone else's proposal is refused. A withdrawal approves nothing and never touches `toolkits.yaml`, so deploying and rejecting stay with a human at `/app/requests`. The proposal shows as `withdrawn` on the Toolkit tab and in the audit log (`toolkit_withdraw`).
+
+### Fixed
+
+- **`admin.toolkit_propose` refuses an existing toolkit name on the call** instead of queueing a proposal that could only fail at deploy, and that the agent had no way to take back (#28). A second pending create for the same name is refused too. The deploy-time guard stays for a name a redeploy adds while a proposal waits.
+- **The collision message says how to change the existing toolkit**, not only "re-propose under a different name": `executor`, `binaries`, `denied_args` and `run_as` go through `admin.toolkit_update`, and `path_roots`, `protected_resources` and limits through `toolkits.yaml` and a reload. `admin.toolkit_update`'s refusal of those fields now names the same path.
+
 ## 1.8.0
 
 An API-key credential can wrap its secret in a fixed header value, so Jellyfin's `Authorization: MediaBrowser Token="<token>"` works.
