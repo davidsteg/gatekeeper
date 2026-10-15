@@ -118,8 +118,26 @@ def test_service_keeps_other_exit1_failed(service, identities, monkeypatch):
     assert result.exit_code == 1
 
 
-def test_exec_without_docker_prefix():
-    assert benign_exit1(["exec", "c", "sh", "-c", "grep foo /x"], "", "", 1, OUTCOME_FAILED)
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["exec", "c", "sh", "-c", "grep foo /x"],
+        ["/usr/bin/exec", "c", "sh", "-c", "grep foo /x"],
+        ["exec", "c", "bash", "-c", "test -f /x"],
+    ],
+)
+def test_bare_exec_is_not_the_docker_form(argv):
+    # argv[0] `exec` is just a binary of that name, not `docker exec`.
+    assert not benign_exit1(argv, "", "", 1, OUTCOME_FAILED)
+
+
+def test_docker_exec_still_accepted_and_needs_exec():
+    assert benign_exit1(docker("grep foo /x"), "", "", 1, OUTCOME_FAILED)
+    assert benign_exit1(["/usr/bin/docker", "exec", "c", "sh", "-c", "test -f /x"],
+                        "", "", 1, OUTCOME_FAILED)
+    assert not benign_exit1(["docker"], "", "", 1, OUTCOME_FAILED)
+    assert not benign_exit1(["docker", "c", "sh", "-c", "grep foo /x"], "", "", 1,
+                            OUTCOME_FAILED)
 
 
 def test_bare_sh_c_for_local_and_ssh():

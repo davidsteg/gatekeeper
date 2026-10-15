@@ -16,8 +16,10 @@ The inner command is found like this:
 
 - A `sh -c` / `bash -c` pair counts ONLY in two positions: as argv[0]
   itself (local/ssh executors), or as the first word after
-  `[docker] exec <container>` (docker executor template
-  `exec {container} sh -c {command}`). A `sh -c` pair anywhere else in
+  `docker exec <container>` (docker executor: binary `docker`, template
+  `exec {container} sh -c {command}`). A bare `exec` as argv[0] is not
+  the docker form -- it is whatever binary is called `exec` -- so it does
+  not open a shell position. A `sh -c` pair anywhere else in
   argv is a parameter value and is ignored, so a tool with two adjacent
   free-text parameters cannot fake the shape.
 - The string following `-c` is the command. If it contains any of
@@ -62,16 +64,15 @@ def _basename(token: str) -> str:
 def _shell_position(argv: list[str]) -> int | None:
     """Index of `sh`/`bash` when the shell IS the command, else None.
 
-    Accepted shapes: `sh -c ...` (index 0), `exec <ctr> sh -c ...`
-    (index 2) and `docker exec <ctr> sh -c ...` (index 3).
+    Accepted shapes: `sh -c ...` (index 0) and
+    `docker exec <ctr> sh -c ...` (index 3). A bare `exec <ctr> sh -c`
+    (argv[0] == "exec") is NOT accepted.
     """
     i = 0
     if argv and _basename(argv[0]) == "docker":
-        i = 1
-    if i < len(argv) and argv[i] == "exec":
-        i += 2  # skip `exec <container>`
-    elif i == 1:
-        return None  # `docker <something other than exec>`
+        if len(argv) < 2 or argv[1] != "exec":
+            return None  # `docker <something other than exec>`
+        i = 3  # skip `docker exec <container>`
     if i + 1 < len(argv) and _basename(argv[i]) in _SHELLS and argv[i + 1] == "-c":
         return i
     return None

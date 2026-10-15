@@ -12,6 +12,7 @@ RELEASE.md section follow in the release commit.
   findable as `outcome == "ok" and exit_code == 1`. The agent still sees
   `exit=1`.
 - The `sh -c` command is only recognised at the command position (argv[0],
-  or right after `[docker] exec <container>`); a `sh -c` pair inside
+  or right after `docker exec <container>`; a bare `exec` as argv[0] does
+  not count); a `sh -c` pair inside
   parameter values is ignored. Pipelines/compound commands are never benign.
 - Denials, rate limits, timeouts, exit >= 2 and exit 1 with stderr are unchanged.
