@@ -125,10 +125,9 @@ tools:
   spec:
     toolkit: gkrepo
     category: write
-    binary: /bin/bash
-    argv:
-    - /mnt/raid/agent/gkrepo/gkrepo-push.sh   # fest, root:root 0755
-    - '{branch}'
+    executor: git_push              # VORSCHLAG: in-process src/gatekeeper/git_push.py push_feat();
+                                    # kein Wrapper-Skript, kein ssh, keine Token-Datei auf dem Host
+    credential_slot: github         # einzige Token-Quelle: Gatekeeper-Credential-Slot github (Tier 2)
     parameters:
       branch:
         type: string
@@ -141,8 +140,10 @@ tools:
     timeout_seconds: 60
     max_output_bytes: 8192
     title: git push origin feat/* (kein Force, nie main)
-    description: Pusht genau einen feat/*-Branch nach github.com/davidsteg/gatekeeper (URL fest im Wrapper).
-      Refspec ohne '+', Token nur ueber Credential-Helper aus Datei (nie argv/Output). main nur per PR.
+    description: Pusht genau einen feat/*-Branch nach github.com/davidsteg/gatekeeper (URL fest in
+      git_push.REMOTE_URL). Refspec ohne '+'. Token nur aus dem Gatekeeper-Slot github (Scope
+      http:github), nur in der Env des Push-Kindes (nie argv/Datei/Output); Timeout killt die ganze
+      Prozessgruppe (git + git-remote-https). main nur per PR.
 
 # Repo-Datei-Tools: Muster file.*_opencode_workspace_root, aber Wurzel = Repo, .git/.venv gesperrt,
 # .github/ nur lesbar (Workflow-Edit auf feat/* + PR koennte CI-Secrets ziehen).

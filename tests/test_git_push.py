@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import base64
 import http.server
+import inspect
 import os
 import shutil
+import socket
 import subprocess
 import threading
+import time
 import types
 
 import pytest
@@ -477,3 +480,124 @@ def test_real_git_prepares_branch_and_only_push_sees_token(world):
     assert all(git_push.TOKEN_ENV not in e for e in got["pre_envs"])
     assert world.evil_refs() == ""
     assert res.outcome in ("failed", "ok") and TOKEN not in res.output
+
+
+# ---------------------------------------------------------------- timeout: whole process group
+# t_a88b979f: on a timeout subprocess.run killed only the direct git child;
+# git / git-remote-https lived on for ~30 s with the token in their environ.
+
+def _alive(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            state = fh.read().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state not in ("Z", "X")
+
+
+def _leftovers(needle=None):
+    """Live processes that hold TOKEN in their environ (or `needle` in argv)."""
+    hits = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        for name, pat in (("environ", TOKEN.encode()), ("cmdline", needle)):
+            if pat is None:
+                continue
+            try:
+                with open(f"/proc/{pid}/{name}", "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                continue
+            if pat in data and _alive(pid):
+                hits.append((int(pid), name))
+                break
+    return hits
+
+
+def _settled_leftovers(needle=None, grace=1.0):
+    # SIGKILL is asynchronous; allow a moment, far below the ~30 s of the bug.
+    end = time.monotonic() + grace
+    while True:
+        hits = _leftovers(needle)
+        if not hits or time.monotonic() >= end:
+            return hits
+        time.sleep(0.05)
+
+
+_FAKE_GIT = """#!/bin/sh
+case " $* " in
+  *" config "*) printf 'file:%s/config\\tcore.bare\\n' "$2" ;;
+  *" push "*) sleep 30 & echo $! >> @PIDS@; echo $$ >> @PIDS@; exec sleep 30 ;;
+esac
+"""
+
+
+def test_default_runner_is_group_killing():
+    default = inspect.signature(push_feat).parameters["runner"].default
+    assert default is git_push.run_isolated
+
+
+def test_timeout_kills_the_whole_process_group(tmp_path):
+    pids = tmp_path / "pids"
+    fake = tmp_path / "git"
+    fake.write_text(_FAKE_GIT.replace("@PIDS@", str(pids)))
+    fake.chmod(0o755)
+    t0 = time.monotonic()
+    res = push_feat("feat/x", resolve_credential=slot(), repo=REPO, git=str(fake),
+                    timeout_seconds=1)
+    assert time.monotonic() - t0 < 10
+    assert res.outcome == "unknown" and res.exit_code is None
+    assert TOKEN not in res.output
+    started = [int(p) for p in pids.read_text().split()]
+    assert len(started) == 2, "fake git push did not start its children"
+    assert _settled_leftovers() == [], "a process with the token outlived the timeout"
+    assert [p for p in started if _alive(p)] == []
+
+
+def test_run_isolated_returns_output_and_rc():
+    proc = git_push.run_isolated(["/bin/sh", "-c", "echo out; echo err >&2; exit 3"],
+                                 env={"PATH": "/usr/bin:/bin"}, cwd="/", timeout=10)
+    assert (proc.returncode, proc.stdout, proc.stderr) == (3, "out\n", "err\n")
+
+
+def test_run_isolated_timeout_keeps_partial_output():
+    with pytest.raises(subprocess.TimeoutExpired) as ei:
+        git_push.run_isolated(["/bin/sh", "-c", "echo early; sleep 30 & exec sleep 30"],
+                              env={"PATH": "/usr/bin:/bin"}, cwd="/", timeout=1)
+    assert "early" in (ei.value.stdout or "")
+
+
+@pytest.fixture
+def silent_tls():
+    """Accepts TCP and never answers: git-remote-https hangs in the TLS handshake."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    conns = []
+
+    def accept():
+        while True:
+            try:
+                conns.append(srv.accept()[0])
+            except OSError:
+                return
+
+    threading.Thread(target=accept, daemon=True).start()
+    yield types.SimpleNamespace(port=srv.getsockname()[1], conns=conns)
+    for s in (*conns, srv):
+        try:
+            s.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        s.close()
+
+
+@needs_git
+def test_real_git_timeout_leaves_no_remote_helper(world, silent_tls, monkeypatch):
+    monkeypatch.setattr(git_push, "REMOTE_URL", f"https://127.0.0.1:{silent_tls.port}/x.git")
+    res = push_feat("feat/x", resolve_credential=slot(), repo=world.repo, git=GIT,
+                    timeout_seconds=3)
+    assert res.outcome == "unknown" and TOKEN not in res.output
+    assert silent_tls.conns, "git-remote-https never connected"
+    assert _settled_leftovers(needle=f"127.0.0.1:{silent_tls.port}".encode()) == []

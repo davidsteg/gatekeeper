@@ -47,6 +47,11 @@ global config off (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_SYSTEM`/
 no parent `GIT_CONFIG_COUNT`/`GIT_CONFIG_*`/`GIT_CONFIG_PARAMETERS`/
 `GIT_DIR` reaches git.
 
+Timeouts: every git call runs as leader of its own process group
+(`run_isolated`, `start_new_session`). On a timeout the whole group gets
+SIGKILL before the leader is reaped, so no `git` / `git remote-https`
+child with the token in its environment outlives the call.
+
 Not wired into Tier 1/the service yet: the tool definition proposal and
 the wiring notes (git binary, noexec /tmp) live in
 docs/proposals/gkrepo-option-a.yaml.
@@ -57,6 +62,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import time
@@ -213,6 +219,56 @@ def _base_env(tmp: str) -> dict[str, str]:
     }
 
 
+def _kill_group(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _drain(proc: subprocess.Popen[Any]) -> tuple[Any, Any]:
+    try:
+        return proc.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        # Something left the group (setsid) and still holds a pipe: stop reading.
+        proc.kill()
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                pipe.close()
+        proc.wait()
+        return "", ""
+
+
+def run_isolated(
+    argv: list[str], *, env: dict[str, str], cwd: str, timeout: float,
+    capture_output: bool = True, text: bool = True, check: bool = False,
+) -> subprocess.CompletedProcess[Any]:
+    """`subprocess.run` for one git call, as leader of its own process group.
+
+    `git push` forks `git remote-https` with the token in its environment;
+    `subprocess.run` would SIGKILL only the leader on a timeout and leave
+    the helper running. Here the whole group is SIGKILLed on a timeout (or
+    any interruption while waiting) and the leader is reaped afterwards.
+    """
+    if not capture_output or check:
+        raise ValueError("run_isolated always captures output and never checks")
+    proc = subprocess.Popen(
+        argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=text, start_new_session=True,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc.pid)
+        out, err = _drain(proc)
+        raise subprocess.TimeoutExpired(argv, timeout, output=out, stderr=err) from None
+    except BaseException:
+        _kill_group(proc.pid)
+        _drain(proc)
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
 def _text(proc: Any) -> str:
     return (proc.stdout or "") + (proc.stderr or "")
 
@@ -224,7 +280,7 @@ def push_feat(
     repo: str,
     git: str = "/usr/bin/git",
     timeout_seconds: float = 60,
-    runner: Callable[..., Any] = subprocess.run,
+    runner: Callable[..., Any] = run_isolated,
 ) -> PushResult:
     validate_branch(branch)
     if not isinstance(repo, str) or not os.path.isabs(repo):
