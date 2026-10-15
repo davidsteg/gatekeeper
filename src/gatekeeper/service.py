@@ -32,6 +32,7 @@ from .audit import AuditLog
 from .catalog import Catalog, ToolDef, load_catalog
 from .credentials import CredentialStore
 from .errors import ConfigError, DenialReason, Denied
+from .exitcodes import benign_exit1
 from .identity import Identity, IdentityStore, load_identities
 from .messages import MessageStore
 from .notifications import CatalogNotifier
@@ -731,6 +732,14 @@ class Service:
                     timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes,
                     idempotent=tool.idempotent, redact=self.audit.redact,
                 )
+
+        # grep/diff/test exit 1 is an answer ("no match"), not an error --
+        # reported as ok so MCP clients do not count it as a failure. The
+        # exit code stays 1 in the result and the audit (exitcodes.py).
+        if toolkit.executor in ("docker", "local", "ssh") and benign_exit1(
+            argv, result.stdout, result.stderr, result.exit_code, result.outcome
+        ):
+            result = dataclasses.replace(result, outcome=execute.OUTCOME_OK)
 
         self.metrics[(tool_id, identity.id, result.outcome)] += 1
         self.audit.call(
