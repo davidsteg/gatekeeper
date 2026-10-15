@@ -214,3 +214,34 @@ grants_draft:
   - file.patch_gkrepo
   add_scopes: []
   unchanged_existing: [git.git, git.gitcommit, git.git_project, script.exec_script]
+
+# ---------------------------------------------------------------- Verdrahtung (Hinweise, NICHT gebaut)
+# Stand t_e35d645e. src/gatekeeper/git_push.py ist nur der Executor-Kern; fuer den Live-Einsatz
+# fehlen zwei Dinge im Gatekeeper-Container.
+wiring_notes: |
+  1. git fehlt im Image (davidsteg/gatekeeper:latest: kein /usr/bin/git, live no-git).
+     a) Empfehlung: im Runtime-Stage des Dockerfile `apt-get install -y --no-install-recommends
+        git ca-certificates` (git-remote-https braucht libcurl; ~+35 MB). Aufwand: S (1 Zeile
+        Dockerfile + Release); git_push.py nimmt `git=/usr/bin/git` fest.
+     b) Alternative ohne Image-Aenderung: Push per ssh-Executor auf dem Host (git 2.47.2 vorhanden).
+        Dann laeuft der Token ueber SSH-Env/stdin auf den Host -- groessere Angriffsflaeche,
+        Aufwand M. Nicht empfohlen.
+  2. /tmp ist live noexec: das GIT_ASKPASS-Skript im Temp-Dir kann dort nicht ausgefuehrt werden.
+     GIT_ASKPASS="/bin/sh -c ..." geht NICHT: git ruft GIT_ASKPASS ohne Shell als Programmpfad
+     auf (argv[0]=Wert, argv[1]=Prompt), ein Kommando-String wird nicht zerlegt.
+     a) Empfehlung: kein ausfuehrbares File. Statt askpass einen Inline-Credential-Helper per
+        Kommandozeile, gelesen aus der Env des Push-Kindes:
+          -c credential.helper= -c 'credential.helper=!f() { echo username=x-access-token;
+             printf "password=%s\n" "$GK_PUSH_TOKEN"; }; f'
+        Laeuft ueber /bin/sh -c (Exec von /bin/sh, nicht aus /tmp), Token nur in der Env, nicht
+        in argv. Die Config-Isolation bleibt: der Helper kommt von der Kommandozeile, alle
+        Datei-Configs sind aus. Aufwand: S (git_push.py: askpass-Block ersetzen, Tests anpassen).
+        Vor Einbau real gegen einen Loopback-Server mit noexec-/tmp belegen.
+     b) Alternative: Temp-Dir auf einem exec-faehigen Pfad (eigener tmpfs-Mount mit exec, z.B.
+        /run/gk-push, mode 0700, in compose.yaml) und tempfile.TemporaryDirectory(dir=...).
+        Aufwand: S, aber Compose-/Deploy-Aenderung und ein exec-Mount mehr im Container.
+     c) http.extraHeader via GIT_CONFIG_COUNT in der Env des Push-Kindes (Authorization: Basic
+        ...): ganz ohne Exec, aber der Header geht an jede URL, die die Push-URL matcht --
+        nur zusammen mit http.followRedirects=false; schwerer zu redigieren. Nicht empfohlen.
+  3. Tests mit echtem git (tests/test_git_push.py, test_attack_*) werden im Image ohne git
+     uebersprungen (skipif). CI (build.yml) hat git auf dem Runner -> dort laufen sie.
