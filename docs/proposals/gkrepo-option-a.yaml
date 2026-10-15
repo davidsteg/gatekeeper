@@ -1,0 +1,216 @@
+# PROPOSAL (Option A) -- tool defs for the gkrepo toolkit. NOT loaded by gatekeeper.
+# Live config is changed only via the console (/ui) + approval. git.push_feat is meant to
+# run on the in-process executor src/gatekeeper/git_push.py (credential slot github,
+# GIT_ASKPASS, fixed remote, feat/* only) instead of a token file on the host.
+# ENTWURF Option A Phase 1 (t_31bba29c, 2026-10-15) -- NICHT LIVE, NICHT in config/ kopieren.
+# Einbau in Phase 2 ausschliesslich ueber GK-Console (/ui) bzw. admin-Tools + Approval.
+# tools.yaml/toolkits.yaml/identities.yaml sind "Managed by gatekeeper": Console-Save ueberschreibt
+# Datei-Edits, SIGHUP laedt identities nicht neu.
+#
+# Repo (Host): /mnt/raid/agent/opencode/workspace/gatekeeper  (= /workspace/gatekeeper im opencode-Ctr)
+# Muster: git.git / git.gitcommit_project (toolkit git, ssh root@10.10.200.90),
+#         script.exec_script (bash + feste Skriptdatei), file.*_opencode_workspace_root (executor file).
+
+# ---------------------------------------------------------------- toolkit (neu)
+toolkits:
+  gkrepo:
+    executor: ssh
+    ssh_host: 10.10.200.90
+    ssh_user: root
+    ssh_known_hosts: <aus toolkit git uebernehmen>
+    credential: selfdeploy            # nur SSH-Login zum Host, wie toolkit git
+    binaries:
+    - /bin/bash                       # NUR mit fester Wrapper-Datei als argv[0] (s. unten)
+    - /usr/bin/git
+    - /mnt/raid/agent/opencode/workspace/gatekeeper/.venv/bin/ruff
+    denied_args: [--force, -f, --force-with-lease, --mirror, --all, --tags, --delete, -d, -D, --no-verify, -c]
+    path_roots: []
+    protected_resources: []
+    limits:
+      timeout_seconds: 120
+      max_output_bytes: 65536
+
+# ---------------------------------------------------------------- tools (neu)
+tools:
+- id: gkrepo.test
+  spec:
+    toolkit: gkrepo
+    category: read                    # Repo read-only gemountet; schreibt nichts
+    idempotent: true
+    binary: /bin/bash
+    argv:
+    - /mnt/raid/agent/gkrepo/gkrepo-test.sh   # fest, root:root 0755, NICHT unter hermes-* (nicht agent-beschreibbar)
+    - '{path}'
+    - '{k}'
+    parameters:
+      path:
+        type: string
+        required: true
+        pattern: ^tests/[a-z0-9_]+\.py$
+        description: Testdatei relativ zum Repo (eine Datei pro Call, <110 s).
+      k:
+        type: string
+        required: false
+        pattern: ^[a-z0-9_ ]{0,60}$
+        description: optionaler pytest -k Ausdruck (a-z0-9_ und Leerzeichen, z.B. 'cred or toolkit').
+    required_scopes:
+    - stack:agent
+    timeout_seconds: 110
+    max_output_bytes: 32768
+    title: pytest im Gatekeeper-Repo (eine Datei)
+    description: Fuehrt pytest fuer EINE Testdatei im Gatekeeper-Repo aus (isolierter Container,
+      kein Netz, Repo read-only, cwd fest /w). Exit 0 auch bei Testfehlern; Ergebnis steht in der letzten
+      Zeile 'GKREPO_RESULT=passed|failed|no_tests pytest_exit=N'. Echte Fehler (Collection/Timeout) = Fehler.
+
+- id: gkrepo.lint
+  spec:
+    toolkit: gkrepo
+    category: read
+    idempotent: true
+    binary: /mnt/raid/agent/opencode/workspace/gatekeeper/.venv/bin/ruff   # statisches Binary, laeuft auf Host (0.16.8 belegt)
+    argv:
+    - check
+    - /mnt/raid/agent/opencode/workspace/gatekeeper/src     # absolut = cwd-unabhaengig; pyproject wird per Pfad gefunden
+    - --no-cache
+    - --exit-zero                     # Befunde -> Exit 0 (kein isError/Breaker); Befundzahl steht im Output
+    - --output-format=concise
+    parameters: {}
+    required_scopes:
+    - stack:agent
+    timeout_seconds: 60
+    max_output_bytes: 32768
+    title: ruff check src (Gatekeeper-Repo)
+    description: Lint wie CI (nur src/). Exit immer 0 ausser ruff selbst crasht; 'All checks passed!' bzw. 'Found N errors'.
+
+- id: git.branch_create
+  spec:
+    toolkit: gkrepo
+    category: write
+    binary: /usr/bin/git
+    argv:
+    - -C
+    - /mnt/raid/agent/opencode/workspace/gatekeeper
+    - checkout
+    - -b
+    - '{branch}'
+    parameters:
+      branch:
+        type: string
+        required: true
+        # nur feat/*, kein '..', kein '.lock', kein '.'/'-' am Suffix-Anfang, kein '.'/'/' am Ende; main strukturell unmoeglich
+        pattern: ^feat/(?!.*\.\.)(?!.*\.lock$)(?![.-])[a-z0-9._-]{1,60}(?<![./])$
+        description: Neuer Branchname feat/<name>, wird vom aktuellen HEAD abgezweigt.
+    required_scopes:
+    - stack:agent
+    timeout_seconds: 30
+    max_output_bytes: 8192
+    title: git checkout -b feat/* (Gatekeeper-Repo)
+    description: Legt einen neuen Feature-Branch an und wechselt hinein. Nie main. Kein Reset, kein Force.
+
+# Optional (Empfehlung, sonst kann der Worker nicht zurueck auf bestehende feat/*):
+- id: git.branch_switch
+  spec:
+    toolkit: gkrepo
+    category: write
+    binary: /usr/bin/git
+    argv: [-C, /mnt/raid/agent/opencode/workspace/gatekeeper, switch, '{branch}']
+    parameters:
+      branch: {type: string, required: true, pattern: '^feat/(?!.*\.\.)(?!.*\.lock$)(?![.-])[a-z0-9._-]{1,60}(?<![./])$'}
+    required_scopes: [stack:agent]
+    timeout_seconds: 30
+    max_output_bytes: 8192
+    title: git switch feat/* (ohne -c/--discard-changes; dirty tree -> git bricht selbst ab)
+
+- id: git.push_feat
+  spec:
+    toolkit: gkrepo
+    category: write
+    binary: /bin/bash
+    argv:
+    - /mnt/raid/agent/gkrepo/gkrepo-push.sh   # fest, root:root 0755
+    - '{branch}'
+    parameters:
+      branch:
+        type: string
+        required: true
+        pattern: ^feat/(?!.*\.\.)(?!.*\.lock$)(?![.-])[a-z0-9._-]{1,60}(?<![./])$
+        description: Lokaler Branch feat/<name>; gepusht wird exakt refs/heads/<b>:refs/heads/<b>.
+    required_scopes:
+    - stack:agent
+    - http:github
+    timeout_seconds: 60
+    max_output_bytes: 8192
+    title: git push origin feat/* (kein Force, nie main)
+    description: Pusht genau einen feat/*-Branch nach github.com/davidsteg/gatekeeper (URL fest im Wrapper).
+      Refspec ohne '+', Token nur ueber Credential-Helper aus Datei (nie argv/Output). main nur per PR.
+
+# Repo-Datei-Tools: Muster file.*_opencode_workspace_root, aber Wurzel = Repo, .git/.venv gesperrt,
+# .github/ nur lesbar (Workflow-Edit auf feat/* + PR koennte CI-Secrets ziehen).
+- id: file.read_gkrepo
+  spec: &gkfile
+    toolkit: file
+    executor: file
+    file_operation: read
+    category: read
+    run_as: root
+    parameters:
+      file:
+        type: string
+        required: true
+        pattern: ^(?!\.git(/|$))(?!\.venv(/|$))(?!\.\.)(?:\.?[a-z0-9][a-z0-9_.-]{0,63})(?:/(?!\.\.)(?:\.?[a-z0-9][a-z0-9_.-]{0,63})){0,6}$
+        description: Pfad relativ zum Gatekeeper-Repo (kein .., nicht .git/ oder .venv/, max. 7 Segmente).
+      path:
+        type: path
+        derived: /mnt/raid/agent/opencode/workspace/gatekeeper/{file}
+        must_resolve_under: /mnt/raid/agent/opencode/workspace/gatekeeper   # Symlink-Ausbruch wird abgewiesen
+    required_scopes: [stack:agent]
+    timeout_seconds: 30
+    max_output_bytes: 65536
+    title: Datei lesen im Gatekeeper-Repo
+- id: file.list_gkrepo
+  spec: {<<: *gkfile, file_operation: list, title: Dateiliste im Gatekeeper-Repo}
+- id: file.write_gkrepo
+  spec:
+    <<: *gkfile
+    file_operation: write
+    category: write
+    parameters:
+      file:
+        type: string
+        required: true
+        pattern: ^(?!\.git(/|$))(?!\.venv(/|$))(?!\.github(/|$))(?!\.\.)(?:\.?[a-z0-9][a-z0-9_.-]{0,63})(?:/(?!\.\.)(?:\.?[a-z0-9][a-z0-9_.-]{0,63})){0,6}$
+      path: {type: path, derived: '/mnt/raid/agent/opencode/workspace/gatekeeper/{file}', must_resolve_under: /mnt/raid/agent/opencode/workspace/gatekeeper}
+      content: {type: string, required: true, pattern: '^[\s\S]*$'}
+    max_output_bytes: 8192
+    title: Datei schreiben im Gatekeeper-Repo (nicht .git/.venv/.github)
+- id: file.patch_gkrepo
+  spec:
+    <<: *gkfile
+    file_operation: patch
+    category: write
+    parameters:
+      file: <wie file.write_gkrepo>
+      path: <wie file.write_gkrepo>
+      old_string: {type: string, required: true, pattern: '^[\s\S]+$'}
+      new_string: {type: string, required: true, pattern: '^[\s\S]*$'}
+    max_output_bytes: 8192
+    title: Datei patchen im Gatekeeper-Repo (old_string -> new_string, eindeutig)
+
+# ---------------------------------------------------------------- Grants (Entwurf, NUR homelab)
+# NICHT per Datei-Edit! Weg: GK-Console /ui -> Identities -> homelab -> Tools hinzufuegen
+# bzw. admin.grant_set(identity=homelab, add=[...]) + Approval durch David.
+# Scopes: homelab hat stack:agent und http:github bereits (identities.yaml belegt) -> keine Scope-Aenderung.
+grants_draft:
+  identity: homelab
+  add_tools:
+  - gkrepo.test
+  - gkrepo.lint
+  - git.branch_create
+  - git.branch_switch      # optional
+  - git.push_feat
+  - file.read_gkrepo
+  - file.list_gkrepo
+  - file.write_gkrepo
+  - file.patch_gkrepo
+  add_scopes: []
+  unchanged_existing: [git.git, git.gitcommit, git.git_project, script.exec_script]
