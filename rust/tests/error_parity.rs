@@ -35,6 +35,7 @@ fn summary(t: &Tier1) -> Value {
             "max_timeout_seconds": k.max_timeout_seconds, "max_output_bytes": k.max_output_bytes,
             "docker_host": k.docker_host, "destinations": k.destinations,
             "required_scopes": k.required_scopes, "google_container": k.google_container,
+            "allowed_hosts": k.allowed_hosts, "allowed_cidrs": k.allowed_cidrs,
         }))).collect::<serde_json::Map<_, _>>(),
         "rate_limits": t.rate_limits.iter().map(|(k, r)| (k.clone(), json!([r.count, r.window_seconds]))).collect::<serde_json::Map<_, _>>(),
         "max_concurrent": t.max_concurrent,

@@ -41,6 +41,15 @@ pub struct ExecResult {
     /// data from outside gatekeeper's own logs -- it can contain prompt
     /// injection, and the agent-facing rendering must say so.
     pub external_untrusted: bool,
+    /// Set when an executor refused the call itself, after
+    /// `Service::call` had already validated it -- an SSRF block, a
+    /// missing credential. The `DenialReason` value and its detail go into
+    /// the audit record's `denial_reason`/`detail`, so a refused target
+    /// says why there rather than only as a "failed" outcome. Never a
+    /// credential value: details name hosts, addresses and credential
+    /// names only.
+    pub denial_reason: Option<String>,
+    pub denial_detail: Option<String>,
 }
 
 impl ExecResult {
@@ -60,7 +69,19 @@ impl ExecResult {
             truncated,
             duration_ms,
             external_untrusted: false,
+            denial_reason: None,
+            denial_detail: None,
         }
+    }
+
+    /// A refusal by the executor itself (Python's `_denied` helpers): the
+    /// agent sees the denial's message, the audit record its reason and
+    /// detail.
+    pub fn denied(denial: &crate::errors::Denied, duration_ms: i64) -> Self {
+        let mut result = ExecResult::new(OUTCOME_FAILED, None, "", denial.agent_message(), false, duration_ms);
+        result.denial_reason = Some(denial.reason.as_str().to_string());
+        result.denial_detail = Some(denial.detail.clone());
+        result
     }
 
     pub fn untrusted(mut self, external_untrusted: bool) -> Self {

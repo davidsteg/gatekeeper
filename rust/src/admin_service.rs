@@ -583,8 +583,9 @@ impl AdminService {
         Ok(json!({"applied": false, "pending": true, "proposal_id": item.id}))
     }
 
-    /// Proposes changing a toolkit's executor, binaries, denied_args or
-    /// run_as.
+    /// Proposes changing a toolkit's executor, binaries, denied_args,
+    /// run_as, and an http/opencode toolkit's allowed_hosts/allowed_cidrs
+    /// (`toolkit_proposals::UPDATE_WRITABLE_FIELDS`).
     pub fn toolkit_update(&self, actor: &str, args: &Args) -> ConfigResult<Value> {
         let name = require_str(args, "name")?;
         let updates = require_dict(args, "updates")?.clone();

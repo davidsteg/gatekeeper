@@ -369,7 +369,11 @@ async fn the_schemas_agents_read() {
     let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<BTreeSet<String>>();
 
     let updates = &schema("admin.toolkit_update")["properties"]["updates"];
-    assert_eq!(keys(&updates["properties"]), ["executor", "binaries", "denied_args", "run_as"].map(String::from).into());
+    assert_eq!(keys(&updates["properties"]), [
+        "executor", "binaries", "denied_args", "run_as", "allowed_hosts", "allowed_cidrs",
+    ]
+    .map(String::from)
+    .into());
     assert_eq!(updates["additionalProperties"], false);
     assert!(updates["properties"]["run_as"]["type"].as_array().unwrap().contains(&json!("null")));
 

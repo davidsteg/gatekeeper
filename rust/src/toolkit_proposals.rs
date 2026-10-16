@@ -27,7 +27,7 @@ use crate::errors::{ConfigError, ConfigResult};
 use crate::pyfmt::{repr_list, repr_str, repr_value, str_value};
 use crate::runas::parse_run_as;
 use crate::service::Service;
-use crate::tier1::{load_tier1, py_truthy};
+use crate::tier1::{load_tier1, parse_network_allowlist, py_truthy, NETWORK_EXECUTORS};
 
 /// What a toolkit proposal may be in.
 pub const STATUSES: [&str; 4] = ["pending", "deployed", "rejected", "withdrawn"];
@@ -40,7 +40,23 @@ pub const BIND_FIELD: &str = "credential";
 
 /// Fields `update`-kind proposals may change. `path_roots`,
 /// `protected_resources` and limits stay deploy-time only (FR-4.11).
-pub const UPDATE_WRITABLE_FIELDS: [&str; 4] = ["executor", "binaries", "denied_args", "run_as"];
+///
+/// `allowed_hosts` and `allowed_cidrs` are here as of 1.10.0, the first
+/// fields in this set that change *where* a toolkit may connect -- a
+/// deliberate move of that line: a public API whose addresses drift
+/// (api.github.com) otherwise needs a host-side file edit every time it
+/// moves. Nothing applies without a human approving the card, and no
+/// proposal can lift what `load_tier1` enforces: exact names only in
+/// `allowed_hosts`, and no non-public address for a hostname toolkit.
+/// Only on toolkits whose executor reads them ([`NETWORK_FIELDS`],
+/// checked at deploy).
+pub const UPDATE_WRITABLE_FIELDS: [&str; 6] =
+    ["executor", "binaries", "denied_args", "run_as", "allowed_hosts", "allowed_cidrs"];
+
+/// The update fields that change a toolkit's network reach -- valid only
+/// on an executor that connects to a URL (`tier1::NETWORK_EXECUTORS`).
+/// Sorted, as Python's `sorted(NETWORK_FIELDS & ...)` iterates them.
+pub const NETWORK_FIELDS: [&str; 2] = ["allowed_cidrs", "allowed_hosts"];
 
 fn propose_action_name(kind: &str) -> &'static str {
     match kind {
@@ -83,8 +99,8 @@ pub fn name_collision_message(name: &str) -> String {
          'create' proposal only adds a new toolkit, and deploying this one \
          would silently overwrite it. If a second, separate toolkit is \
          what you want, propose it under a different name. If you meant to \
-         change the existing one: executor, binaries, denied_args and \
-         run_as go through admin.toolkit_update; path_roots, \
+         change the existing one: executor, binaries, denied_args, run_as, \
+         allowed_hosts and allowed_cidrs go through admin.toolkit_update; path_roots, \
          protected_resources and limits have no proposal path -- edit \
          toolkits.yaml and reload (SIGHUP or restart).",
         repr_str(name)
@@ -318,6 +334,28 @@ impl ToolkitProposalStore {
             // Shape only, for immediate feedback; deploy() is the gate.
             if let Err(exc) = parse_run_as(&str_value(run_as)) {
                 return Err(proposal_refused(format!("Cannot propose this 'run_as': {exc}")));
+            }
+        }
+        // PORT NOTE: Python iterated `NETWORK_FIELDS & set(spec)`, a set
+        // whose order depends on the hash seed; the port checks the two
+        // fields in sorted order, which only decides which error is named
+        // when both are malformed.
+        for field in NETWORK_FIELDS {
+            // Shape only, for immediate feedback, exactly like `run_as`
+            // above -- a wildcard or an IP literal in allowed_hosts is
+            // refused now instead of failing at review. `deploy()`'s full
+            // `load_tier1` stays the authoritative gate.
+            let Some(value) = spec.get(field).filter(|v| !v.is_null()) else { continue };
+            let other = if field == "allowed_hosts" { "allowed_cidrs" } else { "allowed_hosts" };
+            let mut probe = Map::new();
+            probe.insert(field.to_string(), value.clone());
+            probe.insert(other.to_string(), Value::Null);
+            if let Err(exc) = parse_network_allowlist(&probe, &format!("toolkit {}", repr_str(name))) {
+                return Err(proposal_refused(format!(
+                    "Cannot propose this {}: {}",
+                    repr_str(field),
+                    exc.message
+                )));
             }
         }
         if kind == "delete" && !spec.is_empty() {
@@ -560,6 +598,28 @@ impl ToolkitProposalStore {
                 let mut body = existing.clone();
                 for (k, v) in &item.spec {
                     body.insert(k.clone(), v.clone());
+                }
+                let network: Vec<&str> =
+                    NETWORK_FIELDS.iter().copied().filter(|f| item.spec.contains_key(*f)).collect();
+                let executor = body.get("executor").cloned().unwrap_or(Value::Null);
+                let is_network = matches!(&executor, Value::String(e) if NETWORK_EXECUTORS.contains(&e.as_str()));
+                if !network.is_empty() && !is_network {
+                    return Err(proposal_refused(format!(
+                        "Cannot change {} on toolkit {}: its executor {} does not \
+                         connect to a URL. Only an http or opencode toolkit \
+                         has allowed_hosts/allowed_cidrs.",
+                        repr_list(&network),
+                        repr_str(&item.name),
+                        repr_value(&executor)
+                    )));
+                }
+                // A null network field removes the key, so the remaining
+                // one alone decides -- load_tier1 then refuses the toolkit
+                // if that leaves it with neither.
+                for field in &network {
+                    if body.get(*field).is_none_or(Value::is_null) {
+                        body.shift_remove(*field);
+                    }
                 }
                 merged_toolkits.insert(item.name.clone(), Value::Object(body));
             }

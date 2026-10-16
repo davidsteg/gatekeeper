@@ -754,9 +754,10 @@ impl Service {
             exit_code: result.exit_code,
             duration_ms: Some(result.duration_ms),
             truncated: result.truncated,
+            denial_reason: result.denial_reason.clone(),
+            detail: result.denial_detail.clone(),
             credential_names,
             client: client.map(str::to_string),
-            ..Default::default()
         })?;
         Ok(result)
     }

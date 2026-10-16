@@ -29,12 +29,17 @@ pub enum DenialReason {
     Timeout,
     ExecutorUnavailable,
     SsrfBlocked,
+    /// The three ways an http/opencode target can be refused (1.10.0) --
+    /// one reason each, so the audit log says which rule stopped a call.
+    HostNotAllowed,
+    AddressNotPublic,
+    CidrNotAllowed,
     RpcMethodDenied,
     CredentialUnavailable,
 }
 
 impl DenialReason {
-    pub const ALL: [DenialReason; 19] = [
+    pub const ALL: [DenialReason; 22] = [
         DenialReason::UnknownToken,
         DenialReason::UnknownTool,
         DenialReason::ToolDisabled,
@@ -52,6 +57,9 @@ impl DenialReason {
         DenialReason::Timeout,
         DenialReason::ExecutorUnavailable,
         DenialReason::SsrfBlocked,
+        DenialReason::HostNotAllowed,
+        DenialReason::AddressNotPublic,
+        DenialReason::CidrNotAllowed,
         DenialReason::RpcMethodDenied,
         DenialReason::CredentialUnavailable,
     ];
@@ -75,6 +83,9 @@ impl DenialReason {
             DenialReason::Timeout => "timeout",
             DenialReason::ExecutorUnavailable => "executor_unavailable",
             DenialReason::SsrfBlocked => "ssrf_blocked",
+            DenialReason::HostNotAllowed => "host_not_allowed",
+            DenialReason::AddressNotPublic => "address_not_public",
+            DenialReason::CidrNotAllowed => "cidr_not_allowed",
             DenialReason::RpcMethodDenied => "rpc_method_denied",
             DenialReason::CredentialUnavailable => "credential_unavailable",
         }

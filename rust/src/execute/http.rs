@@ -58,7 +58,7 @@ use crate::credentials::{format_header_value, CredentialStore, ResolvedCredentia
 use crate::errors::{ConfigError, DenialReason, Denied};
 use crate::pyfmt::repr_str;
 use crate::pyjson;
-use crate::tier1::{py_truthy, urlsplit, Toolkit};
+use crate::tier1::{is_public_address, py_truthy, urlsplit, Toolkit};
 
 /// FR-8.12: responses are capped not just in bytes but in list length --
 /// a single "list all series" call must not smuggle thousands of fields
@@ -114,6 +114,10 @@ pub(crate) struct Resolved {
 /// saw. The error is `str(socket.gaierror)`, e.g. `[Errno -2] Name or
 /// service not known`.
 pub(crate) async fn getaddrinfo(host: &str, port: u16) -> Result<Vec<Resolved>, String> {
+    #[cfg(test)]
+    if let Some(answer) = test_hooks::fake_lookup(host, port) {
+        return answer;
+    }
     // Python encodes the host with the `idna` codec before the lookup.
     let host = if host.is_ascii() {
         host.to_string()
@@ -342,16 +346,34 @@ pub fn substitute_base_url(base_url: &str, credential: Option<&ResolvedCredentia
     Ok(base_url.replace("{credential}", &credential.value))
 }
 
-/// Resolves `host` and checks every returned address against the toolkit's
-/// `allowed_cidrs` (FR-8.9). Fail-closed: if *any* resolved address falls
-/// outside the allowlist, the call is denied -- a multi-homed or
-/// round-robin DNS answer does not get to pick the permissive address.
+/// Resolves `host` once and checks it and every returned address against
+/// the toolkit's target rules (FR-8.9). Returns the one address the caller
+/// then connects to *as an IP literal* -- so no second lookup happens
+/// between this check and the connect, and a rebinding DNS answer never
+/// reaches a socket.
 ///
-/// PORT NOTE: Python collected the addresses in a `set` and checked and
-/// returned them in set iteration order; the port keeps resolver order
-/// (deduplicated), which only decides *which* address an error names or
-/// the connection uses when several all pass.
+/// Fail-closed on every rule: if *any* resolved address fails, the call is
+/// denied -- a multi-homed or round-robin DNS answer does not get to pick
+/// the permissive address. In order (each with its own audit reason):
+///
+/// 1. `allowed_hosts` set and the hostname not in it -> `HostNotAllowed`,
+///    before any DNS query is made for it.
+/// 2. `allowed_hosts` set and an address is not public ->
+///    `AddressNotPublic`. Not configurable: a hostname toolkit never
+///    reaches a private, loopback, link-local or multicast address.
+/// 3. `allowed_cidrs` set and an address outside it -> `CidrNotAllowed`.
+///    A toolkit with only `allowed_cidrs` (every one before 1.10.0) gets
+///    exactly this check and nothing else, as before.
+///
+/// Addresses are kept in resolver order, de-duplicated, so the address
+/// connected to is the resolver's first answer.
 pub(crate) async fn resolve_and_check(host: &str, port: u16, toolkit: &Toolkit) -> Result<Resolved, Denied> {
+    if !toolkit.allows_host(host) {
+        return Err(Denied::new(
+            DenialReason::HostNotAllowed,
+            format!("Host {} is not in this toolkit's allowed_hosts.", repr_str(host)),
+        ));
+    }
     let infos = getaddrinfo(host, port).await.map_err(|exc| {
         Denied::new(DenialReason::ExecutorUnavailable, format!("Could not resolve {}: {exc}", repr_str(host)))
     })?;
@@ -368,10 +390,18 @@ pub(crate) async fn resolve_and_check(host: &str, port: u16, toolkit: &Toolkit) 
         }
     }
     for address in &addresses {
+        // A scoped IPv6 answer (`fe80::1%eth0`) carries its zone; the
+        // address itself is what is judged.
         let ip: IpAddr = address.addr.ip();
-        if !toolkit.in_allowed_cidrs(ip) {
+        if !toolkit.allowed_hosts.is_empty() && !is_public_address(ip) {
             return Err(Denied::new(
-                DenialReason::SsrfBlocked,
+                DenialReason::AddressNotPublic,
+                format!("{} resolves to {}, which is not a public address.", repr_str(host), address.raw),
+            ));
+        }
+        if !toolkit.allowed_cidrs.is_empty() && !toolkit.in_allowed_cidrs(ip) {
+            return Err(Denied::new(
+                DenialReason::CidrNotAllowed,
                 format!(
                     "{} resolves to {}, which is outside this toolkit's allowed_cidrs.",
                     repr_str(host),
@@ -513,9 +543,7 @@ pub async fn run(
     // A rejection here (missing credential, SSRF block) is still a denial,
     // not a network failure -- reported as a result so it stays inside the
     // normal audit.call()/outcome bookkeeping.
-    let denied = |denial: Denied| -> ExecResult {
-        ExecResult::new(OUTCOME_FAILED, None, "", denial.agent_message(), false, elapsed_ms(started))
-    };
+    let denied = |denial: Denied| -> ExecResult { ExecResult::denied(&denial, elapsed_ms(started)) };
 
     let mut credential: Option<ResolvedCredential> = None;
     if let Some(name) = toolkit.credential.as_deref().filter(|n| !n.is_empty()) {
@@ -880,11 +908,17 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Io for T {}
 /// Connects (5 s, like httpx's connect timeout, TLS handshake included),
 /// sends the request and waits for the response head (5 s read timeout).
 async fn send(req: &Prepared) -> Result<(u16, HeaderMap, Incoming), Failure> {
+    // Tests that pin DNS to public addresses route the connection to a
+    // loopback server instead, recording where it would have gone.
+    #[cfg(test)]
+    let redirected = test_hooks::redirect(req);
+    #[cfg(not(test))]
+    let redirected: Option<SocketAddr> = None;
     let connect = async {
-        let tcp = tokio::net::TcpStream::connect(req.addr)
+        let tcp = tokio::net::TcpStream::connect(redirected.unwrap_or(req.addr))
             .await
             .map_err(|_| Failure::Http("All connection attempts failed".into()))?;
-        let stream: Box<dyn Io> = if req.scheme == "https" {
+        let stream: Box<dyn Io> = if req.scheme == "https" && redirected.is_none() {
             let server_name = rustls::pki_types::ServerName::try_from(req.host.clone())
                 .map_err(|e| Failure::Http(e.to_string()))?;
             let connector = tokio_rustls::TlsConnector::from(TLS.clone());
@@ -1312,3 +1346,95 @@ impl Scanner<'_> {
 #[cfg(test)]
 #[path = "http_tests.rs"]
 pub(crate) mod tests;
+
+/// Test-only seams: a pinned resolver (Python's `FakeDNS`) and a connect
+/// redirect (what httpx's `MockTransport` stood in for), both per thread,
+/// so a `current_thread` test runtime sees only its own.
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::net::{IpAddr, SocketAddr};
+
+    use super::{Prepared, Resolved};
+
+    /// `answers[host]` is a list of answer sets; lookup N (counted over
+    /// all hosts) gets set N, the last one repeating.
+    #[derive(Default)]
+    pub struct FakeDns {
+        pub answers: HashMap<String, Vec<Vec<String>>>,
+        pub calls: Vec<String>,
+    }
+
+    /// Where one request would have connected: the checked address, the
+    /// TLS server name (`None` for plain http) and the scheme.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Connect {
+        pub addr: SocketAddr,
+        pub sni_hostname: Option<String>,
+    }
+
+    thread_local! {
+        static DNS: RefCell<Option<FakeDns>> = const { RefCell::new(None) };
+        static TO: RefCell<Option<SocketAddr>> = const { RefCell::new(None) };
+        static CONNECTS: RefCell<Vec<Connect>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Installs a fake resolver for this thread (replacing any earlier).
+    pub fn install_dns(answers: &[(&str, &[&[&str]])]) {
+        let fake = FakeDns {
+            answers: answers
+                .iter()
+                .map(|(host, sets)| {
+                    (host.to_string(), sets.iter().map(|s| s.iter().map(|a| a.to_string()).collect()).collect())
+                })
+                .collect(),
+            calls: Vec::new(),
+        };
+        DNS.with(|d| *d.borrow_mut() = Some(fake));
+    }
+
+    /// The lookups made since the resolver was installed.
+    pub fn dns_calls() -> Vec<String> {
+        DNS.with(|d| d.borrow().as_ref().map(|f| f.calls.clone()).unwrap_or_default())
+    }
+
+    /// Sends every connection of this thread to `to` instead.
+    pub fn redirect_to(to: SocketAddr) {
+        TO.with(|t| *t.borrow_mut() = Some(to));
+    }
+
+    pub fn connects() -> Vec<Connect> {
+        CONNECTS.with(|c| c.borrow().clone())
+    }
+
+    pub(super) fn fake_lookup(host: &str, port: u16) -> Option<Result<Vec<Resolved>, String>> {
+        DNS.with(|d| {
+            let mut d = d.borrow_mut();
+            let fake = d.as_mut()?;
+            fake.calls.push(host.to_string());
+            let Some(sets) = fake.answers.get(host).filter(|s| !s.is_empty()) else {
+                return Some(Err(format!("no such host {host}")));
+            };
+            let chosen = &sets[(fake.calls.len() - 1).min(sets.len() - 1)];
+            Some(Ok(chosen
+                .iter()
+                .map(|raw| {
+                    let ip: IpAddr = raw.split('%').next().unwrap().parse().expect("fake DNS answer");
+                    Resolved { addr: SocketAddr::new(ip, port), raw: raw.clone() }
+                })
+                .collect()))
+        })
+    }
+
+    pub(super) fn redirect(req: &Prepared) -> Option<SocketAddr> {
+        let to = TO.with(|t| *t.borrow())?;
+        let sni_hostname = (req.scheme == "https").then(|| req.host.clone());
+        CONNECTS.with(|c| c.borrow_mut().push(Connect { addr: req.addr, sni_hostname }));
+        Some(to)
+    }
+}
+
+#[cfg(test)]
+#[path = "allowed_hosts_tests.rs"]
+mod allowed_hosts_tests;
