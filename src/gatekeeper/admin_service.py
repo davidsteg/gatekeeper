@@ -564,7 +564,10 @@ class AdminService:
         """
         name = _require_str(args, "name")
         spec = dict(_require_dict(args, "spec"))
-        item = self.toolkit_proposals.propose(name=name, spec=spec, actor=actor)
+        item = self.toolkit_proposals.propose(
+            name=name, spec=spec, actor=actor,
+            confirm_broad_cidrs=args.get("confirm_broad_cidrs") is True,
+        )
         return {"applied": False, "pending": True, "proposal_id": item.id}
 
     def toolkit_update(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -589,7 +592,8 @@ class AdminService:
             return {"applied": False, "error": "No updates provided."}
 
         item = self.toolkit_proposals.propose(
-            name=name, spec=updates, actor=actor, kind="update"
+            name=name, spec=updates, actor=actor, kind="update",
+            confirm_broad_cidrs=args.get("confirm_broad_cidrs") is True,
         )
         return {"applied": False, "pending": True, "proposal_id": item.id}
 
