@@ -77,6 +77,10 @@ harness = false
 [dev-dependencies]
 tempfile = "3"
 
+[profile.dev]
+# Full debuginfo makes each test binary ~100 MB; line tables keep backtraces.
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
