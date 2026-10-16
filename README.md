@@ -338,7 +338,7 @@ every routine change.
 - **Drafting a new toolkit is possible, deploying it never is — from here.**
   `admin.toolkit_list` reads the live Tier 1 configuration; `admin.toolkit_propose`
   drafts a brand-new toolkit, `admin.toolkit_update` proposes a narrow
-  edit, `admin.toolkit_delete` proposes removing one (refused at
+  edit (including an http toolkit's `allowed_hosts`/`allowed_cidrs`), `admin.toolkit_delete` proposes removing one (refused at
   deploy time if a tool still references it), and `admin.credential_bind`
   proposes pointing an existing toolkit at an existing credential *name*
   (never a value, never a destination-level override) — all four always

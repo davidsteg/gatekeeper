@@ -32,6 +32,11 @@ class DenialReason(str, enum.Enum):
     TIMEOUT = "timeout"
     EXECUTOR_UNAVAILABLE = "executor_unavailable"
     SSRF_BLOCKED = "ssrf_blocked"
+    #: The three ways an http/opencode target can be refused (1.10.0) --
+    #: one reason each, so the audit log says which rule stopped a call.
+    HOST_NOT_ALLOWED = "host_not_allowed"
+    ADDRESS_NOT_PUBLIC = "address_not_public"
+    CIDR_NOT_ALLOWED = "cidr_not_allowed"
     RPC_METHOD_DENIED = "rpc_method_denied"
     CREDENTIAL_UNAVAILABLE = "credential_unavailable"
 

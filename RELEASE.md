@@ -1,3 +1,29 @@
+## 1.10.0
+
+An `http` or `opencode` toolkit can name the hosts it may reach instead of fixed IP ranges, and change them through a proposal without editing `toolkits.yaml` by hand.
+
+### Added
+
+- **`allowed_hosts` on `http` and `opencode` toolkits.** Exact hostnames, such as `api.github.com`. A call is refused unless the URL's hostname is on the list and every address it resolves to is public. Private, loopback, link-local, carrier-grade NAT, multicast and reserved addresses are always refused, for IPv4 and IPv6, including IPv4 addresses inside IPv6 ones. No wildcards and no IP addresses: those are refused when the file loads. With `allowed_cidrs` set as well, an address must also lie inside it, so CIDRs can narrow a hostname toolkit but never reopen a private range for it.
+- **`admin.toolkit_update` takes `allowed_hosts` and `allowed_cidrs`.** Like every toolkit update, it lands on the Toolkit tab of `/app/requests` and does nothing until a human approves it; it is then written to `toolkits.yaml` and reloaded at once, with no restart. `null` removes a field. The card shows the current values next to the proposed ones. Only `http` and `opencode` toolkits accept them.
+- **The audit log names why a target was refused.** A call stopped by the network rules records `denial_reason` `host_not_allowed`, `address_not_public` or `cidr_not_allowed`, with the host and address in `detail` and never a secret. Other refusals inside the `http` and `opencode` executors, such as a missing credential, now record their reason the same way. The outcome stays `failed`.
+- `GET /api/v1/toolkits` and `admin.toolkit_list` report `allowed_hosts` and `allowed_cidrs`, and the Toolkits page shows them.
+
+### Unchanged
+
+- A toolkit with only `allowed_cidrs` works exactly as before, private LAN ranges included.
+- Redirects are still reported and never followed.
+- The checked address is still the one connected to, so a DNS answer that changes between check and connect is never used.
+- A SIGHUP reloads `toolkits.yaml` along with the other files, as it did before; this release adds a test that the next call uses the reloaded toolkit.
+
+### Security
+
+- **`mcp` 2.0.0 → 2.2.0** (CVE-2026-59951, flagged by `pip-audit` in CI).
+
+### Upgrading
+
+To move the GitHub toolkits off fixed addresses, propose for each one: `admin.toolkit_update` with `{"name": "github", "updates": {"allowed_hosts": ["api.github.com"], "allowed_cidrs": null}}`, then approve it at `/app/requests`.
+
 ## 1.9.0
 
 ### Added

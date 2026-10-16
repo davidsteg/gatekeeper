@@ -259,6 +259,8 @@ class ToolkitOut(_Model):
     run_as: str | None
     mailbox_path: str | None
     allowed_agent_operations: list[str]
+    allowed_hosts: list[str]
+    allowed_cidrs: list[str]
 
 
 class ToolkitList(_Model):

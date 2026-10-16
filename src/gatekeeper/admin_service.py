@@ -568,10 +568,11 @@ class AdminService:
         return {"applied": False, "pending": True, "proposal_id": item.id}
 
     def toolkit_update(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
-        """Proposes changing a toolkit's executor type, binaries, and/or
+        """Proposes changing a toolkit's executor type, binaries,
 
-        denied_args. Narrowly scoped: only those three fields can be
-        proposed; security-critical fields (``path_roots``,
+        denied_args, run_as, and an http/opencode toolkit's allowed_hosts/
+        allowed_cidrs. Narrowly scoped: only those fields can be proposed
+        (`toolkit_proposals.UPDATE_WRITABLE_FIELDS`); security-critical fields (``path_roots``,
         ``protected_resources``, ``limits``) remain deploy-time only and
         are rejected. Like `toolkit_propose`, this changes Tier 1 -- what is
         possible at all, not just who can do what -- so it is always written

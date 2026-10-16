@@ -94,10 +94,14 @@ toolkits:
     max_output_bytes: 16384
 
   # FR-8.5 to FR-8.15: an `http` toolkit. Scheme and host live exclusively
-  # here, never in a tool definition or a parameter. `allowed_cidrs` is
-  # GitHub's published API address range -- for a LAN service (Sonarr,
-  # Home Assistant, ...) this would instead be the narrow /32 or /24 that
-  # actually covers that one host, never a blanket private range (FR-8.15).
+  # here, never in a tool definition or a parameter. `allowed_hosts` names
+  # the exact hostname: GitHub's API answers from addresses that are not in
+  # any published range, so a CIDR list here breaks without warning. Every
+  # address the name resolves to must be public -- a hostname never reaches
+  # a private, loopback or link-local address. For a LAN service (Sonarr,
+  # Home Assistant, ...) use `allowed_cidrs` instead: the narrow /32 or /24
+  # that actually covers that one host, never a blanket private range
+  # (FR-8.15).
   # `credential: github` refers to a credential created via /ui/credentials
   # or 'gatekeeper credential-key' + the admin API -- the value is never in
   # this file (FR-10.1).
@@ -108,10 +112,8 @@ toolkits:
     allowed_path_prefixes:
       - /repos/davidsteg/
       - /user/repos
-    allowed_cidrs:
-      - 140.82.112.0/20
-      - 143.55.64.0/20
-      - 192.30.252.0/22
+    allowed_hosts:
+      - api.github.com
     credential: github
     max_timeout_seconds: 20
     max_output_bytes: 131072

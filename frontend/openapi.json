@@ -2072,6 +2072,20 @@
             "title": "Allowed Agent Operations",
             "type": "array"
           },
+          "allowed_cidrs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Cidrs",
+            "type": "array"
+          },
+          "allowed_hosts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Hosts",
+            "type": "array"
+          },
           "binaries": {
             "items": {
               "type": "string"
@@ -2175,7 +2189,9 @@
           "credential",
           "run_as",
           "mailbox_path",
-          "allowed_agent_operations"
+          "allowed_agent_operations",
+          "allowed_hosts",
+          "allowed_cidrs"
         ],
         "title": "ToolkitOut",
         "type": "object"

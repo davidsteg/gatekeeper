@@ -494,15 +494,18 @@ _TOOLS: list[types.Tool] = [
     ),
     types.Tool(
         name="admin.toolkit_update",
-        title="Propose updating a toolkit's executor/binaries",
+        title="Propose updating a toolkit's executor, binaries or network targets",
         description=(
             "Proposes changing an existing toolkit's executor type, "
-            "binaries, denied_args, and/or run_as (the OS user a 'file' "
-            "toolkit's operations run as). Only these four fields can be "
-            "proposed — path_roots, protected_resources, and limits remain "
-            "deploy-time only (FR-4.11) and are rejected, so a proposal can "
-            "change who an operation runs as but never widen where it may "
-            "reach. Like "
+            "binaries, denied_args, run_as (the OS user a 'file' "
+            "toolkit's operations run as), and -- on an http or opencode "
+            "toolkit -- allowed_hosts (exact hostnames such as "
+            "'api.github.com'; no wildcards, no IP addresses) and "
+            "allowed_cidrs. Only these fields can be proposed — path_roots, "
+            "protected_resources, and limits remain deploy-time only "
+            "(FR-4.11) and are rejected. A hostname toolkit never reaches a "
+            "private, loopback, link-local or multicast address, whatever "
+            "its allowed_cidrs say. Like "
             "admin.toolkit_propose, this changes Tier 1 -- what is possible "
             "at all, not just who can do what -- so it is always written to "
             "the toolkit-proposal queue and never applies on its own. A "
@@ -514,7 +517,10 @@ _TOOLS: list[types.Tool] = [
             "'file' by passing "
             "updates={\"executor\": \"file\", \"binaries\": [], \"denied_args\": []}, "
             "or pointing an existing 'file' toolkit at another user with "
-            "updates={\"run_as\": \"3001:3001\"}."
+            "updates={\"run_as\": \"3001:3001\"}, or moving the 'github' "
+            "toolkit from fixed addresses to its hostname with "
+            "updates={\"allowed_hosts\": [\"api.github.com\"], "
+            "\"allowed_cidrs\": null}."
         ),
         inputSchema={
             "type": "object",
@@ -522,7 +528,10 @@ _TOOLS: list[types.Tool] = [
                 "name": {"type": "string", "description": "Toolkit name"},
                 "updates": {
                     "type": "object",
-                    "description": "Fields to propose changing (executor, binaries, denied_args, run_as only)",
+                    "description": (
+                        "Fields to propose changing (executor, binaries, "
+                        "denied_args, run_as, allowed_hosts, allowed_cidrs only)"
+                    ),
                     "properties": {
                         "executor": {"type": "string"},
                         "binaries": {"type": "array", "items": {"type": "string"}},
@@ -543,6 +552,28 @@ _TOOLS: list[types.Tool] = [
                                 "takes effect where the container was started "
                                 "privileged enough to change user; elsewhere "
                                 "the calls fail."
+                            ),
+                        },
+                        "allowed_hosts": {
+                            # null removes the field, leaving allowed_cidrs
+                            # alone to decide (refused if that is empty too).
+                            "type": ["array", "null"],
+                            "items": {"type": "string"},
+                            "description": (
+                                "http/opencode toolkits only: exact hostnames "
+                                "the toolkit may connect to, e.g. "
+                                "['api.github.com']. Every address a name "
+                                "resolves to must be public. null removes it."
+                            ),
+                        },
+                        "allowed_cidrs": {
+                            "type": ["array", "null"],
+                            "items": {"type": "string"},
+                            "description": (
+                                "http/opencode toolkits only: IP networks the "
+                                "resolved address must lie in. With "
+                                "allowed_hosts set it only narrows further. "
+                                "null removes it."
                             ),
                         },
                     },

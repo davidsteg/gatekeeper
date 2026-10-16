@@ -20,14 +20,17 @@ ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
   checked when it is proposed and again at deploy.
 - ``"update"`` (`admin.toolkit_update`) -- narrowly-scoped edits to an
   *existing* toolkit's ``executor``/``binaries``/``denied_args``/``run_as``
-  only (``UPDATE_WRITABLE_FIELDS``); ``spec`` holds just the changed fields,
+  and, since 1.10.0, an http/opencode toolkit's ``allowed_hosts``/
+  ``allowed_cidrs`` only (``UPDATE_WRITABLE_FIELDS``); ``spec`` holds just the changed fields,
   merged into the toolkit's existing body at deploy time. Every other Tier 1
   field (``path_roots``, ``protected_resources``, limits) stays reachable
   only by a redeploy -- this exists so an executor swap (e.g. `local` ->
   `file`) or a change of the OS user a `file` toolkit runs as doesn't
-  require one, not to open a general editing surface. The line it holds is
-  *reach*: a proposal may change who an operation runs as, never where that
-  operation may go.
+  require one, not to open a general editing surface. Until 1.10.0 the line
+  it held was *reach*: a proposal could change who an operation runs as,
+  never where it may go. The two network fields moved that line on purpose
+  (see ``UPDATE_WRITABLE_FIELDS``); ``path_roots`` and
+  ``protected_resources`` still sit behind it.
 - ``"delete"`` (`admin.toolkit_delete`) -- removes an *existing* toolkit.
   ``spec`` is always empty; the name must already exist and, at deploy
   time, must not still be referenced by any non-deleted tool (deleting a
@@ -91,7 +94,7 @@ from .audit import AuditLog
 from .catalog import now_iso
 from .errors import ConfigError
 from .service import Service
-from .tier1 import load_tier1
+from .tier1 import NETWORK_EXECUTORS, _parse_network_allowlist, load_tier1
 
 #: What a toolkit proposal may be in. No 'stale' state: unlike `pending.py`,
 #: `deploy` re-validates the *entire* merged configuration fresh at deploy
@@ -137,7 +140,25 @@ BIND_FIELD = "credential"
 #: `path_roots` and `protected_resources` stay out of this set, so a
 #: proposal can change who an operation runs as but never widen where it
 #: may reach.
-UPDATE_WRITABLE_FIELDS = frozenset({"executor", "binaries", "denied_args", "run_as"})
+#:
+#: `allowed_hosts` and `allowed_cidrs` are here as of 1.10.0, and they are
+#: the first fields in this set that change *where* a toolkit may connect.
+#: That is a deliberate move of the line above, asked for by the operator:
+#: a public API whose addresses drift (api.github.com) otherwise needs a
+#: host-side file edit every time it moves. What keeps it safe is what
+#: keeps every other update safe -- nothing applies without a human
+#: approving the card at /app/requests -- plus what no proposal can lift:
+#: `allowed_hosts` takes exact names only (no wildcard, no IP literal), and
+#: a hostname toolkit never reaches a non-public address, whatever its
+#: `allowed_cidrs` say. Only on toolkits whose executor reads them
+#: (`NETWORK_FIELDS`, checked at deploy).
+UPDATE_WRITABLE_FIELDS = frozenset(
+    {"executor", "binaries", "denied_args", "run_as", "allowed_hosts", "allowed_cidrs"}
+)
+
+#: The update fields that change a toolkit's network reach -- valid only on
+#: an executor that connects to a URL (`tier1.NETWORK_EXECUTORS`).
+NETWORK_FIELDS = frozenset({"allowed_hosts", "allowed_cidrs"})
 
 #: Audit `action` names, keyed by `kind` -- one for `propose()`, one for
 #: `deploy()`.
@@ -174,8 +195,8 @@ def name_collision_message(name: str) -> str:
         "'create' proposal only adds a new toolkit, and deploying this one "
         "would silently overwrite it. If a second, separate toolkit is "
         "what you want, propose it under a different name. If you meant to "
-        "change the existing one: executor, binaries, denied_args and "
-        "run_as go through admin.toolkit_update; path_roots, "
+        "change the existing one: executor, binaries, denied_args, run_as, "
+        "allowed_hosts and allowed_cidrs go through admin.toolkit_update; path_roots, "
         "protected_resources and limits have no proposal path -- edit "
         "toolkits.yaml and reload (SIGHUP or restart)."
     )
@@ -339,6 +360,23 @@ class ToolkitProposalStore:
             except RunAsError as exc:
                 raise ToolkitProposalWriteRefused(
                     f"Cannot propose this 'run_as': {exc}"
+                ) from None
+        for field in NETWORK_FIELDS & set(spec):
+            # Shape only, for immediate feedback, exactly like `run_as`
+            # above -- a wildcard or an IP literal in allowed_hosts is
+            # refused now instead of failing at review. `deploy()`'s full
+            # `load_tier1` stays the authoritative gate.
+            if spec[field] is None:
+                continue
+            try:
+                _parse_network_allowlist(
+                    {field: spec[field], "allowed_cidrs" if field == "allowed_hosts"
+                     else "allowed_hosts": None},
+                    f"toolkit {name!r}",
+                )
+            except ConfigError as exc:
+                raise ToolkitProposalWriteRefused(
+                    f"Cannot propose this {field!r}: {exc}"
                 ) from None
         if kind == "delete" and spec:
             raise ToolkitProposalWriteRefused(
@@ -547,8 +585,23 @@ class ToolkitProposalStore:
                         f"{sorted(UPDATE_WRITABLE_FIELDS)} are writable via an "
                         "update proposal."
                     )
+                merged_body = {**existing, **item.spec}
+                network = sorted(NETWORK_FIELDS & set(item.spec))
+                if network and merged_body.get("executor") not in NETWORK_EXECUTORS:
+                    raise ToolkitProposalWriteRefused(
+                        f"Cannot change {network} on toolkit {item.name!r}: "
+                        f"its executor {merged_body.get('executor')!r} does not "
+                        "connect to a URL. Only an http or opencode toolkit "
+                        "has allowed_hosts/allowed_cidrs."
+                    )
+                # A null network field removes the key, so the remaining
+                # one alone decides -- load_tier1 then refuses the toolkit
+                # if that leaves it with neither.
+                for field in network:
+                    if merged_body.get(field) is None:
+                        merged_body.pop(field, None)
                 before_fields = {k: existing.get(k) for k in item.spec}
-                merged_toolkits[item.name] = {**existing, **item.spec}
+                merged_toolkits[item.name] = merged_body
             elif item.kind == "bind":
                 existing = toolkit_section.get(item.name)
                 if not isinstance(existing, dict):
@@ -690,6 +743,7 @@ class ToolkitProposalStore:
 __all__ = [
     "BIND_FIELD",
     "KINDS",
+    "NETWORK_FIELDS",
     "STATUSES",
     "UPDATE_WRITABLE_FIELDS",
     "ToolkitProposal",
