@@ -18,7 +18,8 @@ and Tier 2 change-approval flow diagrams.
 A toolkit **proposal** (`toolkit_proposals.yaml`) is the one deliberate,
 narrow exception: an `admin.toolkit_propose` call from `/admin/mcp` can
 draft a brand-new Tier 1 toolkit, `admin.toolkit_update` can propose a
-narrowly-scoped change (`executor`/`binaries`/`denied_args`/`run_as` only,
+narrowly-scoped change (`executor`/`binaries`/`denied_args`/`run_as`, and
+an `http`/`opencode` toolkit's `allowed_hosts`/`allowed_cidrs` since 1.10.0;
 never `path_roots`/`protected_resources`/limits) to an *existing* one,
 `admin.toolkit_delete` can propose removing an *existing* one (refused at
 deploy time if any non-deleted tool still references it), and
@@ -105,18 +106,33 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 | `agent` | Other gatekeeper identities | in-process mailbox (`messages.yaml`); no shell, no credential. Network only if the operator sets `GATEKEEPER_NOTIFY_URL` (best-effort delivery webhook, never agent-controllable) |
 
 `http` toolkit boundaries (`tier1.py`'s `Toolkit`): `base_url`,
-`allowed_methods`, `allowed_path_prefixes`, `allowed_cidrs`, `credential`,
-`follow_redirects` (always `false` — not a configurable knob, FR-8.8).
-`execute_http.py` resolves the target host itself and checks the resolved IP
-against `allowed_cidrs` immediately before connecting — a hostname-only check
-would leave a DNS-rebinding gap between the check and the actual connect.
-A tool may carry its own `base_url` (tools.yaml, optional): when set,
-`service.call` applies it over the toolkit's value the way a destination
-override does (FR-8.3g/h), and the executor resolves and SSRF-checks *that*
-host against the same `allowed_cidrs` — the override changes the target, not
-the target restrictions.
+`allowed_methods`, `allowed_path_prefixes`, `allowed_cidrs` and/or
+`allowed_hosts`, `credential`, `follow_redirects` (always `false` — not a
+configurable knob, FR-8.8). `execute_http.py` resolves the target host once,
+checks it and every resolved address, and connects to the checked address as
+an IP literal (`Host` header and TLS SNI keep the name) — so there is no
+second lookup and no DNS-rebinding gap between the check and the connect.
+The checks, all required, each with its own audit `denial_reason`:
 
-`opencode` toolkit boundaries: `base_url`, `allowed_cidrs`, `credential`
+| Rule | Applies when | Refusal |
+|---|---|---|
+| hostname is in `allowed_hosts` (exact, case-insensitive; no wildcards, no IP literals) | `allowed_hosts` set | `host_not_allowed`, before any DNS query |
+| every resolved address is public (no private, loopback, link-local, CGNAT, multicast, reserved or documentation range; IPv4 and IPv6, embedded IPv4 included) | `allowed_hosts` set | `address_not_public` |
+| every resolved address is inside `allowed_cidrs` | `allowed_cidrs` set | `cidr_not_allowed` |
+
+A toolkit with only `allowed_cidrs` (every toolkit before 1.10.0) gets only
+the last rule — which is what lets a LAN service sit behind a private /32.
+A hostname toolkit can never reach a private address: `allowed_cidrs` next to
+`allowed_hosts` only narrows further. A tool may carry its own `base_url`
+(tools.yaml, optional): when set, `service.call` applies it over the
+toolkit's value the way a destination override does (FR-8.3g/h), and the
+executor resolves and checks *that* host against the same rules — the
+override changes the target, not the target restrictions (an override host
+outside `allowed_hosts` disables the tool at load). Executor-side refusals
+are audited as the call's `denial_reason`/`detail` (names and addresses,
+never a secret); the outcome stays `failed`.
+
+`opencode` toolkit boundaries: `base_url`, `allowed_cidrs`/`allowed_hosts`, `credential`
 (all three exactly as for `http`, including the pre-connect resolved-IP
 check), plus `allowed_opencode_operations` and `path_roots`. It is its own
 executor rather than an `http` toolkit because the useful unit of work is
@@ -561,7 +577,8 @@ src/gatekeeper/
   toolkit_proposals.py  ToolkitProposalStore (toolkit_proposals.yaml) --
                        admin.toolkit_propose (new toolkit, kind="create"),
                        admin.toolkit_update (executor/binaries/
-                       denied_args/run_as change to an existing one,
+                       denied_args/run_as/allowed_hosts/allowed_cidrs
+                       change to an existing one,
                        kind="update"), admin.toolkit_delete (remove an
                        existing one, kind="delete") and
                        admin.credential_bind (point an existing toolkit at

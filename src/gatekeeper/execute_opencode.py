@@ -923,6 +923,8 @@ async def run(
             stderr=denial.agent_message,
             truncated=False,
             duration_ms=_elapsed(),
+            denial_reason=denial.reason.value,
+            denial_detail=denial.detail,
         )
 
     # Defensive re-check: `operation` is fixed per tool and not

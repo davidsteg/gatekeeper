@@ -12,6 +12,7 @@ import os
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from ._atomic import safe_load as _yaml_load
 from ._runas import RunAsError, parse_run_as
@@ -534,6 +535,17 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
                 f"allowed_path_prefixes {list(toolkit.allowed_path_prefixes)} "
                 f"of toolkit {toolkit.name!r}"
             )
+        # A per-tool base_url override on a hostname toolkit names a host
+        # too; one outside `allowed_hosts` could never connect, so it is
+        # disabled here instead of failing on every call.
+        if tool.base_url:
+            override_host = urlsplit(tool.base_url).hostname or ""
+            if not toolkit.allows_host(override_host):
+                raise Tier1Violation(
+                    f"{where}: base_url host {override_host!r} is not in the "
+                    f"allowed_hosts {list(toolkit.allowed_hosts)} of toolkit "
+                    f"{toolkit.name!r}"
+                )
 
     elif toolkit.executor == "truenas":
         if not toolkit.allows_rpc_method(tool.rpc_method or ""):

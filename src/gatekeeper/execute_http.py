@@ -32,7 +32,7 @@ import httpx
 from .credentials import CredentialStore, ResolvedCredential, format_header_value
 from .errors import DenialReason, Denied
 from .execute import OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN, Result
-from .tier1 import Toolkit
+from .tier1 import Toolkit, is_public_address
 
 #: FR-8.12: responses are capped not just in bytes but in list length --
 #: a single "list all series" call must not smuggle thousands of fields
@@ -102,13 +102,31 @@ def _substitute_base_url(base_url: str, credential: ResolvedCredential | None) -
 
 
 async def _resolve_and_check(host: str, port: int, toolkit: Toolkit) -> str:
-    """Resolves `host` and checks every returned address against the
+    """Resolves `host` once and checks it and every returned address
 
-    toolkit's `allowed_cidrs` (FR-8.9). Fail-closed: if *any* resolved
-    address falls outside the allowlist, the call is denied -- a
-    multi-homed or round-robin DNS answer does not get to pick the
-    permissive address.
+    against the toolkit's target rules (FR-8.9). Returns the one address
+    the caller then connects to *as an IP literal* -- so no second lookup
+    happens between this check and the connect, and a rebinding DNS answer
+    never reaches a socket.
+
+    Fail-closed on every rule: if *any* resolved address fails, the call is
+    denied -- a multi-homed or round-robin DNS answer does not get to pick
+    the permissive address. In order (each with its own audit reason):
+
+    1. `allowed_hosts` set and the hostname not in it -> HOST_NOT_ALLOWED,
+       before any DNS query is made for it.
+    2. `allowed_hosts` set and an address is not public ->
+       ADDRESS_NOT_PUBLIC. Not configurable: a hostname toolkit never
+       reaches a private, loopback, link-local or multicast address.
+    3. `allowed_cidrs` set and an address outside it -> CIDR_NOT_ALLOWED.
+       A toolkit with only `allowed_cidrs` (every one before 1.10.0) gets
+       exactly this check and nothing else, as before.
     """
+    if not toolkit.allows_host(host):
+        raise Denied(
+            DenialReason.HOST_NOT_ALLOWED,
+            f"Host {host!r} is not in this toolkit's allowed_hosts.",
+        )
     loop = asyncio.get_event_loop()
     try:
         infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
@@ -119,18 +137,27 @@ async def _resolve_and_check(host: str, port: int, toolkit: Toolkit) -> str:
     if not infos:
         raise Denied(DenialReason.EXECUTOR_UNAVAILABLE, f"Could not resolve {host!r}")
 
-    addresses = {info[4][0] for info in infos}
+    # Ordered and de-duplicated, so the address connected to is the
+    # resolver's first answer rather than an arbitrary set member.
+    addresses = list(dict.fromkeys(info[4][0] for info in infos))
     for raw in addresses:
-        address = ipaddress.ip_address(raw)
-        if not toolkit.in_allowed_cidrs(address):
+        # A scoped IPv6 answer (`fe80::1%eth0`) carries its zone; the
+        # address itself is what is judged.
+        address = ipaddress.ip_address(raw.split("%", 1)[0])
+        if toolkit.allowed_hosts and not is_public_address(address):
             raise Denied(
-                DenialReason.SSRF_BLOCKED,
+                DenialReason.ADDRESS_NOT_PUBLIC,
+                f"{host!r} resolves to {raw}, which is not a public address.",
+            )
+        if toolkit.allowed_cidrs and not toolkit.in_allowed_cidrs(address):
+            raise Denied(
+                DenialReason.CIDR_NOT_ALLOWED,
                 f"{host!r} resolves to {raw}, which is outside this toolkit's "
                 "allowed_cidrs.",
             )
     # Any one of the checked addresses is equally allowed; the first is as
     # good as any other now that all have passed.
-    return next(iter(addresses))
+    return addresses[0]
 
 
 def _cap_json(value: Any, *, limit: int, budget: list[int]) -> Any:
@@ -279,6 +306,8 @@ async def run(
             stderr=denial.agent_message,
             truncated=False,
             duration_ms=int((time.monotonic() - started) * 1000),
+            denial_reason=denial.reason.value,
+            denial_detail=denial.detail,
         )
 
     credential: ResolvedCredential | None = None

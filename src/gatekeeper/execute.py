@@ -38,6 +38,14 @@ class Result:
     #: injection, and the agent-facing rendering must say so rather than
     #: present it as if it were as trustworthy as a docker/local result.
     external_untrusted: bool = False
+    #: Set when an executor refused the call itself, after `service.call()`
+    #: had already validated it -- an SSRF block, a missing credential. The
+    #: `DenialReason` value and its detail go into the audit record's
+    #: `denial_reason`/`detail`, so a refused target says why there rather
+    #: than only as a "failed" outcome. Never a credential value: details
+    #: name hosts, addresses and credential names only.
+    denial_reason: str | None = None
+    denial_detail: str | None = None
 
 
 class ResourceLocks:

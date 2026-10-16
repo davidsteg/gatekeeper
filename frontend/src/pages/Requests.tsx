@@ -384,7 +384,7 @@ function ToolkitTab({ items }: { items: Proposal[] }) {
   return (
     <>
       <Notice>
-        Adding a toolkit, changing an existing one's executor, binaries, denied_args or run_as, or binding one
+        Adding a toolkit, changing an existing one's executor, binaries, denied_args, run_as, allowed_hosts or allowed_cidrs, or binding one
         to a credential normally needs a redeploy: Tier 1 is immutable at runtime. A proposal here is the one way
         around that, and only a human can make it take effect.
       </Notice>
@@ -400,6 +400,17 @@ function ToolkitTab({ items }: { items: Proposal[] }) {
       )}
     </>
   );
+}
+
+const NETWORK_FIELDS = ["allowed_hosts", "allowed_cidrs"] as const;
+
+/** What a network field holds today, for the card's "Currently" row. */
+function currentNetwork(item: Proposal): string {
+  const lines = NETWORK_FIELDS.filter((f) => f in item.spec).map((f) => {
+    const values = item.current?.[f] ?? [];
+    return `${f}: ${values.length ? values.join(", ") : "(none)"}`;
+  });
+  return lines.join("\n");
 }
 
 const KIND_TONE: Record<string, Tone> = { delete: "deny", bind: "accent", update: "accent", create: "accent" };
@@ -435,8 +446,12 @@ function deployWarning(item: Proposal): { text: string; ack: string; label: stri
     const runAs = "run_as" in item.spec
       ? ` This proposal changes run_as: file operations on this toolkit would run as ${String(item.spec.run_as)}, within its existing path_roots, and fail where the container cannot change user.`
       : "";
+    const network = NETWORK_FIELDS.filter((f) => f in item.spec);
+    const reach = network.length
+      ? ` This proposal changes where the toolkit may connect (${network.join(", ")}): the targets below become reachable as soon as you deploy. A hostname never reaches a private or loopback address.`
+      : "";
     return {
-      text: `${head}Deploying merges the fields below into toolkit ${item.name} and reloads it at once; only executor, binaries, denied_args and run_as can change.${runAs}`,
+      text: `${head}Deploying merges the fields below into toolkit ${item.name} and reloads it at once; only executor, binaries, denied_args, run_as, allowed_hosts and allowed_cidrs can change.${runAs}${reach}`,
       ack: "I understand this immediately changes what this toolkit can reach.",
       label: "Approve and deploy update",
     };
@@ -482,6 +497,9 @@ function ProposalCard({ item, canDecide }: { item: Proposal; canDecide: boolean 
                 : "Nothing: this toolkit has no credential today."}
             </Row>
           </>
+        )}
+        {item.kind === "update" && item.current && currentNetwork(item) && (
+          <Row label="Currently"><CodeBlock text={currentNetwork(item)} /></Row>
         )}
         {item.spec_yaml && (
           <Row label={item.kind === "update" ? "Proposed changes" : "Proposed toolkit"}>

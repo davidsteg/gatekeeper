@@ -1458,6 +1458,10 @@ export interface components {
         ToolkitOut: {
             /** Allowed Agent Operations */
             allowed_agent_operations: string[];
+            /** Allowed Cidrs */
+            allowed_cidrs: string[];
+            /** Allowed Hosts */
+            allowed_hosts: string[];
             /** Binaries */
             binaries: string[];
             /** Credential */
