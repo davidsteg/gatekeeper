@@ -398,17 +398,19 @@ fn path_roots_and_friends_stay_redeploy_only() {
     let err = propose(&e, "files", json!({"path_roots": ["/"], "limits": 1}), "update").unwrap_err();
     assert_eq!(
         err.message,
-        "Cannot propose changing ['limits', 'path_roots'] -- only ['binaries', 'denied_args', 'executor', \
-         'run_as'] are writable via an update proposal. path_roots, protected_resources, and limits have no \
+        "Cannot propose changing ['limits', 'path_roots'] -- only ['allowed_cidrs', 'allowed_hosts', 'binaries', \
+         'denied_args', 'executor', 'run_as'] are writable via an update proposal. path_roots, protected_resources, and limits have no \
          proposal path -- edit toolkits.yaml and reload (SIGHUP or restart)."
     );
 }
 
 #[test]
-fn update_writable_fields_is_exactly_these_four() {
+fn update_writable_fields_is_exactly_these() {
+    // allowed_hosts/allowed_cidrs joined in 1.10.0 (network targets by
+    // proposal, allowed_hosts tests); path_roots and friends did not.
     let mut f = UPDATE_WRITABLE_FIELDS.to_vec();
     f.sort();
-    assert_eq!(f, ["binaries", "denied_args", "executor", "run_as"]);
+    assert_eq!(f, ["allowed_cidrs", "allowed_hosts", "binaries", "denied_args", "executor", "run_as"]);
 }
 
 #[test]
@@ -441,8 +443,8 @@ fn deploy_update_rejects_unknown_toolkit_and_rechecks_fields() {
     let err = e.proposals.deploy(&item.id, "root").unwrap_err();
     assert_eq!(
         err.message,
-        "Cannot change ['path_roots'] at runtime -- only ['binaries', 'denied_args', 'executor', 'run_as'] are \
-         writable via an update proposal."
+        "Cannot change ['path_roots'] at runtime -- only ['allowed_cidrs', 'allowed_hosts', 'binaries', \
+         'denied_args', 'executor', 'run_as'] are writable via an update proposal."
     );
 }
 

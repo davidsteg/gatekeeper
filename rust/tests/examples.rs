@@ -31,6 +31,7 @@ fn toolkit_value(t: &Toolkit) -> Value {
         "max_timeout_seconds": t.max_timeout_seconds, "max_output_bytes": t.max_output_bytes,
         "credential": t.credential, "base_url": t.base_url, "allowed_methods": t.allowed_methods,
         "allowed_path_prefixes": t.allowed_path_prefixes, "allowed_cidrs": t.allowed_cidrs,
+        "allowed_hosts": t.allowed_hosts,
         "ws_url": t.ws_url, "allowed_rpc_methods": t.allowed_rpc_methods,
         "destinations": t.destinations, "docker_host": t.docker_host, "docker_tls": t.docker_tls,
         "ssh_host": t.ssh_host, "ssh_port": t.ssh_port, "ssh_user": t.ssh_user,

@@ -38,6 +38,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [
@@ -86,6 +87,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [],
@@ -131,10 +133,9 @@
     "/repos/davidsteg/",
     "/user/repos"
    ],
-   "allowed_cidrs": [
-    "140.82.112.0/20",
-    "143.55.64.0/20",
-    "192.30.252.0/22"
+   "allowed_cidrs": [],
+   "allowed_hosts": [
+    "api.github.com"
    ],
    "ws_url": null,
    "allowed_rpc_methods": [],
@@ -176,6 +177,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": "wss://truenas.lan/api/current",
    "allowed_rpc_methods": [
     "pool.query",
@@ -226,6 +228,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [],
@@ -272,6 +275,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [],
@@ -312,6 +316,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [],
@@ -359,6 +364,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [],
@@ -405,6 +411,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [],
@@ -453,6 +460,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [],
@@ -507,6 +515,7 @@
    "allowed_cidrs": [
     "10.10.200.90/32"
    ],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [],
@@ -556,6 +565,7 @@
    "allowed_methods": [],
    "allowed_path_prefixes": [],
    "allowed_cidrs": [],
+   "allowed_hosts": [],
    "ws_url": null,
    "allowed_rpc_methods": [],
    "destinations": [],
