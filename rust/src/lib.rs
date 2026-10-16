@@ -43,3 +43,7 @@ pub mod execute;
 
 // Protocol layer.
 pub mod mcp;
+
+// Console: OAuth sign-in and what is left of /ui.
+pub mod oauth;
+pub mod ui;
