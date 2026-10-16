@@ -63,6 +63,12 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 yaml-rust2 = "0.10"
 
+# Privilege probes re-execute the test binary and must run on its main
+# thread (capabilities are per thread), so this one has its own harness.
+[[test]]
+name = "privilege"
+harness = false
+
 [dev-dependencies]
 tempfile = "3"
 

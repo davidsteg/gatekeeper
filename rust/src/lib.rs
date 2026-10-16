@@ -47,3 +47,5 @@ pub mod mcp;
 // Console: OAuth sign-in and what is left of /ui.
 pub mod oauth;
 pub mod ui;
+
+pub mod privdrop;
