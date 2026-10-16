@@ -16,6 +16,10 @@ An `http` or `opencode` toolkit can name the hosts it may reach instead of fixed
 - The checked address is still the one connected to, so a DNS answer that changes between check and connect is never used.
 - A SIGHUP reloads `toolkits.yaml` along with the other files, as it did before; this release adds a test that the next call uses the reloaded toolkit.
 
+### Security
+
+- **`mcp` 2.0.0 → 2.2.0** (CVE-2026-59951, flagged by `pip-audit` in CI).
+
 ### Upgrading
 
 To move the GitHub toolkits off fixed addresses, propose for each one: `admin.toolkit_update` with `{"name": "github", "updates": {"allowed_hosts": ["api.github.com"], "allowed_cidrs": null}}`, then approve it at `/app/requests`.
