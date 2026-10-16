@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
-use crate::credentials::{format_header_value, CredentialStore, ResolvedCredential};
+use crate::credentials::{CredentialStore, ResolvedCredential};
 use crate::errors::{DenialReason, Denied};
 use crate::execute::google::{cap_json_items, truthy, MAX_JSON_ITEMS};
 use crate::execute::{elapsed_ms, ExecResult, Redact, OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN};
@@ -97,29 +97,7 @@ async fn resolve_and_check(host: &str, port: u16, toolkit: &Toolkit) -> Result<I
     crate::execute::http::resolve_and_check(host, port, toolkit).await.map(|resolved| resolved.addr.ip())
 }
 
-/// `execute_http._credential_headers`.
-// PORT NOTE: stand-in until execute::http lands.
-fn credential_headers(credential: Option<&ResolvedCredential>) -> Vec<(String, String)> {
-    let Some(credential) = credential else {
-        return Vec::new();
-    };
-    match credential.kind.as_str() {
-        "api_key_header" => match credential.header.as_deref().filter(|h| !h.is_empty()) {
-            Some(header) => vec![(
-                header.to_string(),
-                format_header_value(credential.header_format.as_deref(), &credential.value),
-            )],
-            None => Vec::new(),
-        },
-        "bearer" => vec![("Authorization".into(), format!("Bearer {}", credential.value))],
-        "basic" => {
-            use base64::Engine;
-            let encoded = base64::engine::general_purpose::STANDARD.encode(credential.value.as_bytes());
-            vec![("Authorization".into(), format!("Basic {encoded}"))]
-        }
-        _ => Vec::new(),
-    }
-}
+use crate::execute::http::credential_headers;
 
 /// `urlsplit(base_url)`: scheme, hostname (lowercase, no brackets), port
 /// (default by scheme), path without a trailing `/`.
@@ -141,23 +119,6 @@ fn split_base_url(base_url: &str) -> (String, String, u16, String) {
     }
 }
 
-/// `execute_http.probe`: TCP-connect only, no HTTP request.
-// PORT NOTE: stand-in until execute::http lands (`opencode.probe` is
-// `execute_http.probe` verbatim in Python).
-async fn http_probe(toolkit: &Toolkit) -> bool {
-    let base_url = toolkit.base_url.clone().unwrap_or_default();
-    if base_url.contains("{credential}") {
-        return true;
-    }
-    let (_, host, port, _) = split_base_url(&base_url);
-    let Ok(ip) = resolve_and_check(&host, port, toolkit).await else {
-        return false;
-    };
-    matches!(
-        tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect((ip, port))).await,
-        Ok(Ok(_))
-    )
-}
 
 // -- One HTTP request, SSRF-checked ----------------------------------------
 
@@ -1002,7 +963,7 @@ fn timeout_message(operation: &str, timeout_seconds: i64, session_id: &str, idem
 
 /// TCP-connect only, for `/health/ready` -- the `http` probe verbatim.
 pub async fn probe(toolkit: &Toolkit) -> bool {
-    http_probe(toolkit).await
+    crate::execute::http::probe(toolkit).await
 }
 
 #[cfg(test)]

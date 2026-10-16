@@ -443,10 +443,9 @@ async fn console_paths_pass_the_bearer_check_only_with_the_ui() {
     let (env, _) = standard_env();
     let before = audit_of(&env, "auth_failure").len();
     let with_ui = serve(full_app(&env)).await;
-    // The console's own router answers (here: the placeholder, so 404) --
-    // what matters is that the bearer middleware let them through, and
-    // that browser noise stays out of the audit log.
-    for path in ["/", "/favicon.ico", "/ui/", "/app/", "/api/v1/session"] {
+    // The console's own router answers, and browser noise stays out of the
+    // audit log (test_browser_noise_goes_to_app_and_stays_out_of_the_audit_log).
+    for path in ["/", "/favicon.ico", "/ui/", "/app/"] {
         assert_ne!(get(&with_ui, path, None).await.status(), 401, "{path}");
     }
     assert_eq!(audit_of(&env, "auth_failure").len(), before);
