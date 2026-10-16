@@ -17,3 +17,10 @@ pub mod pyjson;
 pub mod pyre;
 pub mod timeutil;
 pub mod yaml;
+
+// Configuration data model.
+pub mod catalog;
+pub mod ratelimit;
+pub mod runas;
+pub mod tier1;
+pub mod validate;
