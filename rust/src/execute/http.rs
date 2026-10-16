@@ -58,7 +58,7 @@ use crate::credentials::{format_header_value, CredentialStore, ResolvedCredentia
 use crate::errors::{ConfigError, DenialReason, Denied};
 use crate::pyfmt::repr_str;
 use crate::pyjson;
-use crate::tier1::{py_truthy, urlsplit, Toolkit};
+use crate::tier1::{is_public_address, py_truthy, urlsplit, Toolkit};
 
 /// FR-8.12: responses are capped not just in bytes but in list length --
 /// a single "list all series" call must not smuggle thousands of fields
@@ -342,16 +342,34 @@ pub fn substitute_base_url(base_url: &str, credential: Option<&ResolvedCredentia
     Ok(base_url.replace("{credential}", &credential.value))
 }
 
-/// Resolves `host` and checks every returned address against the toolkit's
-/// `allowed_cidrs` (FR-8.9). Fail-closed: if *any* resolved address falls
-/// outside the allowlist, the call is denied -- a multi-homed or
-/// round-robin DNS answer does not get to pick the permissive address.
+/// Resolves `host` once and checks it and every returned address against
+/// the toolkit's target rules (FR-8.9). Returns the one address the caller
+/// then connects to *as an IP literal* -- so no second lookup happens
+/// between this check and the connect, and a rebinding DNS answer never
+/// reaches a socket.
 ///
-/// PORT NOTE: Python collected the addresses in a `set` and checked and
-/// returned them in set iteration order; the port keeps resolver order
-/// (deduplicated), which only decides *which* address an error names or
-/// the connection uses when several all pass.
+/// Fail-closed on every rule: if *any* resolved address fails, the call is
+/// denied -- a multi-homed or round-robin DNS answer does not get to pick
+/// the permissive address. In order (each with its own audit reason):
+///
+/// 1. `allowed_hosts` set and the hostname not in it -> `HostNotAllowed`,
+///    before any DNS query is made for it.
+/// 2. `allowed_hosts` set and an address is not public ->
+///    `AddressNotPublic`. Not configurable: a hostname toolkit never
+///    reaches a private, loopback, link-local or multicast address.
+/// 3. `allowed_cidrs` set and an address outside it -> `CidrNotAllowed`.
+///    A toolkit with only `allowed_cidrs` (every one before 1.10.0) gets
+///    exactly this check and nothing else, as before.
+///
+/// Addresses are kept in resolver order, de-duplicated, so the address
+/// connected to is the resolver's first answer.
 pub(crate) async fn resolve_and_check(host: &str, port: u16, toolkit: &Toolkit) -> Result<Resolved, Denied> {
+    if !toolkit.allows_host(host) {
+        return Err(Denied::new(
+            DenialReason::HostNotAllowed,
+            format!("Host {} is not in this toolkit's allowed_hosts.", repr_str(host)),
+        ));
+    }
     let infos = getaddrinfo(host, port).await.map_err(|exc| {
         Denied::new(DenialReason::ExecutorUnavailable, format!("Could not resolve {}: {exc}", repr_str(host)))
     })?;
@@ -368,10 +386,18 @@ pub(crate) async fn resolve_and_check(host: &str, port: u16, toolkit: &Toolkit) 
         }
     }
     for address in &addresses {
+        // A scoped IPv6 answer (`fe80::1%eth0`) carries its zone; the
+        // address itself is what is judged.
         let ip: IpAddr = address.addr.ip();
-        if !toolkit.in_allowed_cidrs(ip) {
+        if !toolkit.allowed_hosts.is_empty() && !is_public_address(ip) {
             return Err(Denied::new(
-                DenialReason::SsrfBlocked,
+                DenialReason::AddressNotPublic,
+                format!("{} resolves to {}, which is not a public address.", repr_str(host), address.raw),
+            ));
+        }
+        if !toolkit.allowed_cidrs.is_empty() && !toolkit.in_allowed_cidrs(ip) {
+            return Err(Denied::new(
+                DenialReason::CidrNotAllowed,
                 format!(
                     "{} resolves to {}, which is outside this toolkit's allowed_cidrs.",
                     repr_str(host),
@@ -513,9 +539,7 @@ pub async fn run(
     // A rejection here (missing credential, SSRF block) is still a denial,
     // not a network failure -- reported as a result so it stays inside the
     // normal audit.call()/outcome bookkeeping.
-    let denied = |denial: Denied| -> ExecResult {
-        ExecResult::new(OUTCOME_FAILED, None, "", denial.agent_message(), false, elapsed_ms(started))
-    };
+    let denied = |denial: Denied| -> ExecResult { ExecResult::denied(&denial, elapsed_ms(started)) };
 
     let mut credential: Option<ResolvedCredential> = None;
     if let Some(name) = toolkit.credential.as_deref().filter(|n| !n.is_empty()) {

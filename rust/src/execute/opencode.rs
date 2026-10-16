@@ -8,8 +8,9 @@
 //! workflow. Kept from the `http` executor:
 //!
 //! * the target lives exclusively on the toolkit (`base_url`, FR-8.5);
-//! * every request resolves the host and re-checks the resolved IP against
-//!   `allowed_cidrs` immediately before connecting (FR-8.9), per request;
+//! * every request resolves the host and re-checks it and the resolved IP
+//!   against `allowed_hosts`/`allowed_cidrs` immediately before connecting
+//!   (FR-8.9), per request;
 //! * redirects are reported, never followed (FR-8.8);
 //! * the credential is injected as a header by this module (FR-8.14);
 //! * responses are external, untrusted data (`external_untrusted`, and the
@@ -88,38 +89,12 @@ fn oc_err(message: impl Into<String>, status: Option<i64>) -> Failure {
 
 // -- Stand-ins for execute_http helpers -----------------------------------
 
-/// `execute_http._resolve_and_check`: resolves `host` and checks every
-/// returned address against `allowed_cidrs` (fail-closed).
-// PORT NOTE: stand-in until execute::http lands. The resolver error text
-// is the Rust resolver's, not Python's `[Errno -2] ...`.
+/// `execute_http._resolve_and_check`: the host against `allowed_hosts`,
+/// then every resolved address against the public-address floor and
+/// `allowed_cidrs` (fail-closed); the checked address is what the request
+/// connects to.
 async fn resolve_and_check(host: &str, port: u16, toolkit: &Toolkit) -> Result<IpAddr, Denied> {
-    let infos: Vec<SocketAddr> = match tokio::net::lookup_host((host, port)).await {
-        Ok(found) => found.collect(),
-        Err(exc) => {
-            return Err(Denied::new(
-                DenialReason::ExecutorUnavailable,
-                format!("Could not resolve {}: {exc}", repr_str(host)),
-            ))
-        }
-    };
-    let mut addresses: Vec<IpAddr> = Vec::new();
-    for info in infos {
-        if !addresses.contains(&info.ip()) {
-            addresses.push(info.ip());
-        }
-    }
-    if addresses.is_empty() {
-        return Err(Denied::new(DenialReason::ExecutorUnavailable, format!("Could not resolve {}", repr_str(host))));
-    }
-    for address in &addresses {
-        if !toolkit.in_allowed_cidrs(*address) {
-            return Err(Denied::new(
-                DenialReason::SsrfBlocked,
-                format!("{} resolves to {address}, which is outside this toolkit's allowed_cidrs.", repr_str(host)),
-            ));
-        }
-    }
-    Ok(addresses[0])
+    crate::execute::http::resolve_and_check(host, port, toolkit).await.map(|resolved| resolved.addr.ip())
 }
 
 /// `execute_http._credential_headers`.
@@ -916,9 +891,7 @@ pub(crate) async fn run_with(
 ) -> ExecResult {
     let started = Instant::now();
     let deadline = started + Duration::from_secs(timeout_seconds.max(0) as u64);
-    let denied = |denial: Denied| {
-        ExecResult::new(OUTCOME_FAILED, None, "", denial.agent_message(), false, elapsed_ms(started))
-    };
+    let denied = |denial: Denied| ExecResult::denied(&denial, elapsed_ms(started));
 
     if !toolkit.allows_opencode_operation(operation) {
         return denied(Denied::new(

@@ -200,6 +200,18 @@ pub struct Toolkit {
     pub allowed_path_prefixes: Vec<String>,
     /// Post-DNS-resolution IP/CIDR allowlist (FR-8.9).
     pub allowed_cidrs: Vec<String>,
+    /// Exact hostnames this toolkit may connect to (1.10.0), for public
+    /// services whose addresses are not a stable, published range.
+    /// Lower-case, no trailing dot, never a wildcard and never an IP
+    /// literal (that is what `allowed_cidrs` is for). When set, three
+    /// checks apply on every connect, all of them required
+    /// (`execute::http::resolve_and_check`): the URL's hostname is in this
+    /// list; every address it resolves to is public ([`is_public_address`]);
+    /// and, if `allowed_cidrs` is set as well, every address is also inside
+    /// it -- CIDRs can only narrow a hostname toolkit, never reopen a
+    /// private range for it. Empty (the default) keeps the pre-1.10.0
+    /// behaviour exactly: `allowed_cidrs` alone decides.
+    pub allowed_hosts: Vec<String>,
 
     // -- `truenas` executor only (FR-8.3a-f) --
     /// JSON-RPC 2.0 endpoint, e.g. `wss://truenas.lan/api/current`.
@@ -275,6 +287,7 @@ impl Default for Toolkit {
             allowed_methods: Vec::new(),
             allowed_path_prefixes: Vec::new(),
             allowed_cidrs: Vec::new(),
+            allowed_hosts: Vec::new(),
             ws_url: None,
             allowed_rpc_methods: Vec::new(),
             destinations: Vec::new(),
@@ -380,6 +393,17 @@ impl Toolkit {
         self.allowed_cidrs
             .iter()
             .any(|cidr| ip_network(cidr).is_ok_and(|net| net.contains(&address)))
+    }
+
+    /// `allowed_hosts`: an exact, case-insensitive name match. True for
+    /// every host when the toolkit declares no `allowed_hosts` -- then
+    /// `allowed_cidrs` alone decides, exactly as before 1.10.0.
+    pub fn allows_host(&self, host: &str) -> bool {
+        if self.allowed_hosts.is_empty() {
+            return true;
+        }
+        let host = normalize_hostname(host);
+        self.allowed_hosts.iter().any(|h| *h == host)
     }
 
     /// FR-8.3c: the whitelist acts on JSON-RPC method names.
@@ -889,6 +913,305 @@ fn check_cidrs(cidrs: &[String], where_: &str) -> ConfigResult<()> {
     Ok(())
 }
 
+// -- Network targets by hostname (1.10.0) ---------------------------------------
+
+/// The executors that connect to a URL and so know what a host is.
+pub const NETWORK_EXECUTORS: &[&str] = &["http", "opencode"];
+
+/// Lower-case, without a trailing root dot -- the one spelling both the
+/// allowlist and the URL's hostname are compared in.
+pub fn normalize_hostname(host: &str) -> String {
+    host.trim().to_lowercase().trim_end_matches('.').to_string()
+}
+
+/// `urlsplit(url).hostname or ""`: lower-cased, brackets stripped.
+pub fn url_hostname(url: &str) -> String {
+    crate::execute::http::host_info(&urlsplit(url).netloc).hostname
+}
+
+/// `ipaddress.ip_address(text)`: a plain IPv4 dotted quad or an IPv6
+/// address (with an optional `%scope`, ignored), `None` otherwise.
+pub fn py_ip_address(text: &str) -> Option<IpAddr> {
+    if let Ok(v4) = text.parse::<std::net::Ipv4Addr>() {
+        return Some(IpAddr::V4(v4));
+    }
+    let bare = match text.split_once('%') {
+        Some((addr, scope)) if !scope.is_empty() && !scope.contains('%') => addr,
+        Some(_) => return None,
+        None => text,
+    };
+    bare.parse::<std::net::Ipv6Addr>().ok().map(IpAddr::V6)
+}
+
+/// `address in any(nets)`, for an address and networks of `bits` width.
+fn in_nets(address: u128, bits: u32, nets: &[(u128, u32)]) -> bool {
+    nets.iter().any(|&(net, prefix)| {
+        let shift = bits - prefix;
+        prefix == 0 || (address >> shift) == (net >> shift)
+    })
+}
+
+fn v4net(a: u8, b: u8, c: u8, d: u8, prefix: u32) -> (u128, u32) {
+    (u32::from_be_bytes([a, b, c, d]) as u128, prefix)
+}
+
+fn v6net(text: &str, prefix: u32) -> (u128, u32) {
+    (u128::from(text.parse::<std::net::Ipv6Addr>().expect("constant network")), prefix)
+}
+
+/// Python 3.13's `ipaddress` classification of one address, in the order
+/// `is_public_address` reads them: `[is_global, is_multicast,
+/// is_reserved, is_loopback, is_link_local, is_unspecified, is_private]`.
+fn v4_flags(address: std::net::Ipv4Addr) -> [bool; 7] {
+    let ip = u32::from(address) as u128;
+    let private = [
+        v4net(0, 0, 0, 0, 8),
+        v4net(10, 0, 0, 0, 8),
+        v4net(127, 0, 0, 0, 8),
+        v4net(169, 254, 0, 0, 16),
+        v4net(172, 16, 0, 0, 12),
+        v4net(192, 0, 0, 0, 24),
+        v4net(192, 0, 0, 170, 31),
+        v4net(192, 0, 2, 0, 24),
+        v4net(192, 168, 0, 0, 16),
+        v4net(198, 18, 0, 0, 15),
+        v4net(198, 51, 100, 0, 24),
+        v4net(203, 0, 113, 0, 24),
+        v4net(240, 0, 0, 0, 4),
+        v4net(255, 255, 255, 255, 32),
+    ];
+    let exceptions = [v4net(192, 0, 0, 9, 32), v4net(192, 0, 0, 10, 32)];
+    let is_private = in_nets(ip, 32, &private) && !in_nets(ip, 32, &exceptions);
+    let is_global = !in_nets(ip, 32, &[v4net(100, 64, 0, 0, 10)]) && !is_private;
+    [
+        is_global,
+        in_nets(ip, 32, &[v4net(224, 0, 0, 0, 4)]),
+        in_nets(ip, 32, &[v4net(240, 0, 0, 0, 4)]),
+        in_nets(ip, 32, &[v4net(127, 0, 0, 0, 8)]),
+        in_nets(ip, 32, &[v4net(169, 254, 0, 0, 16)]),
+        ip == 0,
+        is_private,
+    ]
+}
+
+/// The same flags for an IPv6 address; an IPv4-mapped one
+/// (`::ffff:a.b.c.d`) is judged by its IPv4 address alone, as Python's
+/// properties do.
+fn v6_flags(address: std::net::Ipv6Addr) -> [bool; 7] {
+    let ip = u128::from(address);
+    if (ip >> 32) == 0xFFFF {
+        return v4_flags(std::net::Ipv4Addr::from((ip & 0xFFFF_FFFF) as u32));
+    }
+    let private = [
+        v6net("::1", 128),
+        v6net("::", 128),
+        v6net("::ffff:0:0", 96),
+        v6net("64:ff9b:1::", 48),
+        v6net("100::", 64),
+        v6net("2001::", 23),
+        v6net("2001:db8::", 32),
+        v6net("2002::", 16),
+        v6net("3fff::", 20),
+        v6net("fc00::", 7),
+        v6net("fe80::", 10),
+    ];
+    let exceptions = [
+        v6net("2001:1::1", 128),
+        v6net("2001:1::2", 128),
+        v6net("2001:3::", 32),
+        v6net("2001:4:112::", 48),
+        v6net("2001:20::", 28),
+        v6net("2001:30::", 28),
+    ];
+    let reserved = [
+        v6net("::", 8),
+        v6net("100::", 8),
+        v6net("200::", 7),
+        v6net("400::", 6),
+        v6net("800::", 5),
+        v6net("1000::", 4),
+        v6net("4000::", 3),
+        v6net("6000::", 3),
+        v6net("8000::", 3),
+        v6net("a000::", 3),
+        v6net("c000::", 3),
+        v6net("e000::", 4),
+        v6net("f000::", 5),
+        v6net("f800::", 6),
+        v6net("fe00::", 9),
+    ];
+    let is_private = in_nets(ip, 128, &private) && !in_nets(ip, 128, &exceptions);
+    [
+        !is_private,
+        in_nets(ip, 128, &[v6net("ff00::", 8)]),
+        in_nets(ip, 128, &reserved),
+        ip == 1,
+        in_nets(ip, 128, &[v6net("fe80::", 10)]),
+        ip == 0,
+        is_private,
+    ]
+}
+
+/// True only for a globally routable unicast address.
+///
+/// The SSRF floor of a hostname toolkit (`Toolkit::allowed_hosts`): no
+/// private, loopback, link-local, carrier-grade NAT, multicast, reserved,
+/// documentation or unspecified address, in IPv4 or IPv6. An IPv6 address
+/// that embeds an IPv4 one (IPv4-mapped `::ffff:a.b.c.d`, NAT64
+/// `64:ff9b::/96`, 6to4 `2002::/16`) is judged by the embedded address as
+/// well, so `::ffff:127.0.0.1` cannot pass as an IPv6 literal. The
+/// classification is Python 3.13's `ipaddress` one.
+pub fn is_public_address(address: IpAddr) -> bool {
+    let [global, multicast, reserved, loopback, link_local, unspecified, private] = match address {
+        IpAddr::V4(a) => v4_flags(a),
+        IpAddr::V6(a) => v6_flags(a),
+    };
+    if !global || multicast || reserved || loopback || link_local || unspecified || private {
+        return false;
+    }
+    if let IpAddr::V6(a) = address {
+        let ip = u128::from(a);
+        let embedded: Option<u32> = if (ip >> 32) == 0xFFFF {
+            // ipv4_mapped
+            Some((ip & 0xFFFF_FFFF) as u32)
+        } else if (ip >> 112) == 0x2002 {
+            // sixtofour
+            Some(((ip >> 80) & 0xFFFF_FFFF) as u32)
+        } else if in_nets(ip, 128, &[v6net("64:ff9b::", 96)]) {
+            // NAT64
+            Some((ip & 0xFFFF_FFFF) as u32)
+        } else {
+            None
+        };
+        if let Some(v4) = embedded {
+            if !is_public_address(IpAddr::V4(std::net::Ipv4Addr::from(v4))) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// One DNS label: letters, digits and inner hyphens, 1-63 characters
+/// (Python's `^(?!-)[a-z0-9-]{1,63}(?<!-)$`).
+// PORT NOTE: Python's `$` also matched before a trailing newline, so a
+// label with a newline at its end passed the regex there; it is refused
+// here.
+fn is_host_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 63
+        && label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !label.starts_with('-')
+        && !label.ends_with('-')
+}
+
+/// Validates `allowed_hosts` entries: exact DNS names, nothing else.
+///
+/// No wildcard in any form -- `*.github.com` would hand the choice of host
+/// to whoever controls that zone's subdomains, which is the decision this
+/// field exists to keep in toolkits.yaml. No IP literal either: an address
+/// belongs in `allowed_cidrs`, where it is not subject to the
+/// public-address floor a name gets.
+fn parse_allowed_hosts(value: Option<&Value>, where_: &str) -> ConfigResult<Vec<String>> {
+    let hosts = str_tuple(value, where_)?;
+    let mut out: Vec<String> = Vec::new();
+    for raw in &hosts {
+        let host = normalize_hostname(raw);
+        if host.contains('*') || host.contains('?') {
+            return Err(ConfigError::new(format!(
+                "{where_}: allowed_hosts entry {} is a wildcard -- only exact hostnames are accepted (e.g. 'api.github.com')",
+                repr_str(raw)
+            )));
+        }
+        if py_ip_address(host.trim_matches(|c| c == '[' || c == ']')).is_some() {
+            return Err(ConfigError::new(format!(
+                "{where_}: allowed_hosts entry {} is an IP address -- put addresses in allowed_cidrs (e.g. '{host}/32')",
+                repr_str(raw)
+            )));
+        }
+        let labels: Vec<&str> = host.split('.').collect();
+        if host.is_empty()
+            || host.chars().count() > 253
+            || labels.len() < 2
+            || !labels.iter().all(|label| is_host_label(label))
+        {
+            return Err(ConfigError::new(format!(
+                "{where_}: allowed_hosts entry {} is not a valid fully qualified hostname (e.g. 'api.github.com')",
+                repr_str(raw)
+            )));
+        }
+        if !out.contains(&host) {
+            out.push(host);
+        }
+    }
+    Ok(out)
+}
+
+/// `allowed_cidrs` and `allowed_hosts` of an http/opencode toolkit
+/// (`_parse_network_allowlist`). At least one must be non-empty: a toolkit
+/// with neither would have no target restriction at all. Either may stand
+/// alone -- `allowed_cidrs` alone is every toolkit written before 1.10.0,
+/// unchanged.
+pub fn parse_network_allowlist(
+    spec: &Map<String, Value>,
+    where_: &str,
+) -> ConfigResult<(Vec<String>, Vec<String>)> {
+    let allowed_cidrs = str_tuple(spec.get("allowed_cidrs"), where_)?;
+    check_cidrs(&allowed_cidrs, where_)?;
+    let allowed_hosts = parse_allowed_hosts(spec.get("allowed_hosts"), where_)?;
+    if allowed_cidrs.is_empty() && allowed_hosts.is_empty() {
+        return Err(ConfigError::new(format!(
+            "{where_}: 'allowed_cidrs' must not be empty (or set 'allowed_hosts' to exact hostnames instead)"
+        )));
+    }
+    Ok((allowed_cidrs, allowed_hosts))
+}
+
+/// Load-time half of the hostname check (`_check_url_host_allowed`): a
+/// toolkit whose own target is not in its `allowed_hosts` could never make
+/// a call, so it is refused here rather than on its first one. The
+/// connect-time check in `execute::http` stays the authoritative one.
+fn check_url_host_allowed(url: &str, allowed_hosts: &[String], where_: &str, field: &str) -> ConfigResult<()> {
+    if allowed_hosts.is_empty() {
+        return Ok(());
+    }
+    let host = normalize_hostname(&url_hostname(url));
+    if !allowed_hosts.contains(&host) {
+        return Err(ConfigError::new(format!(
+            "{where_}: {field} host {} is not in allowed_hosts {}",
+            repr_str(&host),
+            repr_list(allowed_hosts)
+        )));
+    }
+    Ok(())
+}
+
+/// The part both network executors share in `load_tier1`: the allowlist,
+/// then the toolkit's own and every destination's `base_url` against it.
+fn parse_network_targets(
+    tk: &mut Toolkit,
+    spec: &Map<String, Value>,
+    where_: &str,
+    base_url: &str,
+    destinations: &IndexMap<String, Destination>,
+) -> ConfigResult<()> {
+    let (allowed_cidrs, allowed_hosts) = parse_network_allowlist(spec, where_)?;
+    check_url_host_allowed(base_url, &allowed_hosts, where_, "base_url")?;
+    for dest_name in &tk.destinations {
+        if let Some(dest_url) = destinations.get(dest_name).and_then(|d| d.base_url.as_deref()) {
+            check_url_host_allowed(
+                dest_url,
+                &allowed_hosts,
+                &format!("{where_}: destination {}", repr_str(dest_name)),
+                "base_url",
+            )?;
+        }
+    }
+    tk.allowed_cidrs = allowed_cidrs;
+    tk.allowed_hosts = allowed_hosts;
+    Ok(())
+}
+
 fn has_dotdot(path: &str) -> bool {
     pure_posix_parts(path).iter().any(|p| p == "..")
 }
@@ -1079,6 +1402,16 @@ fn parse_toolkit(
         tk.required_scopes = str_tuple(spec.get("required_scopes"), where_)?;
     }
 
+    // `allowed_hosts` on an executor that never reads it would read as a
+    // network restriction that does not exist -- refused like `run_as`
+    // above rather than silently ignored.
+    if spec.get("allowed_hosts").is_some_and(|v| !v.is_null()) && !contains(NETWORK_EXECUTORS, executor) {
+        return Err(ConfigError::new(format!(
+            "{where_}: 'allowed_hosts' is only supported on an 'http' or 'opencode' toolkit, not on {}",
+            repr_str(executor)
+        )));
+    }
+
     tk.destinations = toolkit_destinations(spec, executor, where_, destinations)?;
 
     let req_str = |key: &str| -> ConfigResult<String> { Ok(py_str(require(spec, key, where_)?)) };
@@ -1156,9 +1489,8 @@ fn parse_toolkit(
                     )));
                 }
             }
-            tk.allowed_cidrs = req_list("allowed_cidrs")?;
-            nonempty(&tk.allowed_cidrs, "allowed_cidrs")?;
-            check_cidrs(&tk.allowed_cidrs, where_)?;
+            let base_url = tk.base_url.clone().unwrap_or_default();
+            parse_network_targets(&mut tk, spec, where_, &base_url, destinations)?;
             // FR-8.8 is not a configurable knob.
             if spec.get("follow_redirects").is_some_and(py_truthy) {
                 return Err(ConfigError::new(format!(
@@ -1223,10 +1555,8 @@ fn parse_toolkit(
                      as a header, and would send this literally."
                 )));
             }
+            parse_network_targets(&mut tk, spec, where_, &base_url, destinations)?;
             tk.base_url = Some(base_url);
-            tk.allowed_cidrs = req_list("allowed_cidrs")?;
-            nonempty(&tk.allowed_cidrs, "allowed_cidrs")?;
-            check_cidrs(&tk.allowed_cidrs, where_)?;
             tk.allowed_opencode_operations = req_list("allowed_opencode_operations")?;
             nonempty(&tk.allowed_opencode_operations, "allowed_opencode_operations")?;
             let unknown = sorted_difference(&tk.allowed_opencode_operations, OPENCODE_OPERATIONS);

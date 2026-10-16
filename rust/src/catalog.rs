@@ -29,7 +29,7 @@ use crate::errors::{read_config_file, ConfigError, ConfigResult};
 use crate::pyfmt::{repr_list, repr_str, repr_value, type_name};
 use crate::pyre::PyRegex;
 use crate::runas::parse_run_as;
-use crate::tier1::{py_eq, py_int, py_str, py_truthy, validate_http_base_url, Tier1, Toolkit};
+use crate::tier1::{py_eq, py_int, py_str, py_truthy, url_hostname, validate_http_base_url, Tier1, Toolkit};
 
 /// Placeholders in argv, derived and scope templates.
 pub const PLACEHOLDER_PATTERN: &str = r"\{([a-z_][a-z0-9_]*)\}";
@@ -611,6 +611,19 @@ pub fn validate_against_tier1(tool: &ToolDef, toolkit: &Toolkit) -> ConfigResult
                     repr_opt(&tool.path_template),
                     repr_list(&toolkit.allowed_path_prefixes)
                 )));
+            }
+            // A per-tool base_url override on a hostname toolkit names a
+            // host too; one outside `allowed_hosts` could never connect, so
+            // it is disabled here instead of failing on every call.
+            if let Some(base_url) = tool.base_url.as_deref().filter(|b| !b.is_empty()) {
+                let override_host = url_hostname(base_url);
+                if !toolkit.allows_host(&override_host) {
+                    return Err(ConfigError::tier1(format!(
+                        "{where_}: base_url host {} is not in the allowed_hosts {} of toolkit {tk_name}",
+                        repr_str(&override_host),
+                        repr_list(&toolkit.allowed_hosts)
+                    )));
+                }
             }
         }
         "truenas" => {
