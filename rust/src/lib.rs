@@ -40,3 +40,4 @@ pub mod validate;
 
 // Executors.
 pub mod execute;
+pub mod privdrop;
