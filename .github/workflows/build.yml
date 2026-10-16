@@ -278,9 +278,51 @@ jobs:
       - name: Build
         run: npm run build
 
+  rust:
+    name: rust
+    # The Rust implementation (rust/). It is not in the image yet: until it
+    # serves everything the Python package does, this job only proves it
+    # builds without warnings and passes its own suite. Several of its tests
+    # drive the Python package (the MCP SDK client against the Rust server,
+    # scrypt/Fernet/audit-line interop), so the Python side is installed
+    # too and the interop tests are told where it is instead of skipping.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the Python reference
+        working-directory: .
+        run: pip install -e ".[dev]" -c constraints.txt
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo build --locked --all-targets
+
+      - name: Test suite
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          export GATEKEEPER_INTEROP_PYTHON="$(command -v python)"
+          cargo test --locked
+
   image:
     name: image
-    needs: [test, test-privileged, frontend]
+    needs: [test, test-privileged, frontend, rust]
     runs-on: ubuntu-latest
     permissions:
       contents: read
