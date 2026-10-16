@@ -304,8 +304,10 @@ async fn every_handshake_session_is_notified_on_its_standalone_stream() {
     assert_eq!(s.notifier.tracked_sessions(), 1);
     let r = s.post("/mcp", json!({"jsonrpc": "2.0", "id": 9, "method": "ping"}), &[("mcp-session-id", &one)]).await;
     assert_eq!(r.status(), 404);
+    // The manager forgot the session on DELETE: no tombstone, no header.
+    assert!(r.headers().get("mcp-session-id").is_none());
     let body: Value = r.json().await.unwrap();
-    assert_eq!(body["error"]["message"], "Not Found: Session has been terminated");
+    assert_eq!(body["error"]["message"], "Session not found");
 }
 
 #[tokio::test]

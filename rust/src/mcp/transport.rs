@@ -4,13 +4,15 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
-use axum::body::Body;
+use axum::body::{Body, HttpBody};
 use axum::response::Response;
 use http::{HeaderValue, Method, StatusCode};
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
-use tokio::sync::{mpsc, oneshot};
+use futures::StreamExt;
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -18,7 +20,7 @@ use super::handler::{RequestContext, SessionChannel};
 use super::jsonrpc::{self, Message};
 use super::kernel::Conn;
 use super::types::{
-    ErrorData, RidKey, DEFAULT_NEGOTIATED_VERSION, INVALID_PARAMS, INVALID_REQUEST,
+    ErrorData, RidKey, DEFAULT_NEGOTIATED_VERSION, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST,
     LAST_EVENT_ID_HEADER, MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_ID_HEADER, PARSE_ERROR, REQUEST_CANCELLED,
 };
 use super::{check_accept, security_check, sse, Inbound, Mount};
@@ -35,11 +37,58 @@ impl SessionMap {
     fn get(&self, id: &str) -> Option<Arc<Session>> {
         self.map.lock().get(id).cloned()
     }
+
+    /// `_discard_session`: stop tracking the session (its id answers 404
+    /// from now on) and make sure its transport refuses anything that still
+    /// reaches it.
+    fn discard(&self, session: &Arc<Session>) {
+        if let Some(id) = &session.id {
+            self.map.lock().remove(id);
+        }
+        if !session.is_terminated() {
+            session.terminate();
+        }
+    }
+}
+
+/// The idle countdown of a stateful session (`idle_scope` plus
+/// `_requests_in_flight`): suspended while any request is being served
+/// (an open GET stream included), restarted when the last one completes.
+struct IdleState {
+    in_flight: usize,
+    /// `None` while suspended (the scope's `math.inf`).
+    deadline: Option<Instant>,
+    /// The countdown ran out (`idle_scope.cancel_called`).
+    expired: bool,
+}
+
+struct Idle {
+    timeout: Duration,
+    state: Mutex<IdleState>,
+    changed: Notify,
+}
+
+/// Holds one request in flight; dropping it (when the response, streamed
+/// or not, is done) restarts the countdown if it was the last one.
+struct InFlight(Arc<Session>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        if let Some(idle) = &self.0.idle {
+            let mut st = idle.state.lock();
+            st.in_flight = st.in_flight.saturating_sub(1);
+            if st.in_flight == 0 {
+                st.deadline = Some(Instant::now() + idle.timeout);
+            }
+            drop(st);
+            idle.changed.notify_one();
+        }
+    }
 }
 
 /// One handshake-era connection. On the stateful mount it lives in the
-/// session map (a terminated one stays there as a tombstone until its idle
-/// timeout); on the stateless mount it lives for one request.
+/// session map until it is discarded (DELETE, idle timeout, a refused
+/// opening request); on the stateless mount it lives for one request.
 pub(crate) struct Session {
     id: Option<String>,
     conn: Conn,
@@ -49,7 +98,8 @@ pub(crate) struct Session {
     standalone: Mutex<Option<(u64, mpsc::Sender<Value>)>>,
     standalone_gen: AtomicU64,
     inflight: Mutex<HashMap<RidKey, CancellationToken>>,
-    deadline: Mutex<Instant>,
+    /// Stateful sessions with an idle timeout only.
+    idle: Option<Idle>,
     /// Whether this connection has a standalone channel at all (not on the
     /// stateless mount).
     has_channel: bool,
@@ -70,7 +120,7 @@ impl SessionChannel for Session {
 }
 
 impl Session {
-    fn new(id: Option<String>, conn: Conn, has_channel: bool) -> Self {
+    fn new(id: Option<String>, conn: Conn, has_channel: bool, idle_timeout: Option<Duration>) -> Self {
         Session {
             id,
             conn,
@@ -79,7 +129,11 @@ impl Session {
             standalone: Mutex::new(None),
             standalone_gen: AtomicU64::new(0),
             inflight: Mutex::new(HashMap::new()),
-            deadline: Mutex::new(Instant::now()),
+            idle: idle_timeout.map(|timeout| Idle {
+                timeout,
+                state: Mutex::new(IdleState { in_flight: 0, deadline: None, expired: false }),
+                changed: Notify::new(),
+            }),
             has_channel,
         }
     }
@@ -155,7 +209,45 @@ impl Session {
         }
     }
 
+    /// `handle_request`: with an idle timeout, the request holds the
+    /// session open until its response (a whole SSE stream included) is
+    /// done.
     pub(crate) async fn handle(self: &Arc<Self>, mount: &Mount, inbound: Inbound) -> Response {
+        let Some(idle) = &self.idle else { return self.handle_inner(mount, inbound).await };
+        let expired = {
+            let mut st = idle.state.lock();
+            if !st.expired {
+                st.in_flight += 1;
+                st.deadline = None;
+            }
+            st.expired
+        };
+        if expired {
+            // The idle period already ran out and the session is ending:
+            // answer as terminated.
+            if !self.is_terminated() {
+                self.terminate();
+            }
+            return self.handle_inner(mount, inbound).await;
+        }
+        let guard = InFlight(self.clone());
+        let response = self.handle_inner(mount, inbound).await;
+        if response.body().size_hint().exact().is_some() {
+            drop(guard);
+            return response;
+        }
+        let (parts, body) = response.into_parts();
+        let mut data = body.into_data_stream();
+        let stream = async_stream::stream! {
+            let _guard = guard;
+            while let Some(chunk) = data.next().await {
+                yield chunk;
+            }
+        };
+        Response::from_parts(parts, Body::from_stream(stream))
+    }
+
+    async fn handle_inner(self: &Arc<Self>, mount: &Mount, inbound: Inbound) -> Response {
         if let Some(r) = security_check(&mount.config.security, &inbound) {
             return r;
         }
@@ -408,8 +500,17 @@ pub(crate) async fn handle_stateless(mount: &Mount, inbound: Inbound) -> Respons
     // Born-ready, no standalone channel: the header (or the spec's
     // default-absent value) seeds the connection's version.
     let version = inbound.header(MCP_PROTOCOL_VERSION_HEADER).unwrap_or_else(|| DEFAULT_NEGOTIATED_VERSION.to_string());
-    let session = Arc::new(Session::new(None, Conn::born_ready(&version), false));
+    let session = Arc::new(Session::new(None, Conn::born_ready(&version), false, None));
     session.handle(mount, inbound).await
+}
+
+/// `_error_response`: a JSON-RPC error body (no request id), no session header.
+fn manager_error(message: &str, status: StatusCode, code: i64) -> Response {
+    let body = jsonrpc::legacy_text(&jsonrpc::error(None, &ErrorData::new(code, message)));
+    let mut r = Response::new(Body::from(body));
+    *r.status_mut() = status;
+    r.headers_mut().insert("content-type", HeaderValue::from_static("application/json"));
+    r
 }
 
 pub(crate) async fn handle_stateful(mount: &Mount, inbound: Inbound) -> Response {
@@ -421,52 +522,100 @@ pub(crate) async fn handle_stateful(mount: &Mount, inbound: Inbound) -> Response
             n.forget(id);
         }
     }
+    // The SDK binds a session to the credential that created it
+    // (`scope["user"]`, which only its own `AuthenticationMiddleware`
+    // sets) and answers anyone else 404 `Session not found`. gatekeeper
+    // authenticates in its own middleware and never sets `scope["user"]`,
+    // so every requestor is `None`, matches the `None` owner, and the
+    // binding never refuses anything: there is nothing to port.
     match header {
         Some(id) => match mount.sessions.get(&id) {
             Some(session) => {
-                if let Some(timeout) = mount.config.session_idle_timeout {
-                    *session.deadline.lock() = Instant::now() + timeout;
+                let response = session.handle(mount, inbound).await;
+                if session.is_terminated() {
+                    // The client ended the session (DELETE): forget it now.
+                    mount.sessions.discard(&session);
                 }
-                session.handle(mount, inbound).await
+                response
             }
             None => {
                 tracing::info!("Rejected request with unknown or expired session ID: {}", id.chars().take(64).collect::<String>());
-                let body = jsonrpc::legacy_text(&jsonrpc::error(None, &ErrorData::new(INVALID_REQUEST, "Session not found")));
-                let mut r = Response::new(Body::from(body));
-                *r.status_mut() = StatusCode::NOT_FOUND;
-                r.headers_mut().insert("content-type", HeaderValue::from_static("application/json"));
-                r
+                manager_error("Session not found", StatusCode::NOT_FOUND, INVALID_REQUEST)
             }
         },
         None => {
-            let id = uuid::Uuid::new_v4().simple().to_string();
-            let session = Arc::new(Session::new(Some(id.clone()), Conn::for_loop(), true));
-            mount.sessions.map.lock().insert(id.clone(), session.clone());
-            tracing::info!("Created new transport with session ID: {id}");
-            if let Some(timeout) = mount.config.session_idle_timeout {
-                *session.deadline.lock() = Instant::now() + timeout;
+            // `_admit_session`: the session limit and registration, under
+            // one lock.
+            let session = {
+                let mut map = mount.sessions.map.lock();
+                if mount.config.max_sessions.is_some_and(|max| map.len() >= max) {
+                    None
+                } else {
+                    let id = uuid::Uuid::new_v4().simple().to_string();
+                    let session =
+                        Arc::new(Session::new(Some(id.clone()), Conn::for_loop(), true, mount.config.session_idle_timeout));
+                    map.insert(id.clone(), session.clone());
+                    tracing::info!("Created new transport with session ID: {id}");
+                    Some(session)
+                }
+            };
+            let Some(session) = session else {
+                tracing::warn!(
+                    "Refusing to open a new session: {} sessions are already open",
+                    mount.config.max_sessions.unwrap_or_default()
+                );
+                return manager_error("Too many open sessions", StatusCode::SERVICE_UNAVAILABLE, INTERNAL_ERROR);
+            };
+            if session.idle.is_some() {
                 spawn_idle_reaper(Arc::downgrade(&mount.sessions), session.clone());
             }
-            session.handle(mount, inbound).await
+            // `_serve_opening_request`: without a session id only an
+            // initialize can succeed; if this request is refused nothing
+            // was established and the session is discarded again.
+            let response = session.handle(mount, inbound).await;
+            if response.status().as_u16() >= 400 {
+                mount.sessions.discard(&session);
+            }
+            response
         }
     }
 }
 
 fn spawn_idle_reaper(sessions: Weak<SessionMap>, session: Arc<Session>) {
     tokio::spawn(async move {
+        let Some(idle) = &session.idle else { return };
         loop {
-            let deadline = *session.deadline.lock();
-            tokio::time::sleep_until(deadline).await;
-            if *session.deadline.lock() > Instant::now() {
-                continue;
+            let deadline = {
+                let st = idle.state.lock();
+                if st.expired {
+                    return;
+                }
+                st.deadline
+            };
+            let sleep = async {
+                match deadline {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                _ = session.closed.cancelled() => return,
+                _ = idle.changed.notified() => continue,
+                _ = sleep => {}
             }
-            let id = session.id.clone().unwrap_or_default();
-            tracing::info!("Session {id} idle timeout");
-            if let Some(map) = sessions.upgrade() {
-                map.map.lock().remove(&id);
+            {
+                let mut st = idle.state.lock();
+                if st.in_flight > 0 || st.deadline.is_none_or(|d| d > Instant::now()) {
+                    continue;
+                }
+                st.expired = true;
             }
-            session.terminate();
-            break;
+            tracing::info!("Session {} idle timeout", session.id.as_deref().unwrap_or_default());
+            match sessions.upgrade() {
+                Some(map) => map.discard(&session),
+                None => session.terminate(),
+            }
+            return;
         }
     });
 }

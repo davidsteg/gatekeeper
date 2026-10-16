@@ -23,7 +23,7 @@ use super::jsonrpc::{self, Message};
 use super::kernel::{Conn, Kernel, Sink};
 use super::types::{
     ErrorData, McpError, CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, HEADER_MISMATCH, INVALID_REQUEST,
-    MCP_PARAM_HEADER_PREFIX, PARSE_ERROR, PROTOCOL_VERSION_META_KEY,
+    MCP_PARAM_HEADER_PREFIX, MCP_PROTOCOL_VERSION_HEADER, PARSE_ERROR, PROTOCOL_VERSION_META_KEY,
 };
 use super::{check_accept, schema, security_check, sse, Inbound, Mount};
 
@@ -129,6 +129,26 @@ async fn mcp_param_rejection(
     inbound::validate_mcp_param_headers(&input_schema, &arguments, &inbound.header_pairs())
 }
 
+/// `_INVALID_BODY`: well-formed JSON that is not one request or notification.
+fn invalid_body() -> Value {
+    jsonrpc::error(None, &ErrorData::new(INVALID_REQUEST, "Body must be a single JSON-RPC request or notification object"))
+}
+
+/// `_acknowledge_notification`: an id-less object is `202` for a
+/// notification at a served version (and dropped: nothing on this wire acts
+/// on one), a rejection otherwise. Only the version header is checked.
+fn acknowledge_notification(obj: &Map<String, Value>, inbound: &Inbound) -> Response {
+    let Some((method, _)) = jsonrpc::parse_notification(obj) else {
+        return write(&invalid_body());
+    };
+    let requested = inbound.header(MCP_PROTOCOL_VERSION_HEADER).unwrap_or_default();
+    if let Some(unsupported) = inbound::unsupported_protocol_version_rejection(&requested) {
+        return write(&jsonrpc::error(None, &unsupported));
+    }
+    tracing::debug!("acknowledged and dropped client notification {method} at {requested}");
+    empty(StatusCode::ACCEPTED, None)
+}
+
 pub(crate) async fn handle(mount: &Mount, inbound: Inbound) -> Response {
     if let Some(r) = security_check(&mount.config.security, &inbound) {
         return r;
@@ -143,14 +163,13 @@ pub(crate) async fn handle(mount: &Mount, inbound: Inbound) -> Response {
     let Ok(decoded) = jsonrpc::parse_json(&inbound.body) else {
         return write(&jsonrpc::error(None, &ErrorData::new(PARSE_ERROR, "Parse error")));
     };
+    if let Some(obj) = decoded.as_object().filter(|o| !o.contains_key("id")) {
+        return acknowledge_notification(obj, &inbound);
+    }
     let (id, method, params) = match (decoded.as_object(), jsonrpc::parse_message(&decoded)) {
         (Some(_), Ok(Message::Request { id, method, params })) => (id, method, params),
-        _ => {
-            return write(&jsonrpc::error(
-                None,
-                &ErrorData::new(INVALID_REQUEST, "Body must be a single JSON-RPC request object"),
-            ))
-        }
+        // A batch, a posted response, or a request whose envelope is malformed.
+        _ => return write(&invalid_body()),
     };
     let pairs = inbound.header_pairs();
     if let Some(duplicated) = find_duplicated_routing_header(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str()))) {

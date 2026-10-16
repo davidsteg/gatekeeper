@@ -157,6 +157,17 @@ fn opt_params(v: Option<&Value>) -> Option<Map<String, Value>> {
     }
 }
 
+/// `JSONRPCNotification.model_validate` alone: `(method, params)`, or
+/// `None` when the object is not a valid notification.
+pub(crate) fn parse_notification(m: &Map<String, Value>) -> Option<(String, Option<Map<String, Value>>)> {
+    let obj = Value::Object(m.clone());
+    let mut errs = Vec::new();
+    check_jsonrpc(&mut errs, "JSONRPCNotification", m, &obj);
+    check_str(&mut errs, "JSONRPCNotification.method".into(), m.get("method"), &obj);
+    check_dict(&mut errs, "JSONRPCNotification.params".into(), m.get("params"), &obj, true);
+    errs.is_empty().then(|| (m["method"].as_str().unwrap_or_default().to_string(), opt_params(m.get("params"))))
+}
+
 /// Classify a decoded body, or render the pydantic error text for it.
 pub fn parse_message(body: &Value) -> Result<Message, String> {
     let models = ["JSONRPCRequest", "JSONRPCNotification", "JSONRPCResponse", "JSONRPCError"];

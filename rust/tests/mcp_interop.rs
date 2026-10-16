@@ -12,7 +12,9 @@
 //!   two transcripts must be identical.
 //!
 //! Both skip (pass with a note) when the Python reference venv is missing.
-//! Override its interpreter with `GATEKEEPER_INTEROP_PYTHON`.
+//! Override its interpreter with `GATEKEEPER_INTEROP_PYTHON`; set
+//! `GATEKEEPER_INTEROP_DUMP=<dir>` to keep both transcripts
+//! (`python.txt`, `rust.txt`) for diffing.
 
 #[path = "../examples/mcp_echo.rs"]
 mod echo;
@@ -117,6 +119,14 @@ async fn the_wire_matches_the_python_sdk() {
     let base = serve_rust().await;
     let (rs_ok, rs_out, rs_err) = run_script(&python, "probe.py", &base).await;
     assert!(rs_ok, "probe.py failed against the Rust server\n{rs_err}\n{rs_out}");
+
+    // `GATEKEEPER_INTEROP_DUMP=<dir>` keeps both transcripts for diffing.
+    if let Some(dir) = std::env::var_os("GATEKEEPER_INTEROP_DUMP") {
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).expect("dump dir");
+        std::fs::write(dir.join("python.txt"), &py_out).expect("write python.txt");
+        std::fs::write(dir.join("rust.txt"), &rs_out).expect("write rust.txt");
+    }
 
     assert!(py_out.lines().count() > 600, "suspiciously short transcript:\n{py_out}");
     if py_out != rs_out {

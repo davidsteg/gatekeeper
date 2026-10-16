@@ -42,7 +42,8 @@ use http_body_util::BodyExt;
 pub use handler::{CallToolResult, ListToolsResult, McpHandler, RequestContext, ServerInfo, SessionChannel};
 pub use inbound::{
     classify_inbound_request, decode_header_value, encode_header_value, error_code_http_status,
-    find_duplicated_routing_header, find_invalid_x_mcp_header, mcp_param_headers, validate_mcp_param_headers,
+    find_duplicated_routing_header, find_invalid_x_mcp_header, mcp_param_headers, unsupported_protocol_version_rejection,
+    validate_mcp_param_headers,
     x_mcp_header_map, ModernRoute,
 };
 pub use jsonrpc::{parse_message, Message};
@@ -54,8 +55,11 @@ pub use types::*;
 /// How long a handshake-era session may sit idle before it is reaped
 /// (`gatekeeper.server.SESSION_IDLE_TIMEOUT_SECONDS`).
 pub const SESSION_IDLE_TIMEOUT_SECONDS: u64 = 3600;
-/// The SDK's default POST body cap.
+/// The SDK's default request body cap (`DEFAULT_MAX_REQUEST_BODY_SIZE`).
 pub const DEFAULT_MAX_REQUEST_BODY_SIZE: usize = 4 * 1024 * 1024;
+/// The SDK's default cap on concurrent stateful sessions per mount
+/// (`DEFAULT_MAX_SESSIONS`); gatekeeper keeps it.
+pub const DEFAULT_MAX_SESSIONS: usize = 10_000;
 
 /// DNS-rebinding protection (`TransportSecuritySettings`). The POST
 /// content-type check runs regardless.
@@ -78,6 +82,9 @@ pub struct McpConfig {
     /// Stateful mounts only.
     pub session_idle_timeout: Option<Duration>,
     pub max_request_body_size: usize,
+    /// Stateful mounts only: while this many sessions are open, a request
+    /// that would open another is answered 503. `None` removes the limit.
+    pub max_sessions: Option<usize>,
     /// Serves `subscriptions/listen`, announces `tools.listChanged` in both
     /// eras and is told about `DELETE`d sessions.
     pub notifier: Option<CatalogNotifier>,
@@ -92,6 +99,7 @@ impl McpConfig {
             stateless: false,
             session_idle_timeout: Some(Duration::from_secs(SESSION_IDLE_TIMEOUT_SECONDS)),
             max_request_body_size: DEFAULT_MAX_REQUEST_BODY_SIZE,
+            max_sessions: Some(DEFAULT_MAX_SESSIONS),
             notifier: None,
             security: TransportSecurity::default(),
         }
@@ -164,14 +172,12 @@ async fn handle(State(mount): State<Arc<Mount>>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
     let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0);
     let limit = mount.config.max_request_body_size;
-    let body = if parts.method == Method::POST {
-        let declared = parts.headers.get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
-        match read_body(body, limit, declared.is_some_and(|n| n > limit as u64)).await {
-            Some(bytes) => bytes,
-            None => return plain(413, "Request body too large"),
-        }
-    } else {
-        Bytes::new()
+    // `RequestBodyLimitMiddleware` caps every HTTP method's body, not just
+    // POST's.
+    let declared = parts.headers.get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
+    let body = match read_body(body, limit, declared.is_some_and(|n| n > limit as u64)).await {
+        Some(bytes) => bytes,
+        None => return plain(413, "Request body too large"),
     };
     let inbound = Inbound { method: parts.method, headers: parts.headers, extensions: parts.extensions, peer, body };
 

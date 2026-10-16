@@ -332,13 +332,22 @@ pub fn classify_inbound_request(
     let Some(version) = protocol_version.as_str() else {
         return Err(reject(INVALID_PARAMS, "the protocol-version envelope value must be a string"));
     };
-    if !MODERN_PROTOCOL_VERSIONS.contains(&version) {
-        let mut data = Map::new();
-        data.insert("supported".into(), Value::from(MODERN_PROTOCOL_VERSIONS.to_vec()));
-        data.insert("requested".into(), Value::from(version));
-        return Err(ErrorData::with_data(UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version", Value::Object(data)));
+    if let Some(unsupported) = unsupported_protocol_version_rejection(version) {
+        return Err(unsupported);
     }
     Ok(ModernRoute { protocol_version: version.to_string(), client_info, client_capabilities })
+}
+
+/// `unsupported_protocol_version_rejection`: the ladder's last rung, shared
+/// with the modern entry's notification arm.
+pub fn unsupported_protocol_version_rejection(requested: &str) -> Option<Rejection> {
+    if MODERN_PROTOCOL_VERSIONS.contains(&requested) {
+        return None;
+    }
+    let mut data = Map::new();
+    data.insert("supported".into(), Value::from(MODERN_PROTOCOL_VERSIONS.to_vec()));
+    data.insert("requested".into(), Value::from(requested));
+    Some(ErrorData::with_data(UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version", Value::Object(data)))
 }
 
 fn is_canonical_decimal(s: &str) -> bool {
