@@ -17,3 +17,9 @@ pub mod pyjson;
 pub mod pyre;
 pub mod timeutil;
 pub mod yaml;
+
+// Self-contained stores and helpers.
+pub mod artifacts;
+pub mod messages;
+pub mod release_notes;
+pub mod toolkit_reference;

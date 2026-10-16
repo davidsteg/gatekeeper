@@ -25,7 +25,9 @@ bytes = "1"
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 fancy-regex = "0.14"
-fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
+# zlib backend: gzip output byte-identical to Python's (same libz).
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
+fernet ={ version = "0.2", default-features = false, features = ["rustcrypto"] }
 futures = "0.3"
 hex = "0.4"
 hmac = "0.12"
