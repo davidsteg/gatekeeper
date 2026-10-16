@@ -559,7 +559,7 @@ def test_path_roots_and_friends_stay_redeploy_only(tmp_path, sandbox):
             assert field in str(exc)
 
 
-def test_update_writable_fields_is_exactly_these_four(tmp_path, sandbox):
+def test_update_writable_fields_is_exactly_these(tmp_path, sandbox):
     """A guard on the set itself, so widening it stays a deliberate edit
 
     with a test to change rather than a one-word diff that reads as
@@ -567,7 +567,11 @@ def test_update_writable_fields_is_exactly_these_four(tmp_path, sandbox):
     """
     from gatekeeper.toolkit_proposals import UPDATE_WRITABLE_FIELDS
 
-    assert UPDATE_WRITABLE_FIELDS == {"executor", "binaries", "denied_args", "run_as"}
+    # allowed_hosts/allowed_cidrs joined in 1.10.0 (network targets by
+    # proposal, test_allowed_hosts.py); path_roots and friends did not.
+    assert UPDATE_WRITABLE_FIELDS == {
+        "executor", "binaries", "denied_args", "run_as", "allowed_hosts", "allowed_cidrs",
+    }
 
 
 def test_deploy_run_as_null_clears_it(tmp_path, sandbox):

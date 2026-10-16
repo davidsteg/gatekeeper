@@ -12,6 +12,7 @@ import dataclasses
 import ipaddress
 import logging
 import os
+import re
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
@@ -237,6 +238,24 @@ class Toolkit:
     #: target restriction for LAN services, so it must be scoped narrowly
     #: per toolkit (FR-8.15), never a blanket private-range allow.
     allowed_cidrs: tuple[str, ...] = ()
+    #: Exact hostnames this toolkit may connect to (1.10.0), for public
+    #: services whose addresses are not a stable, published range --
+    #: `api.github.com` answering from an address in no GitHub meta list is
+    #: the case that motivated it. Lower-case, no trailing dot, never a
+    #: wildcard and never an IP literal (that is what `allowed_cidrs` is
+    #: for). When set, three checks apply on every connect, all of them
+    #: required (`execute_http._resolve_and_check`):
+    #:
+    #: 1. the URL's hostname is in this list,
+    #: 2. every address it resolves to is a public, globally routable one
+    #:    (`is_public_address`) -- the SSRF floor a name cannot lift,
+    #: 3. and, if `allowed_cidrs` is set as well, every address is also
+    #:    inside it -- CIDRs can only narrow a hostname toolkit, never
+    #:    reopen a private range for it.
+    #:
+    #: Empty (the default) keeps the pre-1.10.0 behaviour exactly:
+    #: `allowed_cidrs` alone decides, private LAN ranges included.
+    allowed_hosts: tuple[str, ...] = ()
 
     # -- `truenas` executor only (FR-8.3a-f) -------------------------------
 
@@ -518,6 +537,16 @@ class Toolkit:
             address in ipaddress.ip_network(cidr, strict=False)
             for cidr in self.allowed_cidrs
         )
+
+    def allows_host(self, host: str) -> bool:
+        """`allowed_hosts`: an exact, case-insensitive name match.
+
+        True for every host when the toolkit declares no `allowed_hosts`
+        -- then `allowed_cidrs` alone decides, exactly as before 1.10.0.
+        """
+        if not self.allowed_hosts:
+            return True
+        return normalize_hostname(host) in self.allowed_hosts
 
     # -- `truenas` executor ----------------------------------------------
 
@@ -815,6 +844,138 @@ def _validate_ws_url(value: str, where: str, field: str = "ws_url") -> str:
     )
 
 
+#: One DNS label: letters, digits and inner hyphens, 1-63 characters.
+_HOST_LABEL = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
+
+#: The executors that connect to a URL and so know what a host is.
+NETWORK_EXECUTORS = frozenset({"http", "opencode"})
+
+
+def normalize_hostname(host: str) -> str:
+    """Lower-case, without a trailing root dot -- the one spelling both the
+    allowlist and the URL's hostname are compared in."""
+    return host.strip().lower().rstrip(".")
+
+
+def is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True only for a globally routable unicast address.
+
+    The SSRF floor of a hostname toolkit (`Toolkit.allowed_hosts`): no
+    private, loopback, link-local, carrier-grade NAT, multicast, reserved,
+    documentation or unspecified address, in IPv4 or IPv6. An IPv6 address
+    that embeds an IPv4 one (IPv4-mapped `::ffff:a.b.c.d`, NAT64
+    `64:ff9b::/96`, 6to4 `2002::/16`) is judged by the embedded address as
+    well, so `::ffff:127.0.0.1` cannot pass as an IPv6 literal.
+    """
+    if (
+        not address.is_global
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_unspecified
+        or address.is_private
+    ):
+        return False
+    if isinstance(address, ipaddress.IPv6Address):
+        embedded: ipaddress.IPv4Address | None = address.ipv4_mapped or address.sixtofour
+        if embedded is None and address in _NAT64:
+            embedded = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+        if embedded is not None and not is_public_address(embedded):
+            return False
+    return True
+
+
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _parse_allowed_hosts(value: Any, where: str) -> tuple[str, ...]:
+    """Validates `allowed_hosts` entries: exact DNS names, nothing else.
+
+    No wildcard in any form -- `*.github.com` would hand the choice of
+    host to whoever controls that zone's subdomains, which is the
+    decision this field exists to keep in toolkits.yaml. No IP literal
+    either: an address belongs in `allowed_cidrs`, where it is not
+    subject to the public-address floor a name gets.
+    """
+    hosts = _str_tuple(value, where)
+    out: list[str] = []
+    for raw in hosts:
+        host = normalize_hostname(raw)
+        if "*" in host or "?" in host:
+            raise ConfigError(
+                f"{where}: allowed_hosts entry {raw!r} is a wildcard -- only "
+                "exact hostnames are accepted (e.g. 'api.github.com')"
+            )
+        try:
+            ipaddress.ip_address(host.strip("[]"))
+        except ValueError:
+            pass
+        else:
+            raise ConfigError(
+                f"{where}: allowed_hosts entry {raw!r} is an IP address -- "
+                f"put addresses in allowed_cidrs (e.g. '{host}/32')"
+            )
+        labels = host.split(".")
+        if (
+            not host
+            or len(host) > 253
+            or len(labels) < 2
+            or not all(_HOST_LABEL.match(label) for label in labels)
+        ):
+            raise ConfigError(
+                f"{where}: allowed_hosts entry {raw!r} is not a valid "
+                "fully qualified hostname (e.g. 'api.github.com')"
+            )
+        if host not in out:
+            out.append(host)
+    return tuple(out)
+
+
+def _parse_network_allowlist(
+    spec: dict[str, Any], where: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """`allowed_cidrs` and `allowed_hosts` of an http/opencode toolkit.
+
+    At least one must be non-empty: a toolkit with neither would have no
+    target restriction at all. Either may stand alone -- `allowed_cidrs`
+    alone is every toolkit written before 1.10.0, unchanged.
+    """
+    allowed_cidrs = _str_tuple(spec.get("allowed_cidrs"), where)
+    for cidr in allowed_cidrs:
+        try:
+            ipaddress.ip_network(cidr, strict=False)
+        except ValueError as exc:
+            raise ConfigError(
+                f"{where}: allowed_cidrs entry {cidr!r} is not a valid "
+                f"IP network: {exc}"
+            ) from None
+    allowed_hosts = _parse_allowed_hosts(spec.get("allowed_hosts"), where)
+    if not allowed_cidrs and not allowed_hosts:
+        raise ConfigError(
+            f"{where}: 'allowed_cidrs' must not be empty (or set "
+            "'allowed_hosts' to exact hostnames instead)"
+        )
+    return allowed_cidrs, allowed_hosts
+
+
+def _check_url_host_allowed(
+    url: str, allowed_hosts: tuple[str, ...], where: str, field: str = "base_url"
+) -> None:
+    """Load-time half of the hostname check: a toolkit whose own target is
+    not in its `allowed_hosts` could never make a call, so it is refused
+    here rather than on its first one. The connect-time check in
+    `execute_http` stays the authoritative one."""
+    if not allowed_hosts:
+        return
+    host = normalize_hostname(urlsplit(url).hostname or "")
+    if host not in allowed_hosts:
+        raise ConfigError(
+            f"{where}: {field} host {host!r} is not in allowed_hosts "
+            f"{list(allowed_hosts)}"
+        )
+
+
 def _parse_destinations(raw: dict[str, Any]) -> dict[str, Destination]:
     """Parses the top-level `destinations:` section (FR-8.3g).
 
@@ -977,6 +1138,7 @@ def load_tier1(path: str) -> Tier1:
         allowed_methods: tuple[str, ...] = ()
         allowed_path_prefixes: tuple[str, ...] = ()
         allowed_cidrs: tuple[str, ...] = ()
+        allowed_hosts: tuple[str, ...] = ()
         ws_url: str | None = None
         allowed_rpc_methods: tuple[str, ...] = ()
         docker_host: str | None = None
@@ -1038,6 +1200,15 @@ def load_tier1(path: str) -> Tier1:
                 )
             required_scopes = _str_tuple(spec.get("required_scopes"), where)
 
+        # `allowed_hosts` on an executor that never reads it would read as
+        # a network restriction that does not exist -- refused like
+        # `run_as` above rather than silently ignored.
+        if spec.get("allowed_hosts") is not None and executor not in NETWORK_EXECUTORS:
+            raise ConfigError(
+                f"{where}: 'allowed_hosts' is only supported on an 'http' or "
+                f"'opencode' toolkit, not on {executor!r}"
+            )
+
         dest_names = _toolkit_destinations(spec, executor, where, destinations)
 
         if executor in ("docker", "local", "ssh"):
@@ -1093,17 +1264,14 @@ def load_tier1(path: str) -> Tier1:
                         f"{where}: allowed_path_prefixes entry {prefix!r} must "
                         "start with '/'"
                     )
-            allowed_cidrs = _str_tuple(_require(spec, "allowed_cidrs", where), where)
-            if not allowed_cidrs:
-                raise ConfigError(f"{where}: 'allowed_cidrs' must not be empty")
-            for cidr in allowed_cidrs:
-                try:
-                    ipaddress.ip_network(cidr, strict=False)
-                except ValueError as exc:
-                    raise ConfigError(
-                        f"{where}: allowed_cidrs entry {cidr!r} is not a valid "
-                        f"IP network: {exc}"
-                    ) from None
+            allowed_cidrs, allowed_hosts = _parse_network_allowlist(spec, where)
+            _check_url_host_allowed(base_url, allowed_hosts, where)
+            for dest_name in dest_names:
+                dest_url = destinations[dest_name].base_url
+                if dest_url is not None:
+                    _check_url_host_allowed(
+                        dest_url, allowed_hosts, f"{where}: destination {dest_name!r}"
+                    )
             # FR-8.8 is not a configurable knob: a toolkit that sets this
             # true would silently defeat the target allowlist, since the
             # target server -- not gatekeeper -- would then decide the
@@ -1181,17 +1349,14 @@ def load_tier1(path: str) -> Tier1:
                     "placeholder -- the opencode executor sends its credential "
                     "as a header, and would send this literally."
                 )
-            allowed_cidrs = _str_tuple(_require(spec, "allowed_cidrs", where), where)
-            if not allowed_cidrs:
-                raise ConfigError(f"{where}: 'allowed_cidrs' must not be empty")
-            for cidr in allowed_cidrs:
-                try:
-                    ipaddress.ip_network(cidr, strict=False)
-                except ValueError as exc:
-                    raise ConfigError(
-                        f"{where}: allowed_cidrs entry {cidr!r} is not a valid "
-                        f"IP network: {exc}"
-                    ) from None
+            allowed_cidrs, allowed_hosts = _parse_network_allowlist(spec, where)
+            _check_url_host_allowed(base_url, allowed_hosts, where)
+            for dest_name in dest_names:
+                dest_url = destinations[dest_name].base_url
+                if dest_url is not None:
+                    _check_url_host_allowed(
+                        dest_url, allowed_hosts, f"{where}: destination {dest_name!r}"
+                    )
             allowed_opencode_operations = _str_tuple(
                 _require(spec, "allowed_opencode_operations", where), where
             )
@@ -1288,6 +1453,7 @@ def load_tier1(path: str) -> Tier1:
             allowed_methods=allowed_methods,
             allowed_path_prefixes=allowed_path_prefixes,
             allowed_cidrs=allowed_cidrs,
+            allowed_hosts=allowed_hosts,
             ws_url=ws_url,
             allowed_rpc_methods=allowed_rpc_methods,
             destinations=dest_names,

@@ -20,7 +20,7 @@
 # Bump alongside a deliberate dependency upgrade, not incidentally: install
 # into a clean venv (`pip install .`), then `pip show <name>` each direct
 # dependency and copy its resolved version here.
-mcp==2.0.0
+mcp==2.2.0
 pyyaml==6.0.3
 uvicorn==0.52.4
 httpx==0.28.1

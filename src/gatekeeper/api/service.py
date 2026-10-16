@@ -370,6 +370,11 @@ def toolkit_summary(name: str, tk: Toolkit) -> dict[str, Any]:
         # reaches nothing and may do nothing.
         "mailbox_path": tk.mailbox_path,
         "allowed_agent_operations": list(tk.allowed_agent_operations),
+        # `http`/`opencode` only: where this toolkit may connect. Reported
+        # so a toolkit_update proposal changing them shows the values it
+        # replaces next to the proposed ones.
+        "allowed_hosts": list(tk.allowed_hosts),
+        "allowed_cidrs": list(tk.allowed_cidrs),
     }
 
 

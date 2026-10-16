@@ -778,6 +778,8 @@ class Service:
             exit_code=result.exit_code,
             duration_ms=result.duration_ms,
             truncated=result.truncated,
+            denial_reason=result.denial_reason,
+            detail=result.denial_detail,
             credential_names=credential_names,
             client=client,
         )

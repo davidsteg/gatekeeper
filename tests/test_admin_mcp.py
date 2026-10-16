@@ -862,7 +862,7 @@ async def test_toolkit_update_schema_exposes_run_as_and_nothing_else_new(admin_m
         tools = {t.name: t for t in (await client.list_tools()).tools}
     updates = tools["admin.toolkit_update"].input_schema["properties"]["updates"]
     assert set(updates["properties"]) == {
-        "executor", "binaries", "denied_args", "run_as",
+        "executor", "binaries", "denied_args", "run_as", "allowed_hosts", "allowed_cidrs",
     }
     assert updates["additionalProperties"] is False
     # null is allowed, so a run_as can be handed back to the container user

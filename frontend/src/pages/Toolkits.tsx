@@ -31,6 +31,8 @@ export function Toolkits() {
             />
             <CardBody className="space-y-2 text-sm">
               {tk.target && <Row label="Target"><code className="break-all">{tk.target}</code></Row>}
+              {tk.allowed_hosts.length > 0 && <Row label="Allowed hosts"><Pills values={tk.allowed_hosts} /></Row>}
+              {tk.allowed_cidrs.length > 0 && <Row label="Allowed CIDRs"><Pills values={tk.allowed_cidrs} /></Row>}
               {tk.binaries.length > 0 && <Row label="Binaries"><Pills values={tk.binaries} /></Row>}
               {tk.denied_args.length > 0 && <Row label="Denied arguments"><Pills values={tk.denied_args} tone="deny" /></Row>}
               {tk.path_roots.length > 0 && <Row label="Path roots"><Pills values={tk.path_roots} /></Row>}
