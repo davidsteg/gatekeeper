@@ -17,3 +17,6 @@ pub mod pyjson;
 pub mod pyre;
 pub mod timeutil;
 pub mod yaml;
+
+// Protocol layer.
+pub mod mcp;
