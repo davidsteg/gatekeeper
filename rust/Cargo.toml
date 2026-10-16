@@ -24,7 +24,7 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
-fancy-regex = "0.14"
+pcre2 = "0.2"
 # zlib backend: gzip output byte-identical to Python's (same libz).
 flate2 = { version = "1", default-features = false, features = ["zlib"] }
 fernet = { version = "0.2", default-features = false, features = ["rustcrypto", "fernet_danger_timestamps"] }
