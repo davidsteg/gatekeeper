@@ -114,6 +114,10 @@ pub(crate) struct Resolved {
 /// saw. The error is `str(socket.gaierror)`, e.g. `[Errno -2] Name or
 /// service not known`.
 pub(crate) async fn getaddrinfo(host: &str, port: u16) -> Result<Vec<Resolved>, String> {
+    #[cfg(test)]
+    if let Some(answer) = test_hooks::fake_lookup(host, port) {
+        return answer;
+    }
     // Python encodes the host with the `idna` codec before the lookup.
     let host = if host.is_ascii() {
         host.to_string()
@@ -904,11 +908,17 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Io for T {}
 /// Connects (5 s, like httpx's connect timeout, TLS handshake included),
 /// sends the request and waits for the response head (5 s read timeout).
 async fn send(req: &Prepared) -> Result<(u16, HeaderMap, Incoming), Failure> {
+    // Tests that pin DNS to public addresses route the connection to a
+    // loopback server instead, recording where it would have gone.
+    #[cfg(test)]
+    let redirected = test_hooks::redirect(req);
+    #[cfg(not(test))]
+    let redirected: Option<SocketAddr> = None;
     let connect = async {
-        let tcp = tokio::net::TcpStream::connect(req.addr)
+        let tcp = tokio::net::TcpStream::connect(redirected.unwrap_or(req.addr))
             .await
             .map_err(|_| Failure::Http("All connection attempts failed".into()))?;
-        let stream: Box<dyn Io> = if req.scheme == "https" {
+        let stream: Box<dyn Io> = if req.scheme == "https" && redirected.is_none() {
             let server_name = rustls::pki_types::ServerName::try_from(req.host.clone())
                 .map_err(|e| Failure::Http(e.to_string()))?;
             let connector = tokio_rustls::TlsConnector::from(TLS.clone());
@@ -1336,3 +1346,95 @@ impl Scanner<'_> {
 #[cfg(test)]
 #[path = "http_tests.rs"]
 pub(crate) mod tests;
+
+/// Test-only seams: a pinned resolver (Python's `FakeDNS`) and a connect
+/// redirect (what httpx's `MockTransport` stood in for), both per thread,
+/// so a `current_thread` test runtime sees only its own.
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::net::{IpAddr, SocketAddr};
+
+    use super::{Prepared, Resolved};
+
+    /// `answers[host]` is a list of answer sets; lookup N (counted over
+    /// all hosts) gets set N, the last one repeating.
+    #[derive(Default)]
+    pub struct FakeDns {
+        pub answers: HashMap<String, Vec<Vec<String>>>,
+        pub calls: Vec<String>,
+    }
+
+    /// Where one request would have connected: the checked address, the
+    /// TLS server name (`None` for plain http) and the scheme.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Connect {
+        pub addr: SocketAddr,
+        pub sni_hostname: Option<String>,
+    }
+
+    thread_local! {
+        static DNS: RefCell<Option<FakeDns>> = const { RefCell::new(None) };
+        static TO: RefCell<Option<SocketAddr>> = const { RefCell::new(None) };
+        static CONNECTS: RefCell<Vec<Connect>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Installs a fake resolver for this thread (replacing any earlier).
+    pub fn install_dns(answers: &[(&str, &[&[&str]])]) {
+        let fake = FakeDns {
+            answers: answers
+                .iter()
+                .map(|(host, sets)| {
+                    (host.to_string(), sets.iter().map(|s| s.iter().map(|a| a.to_string()).collect()).collect())
+                })
+                .collect(),
+            calls: Vec::new(),
+        };
+        DNS.with(|d| *d.borrow_mut() = Some(fake));
+    }
+
+    /// The lookups made since the resolver was installed.
+    pub fn dns_calls() -> Vec<String> {
+        DNS.with(|d| d.borrow().as_ref().map(|f| f.calls.clone()).unwrap_or_default())
+    }
+
+    /// Sends every connection of this thread to `to` instead.
+    pub fn redirect_to(to: SocketAddr) {
+        TO.with(|t| *t.borrow_mut() = Some(to));
+    }
+
+    pub fn connects() -> Vec<Connect> {
+        CONNECTS.with(|c| c.borrow().clone())
+    }
+
+    pub(super) fn fake_lookup(host: &str, port: u16) -> Option<Result<Vec<Resolved>, String>> {
+        DNS.with(|d| {
+            let mut d = d.borrow_mut();
+            let fake = d.as_mut()?;
+            fake.calls.push(host.to_string());
+            let Some(sets) = fake.answers.get(host).filter(|s| !s.is_empty()) else {
+                return Some(Err(format!("no such host {host}")));
+            };
+            let chosen = &sets[(fake.calls.len() - 1).min(sets.len() - 1)];
+            Some(Ok(chosen
+                .iter()
+                .map(|raw| {
+                    let ip: IpAddr = raw.split('%').next().unwrap().parse().expect("fake DNS answer");
+                    Resolved { addr: SocketAddr::new(ip, port), raw: raw.clone() }
+                })
+                .collect()))
+        })
+    }
+
+    pub(super) fn redirect(req: &Prepared) -> Option<SocketAddr> {
+        let to = TO.with(|t| *t.borrow())?;
+        let sni_hostname = (req.scheme == "https").then(|| req.host.clone());
+        CONNECTS.with(|c| c.borrow_mut().push(Connect { addr: req.addr, sni_hostname }));
+        Some(to)
+    }
+}
+
+#[cfg(test)]
+#[path = "allowed_hosts_tests.rs"]
+mod allowed_hosts_tests;
