@@ -5,6 +5,8 @@
 //! constructs the `regex` crate lacks (look-around, backreferences), and
 //! this wrapper translates the few spellings that differ.
 
+use std::sync::OnceLock;
+
 use fancy_regex::Regex;
 
 /// A compiled operator pattern with `re.fullmatch` / `re.search` semantics.
@@ -12,7 +14,16 @@ use fancy_regex::Regex;
 pub struct PyRegex {
     pub source: String,
     full: Regex,
-    search: Regex,
+    translated: String,
+    search: OnceLock<Option<Regex>>,
+}
+
+fn build(p: &str) -> Result<Regex, String> {
+    fancy_regex::RegexBuilder::new(p)
+        .delegate_size_limit(1 << 30)
+        .delegate_dfa_size_limit(1 << 26)
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 impl PartialEq for PyRegex {
@@ -54,9 +65,24 @@ fn translate(pattern: &str) -> String {
 impl PyRegex {
     pub fn new(pattern: &str) -> Result<PyRegex, String> {
         let t = translate(pattern);
-        let full = Regex::new(&format!("^(?:{t})\\z")).map_err(|e| e.to_string())?;
-        let search = Regex::new(&t).map_err(|e| e.to_string())?;
-        Ok(PyRegex { source: pattern.to_string(), full, search })
+        // PORT NOTE: the default 10 MB compiled-size limit refuses patterns
+        // Python compiles fine (the shipped `gmail.send` body pattern
+        // `^.{1,30000}$` needs ~200 MB of NFA under Unicode `.`), so the
+        // limit is raised. The `search` form is compiled on first use only,
+        // so a catalog of fullmatch-only patterns pays for one automaton.
+        // Compiled patterns are cached by source (clones share the
+        // automaton), so a catalog reload does not recompile them.
+        static CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, PyRegex>>> =
+            OnceLock::new();
+        let cache = CACHE.get_or_init(Default::default);
+        if let Some(hit) = cache.lock().unwrap().get(pattern) {
+            return Ok(hit.clone());
+        }
+        let full = build(&format!("^(?:{t})\\z"))?;
+        let compiled =
+            PyRegex { source: pattern.to_string(), full, translated: t, search: OnceLock::new() };
+        cache.lock().unwrap().insert(pattern.to_string(), compiled.clone());
+        Ok(compiled)
     }
 
     /// `re.fullmatch(pattern, value) is not None`. A backtracking limit hit
@@ -67,7 +93,9 @@ impl PyRegex {
 
     /// `re.search(pattern, value) is not None`.
     pub fn search(&self, value: &str) -> bool {
-        self.search.is_match(value).unwrap_or(false)
+        // `full` compiled, so the unanchored form compiles too.
+        let search = self.search.get_or_init(|| build(&self.translated).ok());
+        search.as_ref().is_some_and(|r| r.is_match(value).unwrap_or(false))
     }
 }
 

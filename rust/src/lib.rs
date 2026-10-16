@@ -30,3 +30,10 @@ pub mod credentials;
 pub mod identity;
 pub mod pending;
 pub mod realip;
+
+// Configuration data model.
+pub mod catalog;
+pub mod ratelimit;
+pub mod runas;
+pub mod tier1;
+pub mod validate;
