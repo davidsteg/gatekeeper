@@ -40,3 +40,7 @@ pub mod validate;
 
 // Executors.
 pub mod execute;
+
+// Console: OAuth sign-in and what is left of /ui.
+pub mod oauth;
+pub mod ui;
