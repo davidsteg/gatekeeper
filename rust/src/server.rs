@@ -67,8 +67,7 @@ pub const MCP_PATH: &str = "/mcp";
 pub const ADMIN_MCP_PATH: &str = "/admin/mcp";
 
 /// The console JSON API's mount point (`api.API_PREFIX`).
-// PORT NOTE: stand-in until the console API exports its own constant.
-pub const API_PREFIX: &str = "/api/v1";
+pub const API_PREFIX: &str = crate::api::API_PREFIX;
 
 /// How long a retained `/mcp` session may go without a request before the
 /// transport is terminated and forgotten. Only handshake-era (2025-11-25
@@ -594,6 +593,10 @@ pub fn apply_proxy_headers(trusted: &UvicornTrustedHosts, request: &mut Request)
             }
         }
     }
+    let host = client_addr(request.extensions()).map(|c| c.host);
+    request
+        .extensions_mut()
+        .insert(crate::api::RequestClient { host, scheme: Some(scheme.clone()) });
     request.extensions_mut().insert(RequestScheme(scheme));
 }
 

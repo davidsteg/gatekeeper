@@ -618,11 +618,12 @@ pub fn cmd_password(files: &FileArgs, identity: &str, password: Option<&str>) ->
 
 /// `python -m gatekeeper.api`: prints the console's OpenAPI schema.
 pub fn cmd_openapi() -> i32 {
-    // TODO(console-api): print `crate::api::openapi_json()` once the console
-    // API port provides it -- `std::io::Write::write_all` to stdout, no
-    // trailing newline added (Python's `sys.stdout.write(schema_text())`).
-    eprintln!("gatekeeper openapi: the OpenAPI schema is not available in this build yet.");
-    1
+    use std::io::Write as _;
+    let mut out = std::io::stdout().lock();
+    if out.write_all(crate::api::openapi_json().as_bytes()).and_then(|_| out.flush()).is_err() {
+        return 1;
+    }
+    0
 }
 
 // -- serve ---------------------------------------------------------------------------
