@@ -543,6 +543,21 @@ def build_opencode_call(
     return tool.opencode_operation
 
 
+def build_kuma_call(tool: ToolDef, values: dict[str, str], toolkit: Toolkit) -> str:
+    """The `kuma` operation, re-checked against Tier 1, with the executor's
+    own value floor (`execute_kuma.check_values`) applied here, inside
+    `service.call`'s audited try, so a bad URL is a denial and not a
+    connection to Kuma that then fails."""
+    from .execute_kuma import check_values
+
+    assert tool.kuma_operation is not None
+    if not toolkit.allows_kuma_operation(tool.kuma_operation):
+        raise Denied(DenialReason.TIER1_VIOLATION,
+                     f"Kuma operation {tool.kuma_operation!r} is not allowed for this toolkit.")
+    check_values(tool.kuma_operation, values)
+    return tool.kuma_operation
+
+
 #: An identity id, as `store.create_identity` writes them: alphanumeric
 #: plus dash and underscore. The recipient of a message is one of these and
 #: nothing else -- the shape check below is the cheap half, the existence

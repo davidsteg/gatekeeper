@@ -17,7 +17,14 @@ from urllib.parse import urlsplit
 from ._atomic import safe_load as _yaml_load
 from ._runas import RunAsError, parse_run_as
 from .errors import ConfigError, Tier1Violation, read_config_file
-from .tier1 import Tier1, Toolkit, _validate_http_base_url
+from .tier1 import (
+    KUMA_INTERVAL_MAX,
+    KUMA_INTERVAL_MIN,
+    KUMA_STATUS_CODES,
+    Tier1,
+    Toolkit,
+    _validate_http_base_url,
+)
 
 #: Placeholders in argv, derived and scope templates.
 PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
@@ -64,6 +71,23 @@ ARTIFACT_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = 
     "read": (("artifact",), ("version",)),
     "transfer": (("artifact",), ("version",)),
 }
+
+#: `kuma` executor: what each operation reads. `monitor_add_http` takes
+#: exactly the four fields a gatekeeper-made monitor has a say in; the
+#: monitor type, method, notifications and everything else are fixed in
+#: `execute_kuma.http_monitor`. There is no parameter for a Kuma URL or
+#: account -- both are Tier 1.
+KUMA_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "monitor_list": ((), ()),
+    "monitor_add_http": (("name", "url"), ("interval", "expected_status")),
+    "monitor_pause": (("monitor_id",), ()),
+    "monitor_resume": (("monitor_id",), ()),
+}
+
+#: The `kuma` operations that change something. A tool for one of them is
+#: never category `read`: `read` is what `admin.tool_create` applies without
+#: a human, and these must go through approval.
+KUMA_WRITE_OPERATIONS = frozenset({"monitor_add_http", "monitor_pause", "monitor_resume"})
 
 AGENT_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "send_message": (("to", "body"), ("subject",)),
@@ -250,6 +274,9 @@ class ToolDef:
     #: The `artifact` executor's operation, fixed per tool like
     #: `agent_operation`.
     artifact_operation: str | None = None
+    #: The `kuma` executor's operation (`tier1.KUMA_OPERATIONS`), fixed per
+    #: tool like `agent_operation`.
+    kuma_operation: str | None = None
 
     #: Per-tool override of the toolkit's ``run_as`` (file executor only).
     #: ``None`` -- the default -- means "use the toolkit's ``run_as``", so a
@@ -431,6 +458,52 @@ def _validate_op_params(
         raise ConfigError(
             f"{where}: {executor} operation {operation!r} does not read {unknown} -- it reads "
             f"{sorted(set(required) | set(optional)) or 'no parameters'}.")
+
+
+def _validate_kuma_params(
+    operation: str, category: str, parameters: dict[str, Parameter], where: str
+) -> None:
+    """The `kuma` limits a tool definition must not loosen, at load time.
+
+    `execute_kuma.check_values` enforces the same floor at call time; this
+    is what makes a definition that would publish a wider schema than the
+    executor accepts fail when it is written, not on an agent's call.
+    """
+    if operation in KUMA_WRITE_OPERATIONS and category == "read":
+        raise ConfigError(
+            f"{where}: kuma operation {operation!r} changes monitors -- its "
+            "category must be 'write', not 'read'"
+        )
+    interval = parameters.get("interval")
+    if interval is not None and (
+        interval.type != "integer"
+        or interval.minimum is None
+        or interval.maximum is None
+        or interval.minimum < KUMA_INTERVAL_MIN
+        or interval.maximum > KUMA_INTERVAL_MAX
+    ):
+        raise ConfigError(
+            f"{where}: parameter 'interval' must be an integer with minimum >= "
+            f"{KUMA_INTERVAL_MIN} and maximum <= {KUMA_INTERVAL_MAX}"
+        )
+    status = parameters.get("expected_status")
+    if status is not None and (
+        status.type != "enum" or not set(status.values) <= KUMA_STATUS_CODES
+    ):
+        raise ConfigError(
+            f"{where}: parameter 'expected_status' must be an enum over "
+            f"{sorted(KUMA_STATUS_CODES)}"
+        )
+    url = parameters.get("url")
+    if url is not None and url.type != "string":
+        raise ConfigError(f"{where}: parameter 'url' must be a string with a pattern")
+    monitor_id = parameters.get("monitor_id")
+    if monitor_id is not None and (
+        monitor_id.type != "integer" or monitor_id.minimum is None or monitor_id.minimum < 1
+    ):
+        raise ConfigError(
+            f"{where}: parameter 'monitor_id' must be an integer with minimum >= 1"
+        )
 
 
 def _validate_agent_params(
@@ -619,6 +692,14 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
                 f"toolkit {toolkit.name!r}"
             )
 
+    elif toolkit.executor == "kuma":
+        if not toolkit.allows_kuma_operation(tool.kuma_operation or ""):
+            raise Tier1Violation(
+                f"{where}: kuma operation {tool.kuma_operation!r} is not in "
+                f"the allowlist {list(toolkit.allowed_kuma_operations)} of "
+                f"toolkit {toolkit.name!r}"
+            )
+
     elif toolkit.executor == "agent":
         if not toolkit.allows_agent_operation(tool.agent_operation or ""):
             raise Tier1Violation(
@@ -788,6 +869,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     opencode_operation: str | None = None
     agent_operation: str | None = None
     artifact_operation: str | None = None
+    kuma_operation: str | None = None
     #: Per-tool base_url override -- only the `http` branch sets this
     #: (0.45.5); every other executor leaves it at None.
     tool_base_url: str | None = None
@@ -952,6 +1034,18 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         _validate_op_params("artifact", ARTIFACT_OPERATION_PARAMS, artifact_operation,
                             parameters, where)
 
+    elif toolkit.executor == "kuma":
+        kuma_operation = spec.get("kuma_operation") or spec.get("operation")
+        if not isinstance(kuma_operation, str) or not kuma_operation:
+            raise ConfigError(f"{where}: field 'kuma_operation' is missing")
+        if kuma_operation not in KUMA_OPERATION_PARAMS:
+            raise ConfigError(
+                f"{where}: kuma_operation {kuma_operation!r} is unknown "
+                f"(known: {sorted(KUMA_OPERATION_PARAMS)})"
+            )
+        _validate_op_params("kuma", KUMA_OPERATION_PARAMS, kuma_operation, parameters, where)
+        _validate_kuma_params(kuma_operation, category, parameters, where)
+
     # Every placeholder must point to a declared parameter. A typo
     # in the template would otherwise only surface at runtime -- and
     # then land as an unresolvable placeholder in the request.
@@ -995,6 +1089,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         opencode_operation=opencode_operation,
         agent_operation=agent_operation,
         artifact_operation=artifact_operation,
+        kuma_operation=kuma_operation,
         run_as=tool_run_as,
         base_url=tool_base_url,
     )

@@ -412,7 +412,7 @@ def test_allowed_hosts_refused_on_a_non_network_executor(tmp_path):
     path = _write_tier1(tmp_path, {"box": {
         "executor": "local", "binaries": ["/bin/true"], "allowed_hosts": ["api.github.com"],
     }})
-    with pytest.raises(ConfigError, match="only supported on an 'http' or 'opencode'"):
+    with pytest.raises(ConfigError, match="only supported on an 'http', 'opencode' or 'kuma'"):
         load_tier1(str(path))
 
 

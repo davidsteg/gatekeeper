@@ -38,11 +38,11 @@ def test_each_block_is_one_valid_toolkit_of_its_executor(tmp_path, key):
 def test_every_executor_with_a_toolkit_shape_has_a_reference():
     assert set(REFERENCES) == {
         "local", "docker", "http", "ssh", "truenas", "file",
-        "google", "microsoft", "opencode", "agent",
+        "google", "microsoft", "opencode", "kuma", "agent",
     }
 
 
-@pytest.mark.parametrize("key", ["http", "opencode"])
+@pytest.mark.parametrize("key", ["http", "opencode", "kuma"])
 def test_unedited_cidr_fails_closed(tmp_path, key):
     """A CHANGEME placeholder CIDR must not accidentally allow a real host."""
     (name,) = yaml.safe_load(REFERENCES[key].toolkit_yaml)

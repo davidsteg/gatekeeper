@@ -1102,3 +1102,108 @@ tools:
     required_scopes: []
     timeout_seconds: 30
     max_output_bytes: 8192
+
+  # -- kuma (Uptime Kuma over Socket.IO) -----------------------------------
+  #
+  # 'kuma_operation' is the fixed exchange with Kuma; the parameters are the
+  # fixed names it reads (catalog.py's KUMA_OPERATION_PARAMS). catalog.py
+  # also refuses a schema wider than the executor accepts -- an interval
+  # outside 30-3600 s, a status outside its set -- and a write operation
+  # declared category 'read', which would let a proposal skip approval.
+  # Narrow the url pattern to the domains you mean if you can.
+
+  - id: kuma.monitor_list
+    toolkit: kuma
+    version: 1
+    title: List Kuma monitors
+    description: >-
+      Lists Uptime Kuma's monitors: id, name, type, URL (without credentials
+      or query), whether it is active, its interval, and whether gatekeeper
+      manages it (only managed monitors can be paused or resumed).
+    category: read
+    idempotent: true
+    enabled: false
+    kuma_operation: monitor_list
+    parameters: {}
+    required_scopes: []
+    timeout_seconds: 20
+    max_output_bytes: 131072
+
+  - id: kuma.monitor_add_http
+    toolkit: kuma
+    version: 1
+    title: Add an HTTP monitor
+    description: >-
+      Adds an HTTP(s) GET monitor to Uptime Kuma, without notifications.
+      Returns the new monitor's id. Check kuma.monitor_list first: the same
+      name and URL can exist twice.
+    category: write
+    idempotent: false
+    enabled: false
+    kuma_operation: monitor_add_http
+    parameters:
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,79}$"
+        description: Display name in Kuma.
+      url:
+        type: string
+        required: true
+        pattern: "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/-]*)?$"
+        description: The URL to check, http or https, no user, password or query.
+      interval:
+        type: integer
+        required: false
+        minimum: 30
+        maximum: 3600
+        description: Seconds between checks, 30-3600. Default 60.
+      expected_status:
+        type: enum
+        required: false
+        values: ["200-299", "300-399", "401", "403"]
+        description: Status code or range that counts as up. Default 200-299.
+    required_scopes: []
+    timeout_seconds: 20
+    max_output_bytes: 4096
+
+  - id: kuma.monitor_pause
+    toolkit: kuma
+    version: 1
+    title: Pause a monitor
+    description: >-
+      Pauses a monitor gatekeeper created. Any other monitor is refused.
+    category: write
+    idempotent: true
+    enabled: false
+    kuma_operation: monitor_pause
+    parameters:
+      monitor_id:
+        type: integer
+        required: true
+        minimum: 1
+        description: The monitor's id from kuma.monitor_list.
+    required_scopes: []
+    timeout_seconds: 20
+    max_output_bytes: 4096
+
+  - id: kuma.monitor_resume
+    toolkit: kuma
+    version: 1
+    title: Resume a monitor
+    description: >-
+      Resumes a paused monitor gatekeeper created. Any other monitor is
+      refused.
+    category: write
+    idempotent: true
+    enabled: false
+    kuma_operation: monitor_resume
+    parameters:
+      monitor_id:
+        type: integer
+        required: true
+        minimum: 1
+        description: The monitor's id from kuma.monitor_list.
+    required_scopes: []
+    timeout_seconds: 20
+    max_output_bytes: 4096

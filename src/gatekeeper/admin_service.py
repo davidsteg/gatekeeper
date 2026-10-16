@@ -570,7 +570,7 @@ class AdminService:
     def toolkit_update(self, actor: str, args: dict[str, Any]) -> dict[str, Any]:
         """Proposes changing a toolkit's executor type, binaries,
 
-        denied_args, run_as, and an http/opencode toolkit's allowed_hosts/
+        denied_args, run_as, and an http/opencode/kuma toolkit's allowed_hosts/
         allowed_cidrs. Narrowly scoped: only those fields can be proposed
         (`toolkit_proposals.UPDATE_WRITABLE_FIELDS`); security-critical fields (``path_roots``,
         ``protected_resources``, ``limits``) remain deploy-time only and
