@@ -17,3 +17,10 @@ pub mod pyjson;
 pub mod pyre;
 pub mod timeutil;
 pub mod yaml;
+
+// Identities, audit, credentials, proxies, the pending queue.
+pub mod audit;
+pub mod credentials;
+pub mod identity;
+pub mod pending;
+pub mod realip;
