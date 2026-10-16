@@ -16,8 +16,6 @@ name = "gatekeeper"
 path = "src/main.rs"
 
 [dependencies]
-httpdate = "1"
-md5 = "0.7"
 anyhow = "1"
 async-stream = "0.3"
 async-trait = "0.1"
@@ -35,11 +33,13 @@ hex = "0.4"
 hmac = "0.12"
 http = "1"
 http-body-util = "0.1"
+httpdate = "1"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 indexmap = { version = "2", features = ["serde"] }
 ipnet = "2"
 libc = "0.2"
+md5 = "0.7"
 once_cell = "1"
 parking_lot = "0.12"
 percent-encoding = "2"
