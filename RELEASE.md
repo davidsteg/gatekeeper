@@ -1,4 +1,4 @@
-## 1.11.0
+## 1.13.0
 
 The whole of gatekeeper now also exists as a Rust implementation in `rust/`. The image you deploy is unchanged and still runs the Python one; nothing in this release changes how a running gatekeeper behaves.
 

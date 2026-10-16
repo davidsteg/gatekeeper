@@ -1045,7 +1045,7 @@ itself, which already documents its own single-instance assumption.
 
 ## Rust implementation (`rust/`)
 
-`rust/` is a port of `src/gatekeeper/` to Rust (1.11.0). The Python package
+`rust/` is a port of `src/gatekeeper/` to Rust (1.13.0). The Python package
 is its specification: same validation and check order, same user-visible
 strings, same file and wire formats, so a deployment can switch binaries
 without touching a config file. It is not in the image yet; CI builds and

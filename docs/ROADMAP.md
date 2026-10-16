@@ -93,7 +93,7 @@ item.
 
 ## Not implemented (by design or not yet)
 
-- **Running the Rust implementation in the image.** `rust/` (1.11.0) is a
+- **Running the Rust implementation in the image.** `rust/` (1.13.0) is a
   complete port and is tested in CI, but the image still runs Python. Left:
   build the Rust binary into the image (with PCRE2 linked statically), keep
   the vendored Google and Microsoft scripts at their install path, run the
