@@ -27,7 +27,7 @@ clap = { version = "4", features = ["derive"] }
 fancy-regex = "0.14"
 # zlib backend: gzip output byte-identical to Python's (same libz).
 flate2 = { version = "1", default-features = false, features = ["zlib"] }
-fernet ={ version = "0.2", default-features = false, features = ["rustcrypto"] }
+fernet = { version = "0.2", default-features = false, features = ["rustcrypto", "fernet_danger_timestamps"] }
 futures = "0.3"
 hex = "0.4"
 hmac = "0.12"
@@ -70,3 +70,14 @@ tempfile = "3"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# scrypt (identity hashes) is ~50x slower unoptimized; keep debug builds and
+# tests usable.
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3

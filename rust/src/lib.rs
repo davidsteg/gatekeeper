@@ -23,3 +23,10 @@ pub mod artifacts;
 pub mod messages;
 pub mod release_notes;
 pub mod toolkit_reference;
+
+// Identities, audit, credentials, proxies, the pending queue.
+pub mod audit;
+pub mod credentials;
+pub mod identity;
+pub mod pending;
+pub mod realip;
