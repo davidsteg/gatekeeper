@@ -49,3 +49,10 @@ pub mod oauth;
 pub mod ui;
 
 pub mod privdrop;
+
+// Application layer.
+pub mod admin_service;
+pub mod api;
+pub mod service;
+pub mod store;
+pub mod toolkit_proposals;
