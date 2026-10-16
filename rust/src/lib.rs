@@ -40,3 +40,6 @@ pub mod validate;
 
 // Executors.
 pub mod execute;
+
+// Protocol layer.
+pub mod mcp;
