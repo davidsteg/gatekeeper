@@ -133,7 +133,13 @@ pub fn vendored_script(env_var: &str, subdir: &str, name: &str) -> String {
             return value;
         }
     }
-    let installed = format!("{VENDOR_DIR}/{name}");
+    // Where the image installs the vendored scripts -- the same paths
+    // tier1's startup warning checks.
+    let installed = match name {
+        "google_api.py" => crate::tier1::GOOGLE_FALLBACK_SCRIPT.to_string(),
+        "microsoft_api.py" => crate::tier1::MICROSOFT_FALLBACK_SCRIPT.to_string(),
+        _ => format!("{VENDOR_DIR}/{name}"),
+    };
     if Path::new(&installed).is_file() {
         return installed;
     }
