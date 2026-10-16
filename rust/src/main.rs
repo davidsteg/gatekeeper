@@ -6,4 +6,8 @@ fn main() {
     if let Some(code) = gatekeeper::privdrop::hidden_entry(&args) {
         std::process::exit(code);
     }
+    // Then the CLI (`__main__.main`): the privilege drop, argument parsing
+    // and the command. `serve` starts its tokio runtime itself, after the
+    // drop, because capability changes are per thread.
+    std::process::exit(gatekeeper::cli::main());
 }

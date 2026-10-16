@@ -56,3 +56,8 @@ pub mod api;
 pub mod service;
 pub mod store;
 pub mod toolkit_proposals;
+
+// HTTP server and CLI.
+pub mod admin_server;
+pub mod cli;
+pub mod server;
