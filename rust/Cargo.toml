@@ -16,6 +16,8 @@ name = "gatekeeper"
 path = "src/main.rs"
 
 [dependencies]
+httpdate = "1"
+md5 = "0.7"
 anyhow = "1"
 async-stream = "0.3"
 async-trait = "0.1"
