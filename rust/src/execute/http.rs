@@ -71,7 +71,7 @@ pub const MAX_JSON_ITEMS: i64 = 500;
 const HTTPX_DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The request headers httpx adds to every request.
-const USER_AGENT: &str = concat!("gatekeeper/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("gatekeeper/", env!("GATEKEEPER_VERSION"));
 
 // -- Shared network helpers (also used by the truenas and ssh executors) --
 

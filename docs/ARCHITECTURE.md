@@ -1043,6 +1043,35 @@ ever needs to scale past a single instance or a much higher call rate,
 these three are the first places to revisit -- alongside `RateLimiter`
 itself, which already documents its own single-instance assumption.
 
+## Rust implementation (`rust/`)
+
+`rust/` is a port of `src/gatekeeper/` to Rust (1.11.0). The Python package
+is its specification: same validation and check order, same user-visible
+strings, same file and wire formats, so a deployment can switch binaries
+without touching a config file. It is not in the image yet; CI builds and
+tests it in the `rust` job.
+
+- **Module map.** Module names follow the Python ones (`tier1.py` ->
+  `tier1`, `execute_http.py` -> `execute::http`, `api/*` -> `api::*`);
+  `rust/PORTING.md` has the full table and the porting rules.
+- **Stack.** axum and tokio for the HTTP side; MCP's streamable HTTP
+  transport is implemented in `mcp/` for both protocol eras and tested
+  against clients from the Python SDK. russh replaces asyncssh,
+  tokio-tungstenite replaces `websockets`, hyper + rustls replace httpx.
+- **Python formats on purpose.** `pyjson` writes what `json.dumps` wrote
+  (audit log, mailbox), `yaml` reads and writes with PyYAML's YAML 1.1
+  rules, `pyre` runs operator `pattern:` regexes on PCRE2 with Python's
+  spellings translated, `pathutil` is `os.path`'s non-strict `realpath`.
+- **Unchanged parts.** The React console and `frontend/openapi.json`
+  (embedded in the binary, and what `/api/v1` answers to), and the vendored
+  Google and Microsoft CLI scripts, which still run under Python as a
+  subprocess (`GATEKEEPER_PYTHON`, else `python3`).
+- **Version.** `rust/build.rs` reads `pyproject.toml`, so a release still
+  bumps one file.
+- **Deviations.** Where Python crashed (an uncaught exception on malformed
+  input) the port returns the error a caller would expect instead; each
+  such place carries a `PORT NOTE:` comment.
+
 ## Roadmap / known gaps
 
 See [ROADMAP.md](ROADMAP.md).

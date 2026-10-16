@@ -4,14 +4,14 @@
 
 use std::process::Command;
 
-const PYTHON: &str = "/tmp/claude-0/venv/bin/python";
-
 fn python(script: &str, args: &[&str]) -> Option<String> {
-    if !std::path::Path::new(PYTHON).exists() {
-        eprintln!("skipping: {PYTHON} not found");
+    let interpreter = std::env::var("GATEKEEPER_INTEROP_PYTHON")
+        .unwrap_or_else(|_| "/tmp/claude-0/venv/bin/python".into());
+    if !std::path::Path::new(&interpreter).exists() {
+        eprintln!("skipping: {interpreter} not found");
         return None;
     }
-    let out = Command::new(PYTHON).arg("-I").arg("-c").arg(script).args(args).output().unwrap();
+    let out = Command::new(&interpreter).arg("-I").arg("-c").arg(script).args(args).output().unwrap();
     assert!(out.status.success(), "python failed: {}", String::from_utf8_lossy(&out.stderr));
     Some(String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_string())
 }

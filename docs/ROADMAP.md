@@ -93,6 +93,13 @@ item.
 
 ## Not implemented (by design or not yet)
 
+- **Running the Rust implementation in the image.** `rust/` (1.11.0) is a
+  complete port and is tested in CI, but the image still runs Python. Left:
+  build the Rust binary into the image (with PCRE2 linked statically), keep
+  the vendored Google and Microsoft scripts at their install path, run the
+  root-only tests (privilege drop, `run_as`) against Rust, then remove the
+  Python core.
+
 - **A browser smoke test of the console in CI.** The console migration is
   finished (JSON API 0.53.0, SPA 0.54.0, writes 0.55.0, request decisions
   0.56.0, parity 0.57.0, cutover 1.0.0), and vitest covers the pages, but a

@@ -112,7 +112,8 @@ async fn the_server_identifies_itself() {
     // test_version.py: the real version, never a placeholder.
     assert_ne!(gatekeeper::VERSION, "0.1.0");
     assert_ne!(gatekeeper::VERSION, "0.0.0+unknown");
-    assert_eq!(gatekeeper::VERSION, env!("CARGO_PKG_VERSION"));
+    let pyproject = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../pyproject.toml")).unwrap();
+    assert!(pyproject.contains(&format!("\nversion = \"{}\"\n", gatekeeper::VERSION)));
 }
 
 #[tokio::test]
@@ -217,11 +218,9 @@ async fn release(base: &str, token: &str, query: &str) -> reqwest::Response {
     get(base, &format!("/release{query}"), Some(token)).await
 }
 
-/// PORT NOTE: Python compared the newest section with `__version__`; the
-/// Rust crate's version (2.0.0) is not yet a section of RELEASE.md, so the
-/// newest section is compared with the file itself.
+/// The newest section of RELEASE.md is the running version.
 fn newest_section() -> String {
-    gatekeeper::release_notes::load()[0].0.clone()
+    gatekeeper::VERSION.to_string()
 }
 
 #[tokio::test]

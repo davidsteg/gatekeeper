@@ -425,6 +425,10 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for:
 - Functional and non-functional requirements
 - Specification of each guarantee
 
+A Rust implementation lives in [rust/](rust/) (`cd rust && cargo test`). It
+behaves like the Python one but is not in the image yet; see "Rust
+implementation" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 See [AGENTS.md](AGENTS.md) if you're an AI agent working in this repo — release
 workflow, testing, and known pitfalls.
 

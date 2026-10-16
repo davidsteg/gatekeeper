@@ -259,9 +259,6 @@ async fn audit_pagination() {
     assert_eq!(c.get(&api("/audit?limit=0")).await.status, 422);
 }
 
-/// PORT NOTE: Python also asserts the newest release is `__version__`; the
-/// Rust crate's VERSION runs ahead of RELEASE.md, so only the shape is
-/// pinned here.
 #[tokio::test]
 async fn release_notes() {
     let env = make_env();
@@ -270,7 +267,7 @@ async fn release_notes() {
     let body = c.get(&api("/release-notes?limit=1")).await.json();
     assert_eq!(body["version"], gatekeeper::VERSION);
     assert_eq!(body["releases"].as_array().unwrap().len(), 1);
-    assert!(body["releases"][0]["version"].as_str().is_some_and(|v| !v.is_empty()));
+    assert_eq!(body["releases"][0]["version"], gatekeeper::VERSION);
 }
 
 #[tokio::test]

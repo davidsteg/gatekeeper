@@ -1164,7 +1164,9 @@ mod tests {
     /// is present (it is in the porting environment; skipped elsewhere).
     #[test]
     fn tar_gz_is_byte_identical_to_python() {
-        let python = "/tmp/claude-0/venv/bin/python";
+        let python = std::env::var("GATEKEEPER_INTEROP_PYTHON")
+            .unwrap_or_else(|_| "/tmp/claude-0/venv/bin/python".into());
+        let python = python.as_str();
         if !Path::new(python).exists() {
             return;
         }

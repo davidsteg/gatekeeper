@@ -196,6 +196,11 @@ pub fn toolkit_summary(name: &str, tk: &Toolkit) -> Value {
         "run_as": tk.run_as,
         "mailbox_path": tk.mailbox_path,
         "allowed_agent_operations": tk.allowed_agent_operations,
+        // `http`/`opencode` only: where this toolkit may connect. Reported
+        // so a toolkit_update proposal changing them shows the values it
+        // replaces next to the proposed ones.
+        "allowed_hosts": tk.allowed_hosts,
+        "allowed_cidrs": tk.allowed_cidrs,
     })
 }
 

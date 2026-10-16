@@ -270,7 +270,9 @@ mod tests {
     /// Verbatim against the Python module, when the reference venv exists.
     #[test]
     fn text_matches_python_verbatim() {
-        let python = "/tmp/claude-0/venv/bin/python";
+        let python = std::env::var("GATEKEEPER_INTEROP_PYTHON")
+            .unwrap_or_else(|_| "/tmp/claude-0/venv/bin/python".into());
+        let python = python.as_str();
         if !std::path::Path::new(python).exists() {
             return;
         }

@@ -27,9 +27,7 @@ use serde_json::{json, Map, Value};
 use crate::atomic::{atomic_write, dump, safe_load};
 
 /// `tier1.DEFAULT_MAILBOX_LIMIT`.
-// PORT NOTE: stand-in until tier1 lands; tier1 should own this constant and
-// this module should re-export / import it from there.
-pub const DEFAULT_MAILBOX_LIMIT: usize = 200;
+pub const DEFAULT_MAILBOX_LIMIT: usize = crate::tier1::DEFAULT_MAILBOX_LIMIT as usize;
 
 /// `catalog.now_iso()`: UTC, `%Y-%m-%dT%H:%M:%S%z`.
 fn now_iso() -> String {

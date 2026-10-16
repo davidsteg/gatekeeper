@@ -1,3 +1,19 @@
+## 1.11.0
+
+The whole of gatekeeper now also exists as a Rust implementation in `rust/`. The image you deploy is unchanged and still runs the Python one; nothing in this release changes how a running gatekeeper behaves.
+
+### Added
+
+- **`rust/`: a complete port of `src/gatekeeper/` to Rust.** The same CLI (`serve`, `check`, `init`, `token`, `password`, `credential-key`), the same `/mcp`, `/admin/mcp`, `/api/v1`, `/app` and `/release` endpoints, the same health and metrics routes, every executor, the credential store, the audit log and the toolkit and tool proposals. It reads the same `toolkits.yaml`, `tools.yaml`, `identities.yaml` and `credentials.yaml` and writes them in the same format, so a deployment can later switch binaries without touching a config file. Tokens hashed and credentials encrypted by one implementation are read by the other.
+- The console is served unchanged: the Rust server answers the same `/api/v1` schema (`frontend/openapi.json`), and the React console at `/app` needs no change.
+- The vendored Google and Microsoft CLI scripts stay Python and are run as a subprocess, as before.
+- **CI builds and tests it.** A `rust` job runs `cargo build` with warnings as errors and `cargo test`, including checks against the Python implementation (token hashes, Fernet tokens, MCP clients from the Python SDK, byte-identical artifact archives). The image is built only when it passes.
+
+### Not yet
+
+- The Docker image still runs the Python implementation. Switching it to Rust, and then removing the Python core, are the next steps.
+- Tests that need root (privilege drop, `run_as`) run for the Python implementation only.
+
 ## 1.10.0
 
 An `http` or `opencode` toolkit can name the hosts it may reach instead of fixed IP ranges, and change them through a proposal without editing `toolkits.yaml` by hand.

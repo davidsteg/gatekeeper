@@ -1,6 +1,8 @@
 [package]
 name = "gatekeeper"
-version = "2.0.0"
+version = "0.0.0"
+# The release version is pyproject.toml's; build.rs exports it as
+# GATEKEEPER_VERSION. This one is never published or reported.
 edition = "2021"
 rust-version = "1.85"
 description = "MCP server for controlled host operations"

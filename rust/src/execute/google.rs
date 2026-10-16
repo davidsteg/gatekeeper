@@ -50,47 +50,7 @@ use crate::tier1::Toolkit;
 /// Where the Docker image installs the vendored CLI scripts.
 pub const VENDOR_DIR: &str = "/usr/share/gatekeeper/vendor";
 
-/// `execute_http.MAX_JSON_ITEMS` (FR-8.12).
-// PORT NOTE: stand-in until execute::http lands; switch to its constant.
-pub const MAX_JSON_ITEMS: i64 = 500;
-
-/// `execute_http._cap_json`: truncates list/dict field counts recursively
-/// (FR-8.12). `budget` is shared across the whole walk, as in Python.
-// PORT NOTE: stand-in until execute::http lands; switch to its `cap_json`.
-pub fn cap_json(value: &Value, budget: &mut i64) -> Value {
-    if *budget <= 0 {
-        return match value {
-            Value::Array(_) | Value::Object(_) => Value::String("...(truncated)...".into()),
-            other => other.clone(),
-        };
-    }
-    match value {
-        Value::Array(items) => {
-            let mut kept = Vec::new();
-            for item in items {
-                if *budget <= 0 {
-                    break;
-                }
-                kept.push(cap_json(item, budget));
-                *budget -= 1;
-            }
-            Value::Array(kept)
-        }
-        Value::Object(map) => {
-            let mut kept = Map::new();
-            for (key, item) in map {
-                if *budget <= 0 {
-                    break;
-                }
-                let capped = cap_json(item, budget);
-                kept.insert(key.clone(), capped);
-                *budget -= 1;
-            }
-            Value::Object(kept)
-        }
-        other => other.clone(),
-    }
-}
+pub use super::http::{cap_json, MAX_JSON_ITEMS};
 
 /// `_cap_json(value, limit=n, budget=[n])`.
 pub fn cap_json_items(value: &Value, limit: i64) -> Value {
@@ -274,9 +234,8 @@ fn kill_group(pid: Option<u32>) {
 ///
 /// Returns `Err(Ok(denied))` when the executable cannot be started and
 /// `Err(Err(()))` on timeout.
-// PORT NOTE: a private runner until execute::local::run lands; the lead
-// can switch it over when merging (Python deliberately did not use
-// `execute.run`, which wraps in `_unpriv` -- keep that property).
+// Deliberately not `execute::local::run`: Python did not use `execute.run`
+// here either, since that wraps the child in `_unpriv`.
 pub(crate) async fn run_subprocess(
     argv: &[String],
     env: Option<&HashMap<String, String>>,

@@ -5,7 +5,8 @@
 //! Rust implementation; module names follow the Python modules they
 //! replace (`tier1.py` -> [`tier1`], `execute_http.py` -> `execute::http`).
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The release version, from `pyproject.toml` (see `build.rs`).
+pub const VERSION: &str = env!("GATEKEEPER_VERSION");
 
 // Foundation: Python-compatible formats and file discipline.
 pub mod atomic;
