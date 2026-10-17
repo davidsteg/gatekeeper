@@ -102,6 +102,11 @@ item.
 
 ## Not implemented (by design or not yet)
 
+- **Removing the Python core.** Since 1.13.0 the image runs the Rust
+  implementation (`rust/`), but `src/gatekeeper/` stays as the reference
+  its parity tests compare against, so a change still has to be made in
+  both. Removing it means rewriting those tests against fixtures.
+
 - **A browser smoke test of the console in CI.** The console migration is
   finished (JSON API 0.53.0, SPA 0.54.0, writes 0.55.0, request decisions
   0.56.0, parity 0.57.0, cutover 1.0.0), and vitest covers the pages, but a

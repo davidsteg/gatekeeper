@@ -1,0 +1,188 @@
+[
+ {
+  "input": [
+   {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ping"
+   }
+  ],
+  "error": "4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest\n  Input should be a valid dictionary or instance of JSONRPCRequest [type=model_type, input_value=[{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCNotification\n  Input should be a valid dictionary or instance of JSONRPCNotification [type=model_type, input_value=[{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCResponse\n  Input should be a valid dictionary or instance of JSONRPCResponse [type=model_type, input_value=[{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCError\n  Input should be a valid dictionary or instance of JSONRPCError [type=model_type, input_value=[{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": 19,
+   "method": "ping",
+   "params": [
+    1
+   ]
+  },
+  "error": "4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.params\n  Input should be a valid dictionary [type=dict_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/dict_type\nJSONRPCNotification.params\n  Input should be a valid dictionary [type=dict_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/dict_type\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ...: 'ping', 'params': [1]}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ...: 'ping', 'params': [1]}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": {
+   "jsonrpc": "1.0",
+   "id": 1,
+   "method": "ping"
+  },
+  "error": "6 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value='1.0', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCNotification.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value='1.0', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCResponse.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value='1.0', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '1.0', 'id': 1, 'method': 'ping'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value='1.0', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': '1.0', 'id': 1, 'method': 'ping'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": 1
+  },
+  "error": "4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": {},
+  "error": "11 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.jsonrpc\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCRequest.id\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCRequest.method\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.jsonrpc\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.method\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.jsonrpc\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.id\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.result\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.jsonrpc\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.id\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": "hello",
+  "error": "4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest\n  Input should be a valid dictionary or instance of JSONRPCRequest [type=model_type, input_value='hello', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCNotification\n  Input should be a valid dictionary or instance of JSONRPCNotification [type=model_type, input_value='hello', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCResponse\n  Input should be a valid dictionary or instance of JSONRPCResponse [type=model_type, input_value='hello', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCError\n  Input should be a valid dictionary or instance of JSONRPCError [type=model_type, input_value='hello', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type"
+ },
+ {
+  "input": 5,
+  "error": "4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest\n  Input should be a valid dictionary or instance of JSONRPCRequest [type=model_type, input_value=5, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCNotification\n  Input should be a valid dictionary or instance of JSONRPCNotification [type=model_type, input_value=5, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCResponse\n  Input should be a valid dictionary or instance of JSONRPCResponse [type=model_type, input_value=5, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCError\n  Input should be a valid dictionary or instance of JSONRPCError [type=model_type, input_value=5, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type"
+ },
+ {
+  "input": null,
+  "error": "4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest\n  Input should be a valid dictionary or instance of JSONRPCRequest [type=model_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCNotification\n  Input should be a valid dictionary or instance of JSONRPCNotification [type=model_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCResponse\n  Input should be a valid dictionary or instance of JSONRPCResponse [type=model_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCError\n  Input should be a valid dictionary or instance of JSONRPCError [type=model_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type"
+ },
+ {
+  "input": true,
+  "error": "4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest\n  Input should be a valid dictionary or instance of JSONRPCRequest [type=model_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCNotification\n  Input should be a valid dictionary or instance of JSONRPCNotification [type=model_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCResponse\n  Input should be a valid dictionary or instance of JSONRPCResponse [type=model_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCError\n  Input should be a valid dictionary or instance of JSONRPCError [type=model_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type"
+ },
+ {
+  "input": 1.5,
+  "error": "4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest\n  Input should be a valid dictionary or instance of JSONRPCRequest [type=model_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCNotification\n  Input should be a valid dictionary or instance of JSONRPCNotification [type=model_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCResponse\n  Input should be a valid dictionary or instance of JSONRPCResponse [type=model_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCError\n  Input should be a valid dictionary or instance of JSONRPCError [type=model_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": 1.5
+  },
+  "error": "10 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.id.int\n  Input should be a valid integer [type=int_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCRequest.id.str\n  Input should be a valid string [type=string_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCRequest.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1.5}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1.5}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.id.int\n  Input should be a valid integer [type=int_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCResponse.id.str\n  Input should be a valid string [type=string_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1.5}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.id.int\n  Input should be a valid integer [type=int_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCError.id.str\n  Input should be a valid string [type=string_type, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1.5}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": true,
+   "result": 3
+  },
+  "error": "10 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.id.int\n  Input should be a valid integer [type=int_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCRequest.id.str\n  Input should be a valid string [type=string_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCRequest.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': True, 'result': 3}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': True, 'result': 3}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.id.int\n  Input should be a valid integer [type=int_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCResponse.id.str\n  Input should be a valid string [type=string_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCResponse.result\n  Input should be a valid dictionary [type=dict_type, input_value=3, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/dict_type\nJSONRPCError.id.int\n  Input should be a valid integer [type=int_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCError.id.str\n  Input should be a valid string [type=string_type, input_value=True, input_type=bool]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': True, 'result': 3}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": null,
+   "error": {
+    "code": "x",
+    "message": 3
+   }
+  },
+  "error": "9 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.id.int\n  Input should be a valid integer [type=int_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCRequest.id.str\n  Input should be a valid string [type=string_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCRequest.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ...de': 'x', 'message': 3}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ...de': 'x', 'message': 3}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.id.int\n  Input should be a valid integer [type=int_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCResponse.id.str\n  Input should be a valid string [type=string_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ...de': 'x', 'message': 3}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error.code\n  Input should be a valid integer, unable to parse string as an integer [type=int_parsing, input_value='x', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_parsing\nJSONRPCError.error.message\n  Input should be a valid string [type=string_type, input_value=3, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": 1,
+   "error": {
+    "code": 1.5
+   }
+  },
+  "error": "5 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ... 'error': {'code': 1.5}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ... 'error': {'code': 1.5}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ... 'error': {'code': 1.5}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error.code\n  Input should be a valid integer, got a number with a fractional part [type=int_from_float, input_value=1.5, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_from_float\nJSONRPCError.error.message\n  Field required [type=missing, input_value={'code': 1.5}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": 1,
+   "error": {
+    "code": true,
+    "message": "m"
+   },
+   "method": 3
+  },
+  "error": null
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": 1,
+   "error": "boom"
+  },
+  "error": "4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1, 'error': 'boom'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1, 'error': 'boom'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1, 'error': 'boom'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error\n  Input should be a valid dictionary or instance of ErrorData [type=model_type, input_value='boom', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "method": 7,
+   "params": "p"
+  },
+  "error": "9 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.id\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'method': 7, 'params': 'p'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCRequest.method\n  Input should be a valid string [type=string_type, input_value=7, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCRequest.params\n  Input should be a valid dictionary [type=dict_type, input_value='p', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/dict_type\nJSONRPCNotification.method\n  Input should be a valid string [type=string_type, input_value=7, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCNotification.params\n  Input should be a valid dictionary [type=dict_type, input_value='p', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/dict_type\nJSONRPCResponse.id\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'method': 7, 'params': 'p'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'method': 7, 'params': 'p'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.id\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'method': 7, 'params': 'p'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'method': 7, 'params': 'p'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": {
+   "jsonrpc": 2,
+   "method": "m",
+   "id": [
+    1
+   ],
+   "result": null
+  },
+  "error": "12 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value=2, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCRequest.id.int\n  Input should be a valid integer [type=int_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCRequest.id.str\n  Input should be a valid string [type=string_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCNotification.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value=2, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCResponse.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value=2, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCResponse.id.int\n  Input should be a valid integer [type=int_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCResponse.id.str\n  Input should be a valid string [type=string_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCResponse.result\n  Input should be a valid dictionary [type=dict_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/dict_type\nJSONRPCError.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value=2, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCError.id.int\n  Input should be a valid integer [type=int_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCError.id.str\n  Input should be a valid string [type=string_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': 2, 'method': ...d': [1], 'result': None}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": {
+    "a": 1
+   },
+   "method": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  "error": null
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": "a",
+   "method": null,
+   "params": null,
+   "result": [],
+   "error": {}
+  },
+  "error": "5 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.method\n  Input should be a valid string [type=string_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCNotification.method\n  Input should be a valid string [type=string_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCResponse.result\n  Input should be a valid dictionary [type=dict_type, input_value=[], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/dict_type\nJSONRPCError.error.code\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error.message\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "id": 1,
+   "error": {
+    "code": "12",
+    "message": "m",
+    "data": null
+   },
+   "method": 1
+  },
+  "error": null
+ },
+ {
+  "input": {
+   "jsonrpc": "2.0",
+   "error": {
+    "code": 1.0,
+    "message": "\u00e9\n"
+   },
+   "id": -1.0
+  },
+  "error": "9 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.id.int\n  Input should be a valid integer [type=int_type, input_value=-1.0, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCRequest.id.str\n  Input should be a valid string [type=string_type, input_value=-1.0, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCRequest.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'error...e': '\u00e9\\n'}, 'id': -1.0}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'error...e': '\u00e9\\n'}, 'id': -1.0}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.id.int\n  Input should be a valid integer [type=int_type, input_value=-1.0, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCResponse.id.str\n  Input should be a valid string [type=string_type, input_value=-1.0, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'error...e': '\u00e9\\n'}, 'id': -1.0}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.id.int\n  Input should be a valid integer [type=int_type, input_value=-1.0, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/int_type\nJSONRPCError.id.str\n  Input should be a valid string [type=string_type, input_value=-1.0, input_type=float]\n    For further information visit https://errors.pydantic.dev/2.14/v/string_type"
+ },
+ {
+  "input": {
+   "jsonrpc": null
+  },
+  "error": "11 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCRequest.id\n  Field required [type=missing, input_value={'jsonrpc': None}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCRequest.method\n  Field required [type=missing, input_value={'jsonrpc': None}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCNotification.method\n  Field required [type=missing, input_value={'jsonrpc': None}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCResponse.id\n  Field required [type=missing, input_value={'jsonrpc': None}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': None}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCError.id\n  Field required [type=missing, input_value={'jsonrpc': None}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': None}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"
+ }
+]
