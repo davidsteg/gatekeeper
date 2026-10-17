@@ -122,7 +122,7 @@ async fn routing_errors() {
         ("GET", "/docs", 404, not_found, None),
         ("OPTIONS", "/overview", 405, not_allowed, Some("GET")),
         ("GET", "/requests/pending/approve-all", 405, not_allowed, Some("POST")),
-        ("GET", "/documents/%2e%2e%2fpyproject.toml", 404, not_found, None),
+        ("GET", "/documents/%2e%2e%2fDockerfile", 404, not_found, None),
     ] {
         let response = c.send(method, &api(path), &[], Payload::None).await;
         check(&response, status, body, &format!("{method} {path}"));

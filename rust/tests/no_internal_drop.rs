@@ -1,7 +1,7 @@
 //! Where gatekeeper is allowed to change a process's identity, and nowhere
-//! else (port of the source-scanning half of `tests/test_no_internal_drop.py`;
-//! the Dockerfile/compose checks there test files, not code, and stay with
-//! the Python suite).
+//! else (port of the source-scanning half of the Python suite's
+//! `test_no_internal_drop.py`; the Dockerfile/compose checks there test
+//! files, not code, and are in `tests/test_image_files.py`).
 //!
 //! Two modules may change identity: `runas.rs` (in the short-lived helper
 //! child, one file operation per process, one-way) and `privdrop.rs` (once

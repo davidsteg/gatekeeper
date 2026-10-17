@@ -81,7 +81,7 @@ pub fn python_interpreter() -> String {
 /// Where a vendored script stands in when a toolkit names a path this
 /// filesystem lacks: `$<env_var>` when set, else the image's copy under
 /// [`VENDOR_DIR`], else -- in a development checkout -- the copy in
-/// `src/gatekeeper/<subdir>/`.
+/// `scripts/<subdir>/`.
 ///
 /// PORT NOTE: Python's fallback was the fixed `tier1.*_FALLBACK_SCRIPT`
 /// (`/opt/gatekeeper/...`); the Rust image installs the scripts under
@@ -103,12 +103,7 @@ pub fn vendored_script(env_var: &str, subdir: &str, name: &str) -> String {
     if Path::new(&installed).is_file() {
         return installed;
     }
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("src")
-        .join("gatekeeper")
-        .join(subdir)
-        .join(name);
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("scripts").join(subdir).join(name);
     if dev.is_file() {
         if let Ok(abs) = dev.canonicalize() {
             return abs.to_string_lossy().into_owned();
@@ -120,7 +115,7 @@ pub fn vendored_script(env_var: &str, subdir: &str, name: &str) -> String {
 /// The `google_api.py` the fallback substitutes (`GOOGLE_FALLBACK_SCRIPT`'s
 /// role): `GATEKEEPER_GOOGLE_SCRIPT`, else the image / checkout copy.
 pub fn google_fallback_script() -> String {
-    vendored_script("GATEKEEPER_GOOGLE_SCRIPT", "_google_api", "google_api.py")
+    vendored_script("GATEKEEPER_GOOGLE_SCRIPT", "google", "google_api.py")
 }
 
 pub(crate) fn access(path: &str, mode: libc::c_int) -> bool {

@@ -1,0 +1,14 @@
+# Lint for the Python that is left: the vendored CLI scripts and their
+# tests (`ruff check scripts tests`, run by CI's `tests` job). The rules are
+# the ones the Python implementation was held to.
+line-length = 100
+target-version = "py312"
+# google_api.py is a vendored google-workspace skill script with its own
+# style (E402: the sys.path manipulation before an import is intentional).
+exclude = ["scripts/google"]
+
+[lint]
+# E/F: pycodestyle errors + pyflakes. I: import sorting. UP: pyupgrade.
+# B: flake8-bugbear.
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

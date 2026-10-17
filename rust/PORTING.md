@@ -1,49 +1,33 @@
-# Porting notes (Python -> Rust)
+# Porting history (Python -> Rust)
 
-Working notes for the rewrite. The Python package under `src/gatekeeper/`
-is the specification: the Rust crate must keep its behavior, its file
-formats and its wire formats, so an existing deployment can switch binaries
-without touching a config file.
+gatekeeper was first written in Python. This crate is a faithful port of
+that package: same validation and order of checks, same defaults, every
+user-visible string (error messages, audit field names, JSON keys,
+agent-facing text) copied verbatim, and the same file and wire formats, so
+an existing deployment switched binaries without touching a config file.
 
-## Rules
+- **1.13.0** -- the image runs this crate instead of the Python package.
+  The Python package stayed in the repository as the reference, and the
+  parity tests compared against it live.
+- **1.16.0** -- the Python package, its tests and `pyproject.toml` were
+  removed. What it produced is frozen in `tests/fixtures/` (see below);
+  the release version moved to `Cargo.toml`. Only the vendored Google and
+  Microsoft CLI scripts (`../scripts/`) are still Python.
 
-- **Port faithfully.** Same validation, same order of checks, same
-  defaults. Every user-visible string (error messages, audit field names,
-  JSON keys, agent-facing text) is copied verbatim. Where Python formats
-  with `{x!r}`, use `pyfmt::repr_str` / `repr_list` / `repr_value`, so a
-  message reads `No tool with ID 'x'.` exactly as before.
-- **No new scope.** No features the Python code does not have. A Python
-  quirk that is clearly a bug may be fixed, but note it in a comment
-  starting with `PORT NOTE:`.
-- **Dicts are `serde_json::Value`** (the crate enables `preserve_order`,
-  so key order is insertion order like a Python dict). Typed structs are
-  fine and preferred for parsed config, but keep the raw `Value` wherever
-  Python keeps the raw dict (catalog `raw`, pending payloads, ...).
-- **Formats.** YAML in/out goes through `crate::yaml` (PyYAML 1.1
+## What the port kept on purpose
+
+- **Python formats.** YAML in/out goes through `crate::yaml` (PyYAML 1.1
   semantics) or `crate::atomic::{load_cached, dump, atomic_write}`. JSON
-  text that Python produced with `json.dumps` goes through `crate::pyjson`
-  (Python separators and escaping). Operator-written regexes
-  (`pattern:` in tool specs) go through `crate::pyre::PyRegex`; internal
-  fixed regexes use the `regex` crate. `fnmatch.fnmatchcase` is
-  `crate::fnmatch::fnmatchcase`. `os.path` functions are in
-  `crate::pathutil` (non-strict `realpath`, `commonpath`, `normpath`).
-  Timestamps are in `crate::timeutil`.
-- **Errors.** `ConfigError` (with `kind` for the Python subclasses
-  `Tier1Violation`, `WriteRefused`, `AdminActionError`) and `Denied`
-  (`DenialReason` + detail) live in `crate::errors`.
-- **Sync core, async edges.** Config, catalog, identity, audit and the
-  stores are synchronous (`std::sync`/`parking_lot` locks). Executors and
-  servers are async on tokio.
-- **Secrets.** Credential values are never logged, never returned by an API
-  and never written to a plaintext file (FR-10.2).
-- **Tests.** Port the Python tests that cover the module (grep `tests/` for
-  its name) into `#[cfg(test)] mod tests` or `rust/tests/*.rs`. Run
-  `cargo test` and `cargo build` with zero warnings before committing.
-- The Python reference environment is `/tmp/claude-0/venv` (`mcp`,
-  `pyyaml`, `pytest`, ... installed). Use it to check what Python actually
-  does when the source leaves a doubt.
-
-## Module map
+  text the Python version wrote with `json.dumps` goes through
+  `crate::pyjson`. Operator-written regexes (`pattern:` in tool specs) go
+  through `crate::pyre::PyRegex`; `fnmatch.fnmatchcase` is
+  `crate::fnmatch::fnmatchcase`; `os.path` is `crate::pathutil`; messages
+  that Python formatted with `{x!r}` use `pyfmt::repr_str` / `repr_list` /
+  `repr_value`.
+- **`PORT NOTE:` comments** mark the places where the port deliberately
+  differs -- mostly where Python crashed on malformed input and the port
+  returns the error a caller would expect.
+- **Module names** follow the Python modules they replaced:
 
 | Python | Rust |
 |---|---|
@@ -62,3 +46,24 @@ without touching a config file.
 | `server.py`, `admin_server.py`, `admin_service.py` | `server`, `admin_server`, `admin_service` |
 | `api/*`, `oauth.py`, `ui.py` | `api::*`, `oauth`, `ui` |
 | `__main__.py` | `main.rs` (+ `cli`) |
+
+## Frozen fixtures
+
+Generated from the Python implementation before it was removed and never
+regenerated. A deliberate change to one of these outputs is edited into
+the fixture by hand, in the same commit:
+
+- `tests/fixtures/error_cases_golden.json` -- Tier 1 / tool-spec error texts.
+- `tests/fixtures/examples_golden.json` -- `config/examples/` as loaded.
+- `tests/fixtures/init_golden/` -- what `init --audit-dir /audit` wrote.
+- `tests/fixtures/admin_tools_golden.json` -- the `admin.*` tool list.
+- `tests/fixtures/toolkit_reference_golden.json` -- the reference blocks.
+- `tests/fixtures/shipped_cli_argv_golden.json` -- the minimal argv of every
+  shipped google/microsoft tool (also run against the real scripts by
+  `../tests/test_cli_grammar.py`).
+- `tests/fixtures/mcp_wire_python_transcript.txt` -- `tests/interop/probe.py`
+  against the Python SDK server as the Python gatekeeper configured it.
+- `tests/fixtures/python_written/` -- token hashes, a credential store and
+  its key, as Python wrote them; `tests/python_compat.rs` reads them back.
+- `tests/data/mcp_envelope_errors.json` -- pydantic's envelope validation
+  texts (`tests/interop/envelope_errors.py`, needs only the MCP SDK).

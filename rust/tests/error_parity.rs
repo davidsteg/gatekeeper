@@ -1,11 +1,12 @@
 //! Error-message parity with Python, table-driven.
 //!
-//! `fixtures/error_cases_golden.json` (written by
-//! `fixtures/dump_error_cases.py`) holds ~150 Tier 1 documents and tool
-//! specs -- one per validation branch of `tier1.py`/`catalog.py` -- with
-//! the exact `ConfigError` text Python produced for each, or a summary of
-//! what loaded. Operators grep logs for these messages, so they must match
-//! character for character.
+//! `fixtures/error_cases_golden.json` holds ~150 Tier 1 documents and tool
+//! specs -- one per validation branch of the retired Python `tier1.py`/
+//! `catalog.py` -- with the exact `ConfigError` text Python produced for
+//! each, or a summary of what loaded. It was generated from the Python
+//! implementation and is frozen since that was removed (1.16.0): a change
+//! to a message is a change to this file, made by hand. Operators grep
+//! logs for these messages, so they must match character for character.
 //!
 //! Where Python crashed with an uncaught `ValueError` (`python_crash` in the
 //! fixture), the Rust port reports a `ConfigError` with the same text.

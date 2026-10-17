@@ -8,6 +8,8 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use gatekeeper::identity::{generate_token, hash_token, hash_token_lookup};
+
+mod common;
 use serde_json::{json, Value};
 
 const BIN: &str = env!("CARGO_BIN_EXE_gatekeeper");
@@ -155,37 +157,29 @@ fn a_missing_subcommand_is_a_usage_error() {
     assert!(stderr.to_lowercase().contains("usage"), "{stderr}");
 }
 
-/// The files `init` writes match the Python CLI's, secrets aside.
+/// The files `init` writes match the Python CLI's, secrets aside: what
+/// `python -m gatekeeper init --audit-dir /audit` wrote, frozen in
+/// `fixtures/init_golden/` when the Python implementation was removed
+/// (1.16.0), with the hash values masked.
 #[test]
 fn init_writes_what_the_python_cli_writes() {
-    let Some(python) = python() else { return };
     let tmp = tempfile::tempdir().unwrap();
     let rust = tmp.path().join("rust");
-    let py = tmp.path().join("py");
+    let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/init_golden");
     init(&rust, &["--audit-dir", "/audit"], &[]);
-    let output = Command::new(&python)
-        .args(["-m", "gatekeeper", "init", "--config-dir"])
-        .arg(&py)
-        .args(["--audit-dir", "/audit"])
-        .env("PYTHONPATH", repo_src())
-        .env_remove("GATEKEEPER_DROP_TO")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     for name in ["toolkits.yaml", "tools.yaml"] {
         assert_eq!(
             std::fs::read_to_string(rust.join(name)).unwrap(),
-            std::fs::read_to_string(py.join(name)).unwrap(),
+            std::fs::read_to_string(golden.join(name)).unwrap(),
             "{name}"
         );
     }
     let mask = |text: String| -> Vec<String> {
         text.lines().map(|l| l.split_once(": \"").map(|(k, _)| format!("{k}: <hash>")).unwrap_or(l.to_string())).collect()
     };
-    assert_eq!(
-        mask(std::fs::read_to_string(rust.join("identities.yaml")).unwrap()),
-        mask(std::fs::read_to_string(py.join("identities.yaml")).unwrap())
-    );
+    let masked: Vec<String> =
+        std::fs::read_to_string(golden.join("identities.masked.yaml")).unwrap().lines().map(str::to_string).collect();
+    assert_eq!(mask(std::fs::read_to_string(rust.join("identities.yaml")).unwrap()), masked);
 }
 
 // -- test_selfdrop.py / test_runas.py: the CLI wiring ----------------------------------
@@ -312,7 +306,7 @@ impl Drop for Server {
 
 #[test]
 fn a_python_sdk_agent_session_against_the_real_serve_binary() {
-    let Some(python) = python() else { return };
+    let Some(python) = common::mcp_python() else { return };
     let tmp = tempfile::tempdir().unwrap();
     let token = echo_deployment(tmp.path());
     let port = free_port();
@@ -355,22 +349,6 @@ fn a_python_sdk_agent_session_against_the_real_serve_binary() {
 }
 
 // -- helpers ------------------------------------------------------------------------------
-
-fn python() -> Option<PathBuf> {
-    let path = std::env::var_os("GATEKEEPER_INTEROP_PYTHON")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp/claude-0/venv/bin/python"));
-    if path.exists() {
-        Some(path)
-    } else {
-        eprintln!("skipping: no Python reference interpreter at {}", path.display());
-        None
-    }
-}
-
-fn repo_src() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("src")
-}
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()

@@ -2211,4 +2211,21 @@ mod tests {
         assert!(!Path::new(&first).exists());
         cache.invalidate();
     }
+
+    /// The `SCOPES = [...]` fallback list of a vendored script, as written.
+    fn script_scopes(rel: &str) -> Vec<String> {
+        let text = std::fs::read_to_string(format!("{}/../scripts/{rel}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let start = text.find("\nSCOPES = [\n").expect("a SCOPES list") + "\nSCOPES = [\n".len();
+        let body = &text[start..start + text[start..].find("\n]").unwrap()];
+        body.lines().map(|l| l.trim().trim_end_matches(',').trim_matches('"').to_string()).collect()
+    }
+
+    /// The scripts fall back to exactly what the console asks a human to
+    /// consent to, for a token file written before scopes were stored --
+    /// a wider list is a refresh Google or Microsoft refuses outright.
+    #[test]
+    fn the_vendored_scripts_fall_back_to_the_consented_scopes() {
+        assert_eq!(script_scopes("google/google_api.py"), consented_google());
+        assert_eq!(script_scopes("microsoft/microsoft_api.py"), consented_ms());
+    }
 }

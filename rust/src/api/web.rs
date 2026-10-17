@@ -67,14 +67,13 @@ impl WebDir {
 /// The first directory holding a built `index.html`, or `None`.
 ///
 /// PORT NOTE: Python's middle candidate was `gatekeeper/_web` inside the
-/// installed package; the binary has no package directory, so it checks
-/// that path in the checkout it was built from, then `frontend/dist`. A
+/// installed package; the binary has no package directory, so after the
+/// env var it checks `frontend/dist` in the checkout it was built from. A
 /// container image sets `GATEKEEPER_WEB_DIR`.
 pub fn web_dir() -> Option<String> {
     let repo = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
     let candidates = [
         std::env::var(WEB_DIR_ENV).unwrap_or_default(),
-        format!("{repo}/src/gatekeeper/_web"),
         format!("{repo}/frontend/dist"),
     ];
     candidates.into_iter().find(|base| !base.is_empty() && Path::new(base).join("index.html").is_file())

@@ -20,18 +20,18 @@ item.
 - Two-tier config (Tier 1 immutable / Tier 2 runtime-mutable)
 - `docker` and `local` executors
 - `http` executor — SSRF-safe, no redirects followed, credential-as-header
-  injection, response size/field capping, external-data marking (`execute_http.py`)
+  injection, response size/field capping, external-data marking (`execute/http.rs`)
 - `truenas` executor — JSON-RPC 2.0 over WebSocket, RPC-method whitelist
-  (`execute_truenas.py`)
+  (`execute/truenas.rs`)
 - `ssh` executor — reuses the `docker`/`local` binary+argv tool shape
   exactly (REQUIREMENTS.md §17), executed on a remote host over SSH;
   mandatory host-key pinning (`ssh_known_hosts`, no MITM-prone
   `known_hosts=None`), each argv element `shlex.quote`d before joining
   into the single command string SSH's exec channel requires
-  (`execute_ssh.py`). One toolkit = one host; no destinations support yet
+  (`execute/ssh.rs`). One toolkit = one host; no destinations support yet
   (see below).
 - `microsoft` executor — Outlook mail over Microsoft Graph
-  (`execute_microsoft.py` + `_microsoft_api/microsoft_api.py`): list
+  (`execute/microsoft.rs` + `scripts/microsoft/microsoft_api.py`): list
   messages, get message, list folders, send mail, whitelisted by
   action string per toolkit. The console signs in from
   `/app/credentials` (authorization code + PKCE against
@@ -39,11 +39,11 @@ item.
   and stores the refresh token and the granted scopes in the same
   `oauth2` credential kind the `google` executor uses.
 - `opencode` executor — drives a headless opencode coding-agent server
-  over its own HTTP API (`execute_opencode.py`). Eight operations
+  over its own HTTP API (`execute/opencode.rs`). Eight operations
   (`ask`/`run`/`fire`/`check`/`review_changes`/`abort`/`providers`/
   `health`), whitelisted by name per toolkit the way `truenas` whitelists
   RPC methods; one operation is a fixed multi-request workflow, so a task
-  is one agent round trip rather than four. Reuses `execute_http.py`'s
+  is one agent round trip rather than four. Reuses `execute/http.rs`'s
   SSRF check (resolved IP re-checked before *every* request), credential
   header injection, and JSON field capping. A `directory` parameter,
   checked against the toolkit's `path_roots`, becomes opencode's
@@ -51,42 +51,42 @@ item.
   project root listed there.
 - `git` executor (1.14.0) — `push` of one `feat/*` branch from a
   repository listed in the toolkit's `repos:` to that repository's remote
-  (`execute_git.py`), fast-forward only; no force, delete or `main` exists
+  (`execute/git.rs`), fast-forward only; no force, delete or `main` exists
   in the module. The worker's checkout is only read (fetched into a
   throwaway bare repo), so its hooks and config never run; the token comes
   from the credential store as an env-config header. Output: old/new SHA
   and up to 20 pushed commits.
 - `kuma` executor (1.12.0) — Uptime Kuma monitors over Socket.IO
-  (`execute_kuma.py`), the only interface Kuma offers for them. Four
+  (`execute/kuma.rs`), the only interface Kuma offers for them. Four
   operations, whitelisted by name per toolkit: `monitor_list` (projected
   fields only, no secrets), `monitor_add_http` (type, method and
   notifications fixed; name, URL, interval 30–3600 s and accepted status
   from a fixed set), `monitor_pause`/`monitor_resume` (only monitors
   gatekeeper created, recognised by their description). No delete, edit,
   notification or settings change exists in the module. Login is a `basic`
-  credential in the store; the target check is `execute_http.py`'s.
+  credential in the store; the target check is `execute/http.rs`'s.
 - `agent` executor — a mailbox between gatekeeper identities
-  (`execute_agent.py`, `messages.py`). `agent.send_message` addresses
+  (`execute/agent.rs`, `messages.rs`). `agent.send_message` addresses
   another identity, `agent.read_messages` collects the caller's own and
   marks them read. Deliberately a **mailbox, not a push**: MCP gives a
   server no way to hand a running client an unsolicited payload, and the
   one notification a client acts on (`tools/list_changed`) carries none by
   design — so delivery is on the recipient's next call, without any
   client-side change. The sender is the authenticated identity and the
-  mailbox is the calling one; neither is a parameter, and `catalog.py`
+  mailbox is the calling one; neither is a parameter, and `catalog.rs`
   refuses a tool definition that declares them. Messages sit in plaintext
   in `mailbox_path` (known credential values scrubbed on the way in);
   `read_messages` output is marked `external_untrusted` (FR-8.12).
-- Credential store — write-only, encrypted at rest (`credentials.py`).
+- Credential store — write-only, encrypted at rest (`credentials.rs`).
   Kinds: `api_key_header`, `bearer`, `basic`, `ws_api_key`, `url_path`,
   `url_query`, `docker_tls`, `ssh_private_key`
 - Destinations — a `docker`/`http`/`truenas` toolkit may declare several
   named targets (e.g. two Docker hosts); tools expand at catalog-load time
   into destination-qualified, independently-grantable IDs
-  (`docker.compose_up@nas1`) — REQUIREMENTS.md FR-8.3g-j (`tier1.py`,
-  `catalog.py`)
+  (`docker.compose_up@nas1`) — REQUIREMENTS.md FR-8.3g-j (`tier1.rs`,
+  `catalog.rs`)
 - Toolkit reference — one copy-pasteable toolkit block per executor at
-  `/app/toolkits/reference` (`toolkit_reference.py`). The per-service
+  `/app/toolkits/reference` (`toolkit_reference.rs`). The per-service
   Integrations library (`integrations.py`, `/app/tools/integrations`,
   `gatekeeper integration`) was removed in 1.4.0.
 - `write_external` category — distinct rate-limit bucket, agent-facing
@@ -97,7 +97,7 @@ item.
   (tool create/update/enable/disable/delete, grant and role changes, a
   deployed toolkit proposal, a SIGHUP reload). Both protocol eras are
   served: a `subscriptions/listen` stream at 2026-07-28+, the standalone
-  `GET /mcp` SSE stream before it (`notifications.py`)
+  `GET /mcp` SSE stream before it (`mcp/notifier.rs`)
 
 - **Release-bound artifacts (`artifact` executor, 0.50.0)** — fixed
   repository paths built into the image and bound to the release commit.
@@ -107,12 +107,13 @@ item.
   sources are declared since 0.52.0, when the Hermes recovery adapter (the
   only artifact) was removed.
 
-## Not implemented (by design or not yet)
+- **One implementation, in Rust** (1.13.0, 1.16.0). The image runs the
+  Rust crate in `rust/` since 1.13.0; the Python package it was ported
+  from was removed in 1.16.0, its parity checks replaced by frozen
+  fixtures of its output. Only the vendored Google and Microsoft CLI
+  scripts (`scripts/`) are still Python.
 
-- **Removing the Python core.** Since 1.13.0 the image runs the Rust
-  implementation (`rust/`), but `src/gatekeeper/` stays as the reference
-  its parity tests compare against, so a change still has to be made in
-  both. Removing it means rewriting those tests against fixtures.
+## Not implemented (by design or not yet)
 
 - **A browser smoke test of the console in CI.** The console migration is
   finished (JSON API 0.53.0, SPA 0.54.0, writes 0.55.0, request decisions
@@ -135,7 +136,7 @@ item.
   mailbox above — a protocol limit. An MCP client does not listen for
   arbitrary server-initiated payloads; the only notification a client like
   Hermes acts on is `notifications/tools/list_changed`, and it carries no
-  payload by design (see `notifications.py`). So the earliest a message can
+  payload by design (see `mcp/notifier.rs`). So the earliest a message can
   reach agent B is B's next tool call, and `agent.read_messages` is that
   call. Closing this would mean changing the *client*, not gatekeeper — an
   out-of-band channel (a webhook into the agent's host, a session-side
@@ -143,7 +144,7 @@ item.
   faked: a "notify" that only fires when the recipient happens to call
   something anyway is the mailbox with a misleading name.
 - **Nested `params_template` values** — the `truenas` executor's
-  `params_template` (`validate.py`'s `build_rpc_call`) only substitutes
+  `params_template` (`validate.rs`'s `build_rpc_call`) only substitutes
   flat string placeholders into a positional argument list; it cannot
   build a single positional argument that is itself an object. This is
   why `config/examples/tools.yaml` has a TrueNAS `zfs.snapshot.delete`
@@ -169,10 +170,10 @@ item.
   `ui._oauth_authorize`/`_oauth_callback` (see "Implemented" above).
 - **`ssh` destinations** — a `docker`/`http`/`truenas`/`opencode` toolkit
   can declare several named destinations (see below); `ssh` toolkits can't
-  yet (`tier1.py` rejects a `destinations:` list on an `ssh` toolkit) — one
+  yet (`tier1.rs` rejects a `destinations:` list on an `ssh` toolkit) — one
   toolkit per host for now, add another toolkit for a second host.
 - **The opencode request paths track an external API.** They live in one
-  table (`execute_opencode.py`'s `_EP`) precisely so a future opencode
+  table (`execute/opencode.rs`'s `_EP`) precisely so a future opencode
   release that moves an endpoint is a one-line change rather than a hunt
   through eight workflows. The response *readers* are deliberately
   tolerant for the same reason: several field names are accepted for each
@@ -188,7 +189,7 @@ item.
 - **Kuma's next auth line is not supported yet.** The executor logs in
   with Kuma's socket `login` event (1.23 and 2.0). Kuma's development
   branch moves sign-in to an HTTP session cookie; once that ships, the
-  login half of `execute_kuma.py` needs a second path. A Kuma account
+  login half of `execute/kuma.rs` needs a second path. A Kuma account
   with 2FA cannot be used at all (there is nobody to type the code).
 - **No opencode session listing.** `check`/`review_changes`/`abort` all
   take a session id an agent got from `ask`/`run`/`fire`; there is no
@@ -216,7 +217,7 @@ item.
   tools.
 - **Per-destination `allowed_cidrs`/`allowed_methods`/`allowed_path_prefixes`** —
   an `http` toolkit's SSRF/target restrictions (FR-8.9/8.15) are still
-  toolkit-wide, shared across every destination it declares (`tier1.py`'s
+  toolkit-wide, shared across every destination it declares (`tier1.rs`'s
   `Destination` carries only the connection target, not the toolkit's other
   boundaries — FR-4.9). Doesn't let a call to one destination reach another
   (the target itself stays fixed per destination, FR-8.3i), but the CIDR

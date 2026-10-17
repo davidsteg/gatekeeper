@@ -5,8 +5,11 @@
 Sends a fixed sequence of requests (both protocol eras, both mounts,
 every error path the transport has) and prints a normalized transcript:
 status, the headers that matter, and the body with session ids masked.
-Run against `ref_server.py` (the Python SDK) and `mcp_echo` (the Rust
-port); the two transcripts must be identical.
+Its transcript against the Python SDK server the Python gatekeeper ran
+is frozen in `rust/tests/fixtures/mcp_wire_python_transcript.txt`;
+`rust/tests/mcp_interop.rs` runs it against `mcp_echo` (the Rust port)
+and the two must be identical. Needs only the MCP SDK (`httpx2` comes
+with `mcp==2.2.0`).
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ import json
 import re
 import sys
 
-import httpx
+import httpx2 as httpx
 
 BASE = sys.argv[1].rstrip("/")
 OUT: list[str] = []

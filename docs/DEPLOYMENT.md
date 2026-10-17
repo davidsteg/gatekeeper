@@ -13,7 +13,7 @@ workflow, see [AGENTS.md](../AGENTS.md).
 | `GATEKEEPER_AUDIT_DIR` | Audit-log directory a **fresh** `init` writes into `toolkits.yaml`. `/var/log/gatekeeper` in the container image; unset elsewhere, which falls back to `<state-dir>/logs`. Never rewrites an existing `audit.dir` — that value is Tier 1 and authoritative. See [Where the audit log goes](#where-the-audit-log-goes) |
 | `GATEKEEPER_CREDENTIAL_KEY` | Fernet master key for the credential store (generate with `gatekeeper credential-key`) |
 | `GATEKEEPER_CREDENTIAL_KEY_FILE` | Path to a file holding that same key, for a separately mounted secret instead of a plain env var |
-| `GATEKEEPER_RELEASE_NOTES` | Path to `RELEASE.md`, for the console's Release notes page (`/app/release-notes`). Defaults to `/usr/share/gatekeeper/RELEASE.md` in the container image; a dev checkout finds the file next to `pyproject.toml` on its own and never needs this set |
+| `GATEKEEPER_RELEASE_NOTES` | Path to `RELEASE.md`, for the console's Release notes page (`/app/release-notes`). Defaults to `/usr/share/gatekeeper/RELEASE.md` in the container image; a binary built from a checkout finds the file at the repository root on its own and never needs this set |
 | `GATEKEEPER_LOG_LEVEL` | Python logging level, default `INFO` |
 | `GATEKEEPER_UI` | `1`/`true` enables the console without passing `--ui` |
 | `GATEKEEPER_UI_READ_ONLY` | `1`/`true` disables console writes regardless of role |
@@ -330,7 +330,7 @@ re-investigating: every Tier 2 write reloads the state it just wrote,
 synchronously, in the same process — `ConfigStore._write_tools` reassigns
 `service.catalog` from the file, and `_write_identities` swaps the identity
 contents in place. `tools/list` is answered from those objects on every
-request. `test_mcp_live_catalog.py` asserts that against a live MCP session,
+request. `rust/tests/server_mcp.rs` asserts that against a live MCP session,
 alongside the notification itself.
 
 A **client reconnect** remains the manual fallback, and is still cheaper
@@ -348,14 +348,9 @@ failure, the previous in-memory state is kept. The rate limiter is reset.
 `credentials.yaml` is not part of this reload — it is read fresh on every
 credential-store operation.
 
-**Note (agent environments):** `signal.SIGHUP` does not exist on Windows.
-`cmd_serve` registers a SIGHUP handler unconditionally, so `gatekeeper serve`
-crashes immediately if invoked directly on a Windows dev machine. To smoke-test
-the app on Windows, build the ASGI app directly (`server.build_app(...)`) in a
-small script instead of going through `cmd_serve`/the CLI, and run it with
-`uvicorn.run(...)` yourself — see the pattern used for UI screenshots in this
-project's development history. This is a dev-environment workaround only; the
-container image runs on Linux and is unaffected.
+**Note (dev environments):** gatekeeper is Linux-only (SIGHUP reload,
+privilege dropping, `/proc`); on Windows, build and run it in WSL or a Linux
+container.
 
 ## Removed: recovery supervisor
 
@@ -449,8 +444,9 @@ The files the image serves are also attached to the GitHub release
 
 ## Behind a reverse proxy
 
-`gatekeeper serve` runs directly under uvicorn, which by default trusts
-`X-Forwarded-For`/`X-Forwarded-Proto` only from a proxy on `127.0.0.1`. A
+`gatekeeper serve` trusts `X-Forwarded-For`/`X-Forwarded-Proto` by default
+only from a proxy on `127.0.0.1` (uvicorn's default, which the Python
+implementation had and the Rust one kept). A
 reverse proxy in its own container (Traefik, Caddy, nginx, or any other
 sidecar) is **not** `127.0.0.1` to gatekeeper — it connects from its own
 container address — so without configuration those headers are silently
@@ -483,9 +479,9 @@ docker run -d \
 ```
 
 or `serve --trusted-proxies 172.18.0.0/16` directly. This is not a
-gatekeeper-specific mechanism — it configures uvicorn's own
-`ProxyHeadersMiddleware`, which then rewrites the client address and scheme
-*before* any of gatekeeper's own code sees the request, so nothing else
+gatekeeper-specific mechanism — it behaves like uvicorn's
+`ProxyHeadersMiddleware`, rewriting the client address and scheme
+*before* any of gatekeeper's own request handling sees them, so nothing else
 needs to change. Only name proxies gatekeeper actually shares a network
 with; `*` trusts any peer and should stay reserved for a network gatekeeper
 does not share with anything untrusted.
@@ -577,8 +573,8 @@ so a fresh `init` writes that into `toolkits.yaml` and the mount above puts
 your storage behind it.
 
 Precedence, highest first: `gatekeeper init --audit-dir`, then
-`$GATEKEEPER_AUDIT_DIR`, then `<state-dir>/logs`. The last is what a bare
-`pip install` gets — self-contained, so a checkout stays runnable from any
+`$GATEKEEPER_AUDIT_DIR`, then `<state-dir>/logs`. The last is what a binary
+run outside the image gets — self-contained, so a checkout stays runnable from any
 directory without needing write access to `/var/log`.
 
 Note what this is *not*: the value only seeds a **new** `toolkits.yaml`.
@@ -679,7 +675,7 @@ survives the drop, minus root's own group 0:
 
 Startup then reports `568:568` with `CapEff=00000000000000c0`, files land
 owned by 568 exactly as in the unprivileged profile, and `run_as` works —
-because `_runas.py` asks the kernel for `CAP_SETUID`, not for uid 0.
+because `runas.rs` asks the kernel for `CAP_SETUID`, not for uid 0.
 
 `no-new-privileges: true` stays on and does not conflict. It governs what
 `execve` may *grant from a file*; the capabilities travel in the process's
@@ -766,10 +762,10 @@ failed, which aborts startup rather than reaching this state.
 With that setting **unset**, gatekeeper does not change its own uid. There
 is no entrypoint script, no `PUID`/`PGID` convention, no
 `gosu`/`su-exec`/`setpriv` wrapper, and no `setuid` in the startup path.
-Only two modules in the tree change identity at all — `_selfdrop.py`, which
-runs solely when that variable is set, and the short-lived `run_as` helper
-*child*, after the server has already forked and exec'd it. A test
-(`test_no_internal_drop.py`) parses every module and fails the build if a
+Only two modules in the tree change identity at all — `privdrop.rs`, which
+drops solely when that variable is set, and `runas.rs` in the short-lived
+`run_as` helper *child*, after the server has already forked and exec'd it.
+A test (`rust/tests/no_internal_drop.rs`) scans every module and fails the build if a
 third one ever appears. So an unconfigured process observed at 568 was
 **started** at 568, and looking for an internal drop will not find one.
 

@@ -154,3 +154,31 @@ pub fn err_text<T: std::fmt::Debug>(r: ConfigResult<T>) -> String {
 pub fn args(v: Value) -> serde_json::Map<String, Value> {
     v.as_object().cloned().unwrap()
 }
+
+/// An interpreter with the official Python MCP SDK (`mcp`), for the tests
+/// that drive the Rust server with the SDK's own client
+/// (`tests/interop/*.py`). `GATEKEEPER_INTEROP_PYTHON` names it; CI sets
+/// it, and then an interpreter without `mcp` is a failure, not a skip.
+/// Unset, `python3` on `PATH` is tried, and the test is skipped (passes
+/// with a note) when it cannot import `mcp`.
+pub fn mcp_python() -> Option<PathBuf> {
+    let explicit = std::env::var_os("GATEKEEPER_INTEROP_PYTHON").filter(|v| !v.is_empty());
+    let candidate = match &explicit {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from("python3"),
+    };
+    let has_mcp = std::process::Command::new(&candidate)
+        .args(["-I", "-c", "import mcp"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    match (has_mcp, explicit.is_some()) {
+        (true, _) => Some(candidate),
+        (false, true) => panic!("GATEKEEPER_INTEROP_PYTHON={} cannot import mcp", candidate.display()),
+        (false, false) => {
+            eprintln!("skipping: no python3 with the MCP SDK (`pip install mcp==2.2.0`, or set GATEKEEPER_INTEROP_PYTHON)");
+            None
+        }
+    }
+}

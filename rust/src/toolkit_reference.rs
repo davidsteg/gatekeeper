@@ -311,20 +311,13 @@ mod tests {
         }
     }
 
-    /// Verbatim against the Python module, when the reference venv exists.
+    /// Verbatim against the Python module's `REFERENCES`, frozen in
+    /// `tests/fixtures/toolkit_reference_golden.json` when the Python
+    /// implementation was removed (1.16.0).
     #[test]
     fn text_matches_python_verbatim() {
-        let python = std::env::var("GATEKEEPER_INTEROP_PYTHON")
-            .unwrap_or_else(|_| "/tmp/claude-0/venv/bin/python".into());
-        let python = python.as_str();
-        if !std::path::Path::new(python).exists() {
-            return;
-        }
-        let script = "import json; from gatekeeper.toolkit_reference import REFERENCES as R; \
-                      print(json.dumps([[r.key, r.display_name, r.notes, r.toolkit_yaml] for r in R.values()]))";
-        let out = std::process::Command::new(python).args(["-c", script]).output().unwrap();
-        assert!(out.status.success());
-        let theirs: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let theirs: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/toolkit_reference_golden.json")).unwrap();
         let ours: Vec<Value> = REFERENCES
             .iter()
             .map(|r| serde_json::json!([r.key, r.display_name, r.notes, r.toolkit_yaml]))

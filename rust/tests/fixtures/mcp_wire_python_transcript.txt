@@ -1,0 +1,753 @@
+#### session era
+== initialize 2025-06-18
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 1, "jsonrpc": "2.0", "result": {"capabilities": {"experimental": {}, "tools": {"listChanged": true}}, "instructions": "Echo server for interop tests.", "protocolVersion": "2025-06-18", "serverInfo": {"name": "echo", "version": "9.9.9"}}}
+== initialized notification
+  status 202
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  (empty body)
+== tools/list
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 2, "jsonrpc": "2.0", "result": {"tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}, {"description": "Raises inside the handler.", "inputSchema": {"properties": {}, "type": "object"}, "name": "demo.fail"}, {"description": "Sleeps.", "inputSchema": {"properties": {"seconds": {"type": "number"}}, "type": "object"}, "name": "demo.slow"}]}}
+== tools/list with params
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": "two", "jsonrpc": "2.0", "result": {"tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}, {"description": "Raises inside the handler.", "inputSchema": {"properties": {}, "type": "object"}, "name": "demo.fail"}, {"description": "Sleeps.", "inputSchema": {"properties": {"seconds": {"type": "number"}}, "type": "object"}, "name": "demo.slow"}]}}
+== tools/call echo
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 3, "jsonrpc": "2.0", "result": {"content": [{"text": "hi", "type": "text"}], "isError": false}}
+== tools/call no args
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 4, "jsonrpc": "2.0", "result": {"content": [{"text": "None", "type": "text"}], "isError": false}}
+== tools/call unknown
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 5, "jsonrpc": "2.0", "result": {"content": [{"text": "No tool 'nope'.", "type": "text"}], "isError": true}}
+== tools/call raises
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": 0, "message": "boom from handler"}, "id": 6, "jsonrpc": "2.0"}
+== tools/call missing name
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32602, "data": "", "message": "Invalid request parameters"}, "id": 7, "jsonrpc": "2.0"}
+== tools/call no params
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32602, "data": "", "message": "Invalid request parameters"}, "id": 8, "jsonrpc": "2.0"}
+== tools/call args not object
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32602, "data": "", "message": "Invalid request parameters"}, "id": 9, "jsonrpc": "2.0"}
+== tools/call name not string
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32602, "data": "", "message": "Invalid request parameters"}, "id": 10, "jsonrpc": "2.0"}
+== ping
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 11, "jsonrpc": "2.0", "result": {}}
+== ping with params
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 12, "jsonrpc": "2.0", "result": {}}
+== unknown method
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32601, "data": "foo/bar", "message": "Method not found"}, "id": 13, "jsonrpc": "2.0"}
+== resources/list (no handler)
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32601, "data": "resources/list", "message": "Method not found"}, "id": 14, "jsonrpc": "2.0"}
+== server/discover at session era
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32601, "data": "server/discover", "message": "Method not found"}, "id": 15, "jsonrpc": "2.0"}
+== subscriptions/listen at session era
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32601, "data": "subscriptions/listen", "message": "Method not found"}, "id": 16, "jsonrpc": "2.0"}
+== logging/setLevel (no handler)
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32601, "data": "logging/setLevel", "message": "Method not found"}, "id": 17, "jsonrpc": "2.0"}
+== second initialize on session
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 18, "jsonrpc": "2.0", "result": {"capabilities": {"experimental": {}, "tools": {"listChanged": true}}, "instructions": "Echo server for interop tests.", "protocolVersion": "2025-03-26", "serverInfo": {"name": "echo", "version": "9.9.9"}}}
+== params not object
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32602, "message": "Validation error: 4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.params\n  Input should be a valid dictionary [type=dict_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/dict_type\nJSONRPCNotification.params\n  Input should be a valid dictionary [type=dict_type, input_value=[1], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/dict_type\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ...: 'ping', 'params': [1]}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': ...: 'ping', 'params': [1]}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"}, "id": null, "jsonrpc": "2.0"}
+== float id
+  status 202
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  (empty body)
+== null id
+  status 202
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  (empty body)
+== bool id
+  status 202
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  (empty body)
+== string id
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": "abc", "jsonrpc": "2.0", "result": {}}
+== negative id
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": -3, "jsonrpc": "2.0", "result": {}}
+== unknown notification
+  status 202
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  (empty body)
+== cancel unknown request
+  status 202
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  (empty body)
+== client response
+  status 202
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  (empty body)
+== client error response
+  status 202
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  (empty body)
+== batch
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32602, "message": "Validation error: 4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest\n  Input should be a valid dictionary or instance of JSONRPCRequest [type=model_type, input_value=[{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCNotification\n  Input should be a valid dictionary or instance of JSONRPCNotification [type=model_type, input_value=[{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCResponse\n  Input should be a valid dictionary or instance of JSONRPCResponse [type=model_type, input_value=[{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type\nJSONRPCError\n  Input should be a valid dictionary or instance of JSONRPCError [type=model_type, input_value=[{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.14/v/model_type"}, "id": null, "jsonrpc": "2.0"}
+== wrong jsonrpc version
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32602, "message": "Validation error: 6 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value='1.0', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCNotification.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value='1.0', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCResponse.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value='1.0', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '1.0', 'id': 1, 'method': 'ping'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.jsonrpc\n  Input should be '2.0' [type=literal_error, input_value='1.0', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.14/v/literal_error\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': '1.0', 'id': 1, 'method': 'ping'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"}, "id": null, "jsonrpc": "2.0"}
+== missing method
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32602, "message": "Validation error: 4 validation errors for union[JSONRPCRequest,JSONRPCNotification,JSONRPCResponse,JSONRPCError]\nJSONRPCRequest.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCNotification.method\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCResponse.result\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing\nJSONRPCError.error\n  Field required [type=missing, input_value={'jsonrpc': '2.0', 'id': 1}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/missing"}, "id": null, "jsonrpc": "2.0"}
+== parse error
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32700, "message": "Parse error: key must be a string at line 1 column 2"}, "id": null, "jsonrpc": "2.0"}
+== empty body
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32700, "message": "Parse error: EOF while parsing a value at line 1 column 0"}, "id": null, "jsonrpc": "2.0"}
+== accept json only
+  status 406
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32600, "message": "Not Acceptable: Client must accept both application/json and text/event-stream"}, "id": null, "jsonrpc": "2.0"}
+== accept sse only
+  status 406
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32600, "message": "Not Acceptable: Client must accept both application/json and text/event-stream"}, "id": null, "jsonrpc": "2.0"}
+== accept wildcard
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 22, "jsonrpc": "2.0", "result": {}}
+== accept with q params
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 23, "jsonrpc": "2.0", "result": {}}
+== no accept
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 24, "jsonrpc": "2.0", "result": {}}
+== no content-type
+  status 400
+  text 'Invalid Content-Type header'
+== text/plain content-type
+  status 400
+  text 'Invalid Content-Type header'
+== json charset content-type
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 27, "jsonrpc": "2.0", "result": {}}
+== missing session id
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-2>
+  json {"error": {"code": -32600, "message": "Bad Request: Missing session ID"}, "id": null, "jsonrpc": "2.0"}
+== id from refused opening request
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Session not found"}, "id": null, "jsonrpc": "2.0"}
+== unknown session id
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Session not found"}, "id": null, "jsonrpc": "2.0"}
+== session-era version header
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 30, "jsonrpc": "2.0", "result": {}}
+== modern envelope on session
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 31, "jsonrpc": "2.0", "result": {"tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}, {"description": "Raises inside the handler.", "inputSchema": {"properties": {}, "type": "object"}, "name": "demo.fail"}, {"description": "Sleeps.", "inputSchema": {"properties": {"seconds": {"type": "number"}}, "type": "object"}, "name": "demo.slow"}]}}
+== GET without sse accept
+  status 406
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32600, "message": "Not Acceptable: Client must accept text/event-stream"}, "id": null, "jsonrpc": "2.0"}
+== GET without session id
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-3>
+  json {"error": {"code": -32600, "message": "Bad Request: Missing session ID"}, "id": null, "jsonrpc": "2.0"}
+== GET with id from refused GET
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Session not found"}, "id": null, "jsonrpc": "2.0"}
+== PUT on session
+  status 405
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  header allow: GET, POST, DELETE
+  json {"error": {"code": -32600, "message": "Method Not Allowed"}, "id": null, "jsonrpc": "2.0"}
+== PATCH without session
+  status 405
+  header content-type: application/json
+  header mcp-session-id: <session-4>
+  header allow: GET, POST, DELETE
+  json {"error": {"code": -32600, "message": "Method Not Allowed"}, "id": null, "jsonrpc": "2.0"}
+== oversized body
+  status 413
+  text 'Request body too large'
+== tracked before oversized DELETE: 1
+== DELETE with oversized body
+  status 413
+  text 'Request body too large'
+== tracked after oversized DELETE: 0
+== GET with oversized body
+  status 413
+  text 'Request body too large'
+== session survives oversized DELETE
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 32, "jsonrpc": "2.0", "result": {"tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}, {"description": "Raises inside the handler.", "inputSchema": {"properties": {}, "type": "object"}, "name": "demo.fail"}, {"description": "Sleeps.", "inputSchema": {"properties": {"seconds": {"type": "number"}}, "type": "object"}, "name": "demo.slow"}]}}
+== tracked again after tools/list: 1
+== initialize 2024-11-05
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-5>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 1, "jsonrpc": "2.0", "result": {"capabilities": {"experimental": {}, "tools": {"listChanged": true}}, "instructions": "Echo server for interop tests.", "protocolVersion": "2024-11-05", "serverInfo": {"name": "echo", "version": "9.9.9"}}}
+== initialize 2025-03-26
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-6>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 1, "jsonrpc": "2.0", "result": {"capabilities": {"experimental": {}, "tools": {"listChanged": true}}, "instructions": "Echo server for interop tests.", "protocolVersion": "2025-03-26", "serverInfo": {"name": "echo", "version": "9.9.9"}}}
+== initialize 2025-11-25
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-7>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 1, "jsonrpc": "2.0", "result": {"capabilities": {"experimental": {}, "tools": {"listChanged": true}}, "instructions": "Echo server for interop tests.", "protocolVersion": "2025-11-25", "serverInfo": {"name": "echo", "version": "9.9.9"}}}
+== initialize 1999-01-01
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-8>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 1, "jsonrpc": "2.0", "result": {"capabilities": {"experimental": {}, "tools": {"listChanged": true}}, "instructions": "Echo server for interop tests.", "protocolVersion": "2025-11-25", "serverInfo": {"name": "echo", "version": "9.9.9"}}}
+== initialize 2026-07-28
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-9>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 1, "jsonrpc": "2.0", "result": {"capabilities": {"experimental": {}, "tools": {"listChanged": true}}, "instructions": "Echo server for interop tests.", "protocolVersion": "2025-11-25", "serverInfo": {"name": "echo", "version": "9.9.9"}}}
+== initialize missing params
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-10>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32602, "data": "", "message": "Invalid request parameters"}, "id": 1, "jsonrpc": "2.0"}
+== initialize bad clientInfo
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-11>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32602, "data": "", "message": "Invalid request parameters"}, "id": 1, "jsonrpc": "2.0"}
+== initialize as notification
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-12>
+  json {"error": {"code": -32600, "message": "Bad Request: Missing session ID"}, "id": null, "jsonrpc": "2.0"}
+== GET standalone stream (headers)
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-1>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+== second GET stream
+  status 409
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  json {"error": {"code": -32600, "message": "Conflict: Only one SSE stream is allowed per session"}, "id": null, "jsonrpc": "2.0"}
+== standalone stream events after change
+  sse event: message
+  sse data {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
+== tracked before delete: True
+== DELETE session
+  status 200
+  header content-type: application/json
+  header mcp-session-id: <session-1>
+  (empty body)
+== after DELETE
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Session not found"}, "id": null, "jsonrpc": "2.0"}
+== DELETE again
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Session not found"}, "id": null, "jsonrpc": "2.0"}
+== DELETE without session id
+  status 400
+  header content-type: application/json
+  header mcp-session-id: <session-13>
+  json {"error": {"code": -32600, "message": "Bad Request: Missing session ID"}, "id": null, "jsonrpc": "2.0"}
+== initialize (no initialized notification)
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-14>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 1, "jsonrpc": "2.0", "result": {"capabilities": {"experimental": {}, "tools": {"listChanged": true}}, "instructions": "Echo server for interop tests.", "protocolVersion": "2025-06-18", "serverInfo": {"name": "echo", "version": "9.9.9"}}}
+== tools/list before initialized notification
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-14>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 2, "jsonrpc": "2.0", "result": {"tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}, {"description": "Raises inside the handler.", "inputSchema": {"properties": {}, "type": "object"}, "name": "demo.fail"}, {"description": "Sleeps.", "inputSchema": {"properties": {"seconds": {"type": "number"}}, "type": "object"}, "name": "demo.slow"}]}}
+== cancel in-flight
+  status 202
+  header content-type: application/json
+  header mcp-session-id: <session-14>
+  (empty body)
+== cancelled request response
+  status 200
+  header content-type: text/event-stream
+  header mcp-session-id: <session-14>
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32800, "message": "Request cancelled"}, "id": 50, "jsonrpc": "2.0"}
+#### modern era
+== discover
+  status 200
+  header content-type: application/json
+  json {"id": 1, "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo", "version": "9.9.9"}}, "cacheScope": "private", "capabilities": {"tools": {"listChanged": true}}, "instructions": "Echo server for interop tests.", "resultType": "complete", "supportedVersions": ["2026-07-28"], "ttlMs": 0}}
+== tools/list
+  status 200
+  header content-type: application/json
+  json {"id": 2, "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo", "version": "9.9.9"}}, "cacheScope": "private", "resultType": "complete", "tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}, {"description": "Raises inside the handler.", "inputSchema": {"properties": {}, "type": "object"}, "name": "demo.fail"}, {"description": "Sleeps.", "inputSchema": {"properties": {"seconds": {"type": "number"}}, "type": "object"}, "name": "demo.slow"}], "ttlMs": 0}}
+== tools/call echo
+  status 200
+  header content-type: application/json
+  json {"id": 3, "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo", "version": "9.9.9"}}, "content": [{"text": "hi", "type": "text"}], "isError": false, "resultType": "complete"}}
+== tools/call raises
+  status 200
+  header content-type: application/json
+  json {"error": {"code": -32603, "message": "Internal server error"}, "id": 4, "jsonrpc": "2.0"}
+== tools/call unknown
+  status 200
+  header content-type: application/json
+  json {"id": 5, "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo", "version": "9.9.9"}}, "content": [{"text": "No tool 'nope'.", "type": "text"}], "isError": true, "resultType": "complete"}}
+== tools/call missing name
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32602, "data": "", "message": "Invalid request parameters"}, "id": 6, "jsonrpc": "2.0"}
+== tools/call name header missing
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32020, "message": "mcp-name header does not match the request body's 'name' parameter"}, "id": 7, "jsonrpc": "2.0"}
+== tools/call name header mismatch
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32020, "message": "mcp-name header does not match the request body's 'name' parameter"}, "id": 8, "jsonrpc": "2.0"}
+== tools/call name header base64
+  status 200
+  header content-type: application/json
+  json {"id": 9, "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo", "version": "9.9.9"}}, "content": [{"text": "x", "type": "text"}], "isError": false, "resultType": "complete"}}
+== ping (removed at 2026)
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32601, "data": "ping", "message": "Method not found"}, "id": 10, "jsonrpc": "2.0"}
+== initialize on modern wire
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32601, "data": "initialize", "message": "Method not found"}, "id": 11, "jsonrpc": "2.0"}
+== unknown method
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32601, "data": "foo/bar", "message": "Method not found"}, "id": 12, "jsonrpc": "2.0"}
+== resources/list (no handler)
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32601, "data": "resources/list", "message": "Method not found"}, "id": 13, "jsonrpc": "2.0"}
+== missing _meta
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32602, "message": "params._meta must be an object carrying the required 'io.modelcontextprotocol/protocolVersion' and 'io.modelcontextprotocol/clientCapabilities' envelope keys"}, "id": 14, "jsonrpc": "2.0"}
+== no params
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32602, "message": "params._meta must be an object carrying the required 'io.modelcontextprotocol/protocolVersion' and 'io.modelcontextprotocol/clientCapabilities' envelope keys"}, "id": 15, "jsonrpc": "2.0"}
+== meta missing capabilities
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32602, "message": "params._meta is missing the required envelope key(s): io.modelcontextprotocol/clientCapabilities"}, "id": 16, "jsonrpc": "2.0"}
+== method header mismatch
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32020, "message": "mcp-method header does not match the request body's method"}, "id": 17, "jsonrpc": "2.0"}
+== method header missing
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32020, "message": "mcp-method header does not match the request body's method"}, "id": 18, "jsonrpc": "2.0"}
+== unsupported version (header+meta agree)
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32022, "data": {"requested": "2030-01-01", "supported": ["2026-07-28"]}, "message": "Unsupported protocol version"}, "id": 19, "jsonrpc": "2.0"}
+== version header mismatch
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32020, "message": "mcp-protocol-version header does not match the request envelope's protocol version"}, "id": 20, "jsonrpc": "2.0"}
+== duplicate routing header
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32020, "message": "mcp-method header appears more than once"}, "id": 21, "jsonrpc": "2.0"}
+== notification body
+  status 202
+  (empty body)
+== cancelled notification
+  status 202
+  (empty body)
+== notification without method header
+  status 202
+  (empty body)
+== notification at unsupported version
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32022, "data": {"requested": "2030-01-01", "supported": ["2026-07-28"]}, "message": "Unsupported protocol version"}, "id": null, "jsonrpc": "2.0"}
+== notification missing method
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Body must be a single JSON-RPC request or notification object"}, "id": null, "jsonrpc": "2.0"}
+== notification wrong jsonrpc
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Body must be a single JSON-RPC request or notification object"}, "id": null, "jsonrpc": "2.0"}
+== notification params not object
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Body must be a single JSON-RPC request or notification object"}, "id": null, "jsonrpc": "2.0"}
+== posted response
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Body must be a single JSON-RPC request or notification object"}, "id": null, "jsonrpc": "2.0"}
+== request with null id
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Body must be a single JSON-RPC request or notification object"}, "id": null, "jsonrpc": "2.0"}
+== admin notification
+  status 202
+  (empty body)
+== parse error
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32700, "message": "Parse error"}, "id": null, "jsonrpc": "2.0"}
+== batch
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Body must be a single JSON-RPC request or notification object"}, "id": null, "jsonrpc": "2.0"}
+== accept json only
+  status 406
+  (empty body)
+== no content-type
+  status 400
+  text 'Invalid Content-Type header'
+== string id
+  status 200
+  header content-type: application/json
+  json {"id": "s-1", "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo", "version": "9.9.9"}}, "cacheScope": "private", "resultType": "complete", "tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}, {"description": "Raises inside the handler.", "inputSchema": {"properties": {}, "type": "object"}, "name": "demo.fail"}, {"description": "Sleeps.", "inputSchema": {"properties": {"seconds": {"type": "number"}}, "type": "object"}, "name": "demo.slow"}], "ttlMs": 0}}
+== no clientInfo
+  status 200
+  header content-type: application/json
+  json {"id": 25, "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo", "version": "9.9.9"}}, "cacheScope": "private", "resultType": "complete", "tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}, {"description": "Raises inside the handler.", "inputSchema": {"properties": {}, "type": "object"}, "name": "demo.fail"}, {"description": "Sleeps.", "inputSchema": {"properties": {"seconds": {"type": "number"}}, "type": "object"}, "name": "demo.slow"}], "ttlMs": 0}}
+== listen without sse accept
+  status 406
+  (empty body)
+== listen missing notifications
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32602, "data": "", "message": "Invalid request parameters"}, "id": 27, "jsonrpc": "2.0"}
+== session id header is ignored
+  status 200
+  header content-type: application/json
+  json {"id": 28, "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo", "version": "9.9.9"}}, "cacheScope": "private", "resultType": "complete", "tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}, {"description": "Raises inside the handler.", "inputSchema": {"properties": {}, "type": "object"}, "name": "demo.fail"}, {"description": "Sleeps.", "inputSchema": {"properties": {"seconds": {"type": "number"}}, "type": "object"}, "name": "demo.slow"}], "ttlMs": 0}}
+== GET on modern wire
+  status 405
+  header allow: POST
+  (empty body)
+== DELETE on modern wire
+  status 405
+  header allow: POST
+  (empty body)
+== admin discover
+  status 200
+  header content-type: application/json
+  json {"id": 29, "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo-admin", "version": "9.9.9"}}, "cacheScope": "private", "capabilities": {"tools": {"listChanged": false}}, "instructions": "Admin echo.", "resultType": "complete", "supportedVersions": ["2026-07-28"], "ttlMs": 0}}
+== admin tools/list
+  status 200
+  header content-type: application/json
+  json {"id": 30, "jsonrpc": "2.0", "result": {"_meta": {"io.modelcontextprotocol/serverInfo": {"name": "echo-admin", "version": "9.9.9"}}, "cacheScope": "private", "resultType": "complete", "tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}], "ttlMs": 0}}
+== admin listen (not served)
+  status 404
+  header content-type: application/json
+  json {"error": {"code": -32601, "data": "subscriptions/listen", "message": "Method not found"}, "id": 31, "jsonrpc": "2.0"}
+== listen stream (headers)
+  status 200
+  header content-type: text/event-stream
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+== listen ack
+  sse event: message
+  sse data {"jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged", "params": {"_meta": {"io.modelcontextprotocol/subscriptionId": 40}, "notifications": {"toolsListChanged": true}}}
+== listen event after change
+  sse event: message
+  sse data {"jsonrpc": "2.0", "method": "notifications/tools/list_changed", "params": {"_meta": {"io.modelcontextprotocol/subscriptionId": 40}}}
+== listen ack (other kinds only)
+  sse event: message
+  sse data {"jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged", "params": {"_meta": {"io.modelcontextprotocol/subscriptionId": 41}, "notifications": {"resourcesListChanged": true}}}
+#### stateless mount
+== initialize
+  status 200
+  header content-type: text/event-stream
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 1, "jsonrpc": "2.0", "result": {"capabilities": {"experimental": {}, "tools": {"listChanged": false}}, "instructions": "Admin echo.", "protocolVersion": "2025-06-18", "serverInfo": {"name": "echo-admin", "version": "9.9.9"}}}
+== tools/list without initialize
+  status 200
+  header content-type: text/event-stream
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 2, "jsonrpc": "2.0", "result": {"tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}]}}
+== tools/list with version header
+  status 200
+  header content-type: text/event-stream
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 3, "jsonrpc": "2.0", "result": {"tools": [{"annotations": {"destructiveHint": false, "idempotentHint": true, "readOnlyHint": true}, "description": "Echo the text back.", "inputSchema": {"additionalProperties": false, "properties": {"text": {"type": "string"}}, "required": ["text"], "type": "object"}, "name": "demo.echo", "title": "Echo"}]}}
+== tools/call
+  status 200
+  header content-type: text/event-stream
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 4, "jsonrpc": "2.0", "result": {"content": [{"text": "a", "type": "text"}], "isError": false}}
+== initialized notification
+  status 202
+  header content-type: application/json
+  (empty body)
+== session id is ignored
+  status 200
+  header content-type: text/event-stream
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"id": 5, "jsonrpc": "2.0", "result": {}}
+== subscriptions/listen
+  status 200
+  header content-type: text/event-stream
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32601, "data": "subscriptions/listen", "message": "Method not found"}, "id": 6, "jsonrpc": "2.0"}
+== unknown method
+  status 200
+  header content-type: text/event-stream
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
+  sse event: message
+  sse data {"error": {"code": -32601, "data": "nope", "message": "Method not found"}, "id": 7, "jsonrpc": "2.0"}
+== parse error
+  status 400
+  header content-type: application/json
+  json {"error": {"code": -32700, "message": "Parse error: expected ident at line 1 column 2"}, "id": null, "jsonrpc": "2.0"}
+== accept json only
+  status 406
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Not Acceptable: Client must accept both application/json and text/event-stream"}, "id": null, "jsonrpc": "2.0"}
+== DELETE
+  status 405
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Method Not Allowed: Session termination not supported"}, "id": null, "jsonrpc": "2.0"}
+== PUT
+  status 405
+  header content-type: application/json
+  header allow: GET, POST, DELETE
+  json {"error": {"code": -32600, "message": "Method Not Allowed"}, "id": null, "jsonrpc": "2.0"}
+== GET without sse accept
+  status 406
+  header content-type: application/json
+  json {"error": {"code": -32600, "message": "Not Acceptable: Client must accept text/event-stream"}, "id": null, "jsonrpc": "2.0"}
+== GET stream (headers)
+  status 200
+  header content-type: text/event-stream
+  header cache-control: no-cache, no-transform
+  header x-accel-buffering: no
