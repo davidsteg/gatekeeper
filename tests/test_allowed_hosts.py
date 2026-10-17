@@ -499,7 +499,7 @@ def test_network_fields_refused_on_a_non_network_toolkit(tmp_path, sandbox):
     raw["toolkits"]["box"] = {"executor": "local", "binaries": [PYTHON]}
     toolkits_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
     item = store.propose(
-        name="box", kind="update", actor="hermes", spec={"allowed_cidrs": ["10.0.0.0/8"]},
+        name="box", kind="update", actor="hermes", spec={"allowed_cidrs": ["10.0.0.0/16"]},
     )
     with pytest.raises(ToolkitProposalWriteRefused, match="does not connect to a URL"):
         store.deploy(item.id, decided_by="root")

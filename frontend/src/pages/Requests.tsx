@@ -384,7 +384,7 @@ function ToolkitTab({ items }: { items: Proposal[] }) {
   return (
     <>
       <Notice>
-        Adding a toolkit, changing an existing one's executor, binaries, denied_args, run_as, allowed_hosts or allowed_cidrs, or binding one
+        Adding a toolkit, changing an existing one's executor, binaries, denied_args, run_as, network targets, methods, path prefixes or limits, or binding one
         to a credential normally needs a redeploy: Tier 1 is immutable at runtime. A proposal here is the one way
         around that, and only a human can make it take effect.
       </Notice>
@@ -404,11 +404,15 @@ function ToolkitTab({ items }: { items: Proposal[] }) {
 
 const NETWORK_FIELDS = ["allowed_hosts", "allowed_cidrs"] as const;
 
-/** What a network field holds today, for the card's "Currently" row. */
-function currentNetwork(item: Proposal): string {
-  const lines = NETWORK_FIELDS.filter((f) => f in item.spec).map((f) => {
-    const values = item.current?.[f] ?? [];
-    return `${f}: ${values.length ? values.join(", ") : "(none)"}`;
+/** What every field an update proposal changes holds today, for the card's
+ * "Currently" row: the "before" to the "Proposed changes" row's "after". */
+function currentValues(item: Proposal): string {
+  const current = item.current as Record<string, unknown> | null | undefined;
+  if (!current) return "";
+  const lines = Object.keys(item.spec).map((field) => {
+    const value = current[field];
+    if (Array.isArray(value)) return `${field}: ${value.length ? value.join(", ") : "(none)"}`;
+    return `${field}: ${value === null || value === undefined ? "(none)" : String(value)}`;
   });
   return lines.join("\n");
 }
@@ -451,16 +455,22 @@ function deployWarning(item: Proposal): { text: string; ack: string; label: stri
       ? ` This proposal changes where the toolkit may connect (${network.join(", ")}): the targets below become reachable as soon as you deploy. A hostname never reaches a private or loopback address.`
       : "";
     return {
-      text: `${head}Deploying merges the fields below into toolkit ${item.name} and reloads it at once; only executor, binaries, denied_args, run_as, allowed_hosts and allowed_cidrs can change.${runAs}${reach}`,
+      text: `${head}Deploying merges the fields below into toolkit ${item.name} and reloads it at once; path_roots and protected_resources cannot change this way.${runAs}${reach}${broad(item)}`,
       ack: "I understand this immediately changes what this toolkit can reach.",
       label: "Approve and deploy update",
     };
   }
   return {
-    text: `${head}Deploying writes the toolkit below into toolkits.yaml and reloads it at once: every binary, path root and destination it lists becomes reachable, with no further review.`,
+    text: `${head}Deploying writes the toolkit below into toolkits.yaml and reloads it at once: every binary, path root and destination it lists becomes reachable, with no further review.${broad(item)}`,
     ack: "I understand this immediately expands what this deployment can reach.",
     label: "Approve and deploy",
   };
+}
+
+function broad(item: Proposal): string {
+  return item.confirm_broad_cidrs
+    ? " The proposer confirmed an allowed_cidrs entry wider than /16 (IPv4) or /48 (IPv6): check that this width is really needed."
+    : "";
 }
 
 function ProposalCard({ item, canDecide }: { item: Proposal; canDecide: boolean }) {
@@ -498,8 +508,11 @@ function ProposalCard({ item, canDecide }: { item: Proposal; canDecide: boolean 
             </Row>
           </>
         )}
-        {item.kind === "update" && item.current && currentNetwork(item) && (
-          <Row label="Currently"><CodeBlock text={currentNetwork(item)} /></Row>
+        {item.confirm_broad_cidrs && (
+          <Notice tone="bad">Contains an allowed_cidrs entry wider than /16 (IPv4) or /48 (IPv6), confirmed by the proposer.</Notice>
+        )}
+        {item.kind === "update" && currentValues(item) && (
+          <Row label="Currently"><CodeBlock text={currentValues(item)} /></Row>
         )}
         {item.spec_yaml && (
           <Row label={item.kind === "update" ? "Proposed changes" : "Proposed toolkit"}>

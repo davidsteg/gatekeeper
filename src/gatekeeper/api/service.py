@@ -375,6 +375,10 @@ def toolkit_summary(name: str, tk: Toolkit) -> dict[str, Any]:
         # replaces next to the proposed ones.
         "allowed_hosts": list(tk.allowed_hosts),
         "allowed_cidrs": list(tk.allowed_cidrs),
+        # `http` only, reported so an update proposal's card can show the
+        # values it replaces.
+        "allowed_methods": list(tk.allowed_methods),
+        "allowed_path_prefixes": list(tk.allowed_path_prefixes),
     }
 
 

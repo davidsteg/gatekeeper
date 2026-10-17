@@ -1462,6 +1462,10 @@ export interface components {
             allowed_cidrs: string[];
             /** Allowed Hosts */
             allowed_hosts: string[];
+            /** Allowed Methods */
+            allowed_methods: string[];
+            /** Allowed Path Prefixes */
+            allowed_path_prefixes: string[];
             /** Binaries */
             binaries: string[];
             /** Credential */
@@ -1493,6 +1497,8 @@ export interface components {
         ToolkitProposalOut: {
             /** Actor */
             actor: string;
+            /** Confirm Broad Cidrs */
+            confirm_broad_cidrs: boolean;
             /** Created At */
             created_at: string;
             current: components["schemas"]["ToolkitOut"] | null;

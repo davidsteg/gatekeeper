@@ -2086,6 +2086,20 @@
             "title": "Allowed Hosts",
             "type": "array"
           },
+          "allowed_methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Methods",
+            "type": "array"
+          },
+          "allowed_path_prefixes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Path Prefixes",
+            "type": "array"
+          },
           "binaries": {
             "items": {
               "type": "string"
@@ -2191,7 +2205,9 @@
           "mailbox_path",
           "allowed_agent_operations",
           "allowed_hosts",
-          "allowed_cidrs"
+          "allowed_cidrs",
+          "allowed_methods",
+          "allowed_path_prefixes"
         ],
         "title": "ToolkitOut",
         "type": "object"
@@ -2201,6 +2217,10 @@
           "actor": {
             "title": "Actor",
             "type": "string"
+          },
+          "confirm_broad_cidrs": {
+            "title": "Confirm Broad Cidrs",
+            "type": "boolean"
           },
           "created_at": {
             "title": "Created At",
@@ -2286,6 +2306,7 @@
           "decided_by",
           "decided_at",
           "reason",
+          "confirm_broad_cidrs",
           "current",
           "spec_yaml"
         ],
