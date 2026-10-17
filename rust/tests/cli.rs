@@ -15,7 +15,12 @@ const STANDARD: &str = "/var/log/gatekeeper";
 
 /// The binary with a clean gatekeeper environment.
 fn gatekeeper() -> Command {
-    let mut cmd = Command::new(BIN);
+    gatekeeper_at(Path::new(BIN))
+}
+
+/// The binary at `path` (a copy of [`BIN`]), with no inherited `GATEKEEPER_*`.
+fn gatekeeper_at(path: &Path) -> Command {
+    let mut cmd = Command::new(path);
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("GATEKEEPER_") {
             cmd.env_remove(&key);
@@ -231,11 +236,15 @@ fn require_run_as_refuses_to_start_without_the_privilege() {
         ),
     )
     .unwrap();
+    // nobody must be able to execute the binary, and the build tree may sit
+    // under a home directory it cannot enter (the CI runner's is 0750).
+    let bin = tmp.path().join("gatekeeper");
+    std::fs::copy(BIN, &bin).unwrap();
     for entry in walk(tmp.path()) {
         std::fs::set_permissions(entry, std::fs::Permissions::from_mode(0o777)).unwrap();
     }
     let port = free_port();
-    let mut cmd = gatekeeper();
+    let mut cmd = gatekeeper_at(&bin);
     cmd.arg("serve")
         .env("GATEKEEPER_CONFIG_DIR", &config)
         .env("GATEKEEPER_PORT", port.to_string())

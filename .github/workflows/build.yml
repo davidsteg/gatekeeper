@@ -327,19 +327,22 @@ jobs:
         # drop really gives up authority. sudo on the runner has the
         # SETUID/SETGID and DAC capabilities those tests need; the check
         # first makes sure of that, so a runner without them fails instead
-        # of skipping silently. The tree is handed back afterwards so the
-        # cache step can read it.
+        # of skipping silently. The tests run the binary as dropped users
+        # (568, nobody), so the checkout's path must be traversable by them;
+        # the runner's home is 0750. The tree is handed back afterwards so
+        # the cache step can read it.
         env:
           RUSTFLAGS: -D warnings
         run: |
           export GATEKEEPER_INTEROP_PYTHON="$(command -v python)"
+          chmod o+x "$HOME"
           sudo --preserve-env=GATEKEEPER_INTEROP_PYTHON,RUSTFLAGS,CARGO_HOME,RUSTUP_HOME \
             env "PATH=$PATH" "HOME=$HOME" sh -ec '
               caps=$(awk "/^CapEff:/ {print \$2}" /proc/self/status)
               echo "uid=$(id -u) CapEff=$caps"
               [ "$(id -u)" = 0 ] && [ $(( 0x$caps & 0xc6 )) = $(( 0xc6 )) ] \
                 || { echo "::error::must run as root with SETUID/SETGID/DAC caps"; exit 1; }
-              cargo test --locked --offline
+              cargo test --locked --offline --no-fail-fast
             '
           sudo chown -R "$(id -u):$(id -g)" target
 
