@@ -9,8 +9,8 @@ A refused `/mcp` request now says more about who sent it. Behind a Docker port m
   - `mcp_session: true` when the request carried an `Mcp-Session-Id`, usually a client that was connected before a restart and kept going. The session ID itself is not logged.
   - `presented_format` and `presented_length`: whether the bearer value has the shape `gatekeeper token` generates (`gatekeeper`), has `gk_` in it but not that shape (`gk_malformed`: truncated, quoted, joined), or is some other credential (`foreign`), and its length. Never the value.
   - `lookup_identity`: the identity whose `token_lookup` matches the presented token although its `token_hash` does not. That means the entry in `identities.yaml` is inconsistent (one of the two edited by hand), not that a stranger's token was sent.
-  - `mcp_method`, and `mcp_client` on an `initialize`: the JSON-RPC method and the client's own `clientInfo` name and version, read from the refused POST body. Only a body with a `Content-Length` of at most 64 KiB is read, for at most 2 seconds, so the 401 never waits long.
-- The audit page in the console shows these in the detail column, and calls the 12 hex digits a `fingerprint`, not a `token`: they are the start of the SHA-256 of the presented token, not its first characters.
+  - `mcp_method`, and `mcp_client` on an `initialize`: the JSON-RPC method and the client's own `clientInfo` name and version, read from the refused POST body. Only on `/mcp` and `/admin/mcp`, and only a body with a `Content-Length` of at most 8 KiB, read for at most 500 ms, so the 401 never waits long.
+- The audit page in the console shows these in the detail column, and marks `forwarded_for` and `mcp_client` as unverified, and calls the 12 hex digits a `fingerprint`, not a `token`: they are the start of the SHA-256 of the presented token, not its first characters.
 
 ## 1.14.0
 

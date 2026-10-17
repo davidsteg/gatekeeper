@@ -246,11 +246,11 @@ fn header_latin1(headers: &HeaderMap, name: &str) -> Option<String> {
     headers.get(name).map(|v| v.as_bytes().iter().map(|&b| b as char).collect())
 }
 
-/// How much of a refused POST body is read, and for how long, to name the
-/// MCP client in the audit record. A larger body, a missing Content-Length
+/// How much of a refused POST body to `/mcp` or `/admin/mcp` is read, and
+/// for how long, to name the MCP client in the audit record. A larger body, a missing Content-Length
 /// or a slow sender is simply not read: the 401 never waits on it for long.
-pub const HINT_BODY_MAX: usize = 65536;
-pub const HINT_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+pub const HINT_BODY_MAX: usize = 8192;
+pub const HINT_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// `gatekeeper` for the shape `gatekeeper token` generates (`gk_` and 43
 /// URL-safe characters), `gk_malformed` for a token that has `gk_` in it but
@@ -301,8 +301,12 @@ pub fn mcp_hint(body: &[u8]) -> Map<String, Value> {
 /// of at most [`HINT_BODY_MAX`], and only what arrives within
 /// [`HINT_BODY_TIMEOUT`]; otherwise empty.
 async fn hint_body(request: Request) -> Vec<u8> {
+    let path = decoded_path(&request);
+    if (path != MCP_PATH && path != ADMIN_MCP_PATH) || request.method() != Method::POST {
+        return Vec::new();
+    }
     let length = header_latin1(request.headers(), "content-length").unwrap_or_default();
-    if request.method() != Method::POST || length.is_empty() || !length.bytes().all(|b| b.is_ascii_digit()) {
+    if length.is_empty() || !length.bytes().all(|b| b.is_ascii_digit()) {
         return Vec::new();
     }
     if length.parse::<u128>().map_or(true, |n| n > HINT_BODY_MAX as u128) {

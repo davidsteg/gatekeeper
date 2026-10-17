@@ -615,9 +615,9 @@ describe("ui review fixes", () => {
     renderAt("/audit");
     expect(
       await screen.findByText(
-        "unknown_token · from 172.16.29.1 · forwarded for 10.0.0.7 · fingerprint b07645ad6ddf · " +
+        "unknown_token · from 172.16.29.1 · forwarded for 10.0.0.7 (unverified) · fingerprint b07645ad6ddf · " +
           "not a gatekeeper token · matches hermes's token_lookup, not its token_hash · " +
-          "client hermes 0.9.1 · python-httpx2/2.12.0 · stale session",
+          "client hermes 0.9.1 (unverified) · python-httpx2/2.12.0 · stale session",
       ),
     ).toBeInTheDocument();
   });

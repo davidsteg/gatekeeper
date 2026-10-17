@@ -1036,8 +1036,8 @@ sent; its value is not logged), and for a refused token `presented_format`
 (`gatekeeper`, `gk_malformed` or `foreign`: the value's shape, never the
 value), `presented_length`, and `lookup_identity` when an identity's
 `token_lookup` matches but its `token_hash` does not (an inconsistent
-`identities.yaml` entry). On a refused POST with a `Content-Length` of at
-most 64 KiB the body is read for at most 2 seconds, and its JSON-RPC
+`identities.yaml` entry). On a refused POST to `/mcp` or `/admin/mcp` with a
+`Content-Length` of at most 8 KiB the body is read for at most 500 ms, and its JSON-RPC
 `mcp_method` and, on `initialize`, `mcp_client` (`clientInfo` name and
 version, capped at 120) are added. The field names avoid "token" because
 the audit log masks every key containing it.

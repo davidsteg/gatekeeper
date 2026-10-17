@@ -135,7 +135,10 @@ async def test_an_mcp_auth_failure_says_what_the_client_is(env):
         assert (await c.post("/mcp", json=initialize, headers=headers)).status_code == 401
         assert (await c.post("/mcp", content=b"[" * 60000, headers=headers)).status_code == 401
         assert (await c.get("/mcp", headers={"Authorization": "Bearer gk_short"})).status_code == 401
-    first, garbage, short = _auth_failures(env)[-3:]
+        # Only an MCP mount's body is read.
+        assert (await c.post("/metrics", json=initialize, headers=headers)).status_code == 401
+    first, garbage, short, metrics = _auth_failures(env)[-4:]
+    assert "mcp_method" not in metrics
     assert first["forwarded_for"] == "10.0.0.7"
     assert first["mcp_session"] is True
     assert (first["presented_format"], first["presented_length"]) == ("foreign", 11)

@@ -33,11 +33,11 @@ function detailOf(r: Record<string, unknown>): string {
   return [
     primary,
     `from ${s(r.client)}`,
-    r.forwarded_for ? `forwarded for ${s(r.forwarded_for)}` : "",
+    r.forwarded_for ? `forwarded for ${s(r.forwarded_for)} (unverified)` : "",
     r.fingerprint ? `fingerprint ${s(r.fingerprint)}` : "no token sent",
     FORMAT[s(r.presented_format)] ?? "",
     r.lookup_identity ? `matches ${s(r.lookup_identity)}'s token_lookup, not its token_hash` : "",
-    r.mcp_client ? `client ${s(r.mcp_client)}` : "",
+    r.mcp_client ? `client ${s(r.mcp_client)} (unverified)` : "",
     r.user_agent ? s(r.user_agent) : "",
     r.mcp_session ? "stale session" : "",
   ].filter(Boolean).join(" · ");

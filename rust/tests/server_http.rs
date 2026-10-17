@@ -455,8 +455,12 @@ async fn an_mcp_auth_failure_says_what_the_client_is() {
         .unwrap();
     assert_eq!(garbage.status(), 401);
     assert_eq!(get(&base, "/mcp", Some("gk_short")).await.status(), 401);
+    // Only an MCP mount's body is read.
+    let initialize = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize"});
+    assert_eq!(post_json(&base, "/metrics", Some("sk-not-ours"), initialize, &headers).await.status(), 401);
     let failures = audit_of(&env, "auth_failure");
-    let [first, garbage, short] = &failures[failures.len() - 3..] else { panic!() };
+    let [first, garbage, short, metrics] = &failures[failures.len() - 4..] else { panic!() };
+    assert!(metrics.get("mcp_method").is_none());
     assert_eq!(first["forwarded_for"], "10.0.0.7");
     assert_eq!(first["mcp_session"], true);
     assert_eq!((&first["presented_format"], &first["presented_length"]), (&json!("foreign"), &json!(11)));
