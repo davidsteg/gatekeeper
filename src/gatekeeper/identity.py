@@ -264,6 +264,17 @@ class IdentityStore:
                 found = identity
         return found
 
+    def lookup_matches(self, token: str) -> list[str]:
+        """IDs whose `token_lookup` is this token's, without any scrypt.
+
+        Only asked after `authenticate` has already refused the token, for
+        the audit record: a match then means the identity's `token_lookup`
+        and `token_hash` disagree (one was edited by hand, or copied from a
+        different token) -- a broken entry, not a stranger's token.
+        """
+        lookup = hash_token_lookup(token)
+        return [i.id for i in self.identities.values() if i.token_lookup == lookup]
+
     def authenticate_console(self, identity_id: str, password: str) -> Identity | None:
         """Checks ID and password for sign-in to the console (`/app`).
 

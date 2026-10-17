@@ -1026,10 +1026,24 @@ a bearer token was sent, `fingerprint`: the first 12 hex digits of that
 token's `token_lookup` (SHA-256). The token itself is never logged. Two
 failures with the same fingerprint are the same stale token, and comparing
 it with the `token_lookup` values in an older `identities.yaml` says whose
-token it was.
+token it was. Compute it for a candidate token with
+`printf %s "$TOKEN" | sha256sum | cut -c1-12`.
+
+Since 1.15.0 the record also carries, each only when it applies:
+`forwarded_for` (the `X-Forwarded-For`, else `X-Real-IP`, header as sent,
+unverified, capped at 160), `mcp_session: true` (an `Mcp-Session-Id` was
+sent; its value is not logged), and for a refused token `presented_format`
+(`gatekeeper`, `gk_malformed` or `foreign`: the value's shape, never the
+value), `presented_length`, and `lookup_identity` when an identity's
+`token_lookup` matches but its `token_hash` does not (an inconsistent
+`identities.yaml` entry). On a refused POST with a `Content-Length` of at
+most 64 KiB the body is read for at most 2 seconds, and its JSON-RPC
+`mcp_method` and, on `initialize`, `mcp_client` (`clientInfo` name and
+version, capped at 120) are added. The field names avoid "token" because
+the audit log masks every key containing it.
 
 ```json
-{"kind": "auth_failure", "reason": "unknown_token", "detail": "POST /mcp from 10.10.110.102", "client": "10.10.110.102", "method": "POST", "path": "/mcp", "user_agent": "python-httpx/0.28", "fingerprint": "a1b2c3d4e5f6", "ts": "..."}
+{"kind": "auth_failure", "reason": "unknown_token", "detail": "POST /mcp from 10.10.110.102", "client": "10.10.110.102", "method": "POST", "path": "/mcp", "user_agent": "python-httpx/0.28", "fingerprint": "a1b2c3d4e5f6", "presented_format": "gatekeeper", "presented_length": 46, "mcp_method": "initialize", "mcp_client": "hermes 0.9.1", "ts": "..."}
 ```
 
 ## Telling connected agents the catalog changed

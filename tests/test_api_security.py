@@ -106,12 +106,44 @@ async def test_an_mcp_auth_failure_names_the_caller_but_never_the_token(env):
     assert unknown["detail"] == "POST /mcp from 127.0.0.1"
     assert (unknown["method"], unknown["path"]) == ("POST", "/mcp")
     assert unknown["user_agent"] == "stale-agent/1.0"
-    assert "identity" not in unknown
+    assert (unknown["presented_format"], unknown["presented_length"]) == ("gatekeeper", 46)
+    assert unknown["mcp_method"] == "tools/list"
+    assert "identity" not in unknown and "lookup_identity" not in unknown
+    assert "forwarded_for" not in unknown and "mcp_session" not in unknown
     assert wrong_role["identity"] == "root"
     assert wrong_role["client"] == "127.0.0.1"
     assert "from 127.0.0.1" in wrong_role["detail"]
     assert "fingerprint" not in missing and missing["client"] == "127.0.0.1"
     assert all(stale not in json.dumps(r) for r in audit_records(env))
+
+
+async def test_an_mcp_auth_failure_says_what_the_client_is(env):
+    """Behind a Docker port mapping every caller is the bridge gateway, so
+    the record carries what else the request says about its sender: an
+    unverified X-Forwarded-For, whether it held a session, its token's
+    shape, and the MCP client's own name from `initialize`."""
+    initialize = {
+        "jsonrpc": "2.0", "id": 0, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "hermes", "version": "0.9.1"}},
+    }
+    headers = {
+        **MCP_ACCEPT, "Authorization": "Bearer sk-not-ours", "X-Forwarded-For": "10.0.0.7",
+        "Mcp-Session-Id": "s3cr3t-session",
+    }
+    async with client(env["app"]) as c:
+        assert (await c.post("/mcp", json=initialize, headers=headers)).status_code == 401
+        assert (await c.post("/mcp", content=b"[" * 60000, headers=headers)).status_code == 401
+        assert (await c.get("/mcp", headers={"Authorization": "Bearer gk_short"})).status_code == 401
+    first, garbage, short = _auth_failures(env)[-3:]
+    assert first["forwarded_for"] == "10.0.0.7"
+    assert first["mcp_session"] is True
+    assert (first["presented_format"], first["presented_length"]) == ("foreign", 11)
+    assert (first["mcp_method"], first["mcp_client"]) == ("initialize", "hermes 0.9.1")
+    assert "mcp_method" not in garbage and "mcp_client" not in garbage
+    assert short["presented_format"] == "gk_malformed" and "mcp_method" not in short
+    text = json.dumps(audit_records(env))
+    assert "sk-not-ours" not in text and "s3cr3t-session" not in text
 
 
 async def test_similar_prefixes_are_not_console_paths(env):
