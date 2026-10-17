@@ -543,6 +543,7 @@ impl Service {
                     Request::Agent(validate::build_agent_call(&t, &values, &toolkit, known.as_ref())?)
                 }
                 "artifact" => Request::Artifact(validate::build_artifact_call(&t, &values, &toolkit)?),
+                "kuma" => Request::Kuma(validate::build_kuma_call(&t, &values, &toolkit)?),
                 "file" => Request::File,
                 _ => Request::Unknown,
             };
@@ -678,6 +679,19 @@ impl Service {
                         run_as: effective_run_as,
                     };
                     execute::file::run(&call).await
+                }
+                Request::Kuma(operation) => {
+                    execute::kuma::run(
+                        &operation,
+                        &values,
+                        &toolkit,
+                        credentials,
+                        timeout_seconds as f64,
+                        max_output_bytes,
+                        tool.idempotent,
+                        Some(&redact),
+                    )
+                    .await?
                 }
                 Request::Opencode(operation) => {
                     execute::opencode::run(
@@ -835,6 +849,7 @@ impl Service {
             "google" => execute::google::probe(toolkit).await,
             "microsoft" => execute::microsoft::probe(toolkit).await,
             "opencode" => execute::opencode::probe(toolkit).await,
+            "kuma" => execute::kuma::probe(toolkit).await,
             "agent" => execute::agent::probe(toolkit).await,
             "artifact" => {
                 let store = self.artifact_store();
@@ -933,6 +948,7 @@ enum Request {
     Opencode(String),
     Agent(String),
     Artifact(String),
+    Kuma(String),
     File,
     Unknown,
 }

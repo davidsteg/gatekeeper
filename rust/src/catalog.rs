@@ -29,7 +29,10 @@ use crate::errors::{read_config_file, ConfigError, ConfigResult};
 use crate::pyfmt::{repr_list, repr_str, repr_value, type_name};
 use crate::pyre::PyRegex;
 use crate::runas::parse_run_as;
-use crate::tier1::{py_eq, py_int, py_str, py_truthy, url_hostname, validate_http_base_url, Tier1, Toolkit};
+use crate::tier1::{
+    py_eq, py_int, py_str, py_truthy, url_hostname, validate_http_base_url, Tier1, Toolkit, KUMA_INTERVAL_MAX,
+    KUMA_INTERVAL_MIN, KUMA_STATUS_CODES,
+};
 
 /// Placeholders in argv, derived and scope templates.
 pub const PLACEHOLDER_PATTERN: &str = r"\{([a-z_][a-z0-9_]*)\}";
@@ -90,6 +93,23 @@ pub const ARTIFACT_OPERATION_PARAMS: &[(&str, OpParams)] = &[
     ("read", (&["artifact"], &["version"])),
     ("transfer", (&["artifact"], &["version"])),
 ];
+
+/// `kuma` executor: what each operation reads. `monitor_add_http` takes
+/// exactly the four fields a gatekeeper-made monitor has a say in; the
+/// monitor type, method, notifications and everything else are fixed in
+/// `execute::kuma::http_monitor`. There is no parameter for a Kuma URL or
+/// account -- both are Tier 1.
+pub const KUMA_OPERATION_PARAMS: &[(&str, OpParams)] = &[
+    ("monitor_list", (&[], &[])),
+    ("monitor_add_http", (&["name", "url"], &["interval", "expected_status"])),
+    ("monitor_pause", (&["monitor_id"], &[])),
+    ("monitor_resume", (&["monitor_id"], &[])),
+];
+
+/// The `kuma` operations that change something. A tool for one of them is
+/// never category `read`: `read` is what `admin.tool_create` applies
+/// without a human, and these must go through approval.
+pub const KUMA_WRITE_OPERATIONS: &[&str] = &["monitor_add_http", "monitor_pause", "monitor_resume"];
 
 /// The `agent` executor's parameter contract. There is no `from` and no
 /// mailbox selector in any row, and that is the point.
@@ -262,6 +282,9 @@ pub struct ToolDef {
     pub opencode_operation: Option<String>,
     pub agent_operation: Option<String>,
     pub artifact_operation: Option<String>,
+    /// The `kuma` executor's operation (`tier1::KUMA_OPERATIONS`), fixed
+    /// per tool like `agent_operation`.
+    pub kuma_operation: Option<String>,
 
     /// Per-tool override of the toolkit's `run_as` (file executor only).
     /// `None` inherits the toolkit's; `Some("")` explicitly clears it.
@@ -545,6 +568,80 @@ fn validate_op_params(
     Ok(())
 }
 
+/// A declared `minimum`/`maximum` compared with a fixed bound, as Python's
+/// `<`/`>` would (a bool counts as 0/1).
+///
+/// PORT NOTE: a non-numeric bound (a string, a list) raised TypeError in
+/// Python's `_validate_kuma_params`; here it simply fails the check, so the
+/// definition is refused with the same message as an out-of-range bound.
+fn bound_as_f64(bound: &Value) -> Option<f64> {
+    match bound {
+        Value::Number(n) => n.as_f64(),
+        Value::Bool(b) => Some(f64::from(u8::from(*b))),
+        _ => None,
+    }
+}
+
+/// `_validate_kuma_params`: the `kuma` limits a tool definition must not
+/// loosen, at load time.
+///
+/// `execute::kuma::check_values` enforces the same floor at call time; this
+/// is what makes a definition that would publish a wider schema than the
+/// executor accepts fail when it is written, not on an agent's call.
+fn validate_kuma_params(
+    operation: &str,
+    category: &str,
+    parameters: &IndexMap<String, Parameter>,
+    where_: &str,
+) -> ConfigResult<()> {
+    if KUMA_WRITE_OPERATIONS.contains(&operation) && category == "read" {
+        return Err(ConfigError::new(format!(
+            "{where_}: kuma operation {} changes monitors -- its category must be 'write', not 'read'",
+            repr_str(operation)
+        )));
+    }
+    let below = |b: &Option<Value>, limit: i64| match b {
+        None => true,
+        Some(v) => bound_as_f64(v).is_none_or(|x| x < limit as f64),
+    };
+    let above = |b: &Option<Value>, limit: i64| match b {
+        None => true,
+        Some(v) => bound_as_f64(v).is_none_or(|x| x > limit as f64),
+    };
+    if let Some(interval) = parameters.get("interval") {
+        if interval.ptype != "integer"
+            || below(&interval.minimum, KUMA_INTERVAL_MIN)
+            || above(&interval.maximum, KUMA_INTERVAL_MAX)
+        {
+            return Err(ConfigError::new(format!(
+                "{where_}: parameter 'interval' must be an integer with minimum >= \
+                 {KUMA_INTERVAL_MIN} and maximum <= {KUMA_INTERVAL_MAX}"
+            )));
+        }
+    }
+    if let Some(status) = parameters.get("expected_status") {
+        if status.ptype != "enum" || !status.values.iter().all(|v| KUMA_STATUS_CODES.contains(&v.as_str())) {
+            return Err(ConfigError::new(format!(
+                "{where_}: parameter 'expected_status' must be an enum over {}",
+                repr_list(KUMA_STATUS_CODES)
+            )));
+        }
+    }
+    if let Some(url) = parameters.get("url") {
+        if url.ptype != "string" {
+            return Err(ConfigError::new(format!("{where_}: parameter 'url' must be a string with a pattern")));
+        }
+    }
+    if let Some(monitor_id) = parameters.get("monitor_id") {
+        if monitor_id.ptype != "integer" || below(&monitor_id.minimum, 1) {
+            return Err(ConfigError::new(format!(
+                "{where_}: parameter 'monitor_id' must be an integer with minimum >= 1"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// FR-4.5: a tool may stay below the toolkit limits, never exceed them.
 fn validate_ceilings(tool: &ToolDef, toolkit: &Toolkit, where_: &str) -> ConfigResult<()> {
     if tool.timeout_seconds > toolkit.max_timeout_seconds {
@@ -676,6 +773,15 @@ pub fn validate_against_tier1(tool: &ToolDef, toolkit: &Toolkit) -> ConfigResult
                     "{where_}: artifact operation {} is not in the allowlist {} of toolkit {tk_name}",
                     repr_opt(&tool.artifact_operation),
                     repr_list(&toolkit.allowed_artifact_operations)
+                )));
+            }
+        }
+        "kuma" => {
+            if !toolkit.allows_kuma_operation(tool.kuma_operation.as_deref().unwrap_or("")) {
+                return Err(ConfigError::tier1(format!(
+                    "{where_}: kuma operation {} is not in the allowlist {} of toolkit {tk_name}",
+                    repr_opt(&tool.kuma_operation),
+                    repr_list(&toolkit.allowed_kuma_operations)
                 )));
             }
         }
@@ -940,6 +1046,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         opencode_operation: None,
         agent_operation: None,
         artifact_operation: None,
+        kuma_operation: None,
         run_as: None,
         destination: None,
     };
@@ -1097,6 +1204,21 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
             }
             validate_op_params("artifact", ARTIFACT_OPERATION_PARAMS, &op, &parameters, where_)?;
             tool.artifact_operation = Some(op);
+        }
+        "kuma" => {
+            let Some(op) = nonempty_str(either("kuma_operation", "operation")) else {
+                return Err(ConfigError::new(format!("{where_}: field 'kuma_operation' is missing")));
+            };
+            if op_params(KUMA_OPERATION_PARAMS, &op).is_none() {
+                return Err(ConfigError::new(format!(
+                    "{where_}: kuma_operation {} is unknown (known: {})",
+                    repr_str(&op),
+                    repr_list(&sorted_ops(KUMA_OPERATION_PARAMS))
+                )));
+            }
+            validate_op_params("kuma", KUMA_OPERATION_PARAMS, &op, &parameters, where_)?;
+            validate_kuma_params(&op, &tool.category, &parameters, where_)?;
+            tool.kuma_operation = Some(op);
         }
         _ => {}
     }

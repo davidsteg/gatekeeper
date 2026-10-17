@@ -16,6 +16,7 @@ pub mod artifact;
 pub mod file;
 pub mod google;
 pub mod http;
+pub mod kuma;
 pub mod local;
 pub mod microsoft;
 pub mod opencode;

@@ -42,6 +42,8 @@ BASE = {
               "allowed_agent_operations": ["send_message", "read_messages", "mailbox_status"]},
     "art": {"executor": "artifact", "allowed_artifact_operations": ["list", "info", "transfer"],
             "allowed_artifacts": ["hermes-skill"], "handover_dir": "/handover"},
+    "kuma": {"executor": "kuma", "base_url": "http://kuma.lan:3001", "allowed_cidrs": ["10.0.0.0/8"],
+             "credential": "kuma", "allowed_kuma_operations": ["monitor_list", "monitor_add_http", "monitor_pause"]},
 }
 
 # (name, toolkit name, field overrides; None deletes the field)
@@ -156,6 +158,21 @@ TOOLKIT_CASES = [
                                           "allowed_hosts": ["oc.lan"]}),
     ("oc_hosts_other", "oc", "allowed_hosts", ["oc.example.com"]),
     ("oc_hosts_bad", "oc", "allowed_hosts", ["oc"]),
+    ("kuma_no_base", "kuma", "base_url", None),
+    ("kuma_bad_base", "kuma", "base_url", "ws://kuma.lan:3001"),
+    ("kuma_credential_placeholder", "kuma", "base_url", "http://kuma.lan:3001/{credential}"),
+    ("kuma_no_cidrs", "kuma", "allowed_cidrs", None),
+    ("kuma_no_credential", "kuma", "credential", None),
+    ("kuma_empty_credential", "kuma", "credential", ""),
+    ("kuma_no_ops", "kuma", "allowed_kuma_operations", None),
+    ("kuma_empty_ops", "kuma", "allowed_kuma_operations", []),
+    ("kuma_unknown_ops", "kuma", "allowed_kuma_operations", ["monitor_list", "monitor_delete", "edit"]),
+    ("kuma_ops_not_list", "kuma", "allowed_kuma_operations", "monitor_list"),
+    ("kuma_dest", "kuma", "destinations", ["d_http"]),
+    ("kuma_hosts_ok", "kuma", "__replace__", {**BASE["kuma"], "base_url": "https://kuma.example.org",
+                                              "allowed_cidrs": None, "allowed_hosts": ["kuma.example.org"]}),
+    ("kuma_hosts_other", "kuma", "allowed_hosts", ["status.example.org"]),
+    ("kuma_follow", "kuma", "follow_redirects", True),
     ("denied_not_list", "local", "denied_args", "rm"),
     ("roots_not_strs", "local", "path_roots", [1, 2]),
 ]
@@ -238,6 +255,10 @@ def tool(tid, tk, **kw):
 
 
 S = {"type": "string", "pattern": "^[a-z]+$", "required": True, "description": "s"}
+KID = {"type": "integer", "required": True, "minimum": 1, "description": "id"}
+KADD = {"name": S, "url": {**S, "pattern": "^https?://[a-z.]+/$"},
+        "interval": {"type": "integer", "minimum": 30, "maximum": 3600, "description": "s"},
+        "expected_status": {"type": "enum", "values": ["200-299", "401"], "description": "s"}}
 TOOL_CASES = [
     ("not_mapping", ["x"]),
     ("bad_id", tool("Local.x", "local", binary=SH)),
@@ -316,6 +337,35 @@ TOOL_CASES = [
     ("art_missing", tool("art.x", "art", artifact_operation="info")),
     ("art_extra", tool("art.x", "art", artifact_operation="list", parameters={"x": S})),
     ("art_denied", tool("art.x", "art", artifact_operation="read", parameters={"artifact": S})),
+    ("kuma_no_op", tool("kuma.x", "kuma")),
+    ("kuma_unknown_op", tool("kuma.x", "kuma", kuma_operation="monitor_delete")),
+    ("kuma_op_alias", tool("kuma.x", "kuma", operation="monitor_list")),
+    ("kuma_op_denied", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_resume", parameters={"monitor_id": KID})),
+    ("kuma_write_as_read", tool("kuma.x", "kuma", kuma_operation="monitor_pause", parameters={"monitor_id": KID})),
+    ("kuma_add_ok", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http", parameters=KADD)),
+    ("kuma_add_missing_url", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http", parameters={"name": S})),
+    ("kuma_add_extra", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http", parameters={**KADD, "method": S})),
+    ("kuma_interval_wide", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http",
+                                parameters={**KADD, "interval": {**KADD["interval"], "maximum": 86400}})),
+    ("kuma_interval_low", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http",
+                               parameters={**KADD, "interval": {**KADD["interval"], "minimum": 20}})),
+    ("kuma_interval_float", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http",
+                                 parameters={**KADD, "interval": {**KADD["interval"], "minimum": 30.5, "maximum": 3600.0}})),
+    ("kuma_interval_unbounded", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http",
+                                     parameters={**KADD, "interval": {"type": "integer", "description": "s"}})),
+    ("kuma_interval_string", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http",
+                                  parameters={**KADD, "interval": S})),
+    ("kuma_status_wide", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http",
+                              parameters={**KADD, "expected_status": {"type": "enum", "values": ["200", "500"], "description": "s"}})),
+    ("kuma_status_string", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http",
+                                parameters={**KADD, "expected_status": S})),
+    ("kuma_url_enum", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_add_http",
+                           parameters={**KADD, "url": {"type": "enum", "values": ["https://x.org/"], "required": True, "description": "u"}})),
+    ("kuma_id_zero", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_pause",
+                          parameters={"monitor_id": {**KID, "minimum": 0}})),
+    ("kuma_id_unbounded", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_pause",
+                               parameters={"monitor_id": {"type": "integer", "required": True, "description": "i"}})),
+    ("kuma_id_string", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_pause", parameters={"monitor_id": S})),
 ]
 for name, spec in TOOL_CASES:
     try:

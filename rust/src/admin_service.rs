@@ -585,7 +585,7 @@ impl AdminService {
     }
 
     /// Proposes changing a toolkit's executor, binaries, denied_args,
-    /// run_as, an http/opencode toolkit's allowed_hosts/allowed_cidrs, an
+    /// run_as, an http/opencode/kuma toolkit's allowed_hosts/allowed_cidrs, an
     /// http toolkit's allowed_methods/allowed_path_prefixes and the two
     /// limits (`toolkit_proposals::UPDATE_WRITABLE_FIELDS`).
     pub fn toolkit_update(&self, actor: &str, args: &Args) -> ConfigResult<Value> {

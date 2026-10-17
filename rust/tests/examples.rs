@@ -44,6 +44,7 @@ fn toolkit_value(t: &Toolkit) -> Value {
         "mailbox_path": t.mailbox_path, "allowed_agent_operations": t.allowed_agent_operations,
         "allowed_artifact_operations": t.allowed_artifact_operations,
         "allowed_artifacts": t.allowed_artifacts, "handover_dir": t.handover_dir,
+        "allowed_kuma_operations": t.allowed_kuma_operations,
         "max_message_bytes": t.max_message_bytes, "max_mailbox_messages": t.max_mailbox_messages,
     })
 }
@@ -62,7 +63,8 @@ fn tool_value(t: &ToolDef) -> Value {
         "google_action": t.google_action, "google_args": opt_args(&t.google_args),
         "microsoft_action": t.microsoft_action, "microsoft_args": opt_args(&t.microsoft_args),
         "opencode_operation": t.opencode_operation, "agent_operation": t.agent_operation,
-        "artifact_operation": t.artifact_operation, "run_as": t.run_as,
+        "artifact_operation": t.artifact_operation, "kuma_operation": t.kuma_operation,
+        "run_as": t.run_as,
         "destination": t.destination, "input_schema": t.input_schema(),
         "agent_description": t.agent_description(),
     })

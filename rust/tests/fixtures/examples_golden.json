@@ -65,6 +65,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -111,6 +112,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -160,6 +162,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -207,6 +210,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -252,6 +256,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -299,6 +304,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -347,6 +353,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -392,6 +399,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -443,6 +451,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -494,6 +503,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -548,6 +558,56 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
+   "max_message_bytes": 4096,
+   "max_mailbox_messages": 200
+  },
+  "kuma": {
+   "name": "kuma",
+   "executor": "kuma",
+   "binaries": [],
+   "denied_args": [],
+   "path_roots": [],
+   "protected_resources": [],
+   "max_timeout_seconds": 30,
+   "max_output_bytes": 131072,
+   "credential": "kuma",
+   "base_url": "http://kuma.lan:3001",
+   "allowed_methods": [],
+   "allowed_path_prefixes": [],
+   "allowed_cidrs": [
+    "10.10.200.91/32"
+   ],
+   "allowed_hosts": [],
+   "ws_url": null,
+   "allowed_rpc_methods": [],
+   "destinations": [],
+   "docker_host": null,
+   "docker_tls": false,
+   "ssh_host": null,
+   "ssh_port": 22,
+   "ssh_user": null,
+   "ssh_known_hosts": null,
+   "run_as": null,
+   "google_script": null,
+   "google_container": null,
+   "allowed_google_actions": [],
+   "required_scopes": [],
+   "microsoft_script": null,
+   "microsoft_container": null,
+   "allowed_microsoft_actions": [],
+   "allowed_opencode_operations": [],
+   "mailbox_path": null,
+   "allowed_agent_operations": [],
+   "allowed_artifact_operations": [],
+   "allowed_artifacts": [],
+   "handover_dir": null,
+   "allowed_kuma_operations": [
+    "monitor_list",
+    "monitor_add_http",
+    "monitor_pause",
+    "monitor_resume"
+   ],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   },
@@ -592,6 +652,7 @@
    "allowed_artifact_operations": [],
    "allowed_artifacts": [],
    "handover_dir": null,
+   "allowed_kuma_operations": [],
    "max_message_bytes": 4096,
    "max_mailbox_messages": 200
   }
@@ -650,6 +711,9 @@
   "microsoft": [
    "outlook"
   ],
+  "kuma": [
+   "kuma"
+  ],
   "docker-nas2-tls": [
    "nas2 (destination)"
   ]
@@ -705,6 +769,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas1",
      "input_schema": {
@@ -764,6 +829,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas2",
      "input_schema": {
@@ -824,6 +890,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas1",
      "input_schema": {
@@ -891,6 +958,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas2",
      "input_schema": {
@@ -956,6 +1024,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas1",
      "input_schema": {
@@ -1014,6 +1083,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas2",
      "input_schema": {
@@ -1071,6 +1141,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas1",
      "input_schema": {
@@ -1128,6 +1199,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas2",
      "input_schema": {
@@ -1185,6 +1257,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas1",
      "input_schema": {
@@ -1242,6 +1315,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas2",
      "input_schema": {
@@ -1299,6 +1373,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas1",
      "input_schema": {
@@ -1356,6 +1431,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": "nas2",
      "input_schema": {
@@ -1404,6 +1480,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1446,6 +1523,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1488,6 +1566,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1530,6 +1609,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1574,6 +1654,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1626,6 +1707,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1680,6 +1762,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1724,6 +1807,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1772,6 +1856,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1812,6 +1897,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1856,6 +1942,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1904,6 +1991,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1946,6 +2034,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -1999,6 +2088,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2061,6 +2151,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2127,6 +2218,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2200,6 +2292,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2260,6 +2353,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2316,6 +2410,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2381,6 +2476,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2454,6 +2550,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2526,6 +2623,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2599,6 +2697,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2669,6 +2768,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2727,6 +2827,7 @@
      "opencode_operation": "health",
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2767,6 +2868,7 @@
      "opencode_operation": "providers",
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2813,6 +2915,7 @@
      "opencode_operation": "ask",
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2871,6 +2974,7 @@
      "opencode_operation": "run",
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2929,6 +3033,7 @@
      "opencode_operation": "fire",
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -2987,6 +3092,7 @@
      "opencode_operation": "check",
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -3040,6 +3146,7 @@
      "opencode_operation": "review_changes",
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -3093,6 +3200,7 @@
      "opencode_operation": "abort",
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -3115,11 +3223,221 @@
       "additionalProperties": false
      },
      "agent_description": "Stops a running opencode session."
+    },
+    "kuma.monitor_list": {
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "List Kuma monitors",
+     "description": "Lists Uptime Kuma's monitors: id, name, type, URL (without credentials or query), whether it is active, its interval, and whether gatekeeper manages it (only managed monitors can be paused or resumed).",
+     "category": "read",
+     "enabled": false,
+     "idempotent": true,
+     "ssh_dispatch": false,
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 131072,
+     "binary": null,
+     "argv": [],
+     "http_method": null,
+     "path_template": null,
+     "query_template": {},
+     "body_template": null,
+     "body_raw_param": null,
+     "base_url": null,
+     "rpc_method": null,
+     "params_template": null,
+     "file_operation": null,
+     "google_action": null,
+     "google_args": null,
+     "microsoft_action": null,
+     "microsoft_args": null,
+     "opencode_operation": null,
+     "agent_operation": null,
+     "artifact_operation": null,
+     "kuma_operation": "monitor_list",
+     "run_as": null,
+     "destination": null,
+     "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+     },
+     "agent_description": "Lists Uptime Kuma's monitors: id, name, type, URL (without credentials or query), whether it is active, its interval, and whether gatekeeper manages it (only managed monitors can be paused or resumed)."
+    },
+    "kuma.monitor_add_http": {
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Add an HTTP monitor",
+     "description": "Adds an HTTP(s) GET monitor to Uptime Kuma, without notifications. Returns the new monitor's id. Check kuma.monitor_list first: the same name and URL can exist twice.",
+     "category": "write",
+     "enabled": false,
+     "idempotent": false,
+     "ssh_dispatch": false,
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096,
+     "binary": null,
+     "argv": [],
+     "http_method": null,
+     "path_template": null,
+     "query_template": {},
+     "body_template": null,
+     "body_raw_param": null,
+     "base_url": null,
+     "rpc_method": null,
+     "params_template": null,
+     "file_operation": null,
+     "google_action": null,
+     "google_args": null,
+     "microsoft_action": null,
+     "microsoft_args": null,
+     "opencode_operation": null,
+     "agent_operation": null,
+     "artifact_operation": null,
+     "kuma_operation": "monitor_add_http",
+     "run_as": null,
+     "destination": null,
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "name": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,79}$",
+        "description": "Display name in Kuma."
+       },
+       "url": {
+        "type": "string",
+        "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/-]*)?$",
+        "description": "The URL to check, http or https, no user, password or query."
+       },
+       "interval": {
+        "type": "integer",
+        "minimum": 30,
+        "maximum": 3600,
+        "description": "Seconds between checks, 30-3600. Default 60."
+       },
+       "expected_status": {
+        "type": "string",
+        "enum": [
+         "200-299",
+         "300-399",
+         "401",
+         "403"
+        ],
+        "description": "Status code or range that counts as up. Default 200-299."
+       }
+      },
+      "required": [
+       "name",
+       "url"
+      ],
+      "additionalProperties": false
+     },
+     "agent_description": "Adds an HTTP(s) GET monitor to Uptime Kuma, without notifications. Returns the new monitor's id. Check kuma.monitor_list first: the same name and URL can exist twice. NOT IDEMPOTENT: calling again repeats the effect. After a timeout the outcome is unknown -- do not retry without checking the state first."
+    },
+    "kuma.monitor_pause": {
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Pause a monitor",
+     "description": "Pauses a monitor gatekeeper created. Any other monitor is refused.",
+     "category": "write",
+     "enabled": false,
+     "idempotent": true,
+     "ssh_dispatch": false,
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096,
+     "binary": null,
+     "argv": [],
+     "http_method": null,
+     "path_template": null,
+     "query_template": {},
+     "body_template": null,
+     "body_raw_param": null,
+     "base_url": null,
+     "rpc_method": null,
+     "params_template": null,
+     "file_operation": null,
+     "google_action": null,
+     "google_args": null,
+     "microsoft_action": null,
+     "microsoft_args": null,
+     "opencode_operation": null,
+     "agent_operation": null,
+     "artifact_operation": null,
+     "kuma_operation": "monitor_pause",
+     "run_as": null,
+     "destination": null,
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "monitor_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "The monitor's id from kuma.monitor_list."
+       }
+      },
+      "required": [
+       "monitor_id"
+      ],
+      "additionalProperties": false
+     },
+     "agent_description": "Pauses a monitor gatekeeper created. Any other monitor is refused."
+    },
+    "kuma.monitor_resume": {
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Resume a monitor",
+     "description": "Resumes a paused monitor gatekeeper created. Any other monitor is refused.",
+     "category": "write",
+     "enabled": false,
+     "idempotent": true,
+     "ssh_dispatch": false,
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096,
+     "binary": null,
+     "argv": [],
+     "http_method": null,
+     "path_template": null,
+     "query_template": {},
+     "body_template": null,
+     "body_raw_param": null,
+     "base_url": null,
+     "rpc_method": null,
+     "params_template": null,
+     "file_operation": null,
+     "google_action": null,
+     "google_args": null,
+     "microsoft_action": null,
+     "microsoft_args": null,
+     "opencode_operation": null,
+     "agent_operation": null,
+     "artifact_operation": null,
+     "kuma_operation": "monitor_resume",
+     "run_as": null,
+     "destination": null,
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "monitor_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "The monitor's id from kuma.monitor_list."
+       }
+      },
+      "required": [
+       "monitor_id"
+      ],
+      "additionalProperties": false
+     },
+     "agent_description": "Resumes a paused monitor gatekeeper created. Any other monitor is refused."
     }
    },
    "disabled_by_tier1": [],
    "rejected": [],
-   "raw_count": 38,
+   "raw_count": 42,
    "flat_specs": {
     "docker.compose_ps": {
      "id": "docker.compose_ps",
@@ -4284,6 +4602,111 @@
      "required_scopes": [],
      "timeout_seconds": 30,
      "max_output_bytes": 8192
+    },
+    "kuma.monitor_list": {
+     "id": "kuma.monitor_list",
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "List Kuma monitors",
+     "description": "Lists Uptime Kuma's monitors: id, name, type, URL (without credentials or query), whether it is active, its interval, and whether gatekeeper manages it (only managed monitors can be paused or resumed).",
+     "category": "read",
+     "idempotent": true,
+     "enabled": false,
+     "kuma_operation": "monitor_list",
+     "parameters": {},
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 131072
+    },
+    "kuma.monitor_add_http": {
+     "id": "kuma.monitor_add_http",
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Add an HTTP monitor",
+     "description": "Adds an HTTP(s) GET monitor to Uptime Kuma, without notifications. Returns the new monitor's id. Check kuma.monitor_list first: the same name and URL can exist twice.",
+     "category": "write",
+     "idempotent": false,
+     "enabled": false,
+     "kuma_operation": "monitor_add_http",
+     "parameters": {
+      "name": {
+       "type": "string",
+       "required": true,
+       "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,79}$",
+       "description": "Display name in Kuma."
+      },
+      "url": {
+       "type": "string",
+       "required": true,
+       "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/-]*)?$",
+       "description": "The URL to check, http or https, no user, password or query."
+      },
+      "interval": {
+       "type": "integer",
+       "required": false,
+       "minimum": 30,
+       "maximum": 3600,
+       "description": "Seconds between checks, 30-3600. Default 60."
+      },
+      "expected_status": {
+       "type": "enum",
+       "required": false,
+       "values": [
+        "200-299",
+        "300-399",
+        "401",
+        "403"
+       ],
+       "description": "Status code or range that counts as up. Default 200-299."
+      }
+     },
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096
+    },
+    "kuma.monitor_pause": {
+     "id": "kuma.monitor_pause",
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Pause a monitor",
+     "description": "Pauses a monitor gatekeeper created. Any other monitor is refused.",
+     "category": "write",
+     "idempotent": true,
+     "enabled": false,
+     "kuma_operation": "monitor_pause",
+     "parameters": {
+      "monitor_id": {
+       "type": "integer",
+       "required": true,
+       "minimum": 1,
+       "description": "The monitor's id from kuma.monitor_list."
+      }
+     },
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096
+    },
+    "kuma.monitor_resume": {
+     "id": "kuma.monitor_resume",
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Resume a monitor",
+     "description": "Resumes a paused monitor gatekeeper created. Any other monitor is refused.",
+     "category": "write",
+     "idempotent": true,
+     "enabled": false,
+     "kuma_operation": "monitor_resume",
+     "parameters": {
+      "monitor_id": {
+       "type": "integer",
+       "required": true,
+       "minimum": 1,
+       "description": "The monitor's id from kuma.monitor_list."
+      }
+     },
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096
     }
    },
    "grantable": {
@@ -4406,6 +4829,18 @@
     ],
     "opencode.abort": [
      "opencode.abort"
+    ],
+    "kuma.monitor_list": [
+     "kuma.monitor_list"
+    ],
+    "kuma.monitor_add_http": [
+     "kuma.monitor_add_http"
+    ],
+    "kuma.monitor_pause": [
+     "kuma.monitor_pause"
+    ],
+    "kuma.monitor_resume": [
+     "kuma.monitor_resume"
     ]
    }
   },
@@ -4443,6 +4878,7 @@
      "opencode_operation": null,
      "agent_operation": "send_message",
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -4504,6 +4940,7 @@
      "opencode_operation": null,
      "agent_operation": "read_messages",
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -4915,6 +5352,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -4965,6 +5403,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -5021,6 +5460,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {
@@ -5083,6 +5523,7 @@
      "opencode_operation": null,
      "agent_operation": null,
      "artifact_operation": null,
+     "kuma_operation": null,
      "run_as": null,
      "destination": null,
      "input_schema": {

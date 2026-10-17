@@ -526,7 +526,7 @@ const TOOLS_JSON: &str = r####"
  {
   "name": "admin.toolkit_update",
   "title": "Propose updating a toolkit's executor, binaries or network targets",
-  "description": "Proposes changing an existing toolkit's executor type, binaries, denied_args, run_as (the OS user a 'file' toolkit's operations run as), and -- on an http or opencode toolkit -- allowed_hosts (exact hostnames such as 'api.github.com'; no wildcards, no IP addresses) and allowed_cidrs, plus an http toolkit's allowed_methods and allowed_path_prefixes, and max_timeout_seconds/max_output_bytes. Only these fields can be proposed — path_roots and protected_resources remain deploy-time only (FR-4.11) and are rejected. A CIDR wider than /16 (IPv4) or /48 (IPv6) needs confirm_broad_cidrs: true, and a private range is refused on a toolkit whose target is a public address. A hostname toolkit never reaches a private, loopback, link-local or multicast address, whatever its allowed_cidrs say. Like admin.toolkit_propose, this changes Tier 1 -- what is possible at all, not just who can do what -- so it is always written to the toolkit-proposal queue and never applies on its own. A human reviews it at /app/requests (Toolkit tab) and, if they approve, gatekeeper validates, writes toolkits.yaml, and reloads it into the running process itself -- no redeploy needed, but also no way for this call to make it live by itself. Example: propose switching executor from 'local' to 'file' by passing updates={\"executor\": \"file\", \"binaries\": [], \"denied_args\": []}, or pointing an existing 'file' toolkit at another user with updates={\"run_as\": \"3001:3001\"}, or moving the 'github' toolkit from fixed addresses to its hostname with updates={\"allowed_hosts\": [\"api.github.com\"], \"allowed_cidrs\": null}.",
+  "description": "Proposes changing an existing toolkit's executor type, binaries, denied_args, run_as (the OS user a 'file' toolkit's operations run as), and -- on an http, opencode or kuma toolkit -- allowed_hosts (exact hostnames such as 'api.github.com'; no wildcards, no IP addresses) and allowed_cidrs, plus an http toolkit's allowed_methods and allowed_path_prefixes, and max_timeout_seconds/max_output_bytes. Only these fields can be proposed — path_roots and protected_resources remain deploy-time only (FR-4.11) and are rejected. A CIDR wider than /16 (IPv4) or /48 (IPv6) needs confirm_broad_cidrs: true, and a private range is refused on a toolkit whose target is a public address. A hostname toolkit never reaches a private, loopback, link-local or multicast address, whatever its allowed_cidrs say. Like admin.toolkit_propose, this changes Tier 1 -- what is possible at all, not just who can do what -- so it is always written to the toolkit-proposal queue and never applies on its own. A human reviews it at /app/requests (Toolkit tab) and, if they approve, gatekeeper validates, writes toolkits.yaml, and reloads it into the running process itself -- no redeploy needed, but also no way for this call to make it live by itself. Example: propose switching executor from 'local' to 'file' by passing updates={\"executor\": \"file\", \"binaries\": [], \"denied_args\": []}, or pointing an existing 'file' toolkit at another user with updates={\"run_as\": \"3001:3001\"}, or moving the 'github' toolkit from fixed addresses to its hostname with updates={\"allowed_hosts\": [\"api.github.com\"], \"allowed_cidrs\": null}.",
   "inputSchema": {
    "type": "object",
    "properties": {
@@ -568,7 +568,7 @@ const TOOLS_JSON: &str = r####"
        "items": {
         "type": "string"
        },
-       "description": "http/opencode toolkits only: exact hostnames the toolkit may connect to, e.g. ['api.github.com']. Every address a name resolves to must be public. null removes it."
+       "description": "http/opencode/kuma toolkits only: exact hostnames the toolkit may connect to, e.g. ['api.github.com']. Every address a name resolves to must be public. null removes it."
       },
       "allowed_cidrs": {
        "type": [
@@ -578,7 +578,7 @@ const TOOLS_JSON: &str = r####"
        "items": {
         "type": "string"
        },
-       "description": "http/opencode toolkits only: IP networks the resolved address must lie in. With allowed_hosts set it only narrows further. null removes it. Private ranges are refused when the target is a public address."
+       "description": "http/opencode/kuma toolkits only: IP networks the resolved address must lie in. With allowed_hosts set it only narrows further. null removes it. Private ranges are refused when the target is a public address."
       },
       "allowed_methods": {
        "type": "array",

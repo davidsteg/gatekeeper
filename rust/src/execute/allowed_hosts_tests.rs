@@ -481,7 +481,7 @@ fn allowed_hosts_refused_on_a_non_network_executor() {
         json!({"box": {"executor": "local", "binaries": ["/bin/true"], "allowed_hosts": ["api.github.com"]}}),
     );
     let msg = err_text(load_tier1(&path));
-    assert!(msg.contains("only supported on an 'http' or 'opencode'"), "{msg}");
+    assert!(msg.contains("only supported on an 'http', 'opencode' or 'kuma'"), "{msg}");
 }
 
 #[test]

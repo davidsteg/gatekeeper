@@ -115,6 +115,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -257,6 +270,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -400,6 +426,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -415,7 +454,7 @@
      "dir": "/tmp/x"
     }
    },
-   "error": "toolkit 'local': executor 'podman' is not enabled at this stage (available: ['agent', 'artifact', 'docker', 'file', 'google', 'http', 'local', 'microsoft', 'opencode', 'ssh', 'truenas'])"
+   "error": "toolkit 'local': executor 'podman' is not enabled at this stage (available: ['agent', 'artifact', 'docker', 'file', 'google', 'http', 'kuma', 'local', 'microsoft', 'opencode', 'ssh', 'truenas'])"
   },
   {
    "name": "bad_executor_int",
@@ -543,6 +582,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -558,7 +610,7 @@
      "dir": "/tmp/x"
     }
    },
-   "error": "toolkit 'local': executor 5 is not enabled at this stage (available: ['agent', 'artifact', 'docker', 'file', 'google', 'http', 'local', 'microsoft', 'opencode', 'ssh', 'truenas'])"
+   "error": "toolkit 'local': executor 5 is not enabled at this stage (available: ['agent', 'artifact', 'docker', 'file', 'google', 'http', 'kuma', 'local', 'microsoft', 'opencode', 'ssh', 'truenas'])"
   },
   {
    "name": "zero_timeout",
@@ -686,6 +738,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -829,6 +894,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -942,6 +1020,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -1033,6 +1126,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -1165,6 +1261,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -1278,6 +1387,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -1369,6 +1493,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -1501,6 +1628,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -1648,6 +1788,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -1792,6 +1945,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -1935,6 +2101,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -2078,6 +2257,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -2221,6 +2413,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -2364,6 +2569,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -2477,6 +2695,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -2568,6 +2801,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -2703,6 +2939,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -2844,6 +3093,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -2984,6 +3246,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -3125,6 +3400,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -3268,6 +3556,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -3411,6 +3712,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -3555,6 +3869,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -3699,6 +4026,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -3812,6 +4152,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -3903,6 +4258,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -4036,6 +4394,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -4149,6 +4520,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -4240,6 +4626,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -4373,6 +4762,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -4515,6 +4917,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -4659,6 +5074,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -4803,6 +5231,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -4916,6 +5357,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -5007,6 +5463,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -5138,6 +5597,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -5281,6 +5753,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -5427,6 +5912,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -5569,6 +6067,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -5712,6 +6223,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -5855,6 +6379,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -5995,6 +6532,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -6139,6 +6689,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -6279,6 +6842,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -6422,6 +6998,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -6563,6 +7152,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -6706,6 +7308,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -6850,6 +7465,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -6994,6 +7622,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -7107,6 +7748,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -7198,6 +7854,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -7330,6 +7989,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -7471,6 +8143,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -7614,6 +8299,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -7758,6 +8456,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -7902,6 +8613,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -8015,6 +8739,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -8106,6 +8845,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -8236,6 +8978,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -8379,6 +9134,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -8523,6 +9291,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -8663,6 +9444,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -8806,6 +9600,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -8946,6 +9753,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -9089,6 +9909,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -9232,6 +10065,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -9371,6 +10217,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -9514,6 +10373,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -9657,6 +10529,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -9799,6 +10684,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -9943,6 +10841,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -10084,6 +10995,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -10197,6 +11121,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -10288,6 +11227,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -10423,6 +11365,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -10565,6 +11520,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -10704,6 +11672,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -10845,6 +11826,19 @@
       ],
       "allowed_artifacts": [],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -10989,6 +11983,19 @@
        "x"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -11102,6 +12109,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -11193,6 +12215,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -11325,6 +12350,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/a/../b"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -11466,6 +12504,19 @@
       ],
       "allowed_artifacts": [
        "hermes-skill"
+      ]
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
       ]
      }
     },
@@ -11613,6 +12664,19 @@
       "destinations": [
        "d_docker"
       ]
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -11759,6 +12823,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -11905,6 +12982,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -12051,6 +13141,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -12197,6 +13300,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -12343,6 +13459,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -12489,6 +13618,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -12635,6 +13777,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -12748,6 +13903,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -12841,6 +14011,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -12978,6 +14151,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -13091,6 +14277,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -13184,6 +14385,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -13319,6 +14523,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -13465,6 +14682,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -13611,6 +14841,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -13757,6 +15000,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -13903,6 +15159,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -14049,6 +15318,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -14195,6 +15477,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -14341,6 +15636,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -14487,6 +15795,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -14633,6 +15954,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -14779,6 +16113,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -14925,6 +16272,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -15071,6 +16431,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -15217,6 +16590,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -15363,6 +16749,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -15507,6 +16906,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -15653,6 +17065,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -15799,6 +17224,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -15943,6 +17381,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -16056,6 +17507,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -16147,6 +17613,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -16279,6 +17748,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -16392,6 +17874,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -16483,6 +17980,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -16618,6 +18118,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -16733,6 +18246,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -16824,6 +18352,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -16959,6 +18490,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -17099,6 +18643,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -17243,6 +18800,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -17390,6 +18960,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -17506,6 +19089,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -17597,6 +19195,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -17732,6 +19333,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -17878,6 +19492,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -17893,7 +19520,7 @@
      "dir": "/tmp/x"
     }
    },
-   "error": "toolkit 'local': 'allowed_hosts' is only supported on an 'http' or 'opencode' toolkit, not on 'local'"
+   "error": "toolkit 'local': 'allowed_hosts' is only supported on an 'http', 'opencode' or 'kuma' toolkit, not on 'local'"
   },
   {
    "name": "hosts_on_nas_empty",
@@ -18022,6 +19649,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -18037,7 +19677,7 @@
      "dir": "/tmp/x"
     }
    },
-   "error": "toolkit 'nas': 'allowed_hosts' is only supported on an 'http' or 'opencode' toolkit, not on 'truenas'"
+   "error": "toolkit 'nas': 'allowed_hosts' is only supported on an 'http', 'opencode' or 'kuma' toolkit, not on 'truenas'"
   },
   {
    "name": "hosts_on_file",
@@ -18168,6 +19808,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -18183,7 +19836,7 @@
      "dir": "/tmp/x"
     }
    },
-   "error": "toolkit 'files': 'allowed_hosts' is only supported on an 'http' or 'opencode' toolkit, not on 'file'"
+   "error": "toolkit 'files': 'allowed_hosts' is only supported on an 'http', 'opencode' or 'kuma' toolkit, not on 'file'"
   },
   {
    "name": "oc_hosts_ok",
@@ -18314,6 +19967,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -18427,6 +20093,21 @@
       "allowed_hosts": [],
       "allowed_cidrs": []
      },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
      "local": {
       "executor": "local",
       "run_as": null,
@@ -18520,6 +20201,9 @@
      10
     ],
     "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
      "c": [
       "d_http (destination)"
      ]
@@ -18655,6 +20339,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -18801,6 +20498,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -18817,6 +20527,2602 @@
     }
    },
    "error": "toolkit 'oc': allowed_hosts entry 'oc' is not a valid fully qualified hostname (e.g. 'api.github.com')"
+  },
+  {
+   "name": "kuma_no_base",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': required field 'base_url' is missing"
+  },
+  {
+   "name": "kuma_bad_base",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "ws://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': base_url 'ws://kuma.lan:3001' must be an absolute http(s) URL, e.g. 'http://sonarr.lan:8989'"
+  },
+  {
+   "name": "kuma_credential_placeholder",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001/{credential}",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': base_url must not contain a '{credential}' placeholder -- the kuma executor logs in with its credential, and would send this literally."
+  },
+  {
+   "name": "kuma_no_cidrs",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': 'allowed_cidrs' must not be empty (or set 'allowed_hosts' to exact hostnames instead)"
+  },
+  {
+   "name": "kuma_no_credential",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': a kuma toolkit needs 'credential' -- the name of a 'basic' credential holding the Kuma login as username:password"
+  },
+  {
+   "name": "kuma_empty_credential",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': a kuma toolkit needs 'credential' -- the name of a 'basic' credential holding the Kuma login as username:password"
+  },
+  {
+   "name": "kuma_no_ops",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma"
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': required field 'allowed_kuma_operations' is missing"
+  },
+  {
+   "name": "kuma_empty_ops",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": []
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_list', 'monitor_pause', 'monitor_resume']"
+  },
+  {
+   "name": "kuma_unknown_ops",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_delete",
+       "edit"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['edit', 'monitor_delete'])"
+  },
+  {
+   "name": "kuma_ops_not_list",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": "monitor_list"
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': expects a list of strings"
+  },
+  {
+   "name": "kuma_dest",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ],
+      "destinations": [
+       "d_http"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': 'kuma' toolkits cannot declare destinations -- one toolkit, one Uptime Kuma (use a separate toolkit per instance)"
+  },
+  {
+   "name": "kuma_hosts_ok",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "https://kuma.example.org",
+      "allowed_cidrs": null,
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ],
+      "allowed_hosts": [
+       "kuma.example.org"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": null,
+   "summary": {
+    "toolkits": {
+     "agent": {
+      "executor": "agent",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "art": {
+      "executor": "artifact",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "box": {
+      "executor": "ssh",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "dock": {
+      "executor": "docker",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "files": {
+      "executor": "file",
+      "run_as": "3001:3001",
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "gh": {
+      "executor": "http",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [
+       "api.github.com"
+      ],
+      "allowed_cidrs": []
+     },
+     "gmail": {
+      "executor": "google",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [
+       "gmail.readonly"
+      ],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [
+       "kuma.example.org"
+      ],
+      "allowed_cidrs": []
+     },
+     "local": {
+      "executor": "local",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "nas": {
+      "executor": "truenas",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "oc": {
+      "executor": "opencode",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "web": {
+      "executor": "http",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     }
+    },
+    "rate_limits": {
+     "read": [
+      60,
+      60
+     ],
+     "write": [
+      60,
+      60
+     ],
+     "write_external": [
+      60,
+      60
+     ]
+    },
+    "max_concurrent": 4,
+    "audit": [
+     "/tmp/x",
+     33554432,
+     10
+    ],
+    "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
+     "c": [
+      "d_http (destination)"
+     ]
+    }
+   }
+  },
+  {
+   "name": "kuma_hosts_other",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ],
+      "allowed_hosts": [
+       "status.example.org"
+      ]
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": "toolkit 'kuma': base_url host 'kuma.lan' is not in allowed_hosts ['status.example.org']"
+  },
+  {
+   "name": "kuma_follow",
+   "doc": {
+    "toolkits": {
+     "local": {
+      "executor": "local",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "path_roots": [
+       "/srv"
+      ],
+      "denied_args": [
+       "rm"
+      ],
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192
+     },
+     "dock": {
+      "executor": "docker",
+      "binaries": [
+       "/bin/sh"
+      ]
+     },
+     "web": {
+      "executor": "http",
+      "base_url": "http://sonarr.lan:8989",
+      "allowed_methods": [
+       "GET",
+       "POST"
+      ],
+      "allowed_path_prefixes": [
+       "/api/"
+      ],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "gh": {
+      "executor": "http",
+      "base_url": "https://api.github.com",
+      "allowed_methods": [
+       "GET"
+      ],
+      "allowed_path_prefixes": [
+       "/repos/"
+      ],
+      "allowed_hosts": [
+       "api.github.com"
+      ]
+     },
+     "nas": {
+      "executor": "truenas",
+      "ws_url": "wss://nas/api/current",
+      "allowed_rpc_methods": [
+       "pool.query"
+      ]
+     },
+     "box": {
+      "executor": "ssh",
+      "binaries": [
+       "/bin/sh"
+      ],
+      "ssh_host": "box",
+      "ssh_user": "gk",
+      "ssh_known_hosts": "host ssh-ed25519 AAAAC3Nza"
+     },
+     "files": {
+      "executor": "file",
+      "path_roots": [
+       "/srv"
+      ],
+      "run_as": "3001:3001"
+     },
+     "gmail": {
+      "executor": "google",
+      "google_script": "/opt/g.py",
+      "allowed_google_actions": [
+       "gmail search"
+      ],
+      "required_scopes": [
+       "gmail.readonly"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "microsoft_script": "/opt/m.py",
+      "allowed_microsoft_actions": [
+       "mail list"
+      ]
+     },
+     "oc": {
+      "executor": "opencode",
+      "base_url": "http://oc:4096",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "allowed_opencode_operations": [
+       "ask",
+       "check",
+       "health"
+      ],
+      "path_roots": [
+       "/work"
+      ]
+     },
+     "agent": {
+      "executor": "agent",
+      "mailbox_path": "/data/messages.yaml",
+      "allowed_agent_operations": [
+       "send_message",
+       "read_messages",
+       "mailbox_status"
+      ]
+     },
+     "art": {
+      "executor": "artifact",
+      "allowed_artifact_operations": [
+       "list",
+       "info",
+       "transfer"
+      ],
+      "allowed_artifacts": [
+       "hermes-skill"
+      ],
+      "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ],
+      "follow_redirects": true
+     }
+    },
+    "destinations": {
+     "d_docker": {
+      "docker_host": "unix:///var/run/docker.sock"
+     },
+     "d_http": {
+      "base_url": "http://x.lan",
+      "credential": "c"
+     }
+    },
+    "audit": {
+     "dir": "/tmp/x"
+    }
+   },
+   "error": null,
+   "summary": {
+    "toolkits": {
+     "agent": {
+      "executor": "agent",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "art": {
+      "executor": "artifact",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "box": {
+      "executor": "ssh",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "dock": {
+      "executor": "docker",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "files": {
+      "executor": "file",
+      "run_as": "3001:3001",
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "gh": {
+      "executor": "http",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [
+       "api.github.com"
+      ],
+      "allowed_cidrs": []
+     },
+     "gmail": {
+      "executor": "google",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [
+       "gmail.readonly"
+      ],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "kuma": {
+      "executor": "kuma",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "local": {
+      "executor": "local",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 30,
+      "max_output_bytes": 8192,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "nas": {
+      "executor": "truenas",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "oc": {
+      "executor": "opencode",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     },
+     "outlook": {
+      "executor": "microsoft",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": []
+     },
+     "web": {
+      "executor": "http",
+      "run_as": null,
+      "ssh_port": 22,
+      "max_timeout_seconds": 60,
+      "max_output_bytes": 65536,
+      "docker_host": null,
+      "destinations": [],
+      "required_scopes": [],
+      "google_container": null,
+      "allowed_hosts": [],
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ]
+     }
+    },
+    "rate_limits": {
+     "read": [
+      60,
+      60
+     ],
+     "write": [
+      60,
+      60
+     ],
+     "write_external": [
+      60,
+      60
+     ]
+    },
+    "max_concurrent": 4,
+    "audit": [
+     "/tmp/x",
+     33554432,
+     10
+    ],
+    "credential_references": {
+     "kuma": [
+      "kuma"
+     ],
+     "c": [
+      "d_http (destination)"
+     ]
+    }
+   }
   },
   {
    "name": "denied_not_list",
@@ -18942,6 +23248,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -19086,6 +23405,19 @@
        "hermes-skill"
       ],
       "handover_dir": "/handover"
+     },
+     "kuma": {
+      "executor": "kuma",
+      "base_url": "http://kuma.lan:3001",
+      "allowed_cidrs": [
+       "10.0.0.0/8"
+      ],
+      "credential": "kuma",
+      "allowed_kuma_operations": [
+       "monitor_list",
+       "monitor_add_http",
+       "monitor_pause"
+      ]
      }
     },
     "destinations": {
@@ -20884,6 +25216,757 @@
    },
    "error": "tool 'art.x': artifact operation 'read' is not in the allowlist ['list', 'info', 'transfer'] of toolkit 'art'",
    "tier1_violation": true
+  },
+  {
+   "name": "kuma_no_op",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "read",
+    "enabled": true,
+    "parameters": {},
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024
+   },
+   "error": "tool 'kuma.x': field 'kuma_operation' is missing",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_unknown_op",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "read",
+    "enabled": true,
+    "parameters": {},
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_delete"
+   },
+   "error": "tool 'kuma.x': kuma_operation 'monitor_delete' is unknown (known: ['monitor_add_http', 'monitor_list', 'monitor_pause', 'monitor_resume'])",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_op_alias",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "read",
+    "enabled": true,
+    "parameters": {},
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "operation": "monitor_list"
+   },
+   "error": null,
+   "tier1_violation": false,
+   "summary": {
+    "version": 1,
+    "idempotent": false,
+    "required_scopes": [],
+    "input_schema": {
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    },
+    "body_template": null,
+    "run_as": null
+   }
+  },
+  {
+   "name": "kuma_op_denied",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "monitor_id": {
+      "type": "integer",
+      "required": true,
+      "minimum": 1,
+      "description": "id"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_resume"
+   },
+   "error": "tool 'kuma.x': kuma operation 'monitor_resume' is not in the allowlist ['monitor_list', 'monitor_add_http', 'monitor_pause'] of toolkit 'kuma'",
+   "tier1_violation": true
+  },
+  {
+   "name": "kuma_write_as_read",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "read",
+    "enabled": true,
+    "parameters": {
+     "monitor_id": {
+      "type": "integer",
+      "required": true,
+      "minimum": 1,
+      "description": "id"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_pause"
+   },
+   "error": "tool 'kuma.x': kuma operation 'monitor_pause' changes monitors -- its category must be 'write', not 'read'",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_add_ok",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "string",
+      "pattern": "^https?://[a-z.]+/$",
+      "required": true,
+      "description": "s"
+     },
+     "interval": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 3600,
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "enum",
+      "values": [
+       "200-299",
+       "401"
+      ],
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": null,
+   "tier1_violation": false,
+   "summary": {
+    "version": 1,
+    "idempotent": false,
+    "required_scopes": [],
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "pattern": "^[a-z]+$",
+       "description": "s"
+      },
+      "url": {
+       "type": "string",
+       "pattern": "^https?://[a-z.]+/$",
+       "description": "s"
+      },
+      "interval": {
+       "type": "integer",
+       "minimum": 30,
+       "maximum": 3600,
+       "description": "s"
+      },
+      "expected_status": {
+       "type": "string",
+       "enum": [
+        "200-299",
+        "401"
+       ],
+       "description": "s"
+      }
+     },
+     "required": [
+      "name",
+      "url"
+     ],
+     "additionalProperties": false
+    },
+    "body_template": null,
+    "run_as": null
+   }
+  },
+  {
+   "name": "kuma_add_missing_url",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": "tool 'kuma.x': kuma operation 'monitor_add_http' needs a required 'url' parameter",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_add_extra",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "string",
+      "pattern": "^https?://[a-z.]+/$",
+      "required": true,
+      "description": "s"
+     },
+     "interval": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 3600,
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "enum",
+      "values": [
+       "200-299",
+       "401"
+      ],
+      "description": "s"
+     },
+     "method": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": "tool 'kuma.x': kuma operation 'monitor_add_http' does not read ['method'] -- it reads ['expected_status', 'interval', 'name', 'url'].",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_interval_wide",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "string",
+      "pattern": "^https?://[a-z.]+/$",
+      "required": true,
+      "description": "s"
+     },
+     "interval": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 86400,
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "enum",
+      "values": [
+       "200-299",
+       "401"
+      ],
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": "tool 'kuma.x': parameter 'interval' must be an integer with minimum >= 30 and maximum <= 3600",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_interval_low",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "string",
+      "pattern": "^https?://[a-z.]+/$",
+      "required": true,
+      "description": "s"
+     },
+     "interval": {
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 3600,
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "enum",
+      "values": [
+       "200-299",
+       "401"
+      ],
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": "tool 'kuma.x': parameter 'interval' must be an integer with minimum >= 30 and maximum <= 3600",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_interval_float",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "string",
+      "pattern": "^https?://[a-z.]+/$",
+      "required": true,
+      "description": "s"
+     },
+     "interval": {
+      "type": "integer",
+      "minimum": 30.5,
+      "maximum": 3600.0,
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "enum",
+      "values": [
+       "200-299",
+       "401"
+      ],
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": null,
+   "tier1_violation": false,
+   "summary": {
+    "version": 1,
+    "idempotent": false,
+    "required_scopes": [],
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "pattern": "^[a-z]+$",
+       "description": "s"
+      },
+      "url": {
+       "type": "string",
+       "pattern": "^https?://[a-z.]+/$",
+       "description": "s"
+      },
+      "interval": {
+       "type": "integer",
+       "minimum": 30.5,
+       "maximum": 3600.0,
+       "description": "s"
+      },
+      "expected_status": {
+       "type": "string",
+       "enum": [
+        "200-299",
+        "401"
+       ],
+       "description": "s"
+      }
+     },
+     "required": [
+      "name",
+      "url"
+     ],
+     "additionalProperties": false
+    },
+    "body_template": null,
+    "run_as": null
+   }
+  },
+  {
+   "name": "kuma_interval_unbounded",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "string",
+      "pattern": "^https?://[a-z.]+/$",
+      "required": true,
+      "description": "s"
+     },
+     "interval": {
+      "type": "integer",
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "enum",
+      "values": [
+       "200-299",
+       "401"
+      ],
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": "tool 'kuma.x': parameter 'interval' must be an integer with minimum >= 30 and maximum <= 3600",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_interval_string",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "string",
+      "pattern": "^https?://[a-z.]+/$",
+      "required": true,
+      "description": "s"
+     },
+     "interval": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "enum",
+      "values": [
+       "200-299",
+       "401"
+      ],
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": "tool 'kuma.x': parameter 'interval' must be an integer with minimum >= 30 and maximum <= 3600",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_status_wide",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "string",
+      "pattern": "^https?://[a-z.]+/$",
+      "required": true,
+      "description": "s"
+     },
+     "interval": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 3600,
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "enum",
+      "values": [
+       "200",
+       "500"
+      ],
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": "tool 'kuma.x': parameter 'expected_status' must be an enum over ['200', '200-299', '201', '202', '204', '300-399', '301', '302', '400-499', '401', '403', '404']",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_status_string",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "string",
+      "pattern": "^https?://[a-z.]+/$",
+      "required": true,
+      "description": "s"
+     },
+     "interval": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 3600,
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": "tool 'kuma.x': parameter 'expected_status' must be an enum over ['200', '200-299', '201', '202', '204', '300-399', '301', '302', '400-499', '401', '403', '404']",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_url_enum",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     },
+     "url": {
+      "type": "enum",
+      "values": [
+       "https://x.org/"
+      ],
+      "required": true,
+      "description": "u"
+     },
+     "interval": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 3600,
+      "description": "s"
+     },
+     "expected_status": {
+      "type": "enum",
+      "values": [
+       "200-299",
+       "401"
+      ],
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_add_http"
+   },
+   "error": "tool 'kuma.x': parameter 'url' must be a string with a pattern",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_id_zero",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "monitor_id": {
+      "type": "integer",
+      "required": true,
+      "minimum": 0,
+      "description": "id"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_pause"
+   },
+   "error": "tool 'kuma.x': parameter 'monitor_id' must be an integer with minimum >= 1",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_id_unbounded",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "monitor_id": {
+      "type": "integer",
+      "required": true,
+      "description": "i"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_pause"
+   },
+   "error": "tool 'kuma.x': parameter 'monitor_id' must be an integer with minimum >= 1",
+   "tier1_violation": false
+  },
+  {
+   "name": "kuma_id_string",
+   "spec": {
+    "id": "kuma.x",
+    "toolkit": "kuma",
+    "title": "t",
+    "description": "d",
+    "category": "write",
+    "enabled": true,
+    "parameters": {
+     "monitor_id": {
+      "type": "string",
+      "pattern": "^[a-z]+$",
+      "required": true,
+      "description": "s"
+     }
+    },
+    "required_scopes": [],
+    "timeout_seconds": 5,
+    "max_output_bytes": 1024,
+    "kuma_operation": "monitor_pause"
+   },
+   "error": "tool 'kuma.x': parameter 'monitor_id' must be an integer with minimum >= 1",
+   "tier1_violation": false
   }
  ]
 }

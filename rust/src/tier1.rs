@@ -40,8 +40,8 @@ use crate::runas::parse_run_as;
 
 /// Executor types implemented (sorted, as `sorted(KNOWN_EXECUTORS)` prints).
 pub const KNOWN_EXECUTORS: &[&str] = &[
-    "agent", "artifact", "docker", "file", "google", "http", "local", "microsoft", "opencode",
-    "ssh", "truenas",
+    "agent", "artifact", "docker", "file", "google", "http", "kuma", "local", "microsoft",
+    "opencode", "ssh", "truenas",
 ];
 
 /// FR-8.6: methods an `http` toolkit may allow at all. A toolkit may
@@ -68,6 +68,25 @@ pub const AGENT_OPERATIONS: &[&str] = &["mailbox_status", "read_messages", "send
 /// The `artifact` executor's vocabulary. `transfer` is the only one that
 /// writes, and only into the toolkit's `handover_dir`.
 pub const ARTIFACT_OPERATIONS: &[&str] = &["info", "list", "read", "transfer"];
+
+/// The `kuma` executor's vocabulary (`execute::kuma`): Uptime Kuma
+/// monitors over Socket.IO. Read is `monitor_list`; the other three write.
+/// There is no delete, no edit and nothing for notifications or settings --
+/// not as a denied operation, but as one this executor has no code for.
+pub const KUMA_OPERATIONS: &[&str] = &["monitor_add_http", "monitor_list", "monitor_pause", "monitor_resume"];
+
+/// Bounds of `monitor_add_http`'s `interval`, in seconds. Kuma itself
+/// accepts 20 s to 24 days; this is the narrower range a gatekeeper-made
+/// monitor may have. Here so the load-time check in `catalog` and the
+/// executor's call-time check read one value.
+pub const KUMA_INTERVAL_MIN: i64 = 30;
+pub const KUMA_INTERVAL_MAX: i64 = 3600;
+
+/// The accepted-status ranges a `monitor_add_http` may name -- Kuma's own
+/// notation (a code or a `low-high` range). A tool's `expected_status`
+/// enum must be a subset. Sorted, as `sorted(KUMA_STATUS_CODES)` prints.
+pub const KUMA_STATUS_CODES: &[&str] =
+    &["200", "200-299", "201", "202", "204", "300-399", "301", "302", "400-499", "401", "403", "404"];
 
 /// Artifacts this image no longer builds (RELEASE.md 0.52.0).
 pub const REMOVED_ARTIFACTS: &[&str] = &["hermes-adapter-contract", "hermes-recovery-adapter"];
@@ -263,6 +282,11 @@ pub struct Toolkit {
     pub allowed_artifact_operations: Vec<String>,
     pub allowed_artifacts: Vec<String>,
     pub handover_dir: Option<String>,
+    // -- `kuma` executor only --
+    /// Subset of [`KUMA_OPERATIONS`]. The Kuma instance is `base_url`,
+    /// reached under `allowed_hosts`/`allowed_cidrs` like an `http`
+    /// toolkit; the login is the toolkit's `credential` (kind `basic`).
+    pub allowed_kuma_operations: Vec<String>,
     /// Ceiling on one message's subject + body, in bytes.
     pub max_message_bytes: i64,
     /// Ceiling on how many messages one recipient's mailbox holds.
@@ -311,6 +335,7 @@ impl Default for Toolkit {
             allowed_artifact_operations: Vec::new(),
             allowed_artifacts: Vec::new(),
             handover_dir: None,
+            allowed_kuma_operations: Vec::new(),
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             max_mailbox_messages: DEFAULT_MAILBOX_LIMIT,
         }
@@ -434,6 +459,12 @@ impl Toolkit {
     /// The whitelist acts on artifact operation names.
     pub fn allows_artifact_operation(&self, operation: &str) -> bool {
         self.allowed_artifact_operations.iter().any(|o| o == operation)
+    }
+
+    /// `monitor_add_http` simply never appears on a toolkit meant only to
+    /// read monitors -- same reasoning as `allows_opencode_operation`.
+    pub fn allows_kuma_operation(&self, operation: &str) -> bool {
+        self.allowed_kuma_operations.iter().any(|o| o == operation)
     }
 }
 
@@ -877,6 +908,9 @@ fn toolkit_destinations(
             "ssh" => Some(
                 "'ssh' toolkits cannot declare destinations yet -- one toolkit, one host (use a separate toolkit per host)",
             ),
+            "kuma" => Some(
+                "'kuma' toolkits cannot declare destinations -- one toolkit, one Uptime Kuma (use a separate toolkit per instance)",
+            ),
             "artifact" => Some(
                 "'artifact' toolkits cannot declare destinations -- artifacts come from this image, not from a target to connect to",
             ),
@@ -916,7 +950,7 @@ fn check_cidrs(cidrs: &[String], where_: &str) -> ConfigResult<()> {
 // -- Network targets by hostname (1.10.0) ---------------------------------------
 
 /// The executors that connect to a URL and so know what a host is.
-pub const NETWORK_EXECUTORS: &[&str] = &["http", "opencode"];
+pub const NETWORK_EXECUTORS: &[&str] = &["http", "kuma", "opencode"];
 
 /// Lower-case, without a trailing root dot -- the one spelling both the
 /// allowlist and the URL's hostname are compared in.
@@ -1147,7 +1181,7 @@ fn parse_allowed_hosts(value: Option<&Value>, where_: &str) -> ConfigResult<Vec<
     Ok(out)
 }
 
-/// `allowed_cidrs` and `allowed_hosts` of an http/opencode toolkit
+/// `allowed_cidrs` and `allowed_hosts` of an http/opencode/kuma toolkit
 /// (`_parse_network_allowlist`). At least one must be non-empty: a toolkit
 /// with neither would have no target restriction at all. Either may stand
 /// alone -- `allowed_cidrs` alone is every toolkit written before 1.10.0,
@@ -1407,7 +1441,7 @@ fn parse_toolkit(
     // above rather than silently ignored.
     if spec.get("allowed_hosts").is_some_and(|v| !v.is_null()) && !contains(NETWORK_EXECUTORS, executor) {
         return Err(ConfigError::new(format!(
-            "{where_}: 'allowed_hosts' is only supported on an 'http' or 'opencode' toolkit, not on {}",
+            "{where_}: 'allowed_hosts' is only supported on an 'http', 'opencode' or 'kuma' toolkit, not on {}",
             repr_str(executor)
         )));
     }
@@ -1565,6 +1599,42 @@ fn parse_toolkit(
                     "{where_}: allowed_opencode_operations {} are not opencode operations (known: {})",
                     repr_list(&unknown),
                     repr_list(OPENCODE_OPERATIONS)
+                )));
+            }
+        }
+        "kuma" => {
+            // `http`'s two target fields, for `http`'s reasons: `base_url`
+            // is the only place the Kuma instance is named (FR-8.5), and
+            // its resolved address is checked against `allowed_hosts`/
+            // `allowed_cidrs` before every connect (FR-8.9). The Socket.IO
+            // path under it is fixed in `execute::kuma`.
+            let base_url = validate_http_base_url(&req_str("base_url")?, where_, "base_url")?;
+            if base_url.contains("{credential}") {
+                return Err(ConfigError::new(format!(
+                    "{where_}: base_url must not contain a '{{credential}}' \
+                     placeholder -- the kuma executor logs in with its \
+                     credential, and would send this literally."
+                )));
+            }
+            parse_network_targets(&mut tk, spec, where_, &base_url, destinations)?;
+            tk.base_url = Some(base_url);
+            if tk.credential.as_deref().unwrap_or("").is_empty() {
+                return Err(ConfigError::new(format!(
+                    "{where_}: a kuma toolkit needs 'credential' -- the name of a \
+                     'basic' credential holding the Kuma login as username:password"
+                )));
+            }
+            tk.allowed_kuma_operations = req_list("allowed_kuma_operations")?;
+            let unknown = sorted_difference(&tk.allowed_kuma_operations, KUMA_OPERATIONS);
+            if tk.allowed_kuma_operations.is_empty() || !unknown.is_empty() {
+                let tail = if unknown.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (unknown: {})", repr_list(&unknown))
+                };
+                return Err(ConfigError::new(format!(
+                    "{where_}: allowed_kuma_operations must be a non-empty subset of {}{tail}",
+                    repr_list(KUMA_OPERATIONS)
                 )));
             }
         }

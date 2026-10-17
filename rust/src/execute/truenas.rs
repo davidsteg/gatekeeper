@@ -45,7 +45,7 @@ const MAX_MESSAGE_SIZE: usize = 1 << 20;
 /// websockets' default `close_timeout`.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 
-type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+pub(super) type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Wraps a JSON-RPC call in TrueNAS middleware framing.
 pub fn method_frame(method: &str, params: Vec<Value>, request_id: &str) -> Value {
@@ -54,7 +54,7 @@ pub fn method_frame(method: &str, params: Vec<Value>, request_id: &str) -> Value
 
 /// A `websockets.exceptions.WebSocketException`, as its `str()`.
 #[derive(Debug)]
-struct WsError(String);
+pub(super) struct WsError(pub(super) String);
 
 /// The explanation websockets prints next to a close code.
 fn close_code_explanation(code: u16) -> &'static str {
@@ -95,7 +95,7 @@ fn close_str(frame: Option<&CloseFrame>) -> String {
 }
 
 /// Map a tungstenite failure to websockets' `ConnectionClosed` text.
-fn ws_error(err: tungstenite::Error) -> WsError {
+pub(super) fn ws_error(err: tungstenite::Error) -> WsError {
     match err {
         tungstenite::Error::Capacity(e) => WsError(format!(
             "sent 1009 (message too big) {e}; no close frame received"
@@ -106,7 +106,7 @@ fn ws_error(err: tungstenite::Error) -> WsError {
 
 /// The next data message (text or binary); a close frame from the server
 /// ends the connection the way websockets reports it.
-async fn recv(ws: &mut Ws) -> Result<String, WsError> {
+pub(super) async fn recv(ws: &mut Ws) -> Result<String, WsError> {
     loop {
         match ws.next().await {
             None => return Err(WsError("no close frame received or sent".into())),
@@ -238,7 +238,7 @@ async fn connect(ws_url: &str) -> Result<Ws, String> {
 }
 
 /// Best-effort close, bounded like websockets' close handshake.
-async fn close(mut ws: Ws) {
+pub(super) async fn close(mut ws: Ws) {
     let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
         let _ = ws.close(None).await;
         while let Some(Ok(_)) = ws.next().await {}

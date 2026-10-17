@@ -57,7 +57,7 @@ without touching a config file.
 | `ratelimit.py` | `ratelimit` |
 | `notifications.py` + MCP SDK transport | `mcp` |
 | `service.py` | `service` |
-| `execute*.py` | `execute::{local, http, truenas, ssh, file, google, microsoft, opencode, agent, artifact}` |
+| `execute*.py` | `execute::{local, http, truenas, ssh, file, google, microsoft, opencode, agent, artifact, kuma}` |
 | `_unpriv.py`, `_selfdrop.py` | `privdrop` |
 | `server.py`, `admin_server.py`, `admin_service.py` | `server`, `admin_server`, `admin_service` |
 | `api/*`, `oauth.py`, `ui.py` | `api::*`, `oauth`, `ui` |

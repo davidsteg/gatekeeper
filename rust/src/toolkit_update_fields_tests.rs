@@ -222,7 +222,7 @@ fn network_field_on_another_executor_says_it_does_not_connect() {
     assert_eq!(
         err.message,
         "Cannot change 'allowed_cidrs' on toolkit 'box': its executor 'local' does not use it. Only an http or \
-         opencode toolkit has allowed_cidrs. (It does not connect to a URL.)"
+         kuma or opencode toolkit has allowed_cidrs. (It does not connect to a URL.)"
     );
 }
 

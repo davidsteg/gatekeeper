@@ -29,7 +29,8 @@ pub enum DenialReason {
     Timeout,
     ExecutorUnavailable,
     SsrfBlocked,
-    /// The three ways an http/opencode target can be refused (1.10.0) --
+    /// The three ways an http/opencode target can be refused (1.10.0; kuma
+    /// since 1.12.0) --
     /// one reason each, so the audit log says which rule stopped a call.
     HostNotAllowed,
     AddressNotPublic,

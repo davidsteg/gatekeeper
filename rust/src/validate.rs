@@ -594,6 +594,22 @@ pub fn build_opencode_call(tool: &ToolDef, values: &Values, toolkit: &Toolkit) -
     Ok(operation)
 }
 
+/// The `kuma` operation, re-checked against Tier 1, with the executor's
+/// own value floor (`execute::kuma::check_values`) applied here, inside
+/// `Service::call`'s audited block, so a bad URL is a denial and not a
+/// connection to Kuma that then fails.
+pub fn build_kuma_call(tool: &ToolDef, values: &Values, toolkit: &Toolkit) -> Result<String, Denied> {
+    let operation = tool.kuma_operation.clone().unwrap_or_default();
+    if !toolkit.allows_kuma_operation(&operation) {
+        return Err(denied(
+            DenialReason::Tier1Violation,
+            format!("Kuma operation {} is not allowed for this toolkit.", repr_str(&operation)),
+        ));
+    }
+    crate::execute::kuma::check_values(&operation, values)?;
+    Ok(operation)
+}
+
 /// The `artifact` operation, re-checked against Tier 1, and the shape of
 /// the only two values a call can supply.
 pub fn build_artifact_call(tool: &ToolDef, values: &Values, toolkit: &Toolkit) -> Result<String, Denied> {

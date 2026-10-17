@@ -208,7 +208,7 @@ fn getaddrinfo_blocking(host: &str, port: u16) -> Result<Vec<Resolved>, String> 
 
 /// Python's repr of a socket address tuple: `('127.0.0.1', 1)` /
 /// `('::1', 1, 0, 0)`.
-fn sockaddr_repr(r: &Resolved) -> String {
+pub(crate) fn sockaddr_repr(r: &Resolved) -> String {
     match r.addr {
         SocketAddr::V4(a) => format!("({}, {})", repr_str(&r.raw), a.port()),
         SocketAddr::V6(a) => format!(
@@ -315,7 +315,7 @@ pub async fn probe(toolkit: &Toolkit) -> bool {
 
 /// `parsed.port or (443 if scheme == "https" else 80)` -- a literal `:0`
 /// is falsy and gets the default too.
-fn default_port(port: Option<u16>, scheme: &str) -> u16 {
+pub(crate) fn default_port(port: Option<u16>, scheme: &str) -> u16 {
     match port {
         Some(p) if p != 0 => p,
         _ => {
