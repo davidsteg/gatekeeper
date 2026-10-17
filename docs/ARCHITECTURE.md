@@ -18,9 +18,11 @@ and Tier 2 change-approval flow diagrams.
 A toolkit **proposal** (`toolkit_proposals.yaml`) is the one deliberate,
 narrow exception: an `admin.toolkit_propose` call from `/admin/mcp` can
 draft a brand-new Tier 1 toolkit, `admin.toolkit_update` can propose a
-narrowly-scoped change (`executor`/`binaries`/`denied_args`/`run_as`, and
-an `http`/`opencode` toolkit's `allowed_hosts`/`allowed_cidrs` since 1.10.0;
-never `path_roots`/`protected_resources`/limits) to an *existing* one,
+narrowly-scoped change (`executor`/`binaries`/`denied_args`/`run_as`, an
+`http`/`opencode` toolkit's `allowed_hosts`/`allowed_cidrs` since 1.10.0, an
+`http` toolkit's `allowed_methods`/`allowed_path_prefixes` and the
+`max_timeout_seconds`/`max_output_bytes` ceilings since 1.11.0; never
+`path_roots`/`protected_resources`) to an *existing* one,
 `admin.toolkit_delete` can propose removing an *existing* one (refused at
 deploy time if any non-deleted tool still references it), and
 `admin.credential_bind` can propose pointing an *existing* toolkit at an
@@ -131,6 +133,14 @@ override changes the target, not the target restrictions (an override host
 outside `allowed_hosts` disables the tool at load). Executor-side refusals
 are audited as the call's `denial_reason`/`detail` (names and addresses,
 never a secret); the outcome stays `failed`.
+
+A *proposed* `allowed_cidrs` (toolkit create or update, 1.11.0) is held to
+two more rules, at submit and again at deploy: an entry wider than /16
+(IPv4) or /48 (IPv6) needs `confirm_broad_cidrs: true` on the proposal (the
+review card flags it), and a private or otherwise non-public range is
+refused when the toolkit's `base_url` or a destination's resolves to public
+addresses. `load_tier1` does not apply them, so a hand-written
+`toolkits.yaml` loads as before.
 
 `opencode` toolkit boundaries: `base_url`, `allowed_cidrs`/`allowed_hosts`, `credential`
 (all three exactly as for `http`, including the pre-connect resolved-IP
@@ -577,7 +587,8 @@ src/gatekeeper/
   toolkit_proposals.py  ToolkitProposalStore (toolkit_proposals.yaml) --
                        admin.toolkit_propose (new toolkit, kind="create"),
                        admin.toolkit_update (executor/binaries/
-                       denied_args/run_as/allowed_hosts/allowed_cidrs
+                       denied_args/run_as/allowed_hosts/allowed_cidrs/
+                       allowed_methods/allowed_path_prefixes/limits
                        change to an existing one,
                        kind="update"), admin.toolkit_delete (remove an
                        existing one, kind="delete") and

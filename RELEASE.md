@@ -17,6 +17,22 @@ The image now runs gatekeeper's Rust implementation (`rust/`) instead of the Pyt
 
 - The Python package in `src/gatekeeper/` stays in the repository for now, as the reference the Rust tests compare against. Removing it is the next step.
 
+## 1.11.0
+
+An agent can propose an `http` toolkit's methods, path prefixes and limits through `admin.toolkit_update`, and a proposed IP range is checked for width and for private networks.
+
+### Added
+
+- **`admin.toolkit_update` takes `allowed_methods`, `allowed_path_prefixes`, `max_timeout_seconds` and `max_output_bytes`.** Like every toolkit update, the proposal waits on the Toolkit tab of `/app/requests` until a human approves it; it is then validated, written to `toolkits.yaml` and live at once, with no restart. Methods and path prefixes apply to `http` toolkits only, and limits must be positive integers. `path_roots` and `protected_resources` still need a file edit.
+- **The review card shows before and after for every changed field**, not only for network targets.
+- `GET /api/v1/toolkits` and `admin.toolkit_list` report `allowed_methods` and `allowed_path_prefixes`.
+
+### Changed
+
+- **A proposed `allowed_cidrs` wider than /16 (IPv4) or /48 (IPv6) is refused** unless the proposal sets `confirm_broad_cidrs: true` (on `admin.toolkit_update` and `admin.toolkit_propose`). A confirmed one is flagged in red on the review card.
+- **A proposed private range is refused for a public target.** When the toolkit's `base_url` (or a destination's) resolves to public addresses, an `allowed_cidrs` entry in a private, loopback, link-local or otherwise non-public range is refused, at submit and again at deploy. For a public service, list its public range or use `allowed_hosts`.
+- Both rules apply to proposals only. A `toolkits.yaml` written by hand loads exactly as before.
+
 ## 1.10.0
 
 An `http` or `opencode` toolkit can name the hosts it may reach instead of fixed IP ranges, and change them through a proposal without editing `toolkits.yaml` by hand.

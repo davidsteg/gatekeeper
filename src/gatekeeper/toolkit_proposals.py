@@ -77,11 +77,14 @@ ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
 from __future__ import annotations
 
 import dataclasses
+import ipaddress
 import os
 import secrets
+import socket
 import tempfile
 import threading
 from typing import Any
+from urllib.parse import urlsplit
 
 from ._atomic import atomic_write as _atomic_write
 from ._atomic import dump as _dump
@@ -94,7 +97,12 @@ from .audit import AuditLog
 from .catalog import now_iso
 from .errors import ConfigError
 from .service import Service
-from .tier1 import NETWORK_EXECUTORS, _parse_network_allowlist, load_tier1
+from .tier1 import (
+    NETWORK_EXECUTORS,
+    _parse_network_allowlist,
+    is_public_address,
+    load_tier1,
+)
 
 #: What a toolkit proposal may be in. No 'stale' state: unlike `pending.py`,
 #: `deploy` re-validates the *entire* merged configuration fresh at deploy
@@ -152,13 +160,46 @@ BIND_FIELD = "credential"
 #: a hostname toolkit never reaches a non-public address, whatever its
 #: `allowed_cidrs` say. Only on toolkits whose executor reads them
 #: (`NETWORK_FIELDS`, checked at deploy).
+#:
+#: 1.11.0 adds an http toolkit's `allowed_methods`/`allowed_path_prefixes`
+#: and the two ceilings (`max_timeout_seconds`, `max_output_bytes`), on the
+#: same terms: always a human-approved card, the card shows the current
+#: value next to the proposed one, and `load_tier1` re-validates the whole
+#: merged file before anything is written. `path_roots` and
+#: `protected_resources` remain redeploy-only.
 UPDATE_WRITABLE_FIELDS = frozenset(
-    {"executor", "binaries", "denied_args", "run_as", "allowed_hosts", "allowed_cidrs"}
+    {
+        "executor", "binaries", "denied_args", "run_as",
+        "allowed_hosts", "allowed_cidrs",
+        "allowed_methods", "allowed_path_prefixes",
+        "max_timeout_seconds", "max_output_bytes",
+    }
 )
 
 #: The update fields that change a toolkit's network reach -- valid only on
 #: an executor that connects to a URL (`tier1.NETWORK_EXECUTORS`).
 NETWORK_FIELDS = frozenset({"allowed_hosts", "allowed_cidrs"})
+
+#: Executor-specific update fields and the executors that read them. A
+#: field outside its executors would be silently ignored by `load_tier1`
+#: (it parses only what an executor uses), so `deploy()` refuses it rather
+#: than writing a restriction that does not exist.
+FIELD_EXECUTORS: dict[str, frozenset[str]] = {
+    "allowed_hosts": NETWORK_EXECUTORS,
+    "allowed_cidrs": NETWORK_EXECUTORS,
+    "allowed_methods": frozenset({"http"}),
+    "allowed_path_prefixes": frozenset({"http"}),
+}
+
+#: The two ceilings. Positive integers; `load_tier1` enforces the same.
+LIMIT_FIELDS = frozenset({"max_timeout_seconds", "max_output_bytes"})
+
+#: A proposed CIDR wider than this (an IPv4 network shorter than /16, an
+#: IPv6 one shorter than /48) needs `confirm_broad_cidrs: true` on the
+#: proposal. A /8 almost never describes "the one service this toolkit
+#: talks to" (FR-8.15); the flag makes the agent say it means it, and the
+#: review card shows it in red.
+BROAD_PREFIX = {4: 16, 6: 48}
 
 #: Audit `action` names, keyed by `kind` -- one for `propose()`, one for
 #: `deploy()`.
@@ -196,8 +237,9 @@ def name_collision_message(name: str) -> str:
         "would silently overwrite it. If a second, separate toolkit is "
         "what you want, propose it under a different name. If you meant to "
         "change the existing one: executor, binaries, denied_args, run_as, "
-        "allowed_hosts and allowed_cidrs go through admin.toolkit_update; path_roots, "
-        "protected_resources and limits have no proposal path -- edit "
+        "allowed_hosts, allowed_cidrs, allowed_methods, allowed_path_prefixes "
+        "and the two limits go through admin.toolkit_update; path_roots and "
+        "protected_resources have no proposal path -- edit "
         "toolkits.yaml and reload (SIGHUP or restart)."
     )
 
@@ -225,6 +267,83 @@ def _tools_referencing_toolkit(tools_path: str, toolkit_name: str) -> set[str]:
     }
 
 
+def _resolve_addresses(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Every address `host` resolves to right now; empty when it does not
+    resolve. A module function so tests can pin the answer."""
+    try:
+        literal = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        pass
+    else:
+        return [literal]
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return []
+    return [ipaddress.ip_address(str(info[4][0]).split("%", 1)[0]) for info in infos]
+
+
+def _check_network_policy(
+    body: dict[str, Any], *, confirm_broad: bool, where: str, destination_urls: list[str]
+) -> None:
+    """The two rules a proposed `allowed_cidrs` must meet, beyond shape.
+
+    1. No network wider than `BROAD_PREFIX` without `confirm_broad_cidrs`.
+    2. No private, loopback, link-local or otherwise non-public network on
+       a toolkit whose target is external -- a `base_url` (or destination)
+       whose host is, or right now resolves to, a public address. A private
+       range there would let a rebinding answer for a public name reach
+       the LAN; a LAN service is the only reason to allow one, and its
+       name resolves privately. A host that does not resolve at all is not
+       judged here: it cannot be connected to either.
+
+    Applied to proposals only (create and update), at submit and again at
+    deploy. `load_tier1` does not run it, so toolkits written by hand --
+    and every one deployed before 1.11.0 -- load unchanged.
+    """
+    cidrs = body.get("allowed_cidrs") or []
+    if not isinstance(cidrs, list):
+        return  # load_tier1 reports the shape
+    networks = []
+    for raw in cidrs:
+        try:
+            networks.append(ipaddress.ip_network(str(raw), strict=False))
+        except ValueError:
+            return  # load_tier1 reports the bad entry
+    broad = [str(n) for n in networks if n.prefixlen < BROAD_PREFIX[n.version]]
+    if broad and not confirm_broad:
+        raise ToolkitProposalWriteRefused(
+            f"{where}: allowed_cidrs {broad} are wider than /16 (IPv4) or "
+            "/48 (IPv6). Narrow them to the service's own range, or propose "
+            "again with confirm_broad_cidrs: true if this width is intended "
+            "-- the reviewer then sees it flagged."
+        )
+    private = [str(n) for n in networks if not _network_is_public(n)]
+    if not private:
+        return
+    urls = [u for u in [body.get("base_url"), *destination_urls] if isinstance(u, str)]
+    for url in urls:
+        host = urlsplit(url).hostname or ""
+        if not host:
+            continue
+        addresses = _resolve_addresses(host)
+        if addresses and all(is_public_address(a) for a in addresses):
+            raise ToolkitProposalWriteRefused(
+                f"{where}: allowed_cidrs {private} are private or otherwise "
+                f"non-public networks, but this toolkit's target {host!r} is "
+                "a public address. A private range is only for a LAN "
+                "service; for a public one, list its public range or use "
+                "allowed_hosts."
+            )
+
+
+def _network_is_public(network: ipaddress.IPv4Network | ipaddress.IPv6Network) -> bool:
+    """A network counts as public when both its ends are public addresses."""
+    return is_public_address(network.network_address) and is_public_address(
+        network.broadcast_address
+    )
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class ToolkitProposal:
     id: str
@@ -246,6 +365,10 @@ class ToolkitProposal:
     decided_by: str | None = None
     decided_at: str | None = None
     reason: str | None = None
+    #: The proposer's explicit "yes, this wide" for a CIDR broader than
+    #: `BROAD_PREFIX` (see `_check_network_policy`). Not part of `spec`:
+    #: it is said about the proposal, never written to toolkits.yaml.
+    confirm_broad_cidrs: bool = False
 
     def to_spec(self) -> dict[str, Any]:
         return {
@@ -259,6 +382,7 @@ class ToolkitProposal:
             "decided_by": self.decided_by,
             "decided_at": self.decided_at,
             "reason": self.reason,
+            "confirm_broad_cidrs": self.confirm_broad_cidrs,
         }
 
 
@@ -274,6 +398,7 @@ def _from_spec(spec: dict[str, Any]) -> ToolkitProposal:
         decided_by=spec.get("decided_by"),
         decided_at=spec.get("decided_at"),
         reason=spec.get("reason"),
+        confirm_broad_cidrs=bool(spec.get("confirm_broad_cidrs", False)),
     )
 
 
@@ -326,7 +451,8 @@ class ToolkitProposalStore:
     # -- Writes ----------------------------------------------------------------
 
     def propose(
-        self, *, name: str, spec: dict[str, Any], actor: str, kind: str = "create"
+        self, *, name: str, spec: dict[str, Any], actor: str, kind: str = "create",
+        confirm_broad_cidrs: bool = False,
     ) -> ToolkitProposal:
         if not name or not isinstance(name, str):
             raise ToolkitProposalWriteRefused(
@@ -344,10 +470,17 @@ class ToolkitProposalStore:
                 raise ToolkitProposalWriteRefused(
                     f"Cannot propose changing {sorted(illegal)} -- only "
                     f"{sorted(UPDATE_WRITABLE_FIELDS)} are writable via an "
-                    "update proposal. path_roots, protected_resources, and "
-                    "limits have no proposal path -- edit toolkits.yaml and "
-                    "reload (SIGHUP or restart)."
+                    "update proposal. path_roots and protected_resources "
+                    "have no proposal path -- edit toolkits.yaml and reload "
+                    "(SIGHUP or restart)."
                 )
+            for field in LIMIT_FIELDS & set(spec):
+                value = spec[field]
+                if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                    raise ToolkitProposalWriteRefused(
+                        f"Cannot propose {field}={value!r}: it must be a "
+                        "positive integer."
+                    )
         if "run_as" in spec and spec["run_as"] is not None:
             # Shape only, and only for immediate feedback -- `deploy()` is
             # the authoritative gate (it re-validates the whole merged file
@@ -378,6 +511,14 @@ class ToolkitProposalStore:
                 raise ToolkitProposalWriteRefused(
                     f"Cannot propose this {field!r}: {exc}"
                 ) from None
+        if kind in ("create", "update") and "allowed_cidrs" in spec:
+            body = dict(spec)
+            if kind == "update":
+                body = {**(self._live_toolkit_body(name) or {}), **spec}
+            _check_network_policy(
+                body, confirm_broad=confirm_broad_cidrs, where=f"toolkit {name!r}",
+                destination_urls=self._live_destination_urls(body),
+            )
         if kind == "delete" and spec:
             raise ToolkitProposalWriteRefused(
                 "A delete proposal takes no 'spec' -- there is nothing to "
@@ -433,6 +574,7 @@ class ToolkitProposalStore:
                 kind=kind,
                 status="pending",
                 created_at=now_iso(),
+                confirm_broad_cidrs=bool(confirm_broad_cidrs),
             )
             entries.append(item.to_spec())
             self._write(entries)
@@ -443,9 +585,35 @@ class ToolkitProposalStore:
                     "action": _PROPOSE_ACTION_NAMES[kind],
                     "target": name,
                     "spec": spec,
+                    **({"confirm_broad_cidrs": True} if confirm_broad_cidrs else {}),
                 }
             )
             return item
+
+    def _live_raw(self) -> dict[str, Any]:
+        if not os.path.exists(self.toolkits_path):
+            return {}
+        with open(self.toolkits_path, encoding="utf-8") as handle:
+            raw = _yaml_load(handle.read()) or {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _live_toolkit_body(self, name: str) -> dict[str, Any] | None:
+        section = self._live_raw().get("toolkits")
+        body = section.get(name) if isinstance(section, dict) else None
+        return body if isinstance(body, dict) else None
+
+    def _live_destination_urls(self, body: dict[str, Any], raw: dict[str, Any] | None = None) -> list[str]:
+        """The base_urls of the destinations `body` names, from toolkits.yaml."""
+        names = body.get("destinations") or []
+        section = (raw if raw is not None else self._live_raw()).get("destinations")
+        if not isinstance(names, list) or not isinstance(section, dict):
+            return []
+        urls = []
+        for dest in names:
+            spec = section.get(dest)
+            if isinstance(spec, dict) and isinstance(spec.get("base_url"), str):
+                urls.append(spec["base_url"])
+        return urls
 
     def _live_toolkit_names(self) -> set[str]:
         """Toolkit names in toolkits.yaml as `deploy()` will see them -- the
@@ -587,12 +755,22 @@ class ToolkitProposalStore:
                     )
                 merged_body = {**existing, **item.spec}
                 network = sorted(NETWORK_FIELDS & set(item.spec))
-                if network and merged_body.get("executor") not in NETWORK_EXECUTORS:
-                    raise ToolkitProposalWriteRefused(
-                        f"Cannot change {network} on toolkit {item.name!r}: "
-                        f"its executor {merged_body.get('executor')!r} does not "
-                        "connect to a URL. Only an http or opencode toolkit "
-                        "has allowed_hosts/allowed_cidrs."
+                executor = merged_body.get("executor")
+                for field in sorted(set(FIELD_EXECUTORS) & set(item.spec)):
+                    if executor not in FIELD_EXECUTORS[field]:
+                        readers = " or ".join(sorted(FIELD_EXECUTORS[field]))
+                        raise ToolkitProposalWriteRefused(
+                            f"Cannot change {field!r} on toolkit {item.name!r}: "
+                            f"its executor {executor!r} does not use it. Only "
+                            f"an {readers} toolkit has {field}."
+                            + (" (It does not connect to a URL.)"
+                               if field in NETWORK_FIELDS else "")
+                        )
+                if "allowed_cidrs" in item.spec:
+                    _check_network_policy(
+                        merged_body, confirm_broad=item.confirm_broad_cidrs,
+                        where=f"toolkit {item.name!r}",
+                        destination_urls=self._live_destination_urls(merged_body, raw),
                     )
                 # A null network field removes the key, so the remaining
                 # one alone decides -- load_tier1 then refuses the toolkit
@@ -645,6 +823,12 @@ class ToolkitProposalStore:
                     # redeploy added the name while the proposal waited.
                     raise ToolkitProposalWriteRefused(
                         f"{name_collision_message(item.name)} Reject this proposal."
+                    )
+                if "allowed_cidrs" in item.spec:
+                    _check_network_policy(
+                        item.spec, confirm_broad=item.confirm_broad_cidrs,
+                        where=f"toolkit {item.name!r}",
+                        destination_urls=self._live_destination_urls(item.spec, raw),
                     )
                 merged_toolkits[item.name] = item.spec
 
@@ -742,7 +926,10 @@ class ToolkitProposalStore:
 
 __all__ = [
     "BIND_FIELD",
+    "BROAD_PREFIX",
+    "FIELD_EXECUTORS",
     "KINDS",
+    "LIMIT_FIELDS",
     "NETWORK_FIELDS",
     "STATUSES",
     "UPDATE_WRITABLE_FIELDS",

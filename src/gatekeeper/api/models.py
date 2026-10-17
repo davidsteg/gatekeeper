@@ -261,6 +261,8 @@ class ToolkitOut(_Model):
     allowed_agent_operations: list[str]
     allowed_hosts: list[str]
     allowed_cidrs: list[str]
+    allowed_methods: list[str]
+    allowed_path_prefixes: list[str]
 
 
 class ToolkitList(_Model):
@@ -334,6 +336,8 @@ class ToolkitProposalOut(_Model):
     decided_by: str | None
     decided_at: str | None
     reason: str | None
+    #: The proposer confirmed an allowed_cidrs entry wider than /16 (/48).
+    confirm_broad_cidrs: bool
     current: ToolkitOut | None
     #: What deploying writes into toolkits.yaml ("" for delete and bind).
     spec_yaml: str
