@@ -487,7 +487,19 @@ _TOOLS: list[types.Tool] = [
         ),
         inputSchema={
             "type": "object",
-            "properties": {"name": {"type": "string"}, "spec": _OPEN_OBJECT},
+            "properties": {
+                "name": {"type": "string"},
+                "spec": _OPEN_OBJECT,
+                "confirm_broad_cidrs": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true only when an allowed_cidrs entry is "
+                        "deliberately wider than /16 (IPv4) or /48 (IPv6); "
+                        "without it such a proposal is refused. The reviewer "
+                        "sees the flag."
+                    ),
+                },
+            },
             "required": ["name", "spec"],
             "additionalProperties": False,
         },
@@ -501,9 +513,13 @@ _TOOLS: list[types.Tool] = [
             "toolkit's operations run as), and -- on an http, opencode or "
             "kuma toolkit -- allowed_hosts (exact hostnames such as "
             "'api.github.com'; no wildcards, no IP addresses) and "
-            "allowed_cidrs. Only these fields can be proposed — path_roots, "
-            "protected_resources, and limits remain deploy-time only "
-            "(FR-4.11) and are rejected. A hostname toolkit never reaches a "
+            "allowed_cidrs, plus an http toolkit's allowed_methods and "
+            "allowed_path_prefixes, and max_timeout_seconds/max_output_bytes. "
+            "Only these fields can be proposed — path_roots and "
+            "protected_resources remain deploy-time only (FR-4.11) and are "
+            "rejected. A CIDR wider than /16 (IPv4) or /48 (IPv6) needs "
+            "confirm_broad_cidrs: true, and a private range is refused on a "
+            "toolkit whose target is a public address. A hostname toolkit never reaches a "
             "private, loopback, link-local or multicast address, whatever "
             "its allowed_cidrs say. Like "
             "admin.toolkit_propose, this changes Tier 1 -- what is possible "
@@ -573,11 +589,36 @@ _TOOLS: list[types.Tool] = [
                                 "http/opencode/kuma toolkits only: IP networks the "
                                 "resolved address must lie in. With "
                                 "allowed_hosts set it only narrows further. "
-                                "null removes it."
+                                "null removes it. Private ranges are refused "
+                                "when the target is a public address."
                             ),
                         },
+                        "allowed_methods": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "http toolkits only: HTTP methods its tools may use.",
+                        },
+                        "allowed_path_prefixes": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "http toolkits only: path prefixes (each "
+                                "starting with '/') its tools' paths must lie under."
+                            ),
+                        },
+                        "max_timeout_seconds": {"type": "integer", "minimum": 1},
+                        "max_output_bytes": {"type": "integer", "minimum": 1},
                     },
                     "additionalProperties": False,
+                },
+                "confirm_broad_cidrs": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true only when an allowed_cidrs entry is "
+                        "deliberately wider than /16 (IPv4) or /48 (IPv6); "
+                        "without it such a proposal is refused. The reviewer "
+                        "sees the flag."
+                    ),
                 },
             },
             "required": ["name", "updates"],
