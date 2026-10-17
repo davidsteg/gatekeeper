@@ -20,7 +20,7 @@ ever be reachable through `pending.yaml`'s Tier-2-shaped review path:
   checked when it is proposed and again at deploy.
 - ``"update"`` (`admin.toolkit_update`) -- narrowly-scoped edits to an
   *existing* toolkit's ``executor``/``binaries``/``denied_args``/``run_as``
-  and, since 1.10.0, an http/opencode toolkit's ``allowed_hosts``/
+  and, since 1.10.0, an http/opencode (1.12.0: also kuma) toolkit's ``allowed_hosts``/
   ``allowed_cidrs`` only (``UPDATE_WRITABLE_FIELDS``); ``spec`` holds just the changed fields,
   merged into the toolkit's existing body at deploy time. Every other Tier 1
   field (``path_roots``, ``protected_resources``, limits) stays reachable

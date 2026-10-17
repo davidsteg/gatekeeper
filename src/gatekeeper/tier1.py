@@ -37,6 +37,7 @@ KNOWN_EXECUTORS = frozenset(
         "agent",
         "microsoft",
         "artifact",
+        "kuma",
     }
 )
 
@@ -92,6 +93,31 @@ AGENT_OPERATIONS = frozenset({"send_message", "read_messages", "mailbox_status"}
 #: The `artifact` executor's vocabulary (execute_artifact.py). `transfer`
 #: is the only one that writes, and only into the toolkit's `handover_dir`.
 ARTIFACT_OPERATIONS = frozenset({"list", "info", "read", "transfer"})
+
+#: The `kuma` executor's vocabulary (execute_kuma.py): Uptime Kuma monitors
+#: over Socket.IO. Read is `monitor_list`; the other three write. There is
+#: no delete, no edit and nothing for notifications or settings -- not as a
+#: denied operation, but as one this executor has no code for.
+KUMA_OPERATIONS = frozenset(
+    {"monitor_list", "monitor_add_http", "monitor_pause", "monitor_resume"}
+)
+
+#: Bounds of `monitor_add_http`'s `interval`, in seconds. Kuma itself
+#: accepts 20 s to 24 days; this is the narrower range a gatekeeper-made
+#: monitor may have. Here rather than in execute_kuma.py so the load-time
+#: check in catalog.py and the executor's call-time check read one value.
+KUMA_INTERVAL_MIN = 30
+KUMA_INTERVAL_MAX = 3600
+
+#: The accepted-status ranges a `monitor_add_http` may name -- Kuma's own
+#: notation (a code or a `low-high` range). A tool's `expected_status`
+#: enum must be a subset.
+KUMA_STATUS_CODES = frozenset(
+    {
+        "200-299", "300-399", "400-499",
+        "200", "201", "202", "204", "301", "302", "401", "403", "404",
+    }
+)
 
 #: The recovery supervisor and its Hermes adapter were removed (RELEASE.md
 #: 0.52.0). Hermes orchestrates its own tasks; Gatekeeper never continues a
@@ -426,6 +452,11 @@ class Toolkit:
     allowed_artifact_operations: tuple[str, ...] = ()
     allowed_artifacts: tuple[str, ...] = ()
     handover_dir: str | None = None
+    #: `kuma` executor: the subset of `KUMA_OPERATIONS` this toolkit may
+    #: perform. The Kuma instance is `base_url`, reached under
+    #: `allowed_hosts`/`allowed_cidrs` like an `http` toolkit; the login is
+    #: the toolkit's `credential` (kind `basic`).
+    allowed_kuma_operations: tuple[str, ...] = ()
     #: Ceiling on one message's subject + body, in bytes. A mailbox is for
     #: coordination, not for shipping payloads through gatekeeper.
     max_message_bytes: int = DEFAULT_MAX_MESSAGE_BYTES
@@ -610,6 +641,13 @@ class Toolkit:
 
     def allows_artifact_operation(self, operation: str) -> bool:
         return operation in self.allowed_artifact_operations
+
+    # -- `kuma` executor ----------------------------------------------------
+
+    def allows_kuma_operation(self, operation: str) -> bool:
+        """`monitor_add_http` simply never appears on a toolkit meant only
+        to read monitors -- same reasoning as `allows_opencode_operation`."""
+        return operation in self.allowed_kuma_operations
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -848,7 +886,7 @@ def _validate_ws_url(value: str, where: str, field: str = "ws_url") -> str:
 _HOST_LABEL = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
 
 #: The executors that connect to a URL and so know what a host is.
-NETWORK_EXECUTORS = frozenset({"http", "opencode"})
+NETWORK_EXECUTORS = frozenset({"http", "opencode", "kuma"})
 
 
 def normalize_hostname(host: str) -> str:
@@ -935,7 +973,7 @@ def _parse_allowed_hosts(value: Any, where: str) -> tuple[str, ...]:
 def _parse_network_allowlist(
     spec: dict[str, Any], where: str
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """`allowed_cidrs` and `allowed_hosts` of an http/opencode toolkit.
+    """`allowed_cidrs` and `allowed_hosts` of an http/opencode/kuma toolkit.
 
     At least one must be non-empty: a toolkit with neither would have no
     target restriction at all. Either may stand alone -- `allowed_cidrs`
@@ -1061,6 +1099,11 @@ def _toolkit_destinations(
             f"{where}: 'ssh' toolkits cannot declare destinations yet -- "
             "one toolkit, one host (use a separate toolkit per host)"
         )
+    if dest_names and executor == "kuma":
+        raise ConfigError(
+            f"{where}: 'kuma' toolkits cannot declare destinations -- one "
+            "toolkit, one Uptime Kuma (use a separate toolkit per instance)"
+        )
     if dest_names and executor == "artifact":
         raise ConfigError(
             f"{where}: 'artifact' toolkits cannot declare destinations -- artifacts "
@@ -1159,6 +1202,7 @@ def load_tier1(path: str) -> Tier1:
         allowed_artifact_operations: tuple[str, ...] = ()
         allowed_artifacts: tuple[str, ...] = ()
         handover_dir: str | None = None
+        allowed_kuma_operations: tuple[str, ...] = ()
         max_message_bytes = DEFAULT_MAX_MESSAGE_BYTES
         max_mailbox_messages = DEFAULT_MAILBOX_LIMIT
 
@@ -1205,8 +1249,8 @@ def load_tier1(path: str) -> Tier1:
         # `run_as` above rather than silently ignored.
         if spec.get("allowed_hosts") is not None and executor not in NETWORK_EXECUTORS:
             raise ConfigError(
-                f"{where}: 'allowed_hosts' is only supported on an 'http' or "
-                f"'opencode' toolkit, not on {executor!r}"
+                f"{where}: 'allowed_hosts' is only supported on an 'http', "
+                f"'opencode' or 'kuma' toolkit, not on {executor!r}"
             )
 
         dest_names = _toolkit_destinations(spec, executor, where, destinations)
@@ -1370,6 +1414,37 @@ def load_tier1(path: str) -> Tier1:
                     f"{where}: allowed_opencode_operations {unknown_ops} are not "
                     f"opencode operations (known: {sorted(OPENCODE_OPERATIONS)})"
                 )
+        elif executor == "kuma":
+            # `http`'s two target fields, for `http`'s reasons: `base_url`
+            # is the only place the Kuma instance is named (FR-8.5), and
+            # its resolved address is checked against `allowed_hosts`/
+            # `allowed_cidrs` before every connect (FR-8.9). The Socket.IO
+            # path under it is fixed in execute_kuma.py.
+            base_url = str(_require(spec, "base_url", where))
+            base_url = _validate_http_base_url(base_url, where)
+            if "{credential}" in base_url:
+                raise ConfigError(
+                    f"{where}: base_url must not contain a '{{credential}}' "
+                    "placeholder -- the kuma executor logs in with its "
+                    "credential, and would send this literally."
+                )
+            allowed_cidrs, allowed_hosts = _parse_network_allowlist(spec, where)
+            _check_url_host_allowed(base_url, allowed_hosts, where)
+            if not credential:
+                raise ConfigError(
+                    f"{where}: a kuma toolkit needs 'credential' -- the name of a "
+                    "'basic' credential holding the Kuma login as username:password"
+                )
+            allowed_kuma_operations = _str_tuple(
+                _require(spec, "allowed_kuma_operations", where), where
+            )
+            unknown_kuma_ops = sorted(set(allowed_kuma_operations) - KUMA_OPERATIONS)
+            if not allowed_kuma_operations or unknown_kuma_ops:
+                raise ConfigError(
+                    f"{where}: allowed_kuma_operations must be a non-empty subset of "
+                    f"{sorted(KUMA_OPERATIONS)}"
+                    + (f" (unknown: {unknown_kuma_ops})" if unknown_kuma_ops else "")
+                )
         elif executor == "agent":
             # No target field: the `agent` executor reaches nothing outside
             # this container. What Tier 1 fixes is the mailbox file and the
@@ -1477,6 +1552,7 @@ def load_tier1(path: str) -> Tier1:
             allowed_artifact_operations=allowed_artifact_operations,
             allowed_artifacts=allowed_artifacts,
             handover_dir=handover_dir,
+            allowed_kuma_operations=allowed_kuma_operations,
             max_message_bytes=max_message_bytes,
             max_mailbox_messages=max_mailbox_messages,
         )

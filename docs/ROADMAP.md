@@ -49,6 +49,15 @@ item.
   checked against the toolkit's `path_roots`, becomes opencode's
   `x-opencode-directory` header — one toolkit therefore serves every
   project root listed there.
+- `kuma` executor (1.12.0) — Uptime Kuma monitors over Socket.IO
+  (`execute_kuma.py`), the only interface Kuma offers for them. Four
+  operations, whitelisted by name per toolkit: `monitor_list` (projected
+  fields only, no secrets), `monitor_add_http` (type, method and
+  notifications fixed; name, URL, interval 30–3600 s and accepted status
+  from a fixed set), `monitor_pause`/`monitor_resume` (only monitors
+  gatekeeper created, recognised by their description). No delete, edit,
+  notification or settings change exists in the module. Login is a `basic`
+  credential in the store; the target check is `execute_http.py`'s.
 - `agent` executor — a mailbox between gatekeeper identities
   (`execute_agent.py`, `messages.py`). `agent.send_message` addresses
   another identity, `agent.read_messages` collects the caller's own and
@@ -163,6 +172,11 @@ item.
   value, and an operation whose summary came back empty attaches the raw
   (capped) payload instead, so an upstream rename costs a less tidy answer
   and is visible in the response — never a silently empty one.
+- **Kuma's next auth line is not supported yet.** The executor logs in
+  with Kuma's socket `login` event (1.23 and 2.0). Kuma's development
+  branch moves sign-in to an HTTP session cookie; once that ships, the
+  login half of `execute_kuma.py` needs a second path. A Kuma account
+  with 2FA cannot be used at all (there is nobody to type the code).
 - **No opencode session listing.** `check`/`review_changes`/`abort` all
   take a session id an agent got from `ask`/`run`/`fire`; there is no
   "list every session on this server" operation, which would hand one

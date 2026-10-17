@@ -212,6 +212,51 @@ Two things worth deciding deliberately before granting:
   says so and carries the session id. The follow-up is `check`, never a
   retry — a retry would start the same work a second time.
 
+## Wiring Uptime Kuma (`executor: kuma`)
+
+Uptime Kuma has no REST API for monitors; its UI creates and pauses them
+over Socket.IO, and so does the `kuma` executor. It logs in with Kuma's
+socket `login` event, which Uptime Kuma 1.23 and 2.0 both have.
+
+**1. A Kuma account without 2FA.** gatekeeper cannot type a TOTP code, so
+a login with 2FA is refused with a message saying so. Kuma 1.x has a single
+account; if yours has 2FA, this executor cannot use it.
+
+**2. The credential.** At `/app/credentials`, create `kuma` with kind
+`basic` and the value `<username>:<password>`. It is sent only inside the
+Socket.IO login and never comes back in a response or the audit log.
+
+**3. The toolkit** (Tier 1 — `toolkits.yaml`, redeploy). Copy the `kuma`
+block from `/app/toolkits/reference` or
+[`config/examples/toolkits.yaml`](../config/examples/toolkits.yaml), then
+set `base_url` (the address you open Kuma's UI at, e.g.
+`http://192.168.1.42:3001`) and `allowed_cidrs` to that one host's `/32`,
+or `allowed_hosts` for a public name. The WebSocket goes to the checked
+address directly, never through a proxy. Leave out the operations you do
+not want in `allowed_kuma_operations`: a list with only `monitor_list` is a
+read-only toolkit.
+
+**4. The tools.** Copy the four `kuma.*` entries from
+[`config/examples/tools.yaml`](../config/examples/tools.yaml). Narrow the
+`url` pattern to the domains you mean if you can. `kuma.monitor_list` is
+`read` and is applied at once; the other three are `write`, so a proposal
+for them waits at `/app/requests`, and catalog loading refuses a write
+operation declared `read`. They ship `enabled: false`.
+
+What the agent can and cannot do:
+
+- `monitor_add_http` makes an HTTP(s) GET monitor from `name`, `url`,
+  `interval` (30–3600 s) and `expected_status`. No notifications are
+  attached; add them in Kuma's UI. The monitor's description is set to
+  `Managed by gatekeeper (toolkit <name>)`.
+- `monitor_pause`/`monitor_resume` work only on monitors whose description
+  starts with `Managed by gatekeeper`. Any other monitor is refused before
+  anything is sent. To let gatekeeper manage a hand-made monitor, put that
+  text at the start of its description yourself.
+- There is no delete and no edit. Remove a monitor in Kuma's UI.
+- A timeout after an add or pause was sent is `unknown`: check with
+  `kuma.monitor_list` before trying again, or the monitor may exist twice.
+
 ## A new tool does not appear in an agent session
 
 Reported as an admin/agent split: `admin.tool_create` + `admin.tool_enable`
