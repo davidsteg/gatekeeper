@@ -280,9 +280,9 @@ jobs:
 
   rust:
     name: rust
-    # The Rust implementation (rust/). It is not in the image yet: until it
-    # serves everything the Python package does, this job only proves it
-    # builds without warnings and passes its own suite. Several of its tests
+    # The Rust implementation (rust/). It is not in the image yet; this job
+    # proves it builds without warnings and passes its own suite, once as
+    # the runner user and once as root. Several of its tests
     # drive the Python package (the MCP SDK client against the Rust server,
     # scrypt/Fernet/audit-line interop), so the Python side is installed
     # too and the interop tests are told where it is instead of skipping.
@@ -319,6 +319,29 @@ jobs:
         run: |
           export GATEKEEPER_INTEROP_PYTHON="$(command -v python)"
           cargo test --locked
+
+      - name: Test suite, as root
+        # The same suite again as root, for the reason the `tests (root)`
+        # job exists: the privilege-drop and run_as tests skip themselves
+        # when not root, so without this run nothing asserts that the Rust
+        # drop really gives up authority. sudo on the runner has the
+        # SETUID/SETGID and DAC capabilities those tests need; the check
+        # first makes sure of that, so a runner without them fails instead
+        # of skipping silently. The tree is handed back afterwards so the
+        # cache step can read it.
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          export GATEKEEPER_INTEROP_PYTHON="$(command -v python)"
+          sudo --preserve-env=GATEKEEPER_INTEROP_PYTHON,RUSTFLAGS,CARGO_HOME,RUSTUP_HOME \
+            env "PATH=$PATH" "HOME=$HOME" sh -ec '
+              caps=$(awk "/^CapEff:/ {print \$2}" /proc/self/status)
+              echo "uid=$(id -u) CapEff=$caps"
+              [ "$(id -u)" = 0 ] && [ $(( 0x$caps & 0xc6 )) = $(( 0xc6 )) ] \
+                || { echo "::error::must run as root with SETUID/SETGID/DAC caps"; exit 1; }
+              cargo test --locked --offline
+            '
+          sudo chown -R "$(id -u):$(id -g)" target
 
   image:
     name: image
