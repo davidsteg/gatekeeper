@@ -1,4 +1,4 @@
-## 1.13.0
+## 1.14.0
 
 A new `git` executor pushes a worker's `feat/*` branch from a repository on the host to its GitHub remote. The worker names the repository and the branch; it never holds the token, and no file content passes through the call.
 

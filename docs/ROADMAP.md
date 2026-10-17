@@ -49,7 +49,7 @@ item.
   checked against the toolkit's `path_roots`, becomes opencode's
   `x-opencode-directory` header — one toolkit therefore serves every
   project root listed there.
-- `git` executor (1.13.0) — `push` of one `feat/*` branch from a
+- `git` executor (1.14.0) — `push` of one `feat/*` branch from a
   repository listed in the toolkit's `repos:` to that repository's remote
   (`execute_git.py`), fast-forward only; no force, delete or `main` exists
   in the module. The worker's checkout is only read (fetched into a

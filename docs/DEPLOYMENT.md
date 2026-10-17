@@ -297,7 +297,7 @@ What a call can and cannot do:
 - The answer is `status` (`created`, `updated`, `up_to_date`), the remote
   branch's `old` and `new` SHA, and up to 20 pushed commits as short SHA
   and subject, with `commits_total`.
-- `git` is in the image since 1.13.0.
+- `git` is in the image since 1.14.0.
 
 ## A new tool does not appear in an agent session
 
