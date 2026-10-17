@@ -15,6 +15,24 @@ A new `git` executor pushes a worker's `feat/*` branch from a repository on the 
 ### Setup
 
 See "Wiring a feat/* push to GitHub" in `docs/DEPLOYMENT.md`: the `github` credential, the checkout mounted into the container, the toolkit, then `gkrepo.push` granted to the one identity that should push. The tool ships `enabled: false`.
+## 1.13.0
+
+The image now runs gatekeeper's Rust implementation (`rust/`) instead of the Python one. It reads the same configuration files, keeps every endpoint and environment variable, and an existing deployment starts with no change.
+
+### Changed
+
+- **The `gatekeeper` binary in the image is the Rust build.** The same CLI (`serve`, `check`, `init`, `token`, `password`, `credential-key`), the same `/mcp`, `/admin/mcp`, `/api/v1`, `/app` and `/release` endpoints, the same health and metrics routes, every executor, the credential store, the audit log and the toolkit and tool proposals. It reads `toolkits.yaml`, `tools.yaml`, `identities.yaml` and `credentials.yaml` and writes them in the same format. Tokens hashed and credentials encrypted by the Python version keep working, and the other way round.
+- The console at `/app` is unchanged and talks to the same `/api/v1` schema (`frontend/openapi.json`).
+- The vendored Google and Microsoft CLI scripts are still Python. The image keeps a small Python environment with only Google's client libraries for them, so `python` is still in the image, and the compose healthcheck that calls it keeps working.
+- `amd64` and `arm64` images are both cross-compiled on the build machine.
+
+### Tested
+
+- **A `rust` CI job** runs `cargo build` with warnings as errors and `cargo test`. That includes checks against the Python implementation: token hashes, Fernet tokens, MCP clients from the Python SDK, a byte-for-byte comparison of the MCP wire traffic, and byte-identical artifact archives. The suite runs a second time as root, so the privilege-drop and `run_as` tests run instead of skipping. The image is built only when it passes.
+
+### Not yet
+
+- The Python package in `src/gatekeeper/` stays in the repository for now, as the reference the Rust tests compare against. Removing it is the next step.
 
 ## 1.12.0
 

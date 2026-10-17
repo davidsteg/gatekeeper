@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # --- Console build (React SPA at /app) --------------------------------------
-# Node exists only in this stage: the built files are copied into the Python
-# package as data (gatekeeper/_web/), and the runtime image stays Node-free.
+# Node exists only in this stage: the built files are copied into the image
+# (GATEKEEPER_WEB_DIR), and the runtime image stays Node-free.
 # Pinned by digest, like a lockfile for the toolchain that builds the one
 # part of gatekeeper that runs in a browser. `--ignore-scripts`: no
 # dependency's install hook runs during the build (package-lock.json pins
@@ -15,40 +15,74 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-# --- Build ----------------------------------------------------------------
-FROM python:3.12-slim AS build
+# --- Build: the gatekeeper binary (rust/) ----------------------------------
+# Compiled on the build machine's own architecture and cross-compiled for
+# the target one, so an arm64 image is not built under QEMU (a Rust build
+# there takes the better part of an hour). PCRE2 (operator `pattern:`
+# regexes) is compiled from the crate's bundled source and linked
+# statically; everything else is pure Rust (rustls, not OpenSSL), so the
+# binary needs nothing at runtime but glibc.
+FROM --platform=$BUILDPLATFORM rust:1.97.0-slim-bookworm AS build
+
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+      amd64) echo x86_64-unknown-linux-gnu > /target ;; \
+      arm64) echo aarch64-unknown-linux-gnu > /target \
+             && apt-get update \
+             && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+             && rm -rf /var/lib/apt/lists/* ;; \
+      *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+ && rustup target add "$(cat /target)"
+
+ENV PCRE2_SYS_STATIC=1 \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+
+WORKDIR /build
+# build.rs reads the release version from pyproject.toml, one level up;
+# the console's API schema is embedded from frontend/openapi.json.
+COPY pyproject.toml ./
+COPY frontend/openapi.json ./frontend/openapi.json
+COPY rust ./rust
+RUN cd rust \
+ && cargo build --release --locked --target "$(cat /target)" \
+ && install -m 0755 "target/$(cat /target)/release/gatekeeper" /usr/local/bin/gatekeeper
+
+# --- Vendored script runtime ----------------------------------------------
+# The `google` and `microsoft` executors run the bundled CLI scripts as a
+# subprocess (GATEKEEPER_PYTHON). microsoft_api.py is stdlib-only;
+# google_api.py needs Google's client libraries, and nothing else here
+# does. This venv holds exactly those.
+FROM python:3.12-slim AS scripts
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
-WORKDIR /build
-COPY pyproject.toml constraints.txt ./
-COPY src ./src
-# The console build, as package data (see [tool.setuptools.package-data]).
-COPY --from=web /web/dist ./src/gatekeeper/_web
-
-# constraints.txt pins the direct dependencies to the exact versions this
-# project is tested against, so two builds of the same commit resolve the
-# same dependency tree instead of drifting with whatever pyproject.toml's
-# ">=" floors happen to satisfy that day -- see constraints.txt's own
-# comment for why it stops at direct dependencies rather than a full
-# transitive lock (this image is built for both amd64 and arm64).
+COPY constraints.txt /tmp/constraints.txt
 RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip install --upgrade pip \
- && /opt/venv/bin/pip install . -c constraints.txt
+ && /opt/venv/bin/pip install -c /tmp/constraints.txt \
+      "google-api-python-client>=2.100" "google-auth-oauthlib>=1.0"
 
-# Release-bound artifacts (artifacts.py): every path in artifacts.SOURCES,
-# built from exactly these sources and stamped with the commit CI passes
-# in. The release job copies these exact files out of the published image
-# for the GitHub release -- one build, one set of bytes. SOURCES is empty
-# since 0.52.0 (the Hermes recovery adapter was removed), so this writes a
-# commit-bound manifest with no artifacts; a future source must also be
-# COPY'd here. Without a commit (a local `docker build`), the manifest
-# says "unknown" and versioned downloads 404.
+# --- Release-bound artifacts ----------------------------------------------
+# Every path in artifacts::SOURCES, built from exactly these sources and
+# stamped with the commit CI passes in. The release job copies these exact
+# files out of the published image for the GitHub release -- one build, one
+# set of bytes. SOURCES is empty since 0.52.0 (the Hermes recovery adapter
+# was removed), so this writes a commit-bound manifest with no artifacts; a
+# future source must also be COPY'd here. Without a commit (a local `docker
+# build`), the manifest says "unknown" and versioned downloads 404. Runs on
+# the target architecture, since that is the binary this stage has.
+FROM python:3.12-slim AS artifacts
+
 ARG GATEKEEPER_COMMIT=unknown
-RUN /opt/venv/bin/python -m gatekeeper.artifacts --root . --out /opt/artifacts \
+WORKDIR /build
+COPY pyproject.toml ./
+COPY --from=build /usr/local/bin/gatekeeper /usr/local/bin/gatekeeper
+RUN gatekeeper build-artifacts --root . --out /opt/artifacts \
       --commit "$GATEKEEPER_COMMIT" \
-      --release "$(/opt/venv/bin/python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+      --release "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
 
 # --- Docker CLI + Compose plugin ------------------------------------------
 # Only the client, no daemon. gatekeeper talks to the host's Docker daemon
@@ -127,17 +161,19 @@ RUN apt-get update \
 
 COPY --from=docker-cli /usr/bin/docker /usr/bin/docker
 COPY --from=docker-cli /usr/local/lib/docker/cli-plugins /usr/local/lib/docker/cli-plugins
-COPY --from=build /opt/venv /opt/venv
+COPY --from=build /usr/local/bin/gatekeeper /usr/local/bin/gatekeeper
+COPY --from=scripts /opt/venv /opt/venv
+# The console (/app).
+COPY --from=web /web/dist /usr/share/gatekeeper/web
 # Read-only: the server verifies every file against manifest.json at load.
-COPY --from=build /opt/artifacts /opt/gatekeeper/artifacts
+COPY --from=artifacts /opt/artifacts /opt/gatekeeper/artifacts
 ARG GATEKEEPER_COMMIT=unknown
 
-# RELEASE.md is not part of the Python package (it lives at repo root, not
-# under src/gatekeeper/) -- the console's Release notes page (/app/release-notes,
+# RELEASE.md is not compiled into the binary -- the console's Release notes page (/app/release-notes,
 # via /api/v1/release-notes) reads it from
 # this fixed path in production. GATEKEEPER_RELEASE_NOTES can override it;
-# a dev/editable checkout finds the file next to pyproject.toml instead and
-# never needs this at all (see release_notes.notes_path()).
+# a binary run from a checkout finds the file next to pyproject.toml instead
+# and never needs this at all (see release_notes::notes_path()).
 COPY RELEASE.md /usr/share/gatekeeper/RELEASE.md
 
 # Project documentation — bundled into the image so the /app/docs page
@@ -150,7 +186,7 @@ COPY RELEASE.md /opt/gatekeeper-docs/RELEASE.md
 # /opt/gatekeeper/google/google_api.py. The sibling _hermes_home.py is
 # imported by google_api.py (it adds its own directory to sys.path), so
 # both must live in the same directory. The OAuth token is materialized
-# to $HOME/.hermes/google_token.json per call by service.py -- no secret
+# to $HOME/.hermes/google_token.json per call by the service -- no secret
 # is baked into the image, only the script.
 COPY src/gatekeeper/_google_api/ /opt/gatekeeper/google/
 
@@ -159,7 +195,7 @@ COPY src/gatekeeper/_google_api/ /opt/gatekeeper/google/
 # `microsoft_script` points at. It imports nothing outside the standard
 # library, so it runs under any interpreter in the image, and the OAuth
 # token is materialized to $HOME/.hermes/microsoft_token.json per call
-# by service.py -- no secret is baked into the image, only the script.
+# by the service -- no secret is baked into the image, only the script.
 COPY src/gatekeeper/_microsoft_api/ /opt/gatekeeper/microsoft/
 
 # Verify at build time that 'docker compose' actually resolves. Without this
@@ -200,6 +236,8 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     GATEKEEPER_AUDIT_DIR=/var/log/gatekeeper \
     GATEKEEPER_PORT=8080 \
     GATEKEEPER_RELEASE_NOTES=/usr/share/gatekeeper/RELEASE.md \
+    GATEKEEPER_WEB_DIR=/usr/share/gatekeeper/web \
+    GATEKEEPER_PYTHON=/opt/venv/bin/python \
     PYTHONUNBUFFERED=1
 
 USER 568:568

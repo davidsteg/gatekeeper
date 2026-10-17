@@ -16,9 +16,9 @@ not, see [docs/ROADMAP.md](docs/ROADMAP.md).
 | | |
 |---|---|
 | **Repo** | `davidsteg/gatekeeper` |
-| **Language** | Python 3.12+ |
+| **Language** | Rust (`rust/`, what the image runs); Python 3.12+ (`src/gatekeeper/`, the reference it is tested against) |
 | **Runtime deps** | `mcp`, `pyyaml`, `uvicorn`, `httpx`, `websockets`, `cryptography`, `asyncssh`, `fastapi`, `pydantic` — see `pyproject.toml` |
-| **Tests** | `python -m pytest -q`, plus `npm test`, `tsc` and lint in `frontend/` — all must pass before push |
+| **Tests** | `python -m pytest -q`, plus `npm test`, `tsc` and lint in `frontend/`, plus `cargo test` in `rust/` — all must pass before push |
 
 Check the current version in `pyproject.toml`, not here — it changes every
 release and a hardcoded number in this file would just go stale.
@@ -68,6 +68,12 @@ listener the test starts itself — the ssh one via
 network access outside localhost is needed.
 
 ## Known pitfalls
+
+- **The image runs `rust/`; `src/gatekeeper/` is its reference (1.13.0).**
+  A behavior change goes into both (see `rust/PORTING.md`), or the `rust`
+  CI job's golden fixtures and parity tests fail -- and a change made only
+  in Python never reaches a deployment. The Rust version comes from `pyproject.toml` via
+  `rust/build.rs`; there is no second version string to bump.
 
 - **RELEASE.md is checked by CI before anything builds.** A version bump in
   `pyproject.toml` with no matching `## <version>` section in `RELEASE.md`

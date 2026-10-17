@@ -427,6 +427,10 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for:
 - Functional and non-functional requirements
 - Specification of each guarantee
 
+The image runs the Rust implementation in [rust/](rust/) (`cd rust && cargo
+test`); the Python package in `src/gatekeeper/` is kept as its reference.
+See "Rust implementation" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 See [AGENTS.md](AGENTS.md) if you're an AI agent working in this repo — release
 workflow, testing, and known pitfalls.
 
