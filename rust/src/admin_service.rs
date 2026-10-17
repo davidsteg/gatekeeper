@@ -579,20 +579,23 @@ impl AdminService {
     pub fn toolkit_propose(&self, actor: &str, args: &Args) -> ConfigResult<Value> {
         let name = require_str(args, "name")?;
         let spec = require_dict(args, "spec")?.clone();
-        let item = self.toolkit_proposals.propose(name, spec, actor, "create")?;
+        let confirm = args.get("confirm_broad_cidrs") == Some(&Value::Bool(true));
+        let item = self.toolkit_proposals.propose_with(name, spec, actor, "create", confirm)?;
         Ok(json!({"applied": false, "pending": true, "proposal_id": item.id}))
     }
 
     /// Proposes changing a toolkit's executor, binaries, denied_args,
-    /// run_as, and an http/opencode toolkit's allowed_hosts/allowed_cidrs
-    /// (`toolkit_proposals::UPDATE_WRITABLE_FIELDS`).
+    /// run_as, an http/opencode toolkit's allowed_hosts/allowed_cidrs, an
+    /// http toolkit's allowed_methods/allowed_path_prefixes and the two
+    /// limits (`toolkit_proposals::UPDATE_WRITABLE_FIELDS`).
     pub fn toolkit_update(&self, actor: &str, args: &Args) -> ConfigResult<Value> {
         let name = require_str(args, "name")?;
         let updates = require_dict(args, "updates")?.clone();
         if updates.is_empty() {
             return Ok(json!({"applied": false, "error": "No updates provided."}));
         }
-        let item = self.toolkit_proposals.propose(name, updates, actor, "update")?;
+        let confirm = args.get("confirm_broad_cidrs") == Some(&Value::Bool(true));
+        let item = self.toolkit_proposals.propose_with(name, updates, actor, "update", confirm)?;
         Ok(json!({"applied": false, "pending": true, "proposal_id": item.id}))
     }
 

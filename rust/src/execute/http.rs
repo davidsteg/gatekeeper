@@ -133,6 +133,19 @@ pub(crate) async fn getaddrinfo(host: &str, port: u16) -> Result<Vec<Resolved>, 
         .unwrap_or_else(|e| Err(e.to_string()))
 }
 
+/// The blocking `socket.getaddrinfo(host, port, type=SOCK_STREAM)`, with
+/// the host idna-encoded first as Python does.
+pub(crate) fn getaddrinfo_sync(host: &str, port: u16) -> Result<Vec<Resolved>, String> {
+    if host.is_ascii() {
+        return getaddrinfo_blocking(host, port);
+    }
+    match url::Host::parse(host) {
+        Ok(url::Host::Domain(d)) => getaddrinfo_blocking(&d, port),
+        Ok(other) => getaddrinfo_blocking(&other.to_string(), port),
+        Err(e) => Err(format!("encoding with 'idna' codec failed ({e})")),
+    }
+}
+
 fn getaddrinfo_blocking(host: &str, port: u16) -> Result<Vec<Resolved>, String> {
     let c_host = CString::new(host).map_err(|_| "embedded null character".to_string())?;
     let c_port = CString::new(port.to_string()).expect("digits");

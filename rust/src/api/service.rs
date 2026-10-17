@@ -201,6 +201,10 @@ pub fn toolkit_summary(name: &str, tk: &Toolkit) -> Value {
         // replaces next to the proposed ones.
         "allowed_hosts": tk.allowed_hosts,
         "allowed_cidrs": tk.allowed_cidrs,
+        // `http` only, reported so an update proposal's card can show the
+        // values it replaces.
+        "allowed_methods": tk.allowed_methods,
+        "allowed_path_prefixes": tk.allowed_path_prefixes,
     })
 }
 
@@ -1009,8 +1013,21 @@ pub fn pending_review(item: &PendingAction, store: Option<&ConfigStore>) -> Valu
     json!({"headline": headline, "tools": tools, "unchanged": unchanged, "stale": stale})
 }
 
-const PROPOSAL_FIELDS: [&str; 12] =
-    ["id", "name", "spec", "actor", "kind", "status", "created_at", "decided_by", "decided_at", "reason", "current", "spec_yaml"];
+const PROPOSAL_FIELDS: [&str; 13] = [
+    "id",
+    "name",
+    "spec",
+    "actor",
+    "kind",
+    "status",
+    "created_at",
+    "decided_by",
+    "decided_at",
+    "reason",
+    "confirm_broad_cidrs",
+    "current",
+    "spec_yaml",
+];
 
 /// Each proposal plus the live toolkit it would replace or extend.
 pub fn toolkit_proposals_view(

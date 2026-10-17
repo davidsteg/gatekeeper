@@ -387,8 +387,6 @@ fn path_roots_and_friends_stay_redeploy_only() {
     for (field, value) in [
         ("path_roots", json!(["/"])),
         ("protected_resources", json!([])),
-        ("max_output_bytes", json!(1u64 << 30)),
-        ("max_timeout_seconds", json!(3600)),
     ] {
         let mut spec = Map::new();
         spec.insert(field.into(), value);
@@ -398,9 +396,10 @@ fn path_roots_and_friends_stay_redeploy_only() {
     let err = propose(&e, "files", json!({"path_roots": ["/"], "limits": 1}), "update").unwrap_err();
     assert_eq!(
         err.message,
-        "Cannot propose changing ['limits', 'path_roots'] -- only ['allowed_cidrs', 'allowed_hosts', 'binaries', \
-         'denied_args', 'executor', 'run_as'] are writable via an update proposal. path_roots, protected_resources, and limits have no \
-         proposal path -- edit toolkits.yaml and reload (SIGHUP or restart)."
+        "Cannot propose changing ['limits', 'path_roots'] -- only ['allowed_cidrs', 'allowed_hosts', 'allowed_methods', \
+         'allowed_path_prefixes', 'binaries', 'denied_args', 'executor', 'max_output_bytes', 'max_timeout_seconds', 'run_as'] \
+         are writable via an update proposal. path_roots and protected_resources have no proposal path -- edit \
+         toolkits.yaml and reload (SIGHUP or restart)."
     );
 }
 
@@ -408,9 +407,16 @@ fn path_roots_and_friends_stay_redeploy_only() {
 fn update_writable_fields_is_exactly_these() {
     // allowed_hosts/allowed_cidrs joined in 1.10.0 (network targets by
     // proposal, allowed_hosts tests); path_roots and friends did not.
+    // 1.11.0: an http toolkit's methods/path prefixes and the two limits.
     let mut f = UPDATE_WRITABLE_FIELDS.to_vec();
     f.sort();
-    assert_eq!(f, ["allowed_cidrs", "allowed_hosts", "binaries", "denied_args", "executor", "run_as"]);
+    assert_eq!(
+        f,
+        [
+            "allowed_cidrs", "allowed_hosts", "allowed_methods", "allowed_path_prefixes", "binaries", "denied_args",
+            "executor", "max_output_bytes", "max_timeout_seconds", "run_as",
+        ]
+    );
 }
 
 #[test]
@@ -443,8 +449,9 @@ fn deploy_update_rejects_unknown_toolkit_and_rechecks_fields() {
     let err = e.proposals.deploy(&item.id, "root").unwrap_err();
     assert_eq!(
         err.message,
-        "Cannot change ['path_roots'] at runtime -- only ['allowed_cidrs', 'allowed_hosts', 'binaries', \
-         'denied_args', 'executor', 'run_as'] are writable via an update proposal."
+        "Cannot change ['path_roots'] at runtime -- only ['allowed_cidrs', 'allowed_hosts', 'allowed_methods', \
+         'allowed_path_prefixes', 'binaries', 'denied_args', 'executor', 'max_output_bytes', 'max_timeout_seconds', \
+         'run_as'] are writable via an update proposal."
     );
 }
 

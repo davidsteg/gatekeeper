@@ -16,8 +16,10 @@
 //! reloads the running service, audits and marks the proposal `deployed`.
 
 use std::collections::BTreeSet;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
+use ipnet::IpNet;
 use serde_json::{json, Map, Value};
 
 use crate::atomic::{atomic_write_cfg, dump, load_cached, revision, safe_load, writable};
@@ -27,7 +29,10 @@ use crate::errors::{ConfigError, ConfigResult};
 use crate::pyfmt::{repr_list, repr_str, repr_value, str_value};
 use crate::runas::parse_run_as;
 use crate::service::Service;
-use crate::tier1::{load_tier1, parse_network_allowlist, py_truthy, NETWORK_EXECUTORS};
+use crate::tier1::{
+    ip_network, is_public_address, load_tier1, parse_network_allowlist, py_truthy, url_hostname,
+    NETWORK_EXECUTORS,
+};
 
 /// What a toolkit proposal may be in.
 pub const STATUSES: [&str; 4] = ["pending", "deployed", "rejected", "withdrawn"];
@@ -38,8 +43,8 @@ pub const KINDS: [&str; 4] = ["create", "update", "delete", "bind"];
 /// The one and only field a `bind` proposal carries.
 pub const BIND_FIELD: &str = "credential";
 
-/// Fields `update`-kind proposals may change. `path_roots`,
-/// `protected_resources` and limits stay deploy-time only (FR-4.11).
+/// Fields `update`-kind proposals may change. `path_roots` and
+/// `protected_resources` stay deploy-time only (FR-4.11).
 ///
 /// `allowed_hosts` and `allowed_cidrs` are here as of 1.10.0, the first
 /// fields in this set that change *where* a toolkit may connect -- a
@@ -50,13 +55,52 @@ pub const BIND_FIELD: &str = "credential";
 /// `allowed_hosts`, and no non-public address for a hostname toolkit.
 /// Only on toolkits whose executor reads them ([`NETWORK_FIELDS`],
 /// checked at deploy).
-pub const UPDATE_WRITABLE_FIELDS: [&str; 6] =
-    ["executor", "binaries", "denied_args", "run_as", "allowed_hosts", "allowed_cidrs"];
+///
+/// 1.11.0 adds an http toolkit's `allowed_methods`/`allowed_path_prefixes`
+/// and the two ceilings (`max_timeout_seconds`, `max_output_bytes`), on the
+/// same terms: always a human-approved card, the card shows the current
+/// value next to the proposed one, and `load_tier1` re-validates the whole
+/// merged file before anything is written. `path_roots` and
+/// `protected_resources` remain redeploy-only.
+pub const UPDATE_WRITABLE_FIELDS: [&str; 10] = [
+    "executor",
+    "binaries",
+    "denied_args",
+    "run_as",
+    "allowed_hosts",
+    "allowed_cidrs",
+    "allowed_methods",
+    "allowed_path_prefixes",
+    "max_timeout_seconds",
+    "max_output_bytes",
+];
 
 /// The update fields that change a toolkit's network reach -- valid only
 /// on an executor that connects to a URL (`tier1::NETWORK_EXECUTORS`).
 /// Sorted, as Python's `sorted(NETWORK_FIELDS & ...)` iterates them.
 pub const NETWORK_FIELDS: [&str; 2] = ["allowed_cidrs", "allowed_hosts"];
+
+/// Executor-specific update fields and the executors that read them
+/// (sorted by field, as `sorted(set(FIELD_EXECUTORS) & ...)` iterates). A
+/// field outside its executors would be silently ignored by `load_tier1`
+/// (it parses only what an executor uses), so `deploy()` refuses it rather
+/// than writing a restriction that does not exist.
+pub const FIELD_EXECUTORS: [(&str, &[&str]); 4] = [
+    ("allowed_cidrs", NETWORK_EXECUTORS),
+    ("allowed_hosts", NETWORK_EXECUTORS),
+    ("allowed_methods", &["http"]),
+    ("allowed_path_prefixes", &["http"]),
+];
+
+/// The two ceilings (sorted). Positive integers; `load_tier1` enforces the
+/// same.
+pub const LIMIT_FIELDS: [&str; 2] = ["max_output_bytes", "max_timeout_seconds"];
+
+/// A proposed CIDR wider than this (an IPv4 network shorter than /16, an
+/// IPv6 one shorter than /48) needs `confirm_broad_cidrs: true` on the
+/// proposal (FR-8.15).
+pub const BROAD_PREFIX_V4: u8 = 16;
+pub const BROAD_PREFIX_V6: u8 = 48;
 
 fn propose_action_name(kind: &str) -> &'static str {
     match kind {
@@ -100,8 +144,9 @@ pub fn name_collision_message(name: &str) -> String {
          would silently overwrite it. If a second, separate toolkit is \
          what you want, propose it under a different name. If you meant to \
          change the existing one: executor, binaries, denied_args, run_as, \
-         allowed_hosts and allowed_cidrs go through admin.toolkit_update; path_roots, \
-         protected_resources and limits have no proposal path -- edit \
+         allowed_hosts, allowed_cidrs, allowed_methods, allowed_path_prefixes \
+         and the two limits go through admin.toolkit_update; path_roots and \
+         protected_resources have no proposal path -- edit \
          toolkits.yaml and reload (SIGHUP or restart).",
         repr_str(name)
     )
@@ -136,6 +181,144 @@ fn tools_referencing_toolkit(tools_path: &str, toolkit_name: &str) -> ConfigResu
         .collect())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests pin `resolve_addresses` per thread (Python monkeypatches it).
+    pub(crate) static TEST_DNS: std::cell::RefCell<Option<std::collections::HashMap<String, Vec<IpAddr>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// `ipaddress.ip_address(text)`: an IPv4 or IPv6 literal, an IPv6 scope id
+/// accepted (and dropped).
+fn ip_address(text: &str) -> Option<IpAddr> {
+    if let Ok(v4) = text.parse::<std::net::Ipv4Addr>() {
+        return Some(IpAddr::V4(v4));
+    }
+    let bare = text.split_once('%').map(|(a, _)| a).unwrap_or(text);
+    bare.parse::<std::net::Ipv6Addr>().ok().map(IpAddr::V6)
+}
+
+/// Every address `host` resolves to right now; empty when it does not
+/// resolve.
+fn resolve_addresses(host: &str) -> Vec<IpAddr> {
+    #[cfg(test)]
+    if let Some(answer) = TEST_DNS.with(|t| t.borrow().as_ref().map(|m| m.get(host).cloned().unwrap_or_default())) {
+        return answer;
+    }
+    if let Some(literal) = ip_address(host.trim_matches(|c| c == '[' || c == ']')) {
+        return vec![literal];
+    }
+    // PORT NOTE: Python let a UnicodeError from the idna codec escape; a
+    // name that cannot be encoded resolves to nothing here.
+    match crate::execute::http::getaddrinfo_sync(host, 0) {
+        Ok(infos) => infos.iter().filter_map(|info| ip_address(&info.raw)).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// A network counts as public when both its ends are public addresses.
+fn network_is_public(network: &IpNet) -> bool {
+    is_public_address(network.network()) && is_public_address(network.broadcast())
+}
+
+/// The two rules a proposed `allowed_cidrs` must meet, beyond shape:
+///
+/// 1. No network wider than `BROAD_PREFIX_*` without `confirm_broad_cidrs`.
+/// 2. No private, loopback, link-local or otherwise non-public network on
+///    a toolkit whose target is external -- a `base_url` (or destination)
+///    whose host is, or right now resolves to, a public address. A host
+///    that does not resolve at all is not judged here.
+///
+/// Applied to proposals only (create and update), at submit and again at
+/// deploy. `load_tier1` does not run it, so toolkits written by hand load
+/// unchanged.
+fn check_network_policy(
+    body: &Map<String, Value>,
+    confirm_broad: bool,
+    where_: &str,
+    destination_urls: &[String],
+) -> ConfigResult<()> {
+    let cidrs = match body.get("allowed_cidrs") {
+        Some(v) if py_truthy(v) => v,
+        _ => return Ok(()),
+    };
+    let Value::Array(cidrs) = cidrs else {
+        return Ok(()); // load_tier1 reports the shape
+    };
+    let mut networks = Vec::new();
+    for raw in cidrs {
+        match ip_network(&str_value(raw)) {
+            Ok(n) => networks.push(n),
+            Err(_) => return Ok(()), // load_tier1 reports the bad entry
+        }
+    }
+    let broad: Vec<String> = networks
+        .iter()
+        .filter(|n| match n {
+            IpNet::V4(n) => n.prefix_len() < BROAD_PREFIX_V4,
+            IpNet::V6(n) => n.prefix_len() < BROAD_PREFIX_V6,
+        })
+        .map(ToString::to_string)
+        .collect();
+    if !broad.is_empty() && !confirm_broad {
+        return Err(proposal_refused(format!(
+            "{where_}: allowed_cidrs {} are wider than /16 (IPv4) or \
+             /48 (IPv6). Narrow them to the service's own range, or propose \
+             again with confirm_broad_cidrs: true if this width is intended \
+             -- the reviewer then sees it flagged.",
+            repr_list(&broad)
+        )));
+    }
+    let private: Vec<String> =
+        networks.iter().filter(|n| !network_is_public(n)).map(ToString::to_string).collect();
+    if private.is_empty() {
+        return Ok(());
+    }
+    let mut urls: Vec<&str> = Vec::new();
+    if let Some(Value::String(u)) = body.get("base_url") {
+        urls.push(u);
+    }
+    urls.extend(destination_urls.iter().map(String::as_str));
+    for url in urls {
+        let host = url_hostname(url);
+        if host.is_empty() {
+            continue;
+        }
+        let addresses = resolve_addresses(&host);
+        if !addresses.is_empty() && addresses.iter().all(|a| is_public_address(*a)) {
+            return Err(proposal_refused(format!(
+                "{where_}: allowed_cidrs {} are private or otherwise \
+                 non-public networks, but this toolkit's target {} is \
+                 a public address. A private range is only for a LAN \
+                 service; for a public one, list its public range or use \
+                 allowed_hosts.",
+                repr_list(&private),
+                repr_str(&host)
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The base_urls of the destinations `body` names, from toolkits.yaml.
+fn destination_urls(body: &Map<String, Value>, raw: &Value) -> Vec<String> {
+    let names = match body.get("destinations") {
+        Some(v) if py_truthy(v) => v,
+        _ => return Vec::new(),
+    };
+    let (Value::Array(names), Some(Value::Object(section))) = (names, raw.get("destinations")) else {
+        return Vec::new();
+    };
+    names
+        .iter()
+        .filter_map(Value::as_str)
+        .filter_map(|dest| match section.get(dest) {
+            Some(Value::Object(spec)) => spec.get("base_url").and_then(Value::as_str).map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolkitProposal {
     pub id: String,
@@ -151,6 +334,10 @@ pub struct ToolkitProposal {
     pub decided_by: Option<String>,
     pub decided_at: Option<String>,
     pub reason: Option<String>,
+    /// The proposer's explicit "yes, this wide" for a CIDR broader than
+    /// `BROAD_PREFIX_*` (see `check_network_policy`). Not part of `spec`:
+    /// it is said about the proposal, never written to toolkits.yaml.
+    pub confirm_broad_cidrs: bool,
 }
 
 fn opt(v: &Option<String>) -> Value {
@@ -170,6 +357,7 @@ impl ToolkitProposal {
             "decided_by": opt(&self.decided_by),
             "decided_at": opt(&self.decided_at),
             "reason": opt(&self.reason),
+            "confirm_broad_cidrs": self.confirm_broad_cidrs,
         })
     }
 }
@@ -205,6 +393,7 @@ fn from_spec(spec: &Map<String, Value>) -> ToolkitProposal {
         decided_by: opt_str(spec, "decided_by"),
         decided_at: opt_str(spec, "decided_at"),
         reason: opt_str(spec, "reason"),
+        confirm_broad_cidrs: spec.get("confirm_broad_cidrs").is_some_and(py_truthy),
     }
 }
 
@@ -307,6 +496,18 @@ impl ToolkitProposalStore {
         actor: &str,
         kind: &str,
     ) -> ConfigResult<ToolkitProposal> {
+        self.propose_with(name, spec, actor, kind, false)
+    }
+
+    /// `propose(..., confirm_broad_cidrs=...)`.
+    pub fn propose_with(
+        &self,
+        name: &str,
+        spec: Map<String, Value>,
+        actor: &str,
+        kind: &str,
+        confirm_broad_cidrs: bool,
+    ) -> ConfigResult<ToolkitProposal> {
         if name.is_empty() {
             return Err(proposal_refused("A toolkit proposal needs a non-empty 'name'."));
         }
@@ -322,12 +523,28 @@ impl ToolkitProposalStore {
             if !illegal.is_empty() {
                 return Err(proposal_refused(format!(
                     "Cannot propose changing {} -- only {} are writable via an \
-                     update proposal. path_roots, protected_resources, and \
-                     limits have no proposal path -- edit toolkits.yaml and \
-                     reload (SIGHUP or restart).",
+                     update proposal. path_roots and protected_resources \
+                     have no proposal path -- edit toolkits.yaml and reload \
+                     (SIGHUP or restart).",
                     sorted_repr(illegal),
                     writable_fields_repr()
                 )));
+            }
+            // PORT NOTE: Python iterated `LIMIT_FIELDS & set(spec)` in set
+            // order; sorted here, which only decides which field is named
+            // when both are invalid.
+            for field in LIMIT_FIELDS {
+                let Some(value) = spec.get(field) else { continue };
+                let positive = match value {
+                    Value::Number(n) => n.as_u64().is_some_and(|v| v > 0) || n.as_i64().is_some_and(|v| v > 0),
+                    _ => false,
+                };
+                if !positive {
+                    return Err(proposal_refused(format!(
+                        "Cannot propose {field}={}: it must be a positive integer.",
+                        repr_value(value)
+                    )));
+                }
             }
         }
         if let Some(run_as) = spec.get("run_as").filter(|v| !v.is_null()) {
@@ -357,6 +574,24 @@ impl ToolkitProposalStore {
                     exc.message
                 )));
             }
+        }
+        if (kind == "create" || kind == "update") && spec.contains_key("allowed_cidrs") {
+            let live = self.live_raw()?;
+            let mut body = Map::new();
+            if kind == "update" {
+                if let Some(Value::Object(existing)) = live.get("toolkits").and_then(|t| t.get(name)) {
+                    body = existing.clone();
+                }
+            }
+            for (k, v) in &spec {
+                body.insert(k.clone(), v.clone());
+            }
+            check_network_policy(
+                &body,
+                confirm_broad_cidrs,
+                &format!("toolkit {}", repr_str(name)),
+                &destination_urls(&body, &live),
+            )?;
         }
         if kind == "delete" && !spec.is_empty() {
             return Err(proposal_refused(
@@ -413,19 +648,33 @@ impl ToolkitProposalStore {
             decided_by: None,
             decided_at: None,
             reason: None,
+            confirm_broad_cidrs,
         };
         if let Value::Object(m) = item.to_spec() {
             entries.push(m);
         }
         self.write(&entries)?;
-        self.audit_write(json!({
+        let mut event = json!({
             "kind": "admin_change",
             "actor": actor,
             "action": propose_action_name(kind),
             "target": name,
             "spec": Value::Object(spec),
-        }))?;
+        });
+        if confirm_broad_cidrs {
+            event["confirm_broad_cidrs"] = json!(true);
+        }
+        self.audit_write(event)?;
         Ok(item)
+    }
+
+    /// toolkits.yaml as a mapping (empty when missing or not a mapping).
+    fn live_raw(&self) -> ConfigResult<Value> {
+        if !std::path::Path::new(&self.toolkits_path).exists() {
+            return Ok(Value::Object(Map::new()));
+        }
+        let raw = read_yaml_file(&self.toolkits_path)?;
+        Ok(if raw.is_object() { raw } else { Value::Object(Map::new()) })
     }
 
     /// Toolkit names in toolkits.yaml as `deploy()` will see them (the
@@ -553,6 +802,7 @@ impl ToolkitProposalStore {
             )));
         }
         let raw = read_yaml_file(&self.toolkits_path)?;
+        let raw_value = raw.clone();
         let Value::Object(raw) = raw else {
             // PORT NOTE: Python raised AttributeError on a non-mapping file.
             return Err(proposal_refused("toolkits.yaml: section 'toolkits' is not a mapping."));
@@ -602,16 +852,32 @@ impl ToolkitProposalStore {
                 let network: Vec<&str> =
                     NETWORK_FIELDS.iter().copied().filter(|f| item.spec.contains_key(*f)).collect();
                 let executor = body.get("executor").cloned().unwrap_or(Value::Null);
-                let is_network = matches!(&executor, Value::String(e) if NETWORK_EXECUTORS.contains(&e.as_str()));
-                if !network.is_empty() && !is_network {
-                    return Err(proposal_refused(format!(
-                        "Cannot change {} on toolkit {}: its executor {} does not \
-                         connect to a URL. Only an http or opencode toolkit \
-                         has allowed_hosts/allowed_cidrs.",
-                        repr_list(&network),
-                        repr_str(&item.name),
-                        repr_value(&executor)
-                    )));
+                for (field, readers) in FIELD_EXECUTORS {
+                    if !item.spec.contains_key(field) {
+                        continue;
+                    }
+                    let reads = matches!(&executor, Value::String(e) if readers.contains(&e.as_str()));
+                    if !reads {
+                        let mut sorted_readers = readers.to_vec();
+                        sorted_readers.sort_unstable();
+                        return Err(proposal_refused(format!(
+                            "Cannot change {} on toolkit {}: its executor {} does not use it. Only \
+                             an {} toolkit has {field}.{}",
+                            repr_str(field),
+                            repr_str(&item.name),
+                            repr_value(&executor),
+                            sorted_readers.join(" or "),
+                            if NETWORK_FIELDS.contains(&field) { " (It does not connect to a URL.)" } else { "" }
+                        )));
+                    }
+                }
+                if item.spec.contains_key("allowed_cidrs") {
+                    check_network_policy(
+                        &body,
+                        item.confirm_broad_cidrs,
+                        &format!("toolkit {}", repr_str(&item.name)),
+                        &destination_urls(&body, &raw_value),
+                    )?;
                 }
                 // A null network field removes the key, so the remaining
                 // one alone decides -- load_tier1 then refuses the toolkit
@@ -671,6 +937,14 @@ impl ToolkitProposalStore {
                         "{} Reject this proposal.",
                         name_collision_message(&item.name)
                     )));
+                }
+                if item.spec.contains_key("allowed_cidrs") {
+                    check_network_policy(
+                        &item.spec,
+                        item.confirm_broad_cidrs,
+                        &format!("toolkit {}", repr_str(&item.name)),
+                        &destination_urls(&item.spec, &raw_value),
+                    )?;
                 }
                 merged_toolkits.insert(item.name.clone(), Value::Object(item.spec.clone()));
             }
@@ -768,3 +1042,7 @@ impl ToolkitProposalStore {
         Ok(deployed)
     }
 }
+
+#[cfg(test)]
+#[path = "toolkit_update_fields_tests.rs"]
+mod toolkit_update_fields_tests;

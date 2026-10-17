@@ -591,7 +591,7 @@ fn network_fields_refused_on_a_non_network_toolkit() {
     let mut raw = crate::yaml::load(&std::fs::read_to_string(&e.toolkits_path).unwrap()).unwrap();
     raw["toolkits"]["box"] = json!({"executor": "local", "binaries": ["/bin/sh"]});
     std::fs::write(&e.toolkits_path, serde_json::to_string(&raw).unwrap()).unwrap();
-    let item = e.store.propose("box", obj(json!({"allowed_cidrs": ["10.0.0.0/8"]})), "hermes", "update").unwrap();
+    let item = e.store.propose("box", obj(json!({"allowed_cidrs": ["10.0.0.0/16"]})), "hermes", "update").unwrap();
     let err = e.store.deploy(&item.id, "root").unwrap_err();
     assert!(err.is_write_refused());
     assert!(err.to_string().contains("does not connect to a URL"), "{err}");

@@ -371,6 +371,7 @@ async fn the_schemas_agents_read() {
     let updates = &schema("admin.toolkit_update")["properties"]["updates"];
     assert_eq!(keys(&updates["properties"]), [
         "executor", "binaries", "denied_args", "run_as", "allowed_hosts", "allowed_cidrs",
+        "allowed_methods", "allowed_path_prefixes", "max_timeout_seconds", "max_output_bytes",
     ]
     .map(String::from)
     .into());
