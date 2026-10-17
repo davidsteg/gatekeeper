@@ -23,6 +23,7 @@ from . import (
     execute_artifact,
     execute_google,
     execute_http,
+    execute_kuma,
     execute_microsoft,
     execute_opencode,
     execute_ssh,
@@ -544,6 +545,7 @@ class Service:
             opencode_operation: str | None = None
             agent_operation: str | None = None
             artifact_operation: str | None = None
+            kuma_operation: str | None = None
             if toolkit.executor in ("docker", "local", "ssh"):
                 argv = validate.build_argv(tool, values, toolkit)
                 # Resolved here, inside the same try/except as everything
@@ -591,6 +593,8 @@ class Service:
                 )
             elif toolkit.executor == "artifact":
                 artifact_operation = validate.build_artifact_call(tool, values, toolkit)
+            elif toolkit.executor == "kuma":
+                kuma_operation = validate.build_kuma_call(tool, values, toolkit)
             elif toolkit.executor == "file":
                 pass  # parameters resolved directly into the call below
         except Denied as denial:
@@ -713,6 +717,18 @@ class Service:
                     # A per-tool override is also Tier 1 (tools.yaml, not
                     # agent-supplied), and narrows the toolkit's authority.
                     run_as=effective_run_as,
+                )
+            elif toolkit.executor == "kuma":
+                assert kuma_operation is not None
+                result = await execute_kuma.run(
+                    operation=kuma_operation,
+                    values=values,
+                    toolkit=toolkit,
+                    credentials=self.credentials,
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent,
+                    redact=self.audit.redact,
                 )
             elif toolkit.executor == "opencode":
                 assert opencode_operation is not None
@@ -879,6 +895,8 @@ class Service:
             return await execute_microsoft.probe(toolkit)
         if toolkit.executor == "opencode":
             return await execute_opencode.probe(toolkit)
+        if toolkit.executor == "kuma":
+            return await execute_kuma.probe(toolkit)
         if toolkit.executor == "agent":
             return await execute_agent.probe(toolkit)
         if toolkit.executor == "artifact":

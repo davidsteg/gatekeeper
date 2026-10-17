@@ -1,3 +1,25 @@
+## 1.12.0
+
+A new `kuma` executor lets an agent list Uptime Kuma's monitors and add, pause and resume HTTP monitors, with the Kuma login in the credential store. Kuma has no REST API for monitors, so the `http` executor could not do this.
+
+### Added
+
+- **`executor: kuma`.** It talks to Kuma over Socket.IO, the way Kuma's own web UI does, and logs in with Kuma's `login` event (Uptime Kuma 1.23 and 2.0). The toolkit names the Kuma instance in `base_url` and restricts it with `allowed_cidrs` or `allowed_hosts`, checked before the connection opens exactly as for `http`. The login is a `basic` credential (`username:password`) bound with `credential:`, and it is never sent anywhere but Kuma's login. An account with 2FA is refused with a message saying so.
+- **Four operations, picked per toolkit in `allowed_kuma_operations`:**
+  - `monitor_list` returns each monitor's id, name, type, URL without user, password or query, whether it is active, its interval, and whether gatekeeper manages it. Passwords, headers and other fields of Kuma's own monitor objects are never copied.
+  - `monitor_add_http` creates an HTTP(s) GET monitor from `name`, `url` (http or https, no user or password), `interval` (30 to 3600 seconds) and `expected_status` (one of a fixed set of codes and ranges). It attaches no notifications, headers, body or auth, and writes `Managed by gatekeeper (toolkit <name>)` into the monitor's description.
+  - `monitor_pause` and `monitor_resume` work only on monitors whose description starts with `Managed by gatekeeper`. Any other monitor is refused before anything is sent for it.
+- There is no delete, no edit, and nothing for notifications or settings. The executor has no code for them.
+- **The limits hold whatever a tool definition says.** Loading the catalog refuses a `kuma` tool whose schema is wider than the executor accepts (an `interval` outside 30 to 3600, a status outside the set, a parameter the operation does not read), and refuses `monitor_add_http`, `monitor_pause` or `monitor_resume` declared as category `read`, which would let a proposal skip approval. The executor checks the values again on every call.
+- A timeout after an add, pause or resume was sent is `unknown`, not `failed`.
+- Every call is audited like any other. A refused target records `host_not_allowed`, `address_not_public` or `cidr_not_allowed`, and a foreign monitor records `tier1_violation`.
+- `allowed_hosts` and `allowed_cidrs` on a `kuma` toolkit can be changed through `admin.toolkit_update`, like on `http` and `opencode`.
+- A `kuma` block on `/app/toolkits/reference`, and the toolkit and four tools in `config/examples/`.
+
+### Setup
+
+See "Wiring Uptime Kuma" in `docs/DEPLOYMENT.md`: a `basic` credential named `kuma`, the toolkit in `toolkits.yaml`, then the four `kuma.*` tools. They ship `enabled: false`.
+
 ## 1.11.0
 
 An agent can propose an `http` toolkit's methods, path prefixes and limits through `admin.toolkit_update`, and a proposed IP range is checked for width and for private networks.

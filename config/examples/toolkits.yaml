@@ -375,6 +375,35 @@ toolkits:
     max_output_bytes: 131072
     # credential: opencode
 
+  # The `kuma` executor: Uptime Kuma monitors over Socket.IO, the only API
+  # Kuma has for them. Same target fields as an `http` toolkit, for the same
+  # reasons: `base_url` is the only place the Kuma instance is named, and
+  # the resolved address is checked against allowed_cidrs (or allowed_hosts)
+  # before the WebSocket is opened -- to that checked address, never via a
+  # proxy.
+  #
+  # The whitelist acts on operation names. monitor_list reads; the other
+  # three write. There is no delete, no edit, and nothing for notifications
+  # or settings -- execute_kuma.py has no code for them. Pause/resume only
+  # act on monitors gatekeeper created (their description starts with
+  # "Managed by gatekeeper").
+  #
+  # The credential is required: kind `basic`, value "<user>:<password>" of
+  # a Kuma account without 2FA.
+  kuma:
+    executor: kuma
+    base_url: "http://kuma.lan:3001"
+    allowed_cidrs:
+      - 10.10.200.91/32
+    allowed_kuma_operations:
+      - monitor_list
+      - monitor_add_http
+      - monitor_pause
+      - monitor_resume
+    credential: kuma
+    max_timeout_seconds: 30
+    max_output_bytes: 131072
+
   # The agent mailbox -- agent-to-agent messaging between gatekeeper
   # identities (`messages.py`, `execute_agent.py`). Built-in Python, like
   # the `file` executor: no binary, no host, no credential, nothing outside

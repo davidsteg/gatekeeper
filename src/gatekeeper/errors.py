@@ -32,7 +32,7 @@ class DenialReason(str, enum.Enum):
     TIMEOUT = "timeout"
     EXECUTOR_UNAVAILABLE = "executor_unavailable"
     SSRF_BLOCKED = "ssrf_blocked"
-    #: The three ways an http/opencode target can be refused (1.10.0) --
+    #: The three ways an http/opencode target can be refused (1.10.0; kuma since 1.12.0) --
     #: one reason each, so the audit log says which rule stopped a call.
     HOST_NOT_ALLOWED = "host_not_allowed"
     ADDRESS_NOT_PUBLIC = "address_not_public"

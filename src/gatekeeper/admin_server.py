@@ -510,8 +510,8 @@ _TOOLS: list[types.Tool] = [
         description=(
             "Proposes changing an existing toolkit's executor type, "
             "binaries, denied_args, run_as (the OS user a 'file' "
-            "toolkit's operations run as), and -- on an http or opencode "
-            "toolkit -- allowed_hosts (exact hostnames such as "
+            "toolkit's operations run as), and -- on an http, opencode or "
+            "kuma toolkit -- allowed_hosts (exact hostnames such as "
             "'api.github.com'; no wildcards, no IP addresses) and "
             "allowed_cidrs, plus an http toolkit's allowed_methods and "
             "allowed_path_prefixes, and max_timeout_seconds/max_output_bytes. "
@@ -576,7 +576,7 @@ _TOOLS: list[types.Tool] = [
                             "type": ["array", "null"],
                             "items": {"type": "string"},
                             "description": (
-                                "http/opencode toolkits only: exact hostnames "
+                                "http/opencode/kuma toolkits only: exact hostnames "
                                 "the toolkit may connect to, e.g. "
                                 "['api.github.com']. Every address a name "
                                 "resolves to must be public. null removes it."
@@ -586,7 +586,7 @@ _TOOLS: list[types.Tool] = [
                             "type": ["array", "null"],
                             "items": {"type": "string"},
                             "description": (
-                                "http/opencode toolkits only: IP networks the "
+                                "http/opencode/kuma toolkits only: IP networks the "
                                 "resolved address must lie in. With "
                                 "allowed_hosts set it only narrows further. "
                                 "null removes it. Private ranges are refused "

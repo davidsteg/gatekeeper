@@ -254,11 +254,12 @@ The point v1 left open: *how* does a container reach the host at all. The founda
 |-----|----------|-------------|--------|
 | `docker` | Docker operations | mounted Docker socket | **v1 active** |
 | `local` | Container-local diagnostics | process in container | **v1 active** |
-| `http` | SaaS and LAN APIs (GitHub, *arr, Uptime Kuma …) | HTTP request with toolkit credential | **v1 active** |
+| `http` | SaaS and LAN APIs (GitHub, *arr …) | HTTP request with toolkit credential | **v1 active** |
 | `truenas` | ZFS, pool status, dataset management | JSON-RPC 2.0 over WebSocket, API key | **v1 active** |
 | `ssh` | Host commands without API equivalent (`ps`, `top`) | SSH with host-side restricted key | v1 optional (§17) |
 | `file` | Reading and editing files below the path roots | in-process, no shell and no argv | **v1 active** |
 | `opencode` | A headless opencode coding-agent server | HTTP; one operation = one fixed multi-request workflow | **v1 active** |
+| `kuma` | Uptime Kuma monitors | Socket.IO over WebSocket, login from the credential store | **v1 active** |
 
 - **FR-8.1** Tools do not select an executor themselves — they belong to a toolkit, and the toolkit binds the executor (FR-4.8). A toolkit whose executor is not enabled at deploy time is rejected along with all its associated tools.
 - **FR-8.2** The `docker` executor gets the socket. This is **root-equivalent on the host** and stands in tension with NFR-1. This is deliberately accepted because gatekeeper is exactly the whitelist *that restricts this access* — but it means: a bug in gatekeeper is a root bug. From this follows the strictness of §6.
@@ -333,6 +334,16 @@ opencode is a coding agent that runs as a headless server and exposes an HTTP AP
 - **FR-8.25** An operation's parameters are fixed names the executor reads, not a template it binds. It follows that a name outside the operation's set is rejected at load time rather than accepted and silently ignored — a `dir` typed for `directory` would otherwise be visible only as opencode working in the wrong repository.
 - **FR-8.26** Exactly two parameter values leave the per-parameter allowlist behind, and both are checked before execution *and* again inside the executor (the doubling FR-4.6 already requires of argv). `session_id` is the only value that ever reaches a request path and is restricted to a character set that cannot introduce a path segment. `directory` — sent as opencode's own project-root header, which is what lets one toolkit serve many repositories without one toolkit per repository — must lie inside the toolkit's `path_roots`; a toolkit that declares none accepts no `directory` at all. That containment check is lexical rather than `realpath`-based, and its existence half runs only where the matching root is visible in gatekeeper's own filesystem: the path names a directory in the opencode container's namespace, so resolving symlinks would resolve them in the wrong one.
 - **FR-8.27 A Timed-Out Workflow Is `unknown`, Not `failed`.** `run` dispatches the prompt and then polls. When the call's budget runs out, the prompt has reached opencode and the session keeps working on the other side — the exact case FR-6.9 reserves `unknown` for. The response says so and carries the session id, so the follow-up is `check`, never a retry that would start the same work a second time.
+
+### The `kuma` Executor
+
+Uptime Kuma creates and pauses monitors only through its web UI's Socket.IO connection; it has no REST API for them, so the `http` executor cannot reach them. Without an executor the remaining routes are an INSERT into Kuma's database plus a restart, or a host script holding the Kuma login outside the credential store — both rejected.
+
+- **FR-8.28** A tool on a `kuma` toolkit declares one fixed `kuma_operation`: `monitor_list`, `monitor_add_http`, `monitor_pause` or `monitor_resume`. There is no operation for deleting or editing a monitor, or for notifications or settings — not as a denied operation, but as one the executor has no code for. The toolkit's `allowed_kuma_operations` picks a subset.
+- **FR-8.29** `monitor_add_http` takes `name`, `url` (http/https only, no userinfo), `interval` (30–3600 s) and `expected_status` (an enum over a fixed set of codes and ranges). The monitor type is fixed to HTTP(s), the method to GET, with no notifications, headers, body or auth. A tool definition whose schema is wider than these bounds is rejected at load time, and the executor checks them again on every call.
+- **FR-8.30** `monitor_pause` and `monitor_resume` act only on a monitor gatekeeper created, recognised by the description `monitor_add_http` writes. Any other monitor is refused before anything is sent for it.
+- **FR-8.31** The Kuma login is a `basic` credential in the store, bound by the toolkit's `credential:`. It never appears in a response, an error or the audit log, and `monitor_list` returns only id, name, type, URL without userinfo/query, active, interval and whether gatekeeper manages it — Kuma's own monitor objects carry other monitors' passwords and headers. The target rules of FR-8.24 apply unchanged.
+- **FR-8.32** `monitor_list` is category `read`; the three others are `write`, so their tools go through approval. A write operation declared `read` is rejected at load time. A timeout after a write was sent is `unknown` (FR-6.9).
 
 ### Toolkit Catalog v1
 

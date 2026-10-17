@@ -8,7 +8,7 @@ already in place (a header credential, a /32 CIDR, a narrow whitelist).
 `config/examples/toolkits.yaml` is the long form with the reasoning.
 
 Every placeholder is `CHANGEME`. An unedited block still parses, and fails
-closed: the http/opencode CIDR is 203.0.113.1/32 (RFC 5737 TEST-NET-3,
+closed: the http/opencode/kuma CIDR is 203.0.113.1/32 (RFC 5737 TEST-NET-3,
 reserved for documentation), so it can never match a real host.
 """
 from __future__ import annotations
@@ -204,6 +204,28 @@ _REFERENCES = (
     path_roots:
       - "/mnt/CHANGEME"   # the project roots opencode may be pointed at
     max_timeout_seconds: 900
+    max_output_bytes: 131072
+""",
+    ),
+    ToolkitReference(
+        "kuma", "Uptime Kuma monitors (kuma)",
+        "Lists, adds, pauses and resumes HTTP monitors over Kuma's Socket.IO API. "
+        "Create a credential named kuma (kind basic, value username:password) for a "
+        "Kuma account without 2FA. Pause/resume only touch monitors gatekeeper "
+        "created; there is no delete or edit.",
+        """\
+  kuma:
+    executor: kuma
+    base_url: "http://CHANGEME:3001"
+    allowed_cidrs:
+      - "203.0.113.1/32"  # CHANGEME -- e.g. 192.168.1.42/32, this one host
+    allowed_kuma_operations:
+      - monitor_list
+      - monitor_add_http
+      - monitor_pause
+      - monitor_resume
+    credential: kuma
+    max_timeout_seconds: 30
     max_output_bytes: 131072
 """,
     ),

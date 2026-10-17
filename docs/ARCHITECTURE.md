@@ -19,7 +19,7 @@ A toolkit **proposal** (`toolkit_proposals.yaml`) is the one deliberate,
 narrow exception: an `admin.toolkit_propose` call from `/admin/mcp` can
 draft a brand-new Tier 1 toolkit, `admin.toolkit_update` can propose a
 narrowly-scoped change (`executor`/`binaries`/`denied_args`/`run_as`, an
-`http`/`opencode` toolkit's `allowed_hosts`/`allowed_cidrs` since 1.10.0, an
+`http`/`opencode` toolkit's `allowed_hosts`/`allowed_cidrs` since 1.10.0 (`kuma` too since 1.12.0), an
 `http` toolkit's `allowed_methods`/`allowed_path_prefixes` and the
 `max_timeout_seconds`/`max_output_bytes` ceilings since 1.11.0; never
 `path_roots`/`protected_resources`) to an *existing* one,
@@ -105,6 +105,7 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 | `google` | Gmail, Calendar, Drive (the bundled CLI also carries `contacts`/`sheets`/`docs`) | local subprocess (`google_api.py`), OAuth2 refresh token materialized to a per-call tempfile; whitelisted by action string |
 | `microsoft` | Outlook mail via Microsoft Graph | local subprocess (`microsoft_api.py`), OAuth2 refresh token materialized to a per-call tempfile; whitelisted by action string |
 | `opencode` | A headless opencode coding-agent server | HTTP; one operation = one fixed multi-request workflow, whitelisted by operation name |
+| `kuma` | Uptime Kuma monitors | Socket.IO over WebSocket (Kuma has no REST API for monitors); four fixed operations, whitelisted by operation name |
 | `agent` | Other gatekeeper identities | in-process mailbox (`messages.yaml`); no shell, no credential. Network only if the operator sets `GATEKEEPER_NOTIFY_URL` (best-effort delivery webhook, never agent-controllable) |
 
 `http` toolkit boundaries (`tier1.py`'s `Toolkit`): `base_url`,
@@ -163,6 +164,32 @@ That check is lexical, not `realpath`-based, and its existence half runs
 only where the matching root is visible in gatekeeper's own filesystem:
 the path names a directory in the *opencode container's* namespace, so
 resolving symlinks would resolve them in the wrong one.
+
+`kuma` toolkit boundaries: `base_url`, `allowed_cidrs`/`allowed_hosts` (exactly
+as for `http`: resolved once, checked, and the WebSocket opened to the checked
+address with the name kept for `Host` and SNI, never through a proxy),
+`credential` (required, kind `basic`, `username:password` of a Kuma account
+without 2FA) and `allowed_kuma_operations`, a subset of `monitor_list`,
+`monitor_add_http`, `monitor_pause`, `monitor_resume`. Kuma creates and pauses
+monitors only over Socket.IO, so `execute_kuma.py` carries a minimal Engine.IO
+v4/Socket.IO client on `websockets` and does one fixed exchange per operation:
+log in with Kuma's `login` event, then read the pushed `monitorList`, or send
+one `add` (type `http`, method GET, no notifications, no headers, body or auth;
+only `name`, `url`, `interval` 30–3600 s and `expected_status` from a fixed set
+come from the call), or `pauseMonitor`/`resumeMonitor`. There is no event for
+delete, edit, notifications or settings in the module. Pause and resume first
+fetch the monitor and refuse (`tier1_violation`) unless its description starts
+with `Managed by gatekeeper`, which `monitor_add_http` writes — a hand-made
+monitor is never touched. `monitor_list` returns id, name, type, URL (without
+userinfo, query or fragment), active, interval and `managed`; Kuma's own
+monitor objects carry passwords and headers, and none of those fields is
+copied. The value floor (`execute_kuma.check_values`) runs in
+`validate.build_kuma_call` and again in the executor, and `catalog.py` refuses
+a tool whose schema is wider (an `interval` beyond 30–3600, a status outside
+the set) or that declares a write operation as category `read`, which would
+skip approval. A timeout after `add`/`pauseMonitor`/`resumeMonitor` went out
+is `unknown`. `add` sends Kuma 2.x's extra `conditions`/`rabbitmqNodes` fields
+only when the post-login `info` event names a 2.x version.
 
 `truenas` toolkit boundaries: `ws_url`, `allowed_rpc_methods`, `credential`.
 The whitelist acts on JSON-RPC method *names* — a method not listed
@@ -283,7 +310,7 @@ created or rotated.
 A toolkit for an outside service is pasted into `toolkits.yaml` by a human
 (FR-4.11). `toolkit_reference.py` holds one copy-pasteable starting block
 per executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`,
-`google`, `microsoft`, `opencode`, `agent`) with the safe defaults in
+`google`, `microsoft`, `opencode`, `kuma`, `agent`) with the safe defaults in
 place: a header credential, a `CHANGEME` host and an `allowed_cidrs` of
 203.0.113.1/32 (RFC 5737 TEST-NET-3), so an unedited block parses and
 fails closed. `/app/toolkits/reference` shows them; tools are then
@@ -679,6 +706,8 @@ frontend/              React console source: Vite, TypeScript, Tailwind;
                        paths (image build), read-only store with sha256
                        verification -- see "Release-bound artifacts"
   execute_artifact.py  `artifact` executor: list/info/read/transfer
+  execute_kuma.py      `kuma` executor: Uptime Kuma monitors over a minimal
+                       Socket.IO client (list, add HTTP, pause/resume own)
   ratelimit.py         Per-identity, per-category sliding window limiter
 config/
   toolkits.yaml         Tier 1 -- immutable at runtime
@@ -692,7 +721,7 @@ tests/
   test_api_web.py, api_env.py (shared API setup), test_oauth.py,
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_credentials.py, test_execute_http.py,
-  test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py,
+  test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py, test_execute_kuma.py,
   test_toolkit_reference.py, test_agent_messaging.py, test_admin_mcp.py,
   test_catalog_versioning.py, test_pending.py, test_notifications.py,
   test_mcp_live_catalog.py, conftest.py
