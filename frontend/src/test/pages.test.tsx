@@ -442,6 +442,10 @@ const STATS = {
   series: [{ start: "2026-10-10T00:00:00+00:00", ok: 3, not_ok: 1 }],
   toolkits: [{ name: "demo", ok: 3, denied: 1, failed: 0, total: 4 }],
   identities: [{ name: "bot", ok: 3, denied: 1, failed: 0, total: 4 }],
+  tools: [
+    { name: "demo.show", toolkit: "demo", ok: 2, denied: 1, failed: 0, total: 3 },
+    { name: "files.read", toolkit: "files", ok: 1, denied: 0, failed: 0, total: 1 },
+  ],
   admin: [{ action: "tool saved", count: 2 }],
   latency: [{ toolkit: "demo", avg_ms: 12, p95_ms: 40, count: 3 }],
 };
@@ -459,6 +463,21 @@ describe("stats and docs", () => {
     expect(asked[0]).toContain("window=7d");
     expect(screen.getByRole("link", { name: "bot" })).toHaveAttribute("href", "/audit?identity=bot");
     expect(screen.getByText("tool saved")).toBeInTheDocument();
+  });
+
+  it("lists the top tools of the toolkit picked from the dropdown", async () => {
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.includes("/stats")) return json(200, { ...STATS, toolkits: [...STATS.toolkits, { name: "files", ok: 1, denied: 0, failed: 0, total: 1 }] });
+      return json(200, []);
+    });
+    renderAt("/stats");
+    const picker = await screen.findByRole("combobox", { name: "Toolkit" });
+    expect(screen.getByRole("link", { name: "demo.show" })).toHaveAttribute("href", "/audit?tool=demo.show");
+    expect(screen.getByRole("link", { name: "files.read" })).toBeInTheDocument();
+    await userEvent.setup().selectOptions(picker, "files");
+    expect(screen.queryByRole("link", { name: "demo.show" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "files.read" })).toBeInTheDocument();
   });
 
   it("renders a bundled document as elements", async () => {

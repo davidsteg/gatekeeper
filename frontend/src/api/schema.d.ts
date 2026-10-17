@@ -1245,6 +1245,8 @@ export interface components {
             success_rate: number;
             /** Toolkits */
             toolkits: components["schemas"]["StatsRow"][];
+            /** Tools */
+            tools: components["schemas"]["StatsToolRow"][];
             totals: components["schemas"]["StatsTotals"];
             /** Truncated */
             truncated: boolean;
@@ -1281,6 +1283,33 @@ export interface components {
              * @default 0
              */
             ok: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        };
+        /** StatsToolRow */
+        StatsToolRow: {
+            /**
+             * Denied
+             * @default 0
+             */
+            denied: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /** Name */
+            name: string;
+            /**
+             * Ok
+             * @default 0
+             */
+            ok: number;
+            /** Toolkit */
+            toolkit: string;
             /**
              * Total
              * @default 0

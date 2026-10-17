@@ -4,6 +4,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { apiGet, type Schemas } from "@/api/client";
 import { PageHeader } from "@/components/Layout";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Select } from "@/components/ui/input";
 import { Loading, Notice, QueryError } from "@/components/ui/notice";
 import { cn } from "@/lib/utils";
 import { usePollInterval } from "@/live";
@@ -12,6 +13,8 @@ import { TOOLTIP_STYLE } from "./Overview";
 type Stats = Schemas["Stats"];
 type Window = "24h" | "7d" | "30d";
 const WINDOWS: Window[] = ["24h", "7d", "30d"];
+/** How many tools the "Top tools" card lists. */
+const TOP_TOOLS = 10;
 
 export function Stats() {
   const [params, setParams] = useSearchParams();
@@ -32,7 +35,11 @@ export function Stats() {
             {(query.data?.windows ?? WINDOWS.map((key) => ({ key, label: key }))).map((w) => (
               <button
                 key={w.key} role="tab" aria-selected={w.key === window}
-                onClick={() => setParams(w.key === "24h" ? {} : { window: w.key })}
+                onClick={() => setParams((p) => {
+                  const next = new URLSearchParams(p);
+                  if (w.key === "24h") next.delete("window"); else next.set("window", w.key);
+                  return next;
+                })}
                 className={cn(
                   "rounded-md px-3 py-1.5 text-sm",
                   w.key === window ? "bg-primary/10 font-medium text-primary" : "hover:bg-muted",
@@ -77,7 +84,8 @@ function StatsBody({ data }: { data: Stats }) {
       </Card>
       <div className="grid gap-4 lg:grid-cols-2">
         <CountTable title="By toolkit" rows={data.toolkits} empty="No tool calls in this window." />
-        <CountTable title="By identity" rows={data.identities} empty="No identity made a call in this window." link />
+        <CountTable title="By identity" rows={data.identities} empty="No identity made a call in this window." link="identity" />
+        <TopTools data={data} />
         <Card>
           <CardHeader title="Latency" />
           <CardBody>
@@ -164,16 +172,49 @@ function SeriesChart({ data }: { data: Stats }) {
   );
 }
 
-function CountTable({ title, rows, empty, link }: {
+const kitLabel = (name: string) => (name === "_unknown" ? "unknown tool" : name);
+
+/** The most-called tools of one toolkit (or all), picked from a dropdown.
+ *  The choice lives in the URL (`?toolkit=`), so it survives a reload. */
+function TopTools({ data }: { data: Stats }) {
+  const [params, setParams] = useSearchParams();
+  const kit = params.get("toolkit") ?? "";
+  const kits = data.toolkits.map((t) => t.name);
+  if (kit && !kits.includes(kit)) kits.push(kit);
+  const rows = data.tools.filter((t) => !kit || t.toolkit === kit).slice(0, TOP_TOOLS);
+  const select = (
+    <Select
+      aria-label="Toolkit" value={kit}
+      onChange={(e) => setParams((p) => {
+        const next = new URLSearchParams(p);
+        if (e.target.value) next.set("toolkit", e.target.value); else next.delete("toolkit");
+        return next;
+      })}
+    >
+      <option value="">All toolkits</option>
+      {kits.map((k) => <option key={k} value={k}>{kitLabel(k)}</option>)}
+    </Select>
+  );
+  return (
+    <CountTable
+      title="Top tools" actions={select} rows={rows} link="tool"
+      empty={kit ? `No calls to ${kitLabel(kit)} in this window.` : "No tool calls in this window."}
+    />
+  );
+}
+
+function CountTable({ title, rows, empty, link, actions }: {
   title: string;
   rows: Schemas["StatsRow"][];
   empty: string;
-  link?: boolean;
+  /** Link each name to the audit log, filtered by this field. */
+  link?: "identity" | "tool";
+  actions?: React.ReactNode;
 }) {
   const max = Math.max(1, ...rows.map((r) => r.total));
   return (
     <Card>
-      <CardHeader title={title} />
+      <CardHeader title={title} actions={actions} />
       <CardBody>
         {rows.length === 0 ? <p className="text-sm text-muted-foreground">{empty}</p> : (
           <ul className="space-y-2 text-sm">
@@ -181,8 +222,8 @@ function CountTable({ title, rows, empty, link }: {
               <li key={r.name}>
                 <div className="flex justify-between gap-2">
                   {link
-                    ? <Link className="font-mono hover:underline" to={`/audit?identity=${encodeURIComponent(r.name)}`}>{r.name}</Link>
-                    : <span className="font-mono">{r.name === "_unknown" ? "unknown tool" : r.name}</span>}
+                    ? <Link className="font-mono hover:underline" to={`/audit?${link}=${encodeURIComponent(r.name)}`}>{r.name}</Link>
+                    : <span className="font-mono">{kitLabel(r.name)}</span>}
                   <span className="text-xs text-muted-foreground tabular-nums">
                     {r.total} · {r.ok} ok · {r.denied} denied · {r.failed} failed
                   </span>
