@@ -40,7 +40,7 @@ use crate::runas::parse_run_as;
 
 /// Executor types implemented (sorted, as `sorted(KNOWN_EXECUTORS)` prints).
 pub const KNOWN_EXECUTORS: &[&str] = &[
-    "agent", "artifact", "docker", "file", "google", "http", "kuma", "local", "microsoft",
+    "agent", "artifact", "docker", "file", "git", "google", "http", "kuma", "local", "microsoft",
     "opencode", "ssh", "truenas",
 ];
 
@@ -87,6 +87,32 @@ pub const KUMA_INTERVAL_MAX: i64 = 3600;
 /// enum must be a subset. Sorted, as `sorted(KUMA_STATUS_CODES)` prints.
 pub const KUMA_STATUS_CODES: &[&str] =
     &["200", "200-299", "201", "202", "204", "300-399", "301", "302", "400-499", "401", "403", "404"];
+
+/// The `git` executor's vocabulary (`execute::git`): one operation, a
+/// plain `git push` of one branch from an allowlisted repository to its
+/// Tier 1 remote. No force, no delete, no fetch into the worker's checkout
+/// -- not as denied operations, but as ones this executor has no code for.
+pub const GIT_OPERATIONS: &[&str] = &["push"];
+
+/// The only refs a `git` push may create or move: `refs/heads/` plus this.
+/// A constant rather than a toolkit field, so `main` (or any other branch
+/// outside it) is not one edit of toolkits.yaml away.
+pub const GIT_PUSH_BRANCH_PREFIX: &str = "feat/";
+
+/// Where the `git` executor finds git when the toolkit does not say.
+pub const DEFAULT_GIT_BINARY: &str = "/usr/bin/git";
+
+/// A `repos:` key: what a tool's `repo` parameter names
+/// (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).
+// PORT NOTE: Python's `re.match` with `$` also accepted a name ending in a
+// newline; here the whole name must match.
+fn is_git_repo_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[1..].iter().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
 
 /// Artifacts this image no longer builds (RELEASE.md 0.52.0).
 pub const REMOVED_ARTIFACTS: &[&str] = &["hermes-adapter-contract", "hermes-recovery-adapter"];
@@ -287,6 +313,14 @@ pub struct Toolkit {
     /// reached under `allowed_hosts`/`allowed_cidrs` like an `http`
     /// toolkit; the login is the toolkit's `credential` (kind `basic`).
     pub allowed_kuma_operations: Vec<String>,
+    // -- `git` executor only --
+    /// Subset of [`GIT_OPERATIONS`], the git binary, and the repositories a
+    /// push may come from -- each a local path paired with the one remote
+    /// it may go to. A call names a repository by its key and never a path
+    /// or a URL.
+    pub allowed_git_operations: Vec<String>,
+    pub git_binary: Option<String>,
+    pub git_repos: Vec<GitRepo>,
     /// Ceiling on one message's subject + body, in bytes.
     pub max_message_bytes: i64,
     /// Ceiling on how many messages one recipient's mailbox holds.
@@ -336,6 +370,9 @@ impl Default for Toolkit {
             allowed_artifacts: Vec::new(),
             handover_dir: None,
             allowed_kuma_operations: Vec::new(),
+            allowed_git_operations: Vec::new(),
+            git_binary: None,
+            git_repos: Vec::new(),
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             max_mailbox_messages: DEFAULT_MAILBOX_LIMIT,
         }
@@ -466,6 +503,30 @@ impl Toolkit {
     pub fn allows_kuma_operation(&self, operation: &str) -> bool {
         self.allowed_kuma_operations.iter().any(|o| o == operation)
     }
+
+    // -- `git` executor --
+
+    pub fn allows_git_operation(&self, operation: &str) -> bool {
+        self.allowed_git_operations.iter().any(|o| o == operation)
+    }
+
+    /// The allowlisted repository called `name`, or `None`.
+    pub fn git_repo(&self, name: &str) -> Option<&GitRepo> {
+        self.git_repos.iter().find(|r| r.name == name)
+    }
+}
+
+/// One entry of a `git` toolkit's `repos:` (deploy-time only).
+///
+/// `path` is the working copy (or bare repository) on this container's
+/// filesystem that a worker commits into; `remote` is the one URL its
+/// branches may be pushed to. Neither comes from a call, and the
+/// repository's own remotes are never read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRepo {
+    pub name: String,
+    pub path: String,
+    pub remote: String,
 }
 
 /// A concrete place a toolkit's actions may run (FR-8.3g, deploy-time).
@@ -911,6 +972,9 @@ fn toolkit_destinations(
             "kuma" => Some(
                 "'kuma' toolkits cannot declare destinations -- one toolkit, one Uptime Kuma (use a separate toolkit per instance)",
             ),
+            "git" => Some(
+                "'git' toolkits cannot declare destinations -- each repository under 'repos' already names its one remote",
+            ),
             "artifact" => Some(
                 "'artifact' toolkits cannot declare destinations -- artifacts come from this image, not from a target to connect to",
             ),
@@ -1248,6 +1312,86 @@ fn parse_network_targets(
 
 fn has_dotdot(path: &str) -> bool {
     pure_posix_parts(path).iter().any(|p| p == "..")
+}
+
+/// `_parse_git_repos`: a `git` toolkit's `repos:` -- name -> {path, remote}.
+///
+/// `remote` is https, or http to a loopback address (a local mirror, and
+/// what the tests push to): the token travels in a header to exactly this
+/// URL, so a plain-http hop across a network is refused. No user or
+/// password in it, no query or fragment -- the credential is the store's.
+fn parse_git_repos(value: &Value, where_: &str) -> ConfigResult<Vec<GitRepo>> {
+    let entries = match value {
+        Value::Object(m) if !m.is_empty() => m,
+        _ => {
+            return Err(ConfigError::new(format!(
+                "{where_}: 'repos' must be a non-empty mapping of name -> {{path, remote}}"
+            )))
+        }
+    };
+    let mut repos = Vec::new();
+    for (name, entry) in entries {
+        let at = format!("{where_}: repos.{name}");
+        // PORT NOTE: Python also refused a key YAML parsed as a non-string
+        // (`1:`); `crate::yaml` hands every key over as its `str()`, so a
+        // number-looking name is judged by the pattern alone here.
+        if !is_git_repo_name(name) {
+            return Err(ConfigError::new(format!(
+                "{at}: a repo name is letters, digits, '.', '_' and '-', at most 64 characters"
+            )));
+        }
+        let Value::Object(entry) = entry else {
+            return Err(ConfigError::new(format!("{at}: expects a mapping with 'path' and 'remote'")));
+        };
+        let mut unknown: Vec<String> =
+            entry.keys().filter(|k| k.as_str() != "path" && k.as_str() != "remote").cloned().collect();
+        unknown.sort();
+        if !unknown.is_empty() {
+            return Err(ConfigError::new(format!("{at}: unknown fields {}", repr_list(&unknown))));
+        }
+        let path = py_str(require(entry, "path", &at)?);
+        if !is_absolute(&path) || has_dotdot(&path) {
+            return Err(ConfigError::new(format!("{at}: 'path' must be an absolute path without '..'")));
+        }
+        let remote = py_str(require(entry, "remote", &at)?);
+        let parsed = urlsplit(&remote);
+        let info = crate::execute::http::host_info(&parsed.netloc);
+        if !crate::execute::kuma::netloc_is_valid(&parsed.netloc) || crate::execute::http::parse_port(&info.port).is_err()
+        {
+            return Err(ConfigError::new(format!("{at}: 'remote' is not a valid URL")));
+        }
+        let host = info.hostname;
+        let loopback = host == "localhost" || py_ip_address(&host).is_some_and(is_loopback_address);
+        if parsed.scheme != "https" && !(parsed.scheme == "http" && loopback) {
+            return Err(ConfigError::new(format!(
+                "{at}: 'remote' must be an https URL (plain http only to a loopback address)"
+            )));
+        }
+        // `urlsplit(remote).username`/`.password`: present at all as soon
+        // as the netloc has an '@' (and, for the password, a ':' before it).
+        let has_userinfo = parsed.netloc.contains('@');
+        if host.is_empty() || has_userinfo {
+            return Err(ConfigError::new(format!(
+                "{at}: 'remote' needs a host and no user or password -- the token comes from the toolkit's credential"
+            )));
+        }
+        if !parsed.query.is_empty() || !parsed.fragment.is_empty() || remote.chars().any(crate::execute::kuma::py_isspace) {
+            return Err(ConfigError::new(format!(
+                "{at}: 'remote' must not carry a query, a fragment or whitespace"
+            )));
+        }
+        repos.push(GitRepo { name: name.clone(), path, remote });
+    }
+    Ok(repos)
+}
+
+/// `ipaddress.ip_address(x).is_loopback` (Python 3.13: an IPv4-mapped
+/// IPv6 address is judged by its IPv4 address).
+pub fn is_loopback_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(a) => v4_flags(a)[3],
+        IpAddr::V6(a) => v6_flags(a)[3],
+    }
 }
 
 /// Loads and validates `toolkits.yaml`. Errors here abort startup.
@@ -1637,6 +1781,38 @@ fn parse_toolkit(
                     repr_list(KUMA_OPERATIONS)
                 )));
             }
+        }
+        "git" => {
+            if tk.credential.as_deref().unwrap_or("").is_empty() {
+                return Err(ConfigError::new(format!(
+                    "{where_}: a git toolkit needs 'credential' -- the name of a \
+                     'bearer' credential (a token that may push) or a 'basic' \
+                     one (user:token)"
+                )));
+            }
+            tk.allowed_git_operations = req_list("allowed_git_operations")?;
+            let unknown = sorted_difference(&tk.allowed_git_operations, GIT_OPERATIONS);
+            if tk.allowed_git_operations.is_empty() || !unknown.is_empty() {
+                let tail = if unknown.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (unknown: {})", repr_list(&unknown))
+                };
+                return Err(ConfigError::new(format!(
+                    "{where_}: allowed_git_operations must be a non-empty subset of {}{tail}",
+                    repr_list(GIT_OPERATIONS)
+                )));
+            }
+            let git_binary = spec.get("git_binary").map(py_str).unwrap_or_else(|| DEFAULT_GIT_BINARY.to_string());
+            if !is_absolute(&git_binary) {
+                return Err(ConfigError::new(format!(
+                    "{where_}: git_binary {} must be an absolute path -- \
+                     otherwise PATH decides what gets executed",
+                    repr_str(&git_binary)
+                )));
+            }
+            tk.git_binary = Some(git_binary);
+            tk.git_repos = parse_git_repos(require(spec, "repos", where_)?, where_)?;
         }
         "agent" => {
             let mailbox = req_str("mailbox_path")?;

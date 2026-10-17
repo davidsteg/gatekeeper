@@ -285,7 +285,7 @@ impl SocketIo {
 
 /// `str.isspace()` for one character: Unicode White_Space plus the four
 /// information separators U+001C..U+001F Python also counts.
-fn py_isspace(c: char) -> bool {
+pub(crate) fn py_isspace(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 
@@ -315,7 +315,7 @@ fn ip_kind(s: &str) -> Option<bool> {
 /// The `ValueError`s Python's `urlsplit()` raises for a netloc: unbalanced
 /// brackets, a bracketed host that is not an IPv6/IPvFuture address, and
 /// characters that turn into URL delimiters under NFKC.
-fn netloc_is_valid(netloc: &str) -> bool {
+pub(crate) fn netloc_is_valid(netloc: &str) -> bool {
     let open = netloc.contains('[');
     let close = netloc.contains(']');
     if open != close {

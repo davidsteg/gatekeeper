@@ -15,6 +15,7 @@ A new `git` executor pushes a worker's `feat/*` branch from a repository on the 
 ### Setup
 
 See "Wiring a feat/* push to GitHub" in `docs/DEPLOYMENT.md`: the `github` credential, the checkout mounted into the container, the toolkit, then `gkrepo.push` granted to the one identity that should push. The tool ships `enabled: false`.
+
 ## 1.13.0
 
 The image now runs gatekeeper's Rust implementation (`rust/`) instead of the Python one. It reads the same configuration files, keeps every endpoint and environment variable, and an existing deployment starts with no change.

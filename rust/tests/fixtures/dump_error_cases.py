@@ -44,6 +44,8 @@ BASE = {
             "allowed_artifacts": ["hermes-skill"], "handover_dir": "/handover"},
     "kuma": {"executor": "kuma", "base_url": "http://kuma.lan:3001", "allowed_cidrs": ["10.0.0.0/8"],
              "credential": "kuma", "allowed_kuma_operations": ["monitor_list", "monitor_add_http", "monitor_pause"]},
+    "gkrepo": {"executor": "git", "credential": "github", "allowed_git_operations": ["push"],
+               "repos": {"p": {"path": "/srv/p", "remote": "https://github.com/a/b.git"}}},
 }
 
 # (name, toolkit name, field overrides; None deletes the field)
@@ -173,6 +175,48 @@ TOOLKIT_CASES = [
                                               "allowed_cidrs": None, "allowed_hosts": ["kuma.example.org"]}),
     ("kuma_hosts_other", "kuma", "allowed_hosts", ["status.example.org"]),
     ("kuma_follow", "kuma", "follow_redirects", True),
+    ("git_no_credential", "gkrepo", "credential", None),
+    ("git_empty_credential", "gkrepo", "credential", ""),
+    ("git_no_ops", "gkrepo", "allowed_git_operations", None),
+    ("git_empty_ops", "gkrepo", "allowed_git_operations", []),
+    ("git_unknown_ops", "gkrepo", "allowed_git_operations", ["push", "force_push", "delete"]),
+    ("git_ops_not_list", "gkrepo", "allowed_git_operations", "push"),
+    ("git_binary_ok", "gkrepo", "git_binary", "/opt/git/bin/git"),
+    ("git_binary_relative", "gkrepo", "git_binary", "git"),
+    ("git_binary_int", "gkrepo", "git_binary", 5),
+    ("git_no_repos", "gkrepo", "repos", None),
+    ("git_repos_empty", "gkrepo", "repos", {}),
+    ("git_repos_list", "gkrepo", "repos", ["p"]),
+    ("git_repo_bad_name", "gkrepo", "repos", {"bad name": {"path": "/srv/p", "remote": "https://github.com/a/b.git"}}),
+    ("git_repo_dot_name", "gkrepo", "repos", {".p": {"path": "/srv/p", "remote": "https://github.com/a/b.git"}}),
+    ("git_repo_long_name", "gkrepo", "repos", {"a" * 65: {"path": "/srv/p", "remote": "https://github.com/a/b.git"}}),
+    ("git_repo_max_name", "gkrepo", "repos", {"a" * 64: {"path": "/srv/p", "remote": "https://github.com/a/b.git"}}),
+    ("git_repo_not_mapping", "gkrepo", "repos", {"p": "/srv/p"}),
+    ("git_repo_unknown_field", "gkrepo", "repos", {"p": {"path": "/srv/p", "remote": "https://github.com/a/b.git",
+                                                         "push": "x", "branch": "main"}}),
+    ("git_repo_no_path", "gkrepo", "repos", {"p": {"remote": "https://github.com/a/b.git"}}),
+    ("git_repo_no_remote", "gkrepo", "repos", {"p": {"path": "/srv/p"}}),
+    ("git_repo_relative", "gkrepo", "repos", {"p": {"path": "srv/p", "remote": "https://github.com/a/b.git"}}),
+    ("git_repo_dotdot", "gkrepo", "repos", {"p": {"path": "/srv/../etc", "remote": "https://github.com/a/b.git"}}),
+    ("git_repo_path_int", "gkrepo", "repos", {"p": {"path": 5, "remote": "https://github.com/a/b.git"}}),
+] + [
+    (f"git_remote_{i}", "gkrepo", "repos", {"p": {"path": "/srv/p", "remote": remote}})
+    for i, remote in enumerate([
+        "http://github.com/a/b.git", "ssh://git@github.com/a/b.git", "file:///srv/x", "git@github.com:a/b.git",
+        "https://u:t@github.com/a/b.git", "https://u@github.com/a/b.git", "https://@github.com/a/b.git",
+        "https://github.com/a/b.git?x=1", "https://github.com/a/b.git#f", "https://github.com/a b.git",
+        "https://github.com/a/b.git\n", "https://github.com:x/a.git", "https://github.com:99999/a.git",
+        "https://[::1/a.git", "https://[github.com]/a.git", "https:///a.git", "HTTPS://github.com/a/b.git",
+        "http://127.0.0.1:9418/b.git", "http://127.9.9.9/b.git", "http://localhost/b.git",
+        "http://LOCALHOST:80/b.git", "http://[::1]:8080/b.git", "http://[::ffff:127.0.0.1]/b.git",
+        "http://10.0.0.1/b.git", "https://github.com:443/a/b.git", 5,
+    ])
+] + [
+    ("git_two_repos", "gkrepo", "repos", {"a": {"path": "/srv/a", "remote": "https://github.com/a/a.git"},
+                                          "b": {"path": "/srv/b/", "remote": "http://127.0.0.1:1/b.git"}}),
+    ("git_dest", "gkrepo", "destinations", ["d_http"]),
+    ("git_hosts", "gkrepo", "allowed_hosts", ["github.com"]),
+    ("git_runas", "gkrepo", "run_as", "3001"),
     ("denied_not_list", "local", "denied_args", "rm"),
     ("roots_not_strs", "local", "path_roots", [1, 2]),
 ]
@@ -366,6 +410,35 @@ TOOL_CASES = [
     ("kuma_id_unbounded", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_pause",
                                parameters={"monitor_id": {"type": "integer", "required": True, "description": "i"}})),
     ("kuma_id_string", tool("kuma.x", "kuma", category="write", kuma_operation="monitor_pause", parameters={"monitor_id": S})),
+]
+GREPO = {"type": "enum", "required": True, "values": ["p"], "description": "r"}
+GBRANCH = {"type": "string", "required": True, "pattern": "^feat/[a-z]+$", "description": "b"}
+GPARAMS = {"repo": GREPO, "branch": GBRANCH}
+TOOL_CASES += [
+    ("git_ok", tool("gkrepo.push", "gkrepo", category="write", git_operation="push", parameters=GPARAMS)),
+    ("git_no_op", tool("gkrepo.push", "gkrepo", category="write", parameters=GPARAMS)),
+    ("git_unknown_op", tool("gkrepo.push", "gkrepo", category="write", git_operation="force_push", parameters=GPARAMS)),
+    ("git_op_alias", tool("gkrepo.push", "gkrepo", category="write", operation="push", parameters=GPARAMS)),
+    ("git_as_read", tool("gkrepo.push", "gkrepo", git_operation="push", parameters=GPARAMS)),
+    ("git_write_external", tool("gkrepo.push", "gkrepo", category="write_external", git_operation="push",
+                                parameters=GPARAMS)),
+    ("git_extra", tool("gkrepo.push", "gkrepo", category="write", git_operation="push",
+                       parameters={**GPARAMS, "force": {"type": "boolean", "description": "f"}})),
+    ("git_missing_repo", tool("gkrepo.push", "gkrepo", category="write", git_operation="push",
+                              parameters={"branch": GBRANCH})),
+    ("git_branch_int", tool("gkrepo.push", "gkrepo", category="write", git_operation="push",
+                            parameters={**GPARAMS, "branch": {"type": "integer", "required": True, "description": "b"}})),
+    ("git_repo_bool", tool("gkrepo.push", "gkrepo", category="write", git_operation="push",
+                           parameters={**GPARAMS, "repo": {"type": "boolean", "description": "r"}})),
+    ("git_repo_enum_unknown", tool("gkrepo.push", "gkrepo", category="write", git_operation="push",
+                                   parameters={**GPARAMS, "repo": {**GREPO, "values": ["p", "z", "q"]}})),
+    ("git_repo_string", tool("gkrepo.push", "gkrepo", category="write", git_operation="push",
+                             parameters={**GPARAMS, "repo": {**GBRANCH, "pattern": "^[a-z]+$"}})),
+    ("git_branch_enum", tool("gkrepo.push", "gkrepo", category="write", git_operation="push",
+                             parameters={**GPARAMS, "branch": {"type": "enum", "required": True,
+                                                              "values": ["feat/a", "main"], "description": "b"}})),
+    ("git_timeout_wide", tool("gkrepo.push", "gkrepo", category="write", git_operation="push", parameters=GPARAMS,
+                              timeout_seconds=600)),
 ]
 for name, spec in TOOL_CASES:
     try:

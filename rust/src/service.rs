@@ -544,6 +544,7 @@ impl Service {
                 }
                 "artifact" => Request::Artifact(validate::build_artifact_call(&t, &values, &toolkit)?),
                 "kuma" => Request::Kuma(validate::build_kuma_call(&t, &values, &toolkit)?),
+                "git" => Request::Git(validate::build_git_call(&t, &values, &toolkit)?),
                 "file" => Request::File,
                 _ => Request::Unknown,
             };
@@ -687,6 +688,19 @@ impl Service {
                         &toolkit,
                         credentials,
                         timeout_seconds as f64,
+                        max_output_bytes,
+                        tool.idempotent,
+                        Some(&redact),
+                    )
+                    .await?
+                }
+                Request::Git(operation) => {
+                    execute::git::run(
+                        &operation,
+                        &values,
+                        &toolkit,
+                        credentials,
+                        timeout_seconds,
                         max_output_bytes,
                         tool.idempotent,
                         Some(&redact),
@@ -850,6 +864,7 @@ impl Service {
             "microsoft" => execute::microsoft::probe(toolkit).await,
             "opencode" => execute::opencode::probe(toolkit).await,
             "kuma" => execute::kuma::probe(toolkit).await,
+            "git" => execute::git::probe(toolkit).await,
             "agent" => execute::agent::probe(toolkit).await,
             "artifact" => {
                 let store = self.artifact_store();
@@ -949,6 +964,7 @@ enum Request {
     Agent(String),
     Artifact(String),
     Kuma(String),
+    Git(String),
     File,
     Unknown,
 }

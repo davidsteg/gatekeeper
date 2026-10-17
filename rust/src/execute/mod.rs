@@ -14,6 +14,7 @@ use parking_lot::Mutex;
 pub mod agent;
 pub mod artifact;
 pub mod file;
+pub mod git;
 pub mod google;
 pub mod http;
 pub mod kuma;

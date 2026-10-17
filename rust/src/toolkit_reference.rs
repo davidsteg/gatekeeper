@@ -192,6 +192,23 @@ pub const REFERENCES: &[ToolkitReference] = &[
 "#,
     },
     ToolkitReference {
+        key: "git",
+        display_name: "Push feat/* branches (git)",
+        notes: "Pushes one feat/* branch of a listed repository to that repository's remote, fast-forward only: no force, no delete, no main. Create a credential named github (kind bearer, a token that may push to the remote) and mount the repository into the container, read-only is enough.",
+        toolkit_yaml: r#"  gkrepo:
+    executor: git
+    repos:
+      CHANGEME:
+        path: "/repos/CHANGEME"   # the checkout, as mounted into this container
+        remote: "https://github.com/CHANGEME/CHANGEME.git"
+    allowed_git_operations:
+      - push
+    credential: github
+    max_timeout_seconds: 120
+    max_output_bytes: 16384
+"#,
+    },
+    ToolkitReference {
         key: "kuma",
         display_name: "Uptime Kuma monitors (kuma)",
         notes: "Lists, adds, pauses and resumes HTTP monitors over Kuma's Socket.IO API. Create a credential named kuma (kind basic, value username:password) for a Kuma account without 2FA. Pause/resume only touch monitors gatekeeper created; there is no delete or edit.",
@@ -254,14 +271,20 @@ mod tests {
 
     #[test]
     fn each_block_is_one_toolkit_of_its_executor() {
-        // PORT NOTE: Python also loads each block through load_tier1; that
-        // half belongs with the tier1 port.
         for r in REFERENCES {
             let parsed = crate::yaml::load(r.toolkit_yaml).unwrap();
             let map = parsed.as_object().unwrap();
             assert_eq!(map.len(), 1, "{}", r.key);
-            let (_, body) = map.iter().next().unwrap();
+            let (name, body) = map.iter().next().unwrap();
             assert_eq!(body["executor"], r.key);
+            // ... and it loads as a real Tier 1 toolkit.
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("toolkits.yaml");
+            let logs = dir.path().join("logs");
+            std::fs::write(&path, format!("toolkits:\n{}\naudit:\n  dir: {}\n", r.toolkit_yaml, logs.display()))
+                .unwrap();
+            let tier1 = crate::tier1::load_tier1(path.to_str().unwrap()).unwrap();
+            assert!(tier1.toolkits.contains_key(name), "{}", r.key);
         }
     }
 
@@ -269,8 +292,10 @@ mod tests {
     fn every_executor_with_a_toolkit_shape_has_a_reference() {
         let mut keys: Vec<&str> = REFERENCES.iter().map(|r| r.key).collect();
         keys.sort();
-        let mut want =
-            vec!["local", "docker", "http", "ssh", "truenas", "file", "google", "microsoft", "opencode", "kuma", "agent"];
+        let mut want = vec![
+            "local", "docker", "http", "ssh", "truenas", "file", "google", "microsoft", "opencode", "kuma", "git",
+            "agent",
+        ];
         want.sort();
         assert_eq!(keys, want);
         assert_eq!(get("http").unwrap().display_name, "HTTP API (http)");

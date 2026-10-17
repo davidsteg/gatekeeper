@@ -111,6 +111,12 @@ pub const KUMA_OPERATION_PARAMS: &[(&str, OpParams)] = &[
 /// without a human, and these must go through approval.
 pub const KUMA_WRITE_OPERATIONS: &[&str] = &["monitor_add_http", "monitor_pause", "monitor_resume"];
 
+/// `git` executor: `push` reads the repository's key in the toolkit's
+/// `repos:` and the branch. There is no parameter for a path, a remote, a
+/// refspec or a flag -- the first two are Tier 1, the rest is fixed in
+/// `execute::git`.
+pub const GIT_OPERATION_PARAMS: &[(&str, OpParams)] = &[("push", (&["repo", "branch"], &[]))];
+
 /// The `agent` executor's parameter contract. There is no `from` and no
 /// mailbox selector in any row, and that is the point.
 pub const AGENT_OPERATION_PARAMS: &[(&str, OpParams)] = &[
@@ -285,6 +291,9 @@ pub struct ToolDef {
     /// The `kuma` executor's operation (`tier1::KUMA_OPERATIONS`), fixed
     /// per tool like `agent_operation`.
     pub kuma_operation: Option<String>,
+    /// The `git` executor's operation (`tier1::GIT_OPERATIONS`), fixed per
+    /// tool like `agent_operation`.
+    pub git_operation: Option<String>,
 
     /// Per-tool override of the toolkit's `run_as` (file executor only).
     /// `None` inherits the toolkit's; `Some("")` explicitly clears it.
@@ -642,6 +651,36 @@ fn validate_kuma_params(
     Ok(())
 }
 
+/// `_validate_git_params`: a `push` changes a remote, so it is never
+/// category `read` (which `admin.tool_create` applies without a human).
+/// `repo` and `branch` are strings or enums; what they may contain is
+/// `execute::git::check_values`' call-time floor, which no schema can
+/// widen.
+fn validate_git_params(
+    operation: &str,
+    category: &str,
+    parameters: &IndexMap<String, Parameter>,
+    where_: &str,
+) -> ConfigResult<()> {
+    if category == "read" {
+        return Err(ConfigError::new(format!(
+            "{where_}: git operation {} changes a remote -- its category must be 'write', not 'read'",
+            repr_str(operation)
+        )));
+    }
+    for name in ["repo", "branch"] {
+        if let Some(param) = parameters.get(name) {
+            if param.ptype != "string" && param.ptype != "enum" {
+                return Err(ConfigError::new(format!(
+                    "{where_}: parameter {} must be a string or an enum",
+                    repr_str(name)
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// FR-4.5: a tool may stay below the toolkit limits, never exceed them.
 fn validate_ceilings(tool: &ToolDef, toolkit: &Toolkit, where_: &str) -> ConfigResult<()> {
     if tool.timeout_seconds > toolkit.max_timeout_seconds {
@@ -783,6 +822,27 @@ pub fn validate_against_tier1(tool: &ToolDef, toolkit: &Toolkit) -> ConfigResult
                     repr_opt(&tool.kuma_operation),
                     repr_list(&toolkit.allowed_kuma_operations)
                 )));
+            }
+        }
+        "git" => {
+            if !toolkit.allows_git_operation(tool.git_operation.as_deref().unwrap_or("")) {
+                return Err(ConfigError::tier1(format!(
+                    "{where_}: git operation {} is not in the allowlist {} of toolkit {tk_name}",
+                    repr_opt(&tool.git_operation),
+                    repr_list(&toolkit.allowed_git_operations)
+                )));
+            }
+            if let Some(repo) = tool.parameters.get("repo").filter(|p| p.ptype == "enum") {
+                let mut unknown: Vec<String> =
+                    repo.values.iter().filter(|v| toolkit.git_repo(v).is_none()).cloned().collect();
+                unknown.sort();
+                unknown.dedup();
+                if !unknown.is_empty() {
+                    return Err(ConfigError::tier1(format!(
+                        "{where_}: repo values {} are not in the 'repos' of toolkit {tk_name}",
+                        repr_list(&unknown)
+                    )));
+                }
             }
         }
         "agent" => {
@@ -1047,6 +1107,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         agent_operation: None,
         artifact_operation: None,
         kuma_operation: None,
+        git_operation: None,
         run_as: None,
         destination: None,
     };
@@ -1219,6 +1280,21 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
             validate_op_params("kuma", KUMA_OPERATION_PARAMS, &op, &parameters, where_)?;
             validate_kuma_params(&op, &tool.category, &parameters, where_)?;
             tool.kuma_operation = Some(op);
+        }
+        "git" => {
+            let Some(op) = nonempty_str(either("git_operation", "operation")) else {
+                return Err(ConfigError::new(format!("{where_}: field 'git_operation' is missing")));
+            };
+            if op_params(GIT_OPERATION_PARAMS, &op).is_none() {
+                return Err(ConfigError::new(format!(
+                    "{where_}: git_operation {} is unknown (known: {})",
+                    repr_str(&op),
+                    repr_list(&sorted_ops(GIT_OPERATION_PARAMS))
+                )));
+            }
+            validate_op_params("git", GIT_OPERATION_PARAMS, &op, &parameters, where_)?;
+            validate_git_params(&op, &tool.category, &parameters, where_)?;
+            tool.git_operation = Some(op);
         }
         _ => {}
     }
