@@ -24,9 +24,9 @@ No shell injection. No command confusion. No hidden side effects.
 - **Granular permissions** — per-tool, per-identity, scoped by resource
 - **Complete audit trail** — every call logged, even the rejected ones
 - **Empty on install** — nothing ships preconfigured; every capability is an audited decision
-- **Not just local commands** — `http`, `truenas`, `ssh`, `opencode` and `kuma` executors
-  reach outside APIs, remote hosts, a headless coding agent and Uptime Kuma's
-  monitors the same way, with
+- **Not just local commands** — `http`, `truenas`, `ssh`, `opencode`, `kuma` and `git` executors
+  reach outside APIs, remote hosts, a headless coding agent, Uptime Kuma's
+  monitors and a `feat/*` push to GitHub the same way, with
   SSRF-safe target checks, mandatory SSH
   host-key pinning, and secrets kept in a write-only credential store; see
   [Reaching other services](#reaching-other-services-http-ssh-truenas-opencode) below
@@ -94,7 +94,7 @@ Each tool is a template — a fixed action, not a free-form command. For a local
 
 ### Reaching other services: http, ssh, truenas, opencode
 
-Reaching an outside service (Sonarr, Home Assistant, pfSense, TrueNAS, a plain Linux host over SSH, a headless opencode server, Uptime Kuma, …) takes two steps. First a **toolkit**: which host, which address range, which credential. That is a deploy-time decision you paste into `toolkits.yaml` by hand and redeploy. The console can create *tools*, never *toolkits*, on purpose: that boundary is what keeps a compromised admin session from reaching an address nobody approved. **Toolkits → Reference YAML** has a copy-pasteable starting block for every executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`, `google`, `microsoft`, `opencode`, `kuma`, `agent`) with the safe defaults already in place, and `config/examples/toolkits.yaml` is the long form with the reasoning.
+Reaching an outside service (Sonarr, Home Assistant, pfSense, TrueNAS, a plain Linux host over SSH, a headless opencode server, Uptime Kuma, …) takes two steps. First a **toolkit**: which host, which address range, which credential. That is a deploy-time decision you paste into `toolkits.yaml` by hand and redeploy. The console can create *tools*, never *toolkits*, on purpose: that boundary is what keeps a compromised admin session from reaching an address nobody approved. **Toolkits → Reference YAML** has a copy-pasteable starting block for every executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`, `google`, `microsoft`, `opencode`, `kuma`, `git`, `agent`) with the safe defaults already in place, and `config/examples/toolkits.yaml` is the long form with the reasoning.
 
 Then the **tools**: a method and a path under the toolkit's allowed prefixes, written in the tool editor or created by an admin agent over `/admin/mcp` (`admin.tool_validate`, `admin.tool_create`). Either way each one is checked against the toolkit's limits before it's saved.
 
@@ -109,7 +109,7 @@ An agent never sees a key and never sends one. It asks for a tool by name; gatek
 | Kind | How it reaches the request | Typical service |
 | --- | --- | --- |
 | `api_key_header` | A named header you choose | Sonarr, Radarr, Prowlarr, Bazarr, Jellyseerr (`X-Api-Key`), Jellyfin (`X-Emby-Token`) |
-| `bearer` | `Authorization: Bearer …` | Home Assistant, Netdata |
+| `bearer` | `Authorization: Bearer …`; for `git`, the push token (sent as Basic, the way git over https expects) | Home Assistant, Netdata, GitHub |
 | `basic` | `Authorization: Basic …` (value stored as `user:pass`); for `kuma`, the Socket.IO login | anything with HTTP basic auth, Uptime Kuma |
 | `url_query` | A query parameter — the one documented exception, for services with no header option at all | SABnzbd (`?apikey=`) |
 | `url_path` | Substituted into the toolkit's `base_url` | Telegram's bot API |

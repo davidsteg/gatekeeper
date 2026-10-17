@@ -106,6 +106,7 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 | `microsoft` | Outlook mail via Microsoft Graph | local subprocess (`microsoft_api.py`), OAuth2 refresh token materialized to a per-call tempfile; whitelisted by action string |
 | `opencode` | A headless opencode coding-agent server | HTTP; one operation = one fixed multi-request workflow, whitelisted by operation name |
 | `kuma` | Uptime Kuma monitors | Socket.IO over WebSocket (Kuma has no REST API for monitors); four fixed operations, whitelisted by operation name |
+| `git` | Pushing a `feat/*` branch of a listed repository to its remote | local `git` subprocess in a throwaway bare repository; token as an env-config header; one operation, `push` |
 | `agent` | Other gatekeeper identities | in-process mailbox (`messages.yaml`); no shell, no credential. Network only if the operator sets `GATEKEEPER_NOTIFY_URL` (best-effort delivery webhook, never agent-controllable) |
 
 `http` toolkit boundaries (`tier1.py`'s `Toolkit`): `base_url`,
@@ -190,6 +191,34 @@ the set) or that declares a write operation as category `read`, which would
 skip approval. A timeout after `add`/`pauseMonitor`/`resumeMonitor` went out
 is `unknown`. `add` sends Kuma 2.x's extra `conditions`/`rabbitmqNodes` fields
 only when the post-login `info` event names a 2.x version.
+
+`git` toolkit boundaries: `repos` (name → `path`, the checkout as mounted in
+this container, and `remote`, https or loopback-only http, no userinfo),
+`credential` (required, `bearer` token or `basic` `user:token`),
+`allowed_git_operations` (`push`) and `git_binary` (default `/usr/bin/git`,
+absolute). A call names a repo key and a branch. `execute_git.check_values`
+(in `validate.build_git_call` and again in the executor) allows only
+`feat/<name>` with plain components (`tier1.GIT_PUSH_BRANCH_PREFIX`, a
+constant) and a listed repo. The push never runs in the worker's checkout,
+whose `.git/config` and hooks the worker controls (a `pre-push` hook, an
+`url.<x>.insteadOf` or a `credential.helper` there would run code or move
+the token elsewhere). Each call instead `git init --bare --template=` a
+tempdir, points `objects/info/alternates` at the checkout's object store,
+fetches `refs/heads/<branch>` from the checkout's path (only `upload-pack`
+touches it), `ls-remote`s the remote for the old SHA, lists the new commits
+(`rev-list --not <old>`, or `--not` every remote head for a new branch), and
+pushes `refs/heads/<branch>:refs/heads/<branch>` with `--porcelain
+--no-verify` and no `+`. Every git child gets a fresh environment
+(`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`, a temp `HOME`, no
+terminal prompt) and its config through `GIT_CONFIG_COUNT`:
+`core.hooksPath=/dev/null`, an empty `credential.helper`,
+`http.followRedirects=false`, `protocol.allow=never` with only `file` (for
+the fetch) or the remote's scheme re-allowed, `safe.directory` for the
+checkout, and -- only for `ls-remote` and `push` --
+`http.<remote>.extraHeader: Authorization: Basic …`. The token is never in
+argv; outputs are scrubbed of the token and its encodings before the audit
+redactor. A timeout during the push is `unknown` unless the tool is
+idempotent (`gkrepo.push` is: pushing the same commit again is a no-op).
 
 `truenas` toolkit boundaries: `ws_url`, `allowed_rpc_methods`, `credential`.
 The whitelist acts on JSON-RPC method *names* — a method not listed
@@ -310,7 +339,7 @@ created or rotated.
 A toolkit for an outside service is pasted into `toolkits.yaml` by a human
 (FR-4.11). `toolkit_reference.py` holds one copy-pasteable starting block
 per executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`,
-`google`, `microsoft`, `opencode`, `kuma`, `agent`) with the safe defaults in
+`google`, `microsoft`, `opencode`, `kuma`, `git`, `agent`) with the safe defaults in
 place: a header credential, a `CHANGEME` host and an `allowed_cidrs` of
 203.0.113.1/32 (RFC 5737 TEST-NET-3), so an unedited block parses and
 fails closed. `/app/toolkits/reference` shows them; tools are then
@@ -708,6 +737,8 @@ frontend/              React console source: Vite, TypeScript, Tailwind;
   execute_artifact.py  `artifact` executor: list/info/read/transfer
   execute_kuma.py      `kuma` executor: Uptime Kuma monitors over a minimal
                        Socket.IO client (list, add HTTP, pause/resume own)
+  execute_git.py       `git` executor: fast-forward push of one feat/* branch
+                       from a listed repository, via a throwaway bare repo
   ratelimit.py         Per-identity, per-category sliding window limiter
 config/
   toolkits.yaml         Tier 1 -- immutable at runtime
@@ -721,7 +752,7 @@ tests/
   test_api_web.py, api_env.py (shared API setup), test_oauth.py,
   test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
   test_credentials.py, test_execute_http.py,
-  test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py, test_execute_kuma.py,
+  test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py, test_execute_kuma.py, test_execute_git.py,
   test_toolkit_reference.py, test_agent_messaging.py, test_admin_mcp.py,
   test_catalog_versioning.py, test_pending.py, test_notifications.py,
   test_mcp_live_catalog.py, conftest.py

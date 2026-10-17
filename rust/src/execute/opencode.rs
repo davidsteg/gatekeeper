@@ -419,7 +419,7 @@ pub fn message_text(payload: &Value) -> String {
 }
 
 /// `str.splitlines()`.
-fn splitlines(text: &str) -> Vec<&str> {
+pub(crate) fn splitlines(text: &str) -> Vec<&str> {
     let mut lines = Vec::new();
     let mut start = 0;
     let mut chars = text.char_indices().peekable();

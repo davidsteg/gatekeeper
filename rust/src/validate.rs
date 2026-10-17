@@ -610,6 +610,21 @@ pub fn build_kuma_call(tool: &ToolDef, values: &Values, toolkit: &Toolkit) -> Re
     Ok(operation)
 }
 
+/// The `git` operation, re-checked against Tier 1, with
+/// `execute::git::check_values` applied here so a `main` branch or an
+/// unknown repo is an audited denial before git ever runs.
+pub fn build_git_call(tool: &ToolDef, values: &Values, toolkit: &Toolkit) -> Result<String, Denied> {
+    let operation = tool.git_operation.clone().unwrap_or_default();
+    if !toolkit.allows_git_operation(&operation) {
+        return Err(denied(
+            DenialReason::Tier1Violation,
+            format!("Git operation {} is not allowed for this toolkit.", repr_str(&operation)),
+        ));
+    }
+    crate::execute::git::check_values(toolkit, values)?;
+    Ok(operation)
+}
+
 /// The `artifact` operation, re-checked against Tier 1, and the shape of
 /// the only two values a call can supply.
 pub fn build_artifact_call(tool: &ToolDef, values: &Values, toolkit: &Toolkit) -> Result<String, Denied> {

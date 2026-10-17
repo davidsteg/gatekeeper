@@ -8,6 +8,9 @@
 //! every parsed tool field, the MCP `inputSchema`, the agent description,
 //! the disabled/rejected lists, `flat_spec_of` and `grantable_ids`.
 
+// The toolkit dump is one `json!` with every field of `Toolkit`.
+#![recursion_limit = "256"]
+
 mod common;
 
 use common::examples_dir;
@@ -24,6 +27,8 @@ fn opt_args(a: &Option<IndexMap<String, CliArg>>) -> Value {
 }
 
 fn toolkit_value(t: &Toolkit) -> Value {
+    let git_repos: Vec<Value> =
+        t.git_repos.iter().map(|r| json!({"name": r.name, "path": r.path, "remote": r.remote})).collect();
     json!({
         "name": t.name, "executor": t.executor, "binaries": t.binaries,
         "denied_args": t.denied_args, "path_roots": t.path_roots,
@@ -45,6 +50,8 @@ fn toolkit_value(t: &Toolkit) -> Value {
         "allowed_artifact_operations": t.allowed_artifact_operations,
         "allowed_artifacts": t.allowed_artifacts, "handover_dir": t.handover_dir,
         "allowed_kuma_operations": t.allowed_kuma_operations,
+        "allowed_git_operations": t.allowed_git_operations, "git_binary": t.git_binary,
+        "git_repos": git_repos,
         "max_message_bytes": t.max_message_bytes, "max_mailbox_messages": t.max_mailbox_messages,
     })
 }
@@ -64,7 +71,7 @@ fn tool_value(t: &ToolDef) -> Value {
         "microsoft_action": t.microsoft_action, "microsoft_args": opt_args(&t.microsoft_args),
         "opencode_operation": t.opencode_operation, "agent_operation": t.agent_operation,
         "artifact_operation": t.artifact_operation, "kuma_operation": t.kuma_operation,
-        "run_as": t.run_as,
+        "git_operation": t.git_operation, "run_as": t.run_as,
         "destination": t.destination, "input_schema": t.input_schema(),
         "agent_description": t.agent_description(),
     })

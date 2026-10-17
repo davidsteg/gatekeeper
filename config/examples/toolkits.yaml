@@ -404,6 +404,33 @@ toolkits:
     max_timeout_seconds: 30
     max_output_bytes: 131072
 
+  # The `git` executor: push one feat/* branch of an allowlisted repository
+  # to that repository's remote. A call names a key under `repos` and a
+  # branch, never a path, a URL or a flag. The target is always
+  # refs/heads/feat/<name>, fast-forward only -- there is no force, delete
+  # or main in execute_git.py, and the remote rejects a non-fast-forward.
+  #
+  # The repository is only read: each push fetches the branch into a
+  # throwaway bare repository gatekeeper configures itself and pushes from
+  # there, so the checkout's own hooks, remotes, insteadOf and credential
+  # helper never run. Mount it read-only. `remote` is https (plain http only
+  # to a loopback address); the token goes to exactly that URL as a header.
+  #
+  # The credential is required: kind `bearer` (a token that may push, e.g.
+  # a fine-grained GitHub token with Contents: write on this repository) or
+  # `basic` (user:token).
+  gkrepo:
+    executor: git
+    repos:
+      gatekeeper:
+        path: /repos/gatekeeper
+        remote: https://github.com/davidsteg/gatekeeper.git
+    allowed_git_operations:
+      - push
+    credential: github
+    max_timeout_seconds: 120
+    max_output_bytes: 16384
+
   # The agent mailbox -- agent-to-agent messaging between gatekeeper
   # identities (`messages.py`, `execute_agent.py`). Built-in Python, like
   # the `file` executor: no binary, no host, no credential, nothing outside

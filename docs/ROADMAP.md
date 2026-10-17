@@ -49,6 +49,13 @@ item.
   checked against the toolkit's `path_roots`, becomes opencode's
   `x-opencode-directory` header — one toolkit therefore serves every
   project root listed there.
+- `git` executor (1.14.0) — `push` of one `feat/*` branch from a
+  repository listed in the toolkit's `repos:` to that repository's remote
+  (`execute_git.py`), fast-forward only; no force, delete or `main` exists
+  in the module. The worker's checkout is only read (fetched into a
+  throwaway bare repo), so its hooks and config never run; the token comes
+  from the credential store as an env-config header. Output: old/new SHA
+  and up to 20 pushed commits.
 - `kuma` executor (1.12.0) — Uptime Kuma monitors over Socket.IO
   (`execute_kuma.py`), the only interface Kuma offers for them. Four
   operations, whitelisted by name per toolkit: `monitor_list` (projected
@@ -172,6 +179,12 @@ item.
   value, and an operation whose summary came back empty attaches the raw
   (capped) payload instead, so an upstream rename costs a less tidy answer
   and is visible in the response — never a silently empty one.
+- **`git` pushes, nothing else.** No fetch or pull into the worker's
+  checkout, no tags, no pull request: `gkrepo.push` is the one write, and
+  opening a PR stays an `http` tool against the GitHub API. The remote's
+  address is not checked against `allowed_cidrs` the way `http`'s is —
+  git does its own lookup — which is why `remote` is a fixed Tier 1 URL,
+  https only, with redirects off.
 - **Kuma's next auth line is not supported yet.** The executor logs in
   with Kuma's socket `login` event (1.23 and 2.0). Kuma's development
   branch moves sign-in to an HTTP session cookie; once that ships, the

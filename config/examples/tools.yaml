@@ -1207,3 +1207,40 @@ tools:
     required_scopes: []
     timeout_seconds: 20
     max_output_bytes: 4096
+
+  # -- git (push feat/* branches) ------------------------------------------
+  #
+  # 'git_operation' is the fixed exchange; 'repo' and 'branch' are the only
+  # parameters it reads (catalog.py's GIT_OPERATION_PARAMS). A `repo` enum
+  # must name keys of the toolkit's `repos:`; whatever the patterns say, the
+  # executor still refuses anything but feat/<name> and a listed repo. A
+  # push changes a remote, so catalog.py refuses it as category 'read'.
+
+  - id: gkrepo.push
+    toolkit: gkrepo
+    version: 1
+    title: Push a feat/* branch
+    description: >-
+      Pushes a local feat/* branch of a listed repository to its remote, as a
+      fast-forward only (no force, no delete, never main). Returns the remote
+      branch's old and new SHA and the commits that went over. Commit in the
+      repository first; integrate the remote branch there if this is refused
+      as not a fast-forward.
+    category: write
+    idempotent: true
+    enabled: false
+    git_operation: push
+    parameters:
+      repo:
+        type: enum
+        required: true
+        values: ["gatekeeper"]
+        description: The repository, by its name in the toolkit.
+      branch:
+        type: string
+        required: true
+        pattern: "^feat/[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
+        description: The branch to push, feat/<name>.
+    required_scopes: []
+    timeout_seconds: 120
+    max_output_bytes: 16384

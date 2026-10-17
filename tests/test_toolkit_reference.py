@@ -38,7 +38,7 @@ def test_each_block_is_one_valid_toolkit_of_its_executor(tmp_path, key):
 def test_every_executor_with_a_toolkit_shape_has_a_reference():
     assert set(REFERENCES) == {
         "local", "docker", "http", "ssh", "truenas", "file",
-        "google", "microsoft", "opencode", "kuma", "agent",
+        "google", "microsoft", "opencode", "kuma", "git", "agent",
     }
 
 

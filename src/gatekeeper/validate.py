@@ -558,6 +558,20 @@ def build_kuma_call(tool: ToolDef, values: dict[str, str], toolkit: Toolkit) -> 
     return tool.kuma_operation
 
 
+def build_git_call(tool: ToolDef, values: dict[str, str], toolkit: Toolkit) -> str:
+    """The `git` operation, re-checked against Tier 1, with
+    `execute_git.check_values` applied here so a `main` branch or an
+    unknown repo is an audited denial before git ever runs."""
+    from .execute_git import check_values
+
+    assert tool.git_operation is not None
+    if not toolkit.allows_git_operation(tool.git_operation):
+        raise Denied(DenialReason.TIER1_VIOLATION,
+                     f"Git operation {tool.git_operation!r} is not allowed for this toolkit.")
+    check_values(toolkit, values)
+    return tool.git_operation
+
+
 #: An identity id, as `store.create_identity` writes them: alphanumeric
 #: plus dash and underscore. The recipient of a message is one of these and
 #: nothing else -- the shape check below is the cheap half, the existence

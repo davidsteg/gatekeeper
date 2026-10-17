@@ -208,6 +208,26 @@ _REFERENCES = (
 """,
     ),
     ToolkitReference(
+        "git", "Push feat/* branches (git)",
+        "Pushes one feat/* branch of a listed repository to that repository's remote, "
+        "fast-forward only: no force, no delete, no main. Create a credential named "
+        "github (kind bearer, a token that may push to the remote) and mount the "
+        "repository into the container, read-only is enough.",
+        """\
+  gkrepo:
+    executor: git
+    repos:
+      CHANGEME:
+        path: "/repos/CHANGEME"   # the checkout, as mounted into this container
+        remote: "https://github.com/CHANGEME/CHANGEME.git"
+    allowed_git_operations:
+      - push
+    credential: github
+    max_timeout_seconds: 120
+    max_output_bytes: 16384
+""",
+    ),
+    ToolkitReference(
         "kuma", "Uptime Kuma monitors (kuma)",
         "Lists, adds, pauses and resumes HTTP monitors over Kuma's Socket.IO API. "
         "Create a credential named kuma (kind basic, value username:password) for a "
