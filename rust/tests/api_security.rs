@@ -40,6 +40,16 @@ async fn a_wrong_password_is_refused_and_audited() {
     assert_eq!(last["detail"], "identity='root' from 127.0.0.1");
 }
 
+/// `/api/v1` answers before sign-in, so its body is capped before any route.
+#[tokio::test]
+async fn an_oversized_body_is_refused_unread() {
+    let env = make_env();
+    let mut c = env.client();
+    let password = "x".repeat(gatekeeper::api::app::MAX_BODY_BYTES);
+    let response = c.post(&api("/session"), json!({"identity": "root", "password": password}), &[]).await;
+    assert_eq!(response.status, 413);
+}
+
 /// Unknown identity, wrong password, an agent: the same answer three times.
 #[tokio::test]
 async fn sign_in_is_not_a_directory_of_accounts() {
@@ -149,6 +159,19 @@ async fn a_role_change_or_rename_ends_that_identitys_sessions() {
         edit_eye(&env, change.clone()).await;
         assert_eq!(eye.get(&api("/session")).await.status, 401, "{change}");
     }
+}
+
+#[tokio::test]
+async fn a_demoted_admin_loses_the_admin_session() {
+    let env = make_env();
+    edit_eye(&env, json!({"role": "admin"})).await;
+    let mut eye = env.client();
+    eye.login("eye").await;
+    assert_eq!(eye.get(&api("/session")).await.json()["role"], "admin");
+    // Still a console role, so the edit itself keeps the session; the role
+    // it carries no longer matches, and that ends it.
+    edit_eye(&env, json!({"role": "viewer"})).await;
+    assert_eq!(eye.get(&api("/session")).await.status, 401);
 }
 
 #[tokio::test]

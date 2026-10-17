@@ -301,13 +301,15 @@ pub fn resolve_path(param: &Parameter, raw: &str) -> Result<String, Denied> {
             format!("Parameter {}: path contains '..'.", repr_str(&param.name)),
         ));
     }
-    let real = crate::pathutil::realpath(raw);
-    let real_root = crate::pathutil::realpath(root);
     let escape = || {
         denied(
             DenialReason::PathEscape,
             format!("Parameter {}: path resolves outside {}.", repr_str(&param.name), repr_str(root)),
         )
+    };
+    // A path whose links cannot be fully resolved is never "under" anything.
+    let (Ok(real), Ok(real_root)) = (crate::pathutil::realpath(raw), crate::pathutil::realpath(root)) else {
+        return Err(escape());
     };
     match crate::pathutil::commonpath(&[real.as_str(), real_root.as_str()]) {
         Some(common) if common == real_root => Ok(real),

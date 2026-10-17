@@ -1057,3 +1057,29 @@ async def test_readiness_probe_agrees_with_the_startup_warning(tmp_path, service
     )
     assert tier1.missing_local_binaries()
     assert await service._probe_one(tier1.toolkits["zfs"]) is False
+
+
+async def test_an_inherited_environment_leaves_gatekeepers_secrets_out(monkeypatch):
+    """A binary that prints its environment must not print the master key."""
+    monkeypatch.setenv("GATEKEEPER_CREDENTIAL_KEY", "k3y-for-the-env-test")
+    monkeypatch.setenv("GATEKEEPER_NOTIFY_SECRET", "s3cret-for-the-env-test")
+    result = await execute.run(
+        ["/bin/sh", "-c",
+         "echo ${GATEKEEPER_CREDENTIAL_KEY:-gone} ${GATEKEEPER_NOTIFY_SECRET:-gone} ${PATH:+path}"],
+        timeout_seconds=10, max_output_bytes=4096, idempotent=True,
+    )
+    assert result.stdout == "gone gone path\n"
+
+
+async def test_unknown_tool_names_share_one_series_and_cannot_forge_lines(tmp_path):
+    from gatekeeper.identity import Identity
+
+    service = _file_service(tmp_path, [])
+    caller = Identity(id="dev", role="agent", token_hash="x", tools=frozenset(), scopes=())
+    forged = 'x"} 1\ngatekeeper_executor_ready{executor="evil"} 1\n#'
+    for name in (forged, "y" * 100_000):
+        with pytest.raises(Denied) as denied:
+            await service.call(caller, name, {})
+        assert len(denied.value.detail) < 1000
+    assert dict(service.metrics) == {("<unknown>", "dev", "denied"): 2}
+    assert 'executor="evil"' not in service.render_metrics()

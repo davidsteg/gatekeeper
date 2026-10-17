@@ -206,10 +206,20 @@ pub fn current_session(context: &ApiContext, request: &ApiRequest) -> ApiResult<
         )?;
         return Err(api(401, "Bearer tokens are not accepted here; sign in to the console."));
     }
-    match context.sessions.resolve(request.cookie(SESSION_COOKIE).as_deref()) {
-        Some(session) => Ok(session),
-        None => Err(api(401, "Not signed in.")),
+    let sid = request.cookie(SESSION_COOKIE);
+    let Some(session) = context.sessions.resolve(sid.as_deref()) else {
+        return Err(api(401, "Not signed in."));
+    };
+    // A session carries the role it signed in with, so it is checked
+    // against the identity as it is now: demoted (an edit, an approved
+    // `admin.role_set`, a reload of identities.yaml) or removed, it ends
+    // here instead of keeping the old role until it expires.
+    let current = context.identities.read().identities.get(&session.identity).map(|i| i.role.clone());
+    if current.as_deref() != Some(session.role.as_str()) {
+        context.sessions.destroy(sid.as_deref());
+        return Err(api(401, "Not signed in."));
     }
+    Ok(session)
 }
 
 /// An `admin_denied` audit record: the denied path and the reason.

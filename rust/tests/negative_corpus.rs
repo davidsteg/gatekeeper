@@ -149,7 +149,7 @@ fn derived_path_resolves_under_root() {
     let e = env();
     let t = tool(&e.catalog, "demo.show");
     let v = resolve(t, json!({"stack": "media-jellyfin"})).unwrap();
-    let expected = gatekeeper::pathutil::realpath(e.sandbox.join("media-jellyfin/compose.yaml").to_str().unwrap());
+    let expected = gatekeeper::pathutil::realpath(e.sandbox.join("media-jellyfin/compose.yaml").to_str().unwrap()).unwrap();
     assert_eq!(v["compose_path"], expected);
     assert_eq!(v.keys().collect::<Vec<_>>(), vec!["stack", "compose_path"]);
 }
