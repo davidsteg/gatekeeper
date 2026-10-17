@@ -1048,8 +1048,9 @@ itself, which already documents its own single-instance assumption.
 `rust/` is a port of `src/gatekeeper/` to Rust (1.13.0). The Python package
 is its specification: same validation and check order, same user-visible
 strings, same file and wire formats, so a deployment can switch binaries
-without touching a config file. It is not in the image yet; CI builds and
-tests it in the `rust` job.
+without touching a config file. Since 1.13.0 it is what the image runs
+(`/usr/local/bin/gatekeeper`); the Python package stays in the repository
+as the reference the `rust` CI job's parity tests compare against.
 
 - **Module map.** Module names follow the Python ones (`tier1.py` ->
   `tier1`, `execute_http.py` -> `execute::http`, `api/*` -> `api::*`);
@@ -1066,6 +1067,11 @@ tests it in the `rust` job.
   (embedded in the binary, and what `/api/v1` answers to), and the vendored
   Google and Microsoft CLI scripts, which still run under Python as a
   subprocess (`GATEKEEPER_PYTHON`, else `python3`).
+- **Image.** The `build` stage cross-compiles for the target architecture
+  with PCRE2 linked statically; the console is copied to
+  `/usr/share/gatekeeper/web` (`GATEKEEPER_WEB_DIR`); a venv at `/opt/venv`
+  holds only Google's client libraries for `google_api.py`
+  (`GATEKEEPER_PYTHON=/opt/venv/bin/python`).
 - **Version.** `rust/build.rs` reads `pyproject.toml`, so a release still
   bumps one file.
 - **Deviations.** Where Python crashed (an uncaught exception on malformed

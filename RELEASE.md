@@ -1,17 +1,21 @@
 ## 1.13.0
 
-The whole of gatekeeper now also exists as a Rust implementation in `rust/`. The image you deploy is unchanged and still runs the Python one; nothing in this release changes how a running gatekeeper behaves.
+The image now runs gatekeeper's Rust implementation (`rust/`) instead of the Python one. It reads the same configuration files, keeps every endpoint and environment variable, and an existing deployment starts with no change.
 
-### Added
+### Changed
 
-- **`rust/`: a complete port of `src/gatekeeper/` to Rust.** The same CLI (`serve`, `check`, `init`, `token`, `password`, `credential-key`), the same `/mcp`, `/admin/mcp`, `/api/v1`, `/app` and `/release` endpoints, the same health and metrics routes, every executor, the credential store, the audit log and the toolkit and tool proposals. It reads the same `toolkits.yaml`, `tools.yaml`, `identities.yaml` and `credentials.yaml` and writes them in the same format, so a deployment can later switch binaries without touching a config file. Tokens hashed and credentials encrypted by one implementation are read by the other.
-- The console is served unchanged: the Rust server answers the same `/api/v1` schema (`frontend/openapi.json`), and the React console at `/app` needs no change.
-- The vendored Google and Microsoft CLI scripts stay Python and are run as a subprocess, as before.
-- **CI builds and tests it.** A `rust` job runs `cargo build` with warnings as errors and `cargo test`, including checks against the Python implementation (token hashes, Fernet tokens, MCP clients from the Python SDK, byte-identical artifact archives). It runs the suite a second time as root, so the privilege-drop and `run_as` tests run instead of skipping. The image is built only when it passes.
+- **The `gatekeeper` binary in the image is the Rust build.** The same CLI (`serve`, `check`, `init`, `token`, `password`, `credential-key`), the same `/mcp`, `/admin/mcp`, `/api/v1`, `/app` and `/release` endpoints, the same health and metrics routes, every executor, the credential store, the audit log and the toolkit and tool proposals. It reads `toolkits.yaml`, `tools.yaml`, `identities.yaml` and `credentials.yaml` and writes them in the same format. Tokens hashed and credentials encrypted by the Python version keep working, and the other way round.
+- The console at `/app` is unchanged and talks to the same `/api/v1` schema (`frontend/openapi.json`).
+- The vendored Google and Microsoft CLI scripts are still Python. The image keeps a small Python environment with only Google's client libraries for them, so `python` is still in the image, and the compose healthcheck that calls it keeps working.
+- `amd64` and `arm64` images are both cross-compiled on the build machine.
+
+### Tested
+
+- **A `rust` CI job** runs `cargo build` with warnings as errors and `cargo test`. That includes checks against the Python implementation: token hashes, Fernet tokens, MCP clients from the Python SDK, a byte-for-byte comparison of the MCP wire traffic, and byte-identical artifact archives. The suite runs a second time as root, so the privilege-drop and `run_as` tests run instead of skipping. The image is built only when it passes.
 
 ### Not yet
 
-- The Docker image still runs the Python implementation. Switching it to Rust, and then removing the Python core, are the next steps.
+- The Python package in `src/gatekeeper/` stays in the repository for now, as the reference the Rust tests compare against. Removing it is the next step.
 
 ## 1.10.0
 
