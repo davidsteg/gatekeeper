@@ -171,6 +171,16 @@ pub(crate) fn plain(status: u16, text: &'static str) -> Response {
 async fn handle(State(mount): State<Arc<Mount>>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
     let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0);
+    // `SessionReaper` (outside the SDK app, so before the body cap and the
+    // era routing): a DELETE with a session id is the client saying it is
+    // done; forget it before the transport sees the request.
+    if parts.method == Method::DELETE {
+        if let Some(n) = &mount.config.notifier {
+            if let Some(id) = parts.headers.get(MCP_SESSION_ID_HEADER).map(latin1).filter(|s| !s.is_empty()) {
+                n.forget(&id);
+            }
+        }
+    }
     let limit = mount.config.max_request_body_size;
     // `RequestBodyLimitMiddleware` caps every HTTP method's body, not just
     // POST's.

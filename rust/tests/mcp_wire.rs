@@ -86,9 +86,13 @@ struct Server {
 }
 
 async fn serve(idle: Option<Duration>) -> Server {
+    serve_with(|agent| agent.session_idle_timeout = idle).await
+}
+
+async fn serve_with(configure: impl FnOnce(&mut McpConfig)) -> Server {
     let notifier = CatalogNotifier::new();
     let mut agent = McpConfig::stateful("/mcp").with_notifier(notifier.clone());
-    agent.session_idle_timeout = idle;
+    configure(&mut agent);
     let app = Router::new()
         .merge(mcp::router(Arc::new(Probe { name: "agent", notifier: Some(notifier.clone()) }), agent))
         .merge(mcp::router(Arc::new(Probe { name: "gatekeeper-admin", notifier: None }), McpConfig::stateless("/admin/mcp")))
@@ -377,9 +381,151 @@ async fn the_modern_wire_maps_error_codes_to_statuses() {
         r.text().await.unwrap(),
         r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found","data":"ping"}}"#
     );
+    // A notification POST is acknowledged and dropped (mcp 2.2.0)...
     let r = s.post("/mcp", json!({"jsonrpc": "2.0", "method": "x"}), &[("mcp-protocol-version", MODERN)]).await;
+    assert_eq!(r.status(), 202);
+    assert_eq!(r.text().await.unwrap(), "");
+    // ...unless it is not one, or names a version this entry does not serve.
+    let r = s.post("/mcp", json!({"jsonrpc": "2.0", "method": 5}), &[("mcp-protocol-version", MODERN)]).await;
     assert_eq!(r.status(), 400);
+    assert_eq!(
+        r.text().await.unwrap(),
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Body must be a single JSON-RPC request or notification object"}}"#
+    );
+    let r = s.post("/mcp", json!({"jsonrpc": "2.0", "method": "x"}), &[("mcp-protocol-version", "2030-01-01")]).await;
+    assert_eq!(r.status(), 400);
+    let body: Value = r.json().await.unwrap();
+    assert_eq!(body["id"], Value::Null);
+    assert_eq!(body["error"]["code"], -32022);
+    assert_eq!(body["error"]["data"], json!({"supported": [MODERN], "requested": "2030-01-01"}));
     let r = s.http.get(format!("{}/mcp", s.base)).header("mcp-protocol-version", MODERN).send().await.unwrap();
     assert_eq!(r.status(), 405);
     assert_eq!(r.headers()["allow"], "POST");
+}
+
+fn ping(s: &Server, sid: &str) -> impl Future<Output = reqwest::Response> + 'static {
+    s.post("/mcp", json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}), &[("mcp-session-id", sid)])
+}
+
+fn init(s: &Server) -> impl Future<Output = reqwest::Response> + 'static {
+    s.post(
+        "/mcp",
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "wire", "version": "1"}}}),
+        &[],
+    )
+}
+
+#[tokio::test]
+async fn the_session_limit_refuses_new_sessions_with_503() {
+    assert_eq!(McpConfig::stateful("/mcp").max_sessions, Some(mcp::DEFAULT_MAX_SESSIONS));
+    assert_eq!(mcp::DEFAULT_MAX_SESSIONS, 10_000);
+    let s = serve_with(|c| c.max_sessions = Some(2)).await;
+    let (one, _) = s.handshake().await;
+    let (_two, _) = s.handshake().await;
+    let r = init(&s).await;
+    assert_eq!(r.status(), 503);
+    assert!(r.headers().get("mcp-session-id").is_none());
+    assert_eq!(r.headers()["content-type"], "application/json");
+    assert_eq!(
+        r.text().await.unwrap(),
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Too many open sessions"}}"#
+    );
+    // Existing sessions are unaffected.
+    assert_eq!(ping(&s, &one).await.status(), 200);
+    // Room frees up as sessions end.
+    let r = s.http.delete(format!("{}/mcp", s.base)).header("mcp-session-id", &one).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(init(&s).await.status(), 200);
+    assert_eq!(init(&s).await.status(), 503);
+    // The modern wire holds no sessions and is never limited.
+    assert_eq!(s.modern("/mcp", 1, "tools/list", json!({}), &[]).await.status(), 200);
+    // `None` removes the limit; stateless mounts have none.
+    let s = serve_with(|c| c.max_sessions = None).await;
+    for _ in 0..3 {
+        s.handshake().await;
+    }
+}
+
+#[tokio::test]
+async fn a_refused_opening_request_is_discarded() {
+    let s = serve_with(|c| c.max_sessions = Some(1)).await;
+    // A POST without a session id that is not an initialize opens nothing:
+    // the id it is answered with is forgotten at once...
+    let r = s.post("/mcp", json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}), &[]).await;
+    assert_eq!(r.status(), 400);
+    let refused = r.headers()["mcp-session-id"].to_str().unwrap().to_string();
+    let r = ping(&s, &refused).await;
+    assert_eq!(r.status(), 404);
+    assert!(r.headers().get("mcp-session-id").is_none());
+    assert_eq!(
+        r.text().await.unwrap(),
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Session not found"}}"#
+    );
+    let r = s.http.get(format!("{}/mcp", s.base)).header("accept", "text/event-stream").send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    // ...and takes no room under the limit.
+    let (sid, _) = s.handshake().await;
+    assert_eq!(ping(&s, &sid).await.status(), 200);
+}
+
+#[tokio::test]
+async fn an_open_stream_holds_an_idle_session() {
+    let s = serve(Some(Duration::from_millis(300))).await;
+    let (sid, _) = s.handshake().await;
+    let r = s.http.get(format!("{}/mcp", s.base)).header("accept", "text/event-stream").header("mcp-session-id", &sid).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    // The countdown is suspended while the GET stream is open...
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_eq!(ping(&s, &sid).await.status(), 200);
+    // ...and a long request in flight holds it too.
+    drop(r);
+    let slow = s.post("/mcp", json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "slow"}}), &[("mcp-session-id", &sid)]);
+    let slow = tokio::spawn(async move {
+        let r = slow.await;
+        let mut frames = Frames::new(r);
+        tokio::time::timeout(Duration::from_millis(900), frames.next()).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(ping(&s, &sid).await.status(), 200);
+    slow.await.unwrap();
+    // It restarts once the last request completes.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let r = ping(&s, &sid).await;
+    assert_eq!(r.status(), 404);
+    assert_eq!(
+        r.text().await.unwrap(),
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Session not found"}}"#
+    );
+}
+
+#[tokio::test]
+async fn every_method_body_is_capped() {
+    let s = serve_with(|c| c.max_request_body_size = 16).await;
+    let sid = "0123456789abcdef";
+    let big = "x".repeat(64);
+    for method in [http::Method::GET, http::Method::DELETE, http::Method::PUT] {
+        let r = s
+            .http
+            .request(method.clone(), format!("{}/mcp", s.base))
+            .header("mcp-session-id", sid)
+            .body(big.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 413, "{method}");
+        assert_eq!(r.text().await.unwrap(), "Request body too large");
+    }
+}
+
+#[tokio::test]
+async fn an_oversized_delete_still_untracks_the_session() {
+    let s = serve_with(|c| c.max_request_body_size = 512).await;
+    let (sid, _) = s.handshake().await;
+    assert_eq!(s.notifier.tracked_sessions(), 1);
+    let r = s.http.delete(format!("{}/mcp", s.base)).header("mcp-session-id", &sid).body("x".repeat(1024)).send().await.unwrap();
+    assert_eq!(r.status(), 413);
+    // `SessionReaper` runs before the body cap; the session itself lives on.
+    assert_eq!(s.notifier.tracked_sessions(), 0);
+    assert_eq!(ping(&s, &sid).await.status(), 200);
 }

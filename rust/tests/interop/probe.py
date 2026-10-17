@@ -197,7 +197,12 @@ async def session_era(http: httpx.AsyncClient) -> None:
     await post(http, "no content-type", {"jsonrpc": "2.0", "id": 25, "method": "ping"}, headers=s, ctype=None)
     await post(http, "text/plain content-type", {"jsonrpc": "2.0", "id": 26, "method": "ping"}, headers=s, ctype="text/plain")
     await post(http, "json charset content-type", {"jsonrpc": "2.0", "id": 27, "method": "ping"}, headers=s, ctype="application/json; charset=utf-8")
-    await post(http, "missing session id", {"jsonrpc": "2.0", "id": 28, "method": "ping"})
+    r = await post(http, "missing session id", {"jsonrpc": "2.0", "id": 28, "method": "ping"})
+    # A refused opening request establishes nothing: the id it was answered
+    # with is already forgotten.
+    refused = r.headers.get("mcp-session-id")
+    if refused:
+        await post(http, "id from refused opening request", {"jsonrpc": "2.0", "id": 28, "method": "ping"}, headers={"Mcp-Session-Id": refused})
     await post(http, "unknown session id", {"jsonrpc": "2.0", "id": 29, "method": "ping"}, headers={"Mcp-Session-Id": "deadbeef"})
     await post(http, "session-era version header", {"jsonrpc": "2.0", "id": 30, "method": "ping"}, headers={**s, "MCP-Protocol-Version": "2024-11-05"})
     await post(http, "modern envelope on session", {"jsonrpc": "2.0", "id": 31, "method": "tools/list", "params": {"_meta": META}}, headers=s)
@@ -206,13 +211,31 @@ async def session_era(http: httpx.AsyncClient) -> None:
     record("GET without sse accept", r, r.text)
     r = await http.get(BASE + "/mcp", headers={"Accept": "text/event-stream"})
     record("GET without session id", r, r.text)
+    refused = r.headers.get("mcp-session-id")
+    if refused:
+        r = await http.get(BASE + "/mcp", headers={"Accept": "text/event-stream", "Mcp-Session-Id": refused})
+        record("GET with id from refused GET", r, r.text)
     r = await http.put(BASE + "/mcp", headers=s, content=b"{}")
     record("PUT on session", r, r.text)
     r = await http.request("PATCH", BASE + "/mcp", content=b"")
     record("PATCH without session", r, r.text)
 
-    # Big body.
-    await post(http, "oversized body", None, raw=b'{"x":"' + b"a" * (4 * 1024 * 1024) + b'"}', headers=s)
+    # Big body: capped for every method, not just POST.
+    big = b'{"x":"' + b"a" * (4 * 1024 * 1024) + b'"}'
+    await post(http, "oversized body", None, raw=big, headers=s)
+    tracked = (await http.get(BASE + "/_tracked")).json()
+    OUT.append(f"== tracked before oversized DELETE: {tracked['tracked']}")
+    r = await http.request("DELETE", BASE + "/mcp", headers=s, content=big)
+    record("DELETE with oversized body", r, r.text)
+    # `SessionReaper` sits outside the body cap: the session is untracked
+    # even though the transport never saw the DELETE.
+    tracked = (await http.get(BASE + "/_tracked")).json()
+    OUT.append(f"== tracked after oversized DELETE: {tracked['tracked']}")
+    r = await http.request("GET", BASE + "/mcp", headers={"Accept": "text/event-stream", **s}, content=big)
+    record("GET with oversized body", r, r.text)
+    await post(http, "session survives oversized DELETE", {"jsonrpc": "2.0", "id": 32, "method": "tools/list"}, headers=s)
+    tracked = (await http.get(BASE + "/_tracked")).json()
+    OUT.append(f"== tracked again after tools/list: {tracked['tracked']}")
 
     # Other negotiated versions.
     for version in ("2024-11-05", "2025-03-26", "2025-11-25", "1999-01-01", MODERN):
@@ -297,6 +320,15 @@ async def modern_era(http: httpx.AsyncClient) -> None:
     await post(http, "version header mismatch", req(20, "tools/list"), headers=modern_headers("tools/list", version="2030-01-01"))
     await post(http, "duplicate routing header", req(21, "tools/list"), headers=[("MCP-Protocol-Version", MODERN), ("Mcp-Method", "tools/list"), ("Mcp-Method", "tools/list")])
     await post(http, "notification body", {"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=modern_headers("notifications/initialized"))
+    await post(http, "cancelled notification", {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}}, headers=modern_headers("notifications/cancelled"))
+    await post(http, "notification without method header", {"jsonrpc": "2.0", "method": "notifications/initialized"}, headers={"MCP-Protocol-Version": MODERN})
+    await post(http, "notification at unsupported version", {"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=modern_headers("notifications/initialized", version="2030-01-01"))
+    await post(http, "notification missing method", {"jsonrpc": "2.0"}, headers=modern_headers("x"))
+    await post(http, "notification wrong jsonrpc", {"jsonrpc": "1.0", "method": "notifications/initialized"}, headers=modern_headers("notifications/initialized"))
+    await post(http, "notification params not object", {"jsonrpc": "2.0", "method": "notifications/initialized", "params": [1]}, headers=modern_headers("notifications/initialized"))
+    await post(http, "posted response", {"jsonrpc": "2.0", "id": 5, "result": {}}, headers=modern_headers("x"))
+    await post(http, "request with null id", {"jsonrpc": "2.0", "id": None, "method": "tools/list", "params": {"_meta": META}}, headers=modern_headers("tools/list"))
+    await post(http, "admin notification", {"jsonrpc": "2.0", "method": "notifications/initialized"}, path="/admin/mcp", headers=modern_headers("notifications/initialized"))
     await post(http, "parse error", None, raw=b"[1,", headers=modern_headers("tools/list"))
     await post(http, "batch", [req(22, "tools/list")], headers=modern_headers("tools/list"))
     await post(http, "accept json only", req(23, "tools/list"), headers=modern_headers("tools/list"), accept="application/json")

@@ -515,13 +515,6 @@ fn manager_error(message: &str, status: StatusCode, code: i64) -> Response {
 
 pub(crate) async fn handle_stateful(mount: &Mount, inbound: Inbound) -> Response {
     let header = inbound.header(MCP_SESSION_ID_HEADER);
-    // `SessionReaper`: a DELETE with a session id is the client saying it
-    // is done; forget it before the transport sees the request.
-    if inbound.method == Method::DELETE {
-        if let (Some(n), Some(id)) = (&mount.config.notifier, header.as_deref().filter(|s| !s.is_empty())) {
-            n.forget(id);
-        }
-    }
     // The SDK binds a session to the credential that created it
     // (`scope["user"]`, which only its own `AuthenticationMiddleware`
     // sets) and answers anyone else 404 `Session not found`. gatekeeper
