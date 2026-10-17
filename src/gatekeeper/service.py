@@ -21,6 +21,7 @@ from . import (
     execute,
     execute_agent,
     execute_artifact,
+    execute_git,
     execute_google,
     execute_http,
     execute_kuma,
@@ -546,6 +547,7 @@ class Service:
             agent_operation: str | None = None
             artifact_operation: str | None = None
             kuma_operation: str | None = None
+            git_operation: str | None = None
             if toolkit.executor in ("docker", "local", "ssh"):
                 argv = validate.build_argv(tool, values, toolkit)
                 # Resolved here, inside the same try/except as everything
@@ -595,6 +597,8 @@ class Service:
                 artifact_operation = validate.build_artifact_call(tool, values, toolkit)
             elif toolkit.executor == "kuma":
                 kuma_operation = validate.build_kuma_call(tool, values, toolkit)
+            elif toolkit.executor == "git":
+                git_operation = validate.build_git_call(tool, values, toolkit)
             elif toolkit.executor == "file":
                 pass  # parameters resolved directly into the call below
         except Denied as denial:
@@ -722,6 +726,18 @@ class Service:
                 assert kuma_operation is not None
                 result = await execute_kuma.run(
                     operation=kuma_operation,
+                    values=values,
+                    toolkit=toolkit,
+                    credentials=self.credentials,
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=max_output_bytes,
+                    idempotent=tool.idempotent,
+                    redact=self.audit.redact,
+                )
+            elif toolkit.executor == "git":
+                assert git_operation is not None
+                result = await execute_git.run(
+                    operation=git_operation,
                     values=values,
                     toolkit=toolkit,
                     credentials=self.credentials,
@@ -897,6 +913,8 @@ class Service:
             return await execute_opencode.probe(toolkit)
         if toolkit.executor == "kuma":
             return await execute_kuma.probe(toolkit)
+        if toolkit.executor == "git":
+            return await execute_git.probe(toolkit)
         if toolkit.executor == "agent":
             return await execute_agent.probe(toolkit)
         if toolkit.executor == "artifact":

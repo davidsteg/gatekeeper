@@ -38,6 +38,7 @@ KNOWN_EXECUTORS = frozenset(
         "microsoft",
         "artifact",
         "kuma",
+        "git",
     }
 )
 
@@ -118,6 +119,23 @@ KUMA_STATUS_CODES = frozenset(
         "200", "201", "202", "204", "301", "302", "401", "403", "404",
     }
 )
+
+#: The `git` executor's vocabulary (execute_git.py): one operation, a
+#: plain `git push` of one branch from an allowlisted repository to its
+#: Tier 1 remote. No force, no delete, no fetch into the worker's checkout
+#: -- not as denied operations, but as ones this executor has no code for.
+GIT_OPERATIONS = frozenset({"push"})
+
+#: The only refs a `git` push may create or move: `refs/heads/` plus this.
+#: A constant rather than a toolkit field, so `main` (or any other branch
+#: outside it) is not one edit of toolkits.yaml away.
+GIT_PUSH_BRANCH_PREFIX = "feat/"
+
+#: Where the `git` executor finds git when the toolkit does not say.
+DEFAULT_GIT_BINARY = "/usr/bin/git"
+
+#: A `repos:` key: what a tool's `repo` parameter names.
+_GIT_REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 #: The recovery supervisor and its Hermes adapter were removed (RELEASE.md
 #: 0.52.0). Hermes orchestrates its own tasks; Gatekeeper never continues a
@@ -457,6 +475,13 @@ class Toolkit:
     #: `allowed_hosts`/`allowed_cidrs` like an `http` toolkit; the login is
     #: the toolkit's `credential` (kind `basic`).
     allowed_kuma_operations: tuple[str, ...] = ()
+    #: `git` executor: the subset of `GIT_OPERATIONS`, the git binary, and
+    #: the repositories a push may come from -- each a local path paired
+    #: with the one remote it may go to. A call names a repository by its
+    #: key and never a path or a URL.
+    allowed_git_operations: tuple[str, ...] = ()
+    git_binary: str | None = None
+    git_repos: tuple[GitRepo, ...] = ()
     #: Ceiling on one message's subject + body, in bytes. A mailbox is for
     #: coordination, not for shipping payloads through gatekeeper.
     max_message_bytes: int = DEFAULT_MAX_MESSAGE_BYTES
@@ -649,6 +674,33 @@ class Toolkit:
         to read monitors -- same reasoning as `allows_opencode_operation`."""
         return operation in self.allowed_kuma_operations
 
+    # -- `git` executor -----------------------------------------------------
+
+    def allows_git_operation(self, operation: str) -> bool:
+        return operation in self.allowed_git_operations
+
+    def git_repo(self, name: str) -> GitRepo | None:
+        """The allowlisted repository called `name`, or None."""
+        for repo in self.git_repos:
+            if repo.name == name:
+                return repo
+        return None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GitRepo:
+    """One entry of a `git` toolkit's `repos:` (deploy-time only).
+
+    `path` is the working copy (or bare repository) on this container's
+    filesystem that a worker commits into; `remote` is the one URL its
+    branches may be pushed to. Neither comes from a call, and the
+    repository's own remotes are never read.
+    """
+
+    name: str
+    path: str
+    remote: str
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Destination:
@@ -826,6 +878,56 @@ def _is_absolute(path: str) -> bool:
     program name remains, over which PATH would then decide.
     """
     return path.startswith("/") or os.path.isabs(path)
+
+
+def _parse_git_repos(value: Any, where: str) -> tuple[GitRepo, ...]:
+    """A `git` toolkit's `repos:` -- name -> {path, remote}.
+
+    `remote` is https, or http to a loopback address (a local mirror, and
+    what the tests push to): the token travels in a header to exactly this
+    URL, so a plain-http hop across a network is refused. No user or
+    password in it, no query or fragment -- the credential is the store's.
+    """
+    if not isinstance(value, dict) or not value:
+        raise ConfigError(f"{where}: 'repos' must be a non-empty mapping of name -> "
+                          "{path, remote}")
+    repos: list[GitRepo] = []
+    for name, entry in value.items():
+        at = f"{where}: repos.{name}"
+        if not isinstance(name, str) or not _GIT_REPO_NAME.match(name):
+            raise ConfigError(f"{at}: a repo name is letters, digits, '.', '_' and "
+                              "'-', at most 64 characters")
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{at}: expects a mapping with 'path' and 'remote'")
+        unknown = sorted(set(entry) - {"path", "remote"})
+        if unknown:
+            raise ConfigError(f"{at}: unknown fields {unknown}")
+        path = str(_require(entry, "path", at))
+        if not _is_absolute(path) or ".." in PurePosixPath(path).parts:
+            raise ConfigError(f"{at}: 'path' must be an absolute path without '..'")
+        remote = str(_require(entry, "remote", at))
+        try:
+            parsed = urlsplit(remote)
+            parsed.port  # noqa: B018 -- raises on a malformed port
+        except ValueError:
+            raise ConfigError(f"{at}: 'remote' is not a valid URL") from None
+        host = parsed.hostname or ""
+        loopback = host == "localhost"
+        try:
+            loopback = loopback or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            pass
+        if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
+            raise ConfigError(f"{at}: 'remote' must be an https URL (plain http only "
+                              "to a loopback address)")
+        if not host or parsed.username is not None or parsed.password is not None:
+            raise ConfigError(f"{at}: 'remote' needs a host and no user or password -- "
+                              "the token comes from the toolkit's credential")
+        if parsed.query or parsed.fragment or any(ch.isspace() for ch in remote):
+            raise ConfigError(f"{at}: 'remote' must not carry a query, a fragment or "
+                              "whitespace")
+        repos.append(GitRepo(name=name, path=path, remote=remote))
+    return tuple(repos)
 
 
 def _require(data: dict[str, Any], key: str, where: str) -> Any:
@@ -1104,6 +1206,11 @@ def _toolkit_destinations(
             f"{where}: 'kuma' toolkits cannot declare destinations -- one "
             "toolkit, one Uptime Kuma (use a separate toolkit per instance)"
         )
+    if dest_names and executor == "git":
+        raise ConfigError(
+            f"{where}: 'git' toolkits cannot declare destinations -- each "
+            "repository under 'repos' already names its one remote"
+        )
     if dest_names and executor == "artifact":
         raise ConfigError(
             f"{where}: 'artifact' toolkits cannot declare destinations -- artifacts "
@@ -1203,6 +1310,9 @@ def load_tier1(path: str) -> Tier1:
         allowed_artifacts: tuple[str, ...] = ()
         handover_dir: str | None = None
         allowed_kuma_operations: tuple[str, ...] = ()
+        allowed_git_operations: tuple[str, ...] = ()
+        git_binary: str | None = None
+        git_repos: tuple[GitRepo, ...] = ()
         max_message_bytes = DEFAULT_MAX_MESSAGE_BYTES
         max_mailbox_messages = DEFAULT_MAILBOX_LIMIT
 
@@ -1445,6 +1555,30 @@ def load_tier1(path: str) -> Tier1:
                     f"{sorted(KUMA_OPERATIONS)}"
                     + (f" (unknown: {unknown_kuma_ops})" if unknown_kuma_ops else "")
                 )
+        elif executor == "git":
+            if not credential:
+                raise ConfigError(
+                    f"{where}: a git toolkit needs 'credential' -- the name of a "
+                    "'bearer' credential (a token that may push) or a 'basic' "
+                    "one (user:token)"
+                )
+            allowed_git_operations = _str_tuple(
+                _require(spec, "allowed_git_operations", where), where
+            )
+            unknown_git_ops = sorted(set(allowed_git_operations) - GIT_OPERATIONS)
+            if not allowed_git_operations or unknown_git_ops:
+                raise ConfigError(
+                    f"{where}: allowed_git_operations must be a non-empty subset of "
+                    f"{sorted(GIT_OPERATIONS)}"
+                    + (f" (unknown: {unknown_git_ops})" if unknown_git_ops else "")
+                )
+            git_binary = str(spec.get("git_binary", DEFAULT_GIT_BINARY))
+            if not _is_absolute(git_binary):
+                raise ConfigError(
+                    f"{where}: git_binary {git_binary!r} must be an absolute path -- "
+                    "otherwise PATH decides what gets executed"
+                )
+            git_repos = _parse_git_repos(_require(spec, "repos", where), where)
         elif executor == "agent":
             # No target field: the `agent` executor reaches nothing outside
             # this container. What Tier 1 fixes is the mailbox file and the
@@ -1553,6 +1687,9 @@ def load_tier1(path: str) -> Tier1:
             allowed_artifacts=allowed_artifacts,
             handover_dir=handover_dir,
             allowed_kuma_operations=allowed_kuma_operations,
+            allowed_git_operations=allowed_git_operations,
+            git_binary=git_binary,
+            git_repos=git_repos,
             max_message_bytes=max_message_bytes,
             max_mailbox_messages=max_mailbox_messages,
         )

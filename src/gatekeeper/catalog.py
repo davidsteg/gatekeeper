@@ -89,6 +89,14 @@ KUMA_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 #: a human, and these must go through approval.
 KUMA_WRITE_OPERATIONS = frozenset({"monitor_add_http", "monitor_pause", "monitor_resume"})
 
+#: `git` executor: `push` reads the repository's key in the toolkit's
+#: `repos:` and the branch. There is no parameter for a path, a remote, a
+#: refspec or a flag -- the first two are Tier 1, the rest is fixed in
+#: `execute_git.py`.
+GIT_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "push": (("repo", "branch"), ()),
+}
+
 AGENT_OPERATION_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "send_message": (("to", "body"), ("subject",)),
     "read_messages": ((), ("limit", "peek")),
@@ -277,6 +285,9 @@ class ToolDef:
     #: The `kuma` executor's operation (`tier1.KUMA_OPERATIONS`), fixed per
     #: tool like `agent_operation`.
     kuma_operation: str | None = None
+    #: The `git` executor's operation (`tier1.GIT_OPERATIONS`), fixed per
+    #: tool like `agent_operation`.
+    git_operation: str | None = None
 
     #: Per-tool override of the toolkit's ``run_as`` (file executor only).
     #: ``None`` -- the default -- means "use the toolkit's ``run_as``", so a
@@ -506,6 +517,24 @@ def _validate_kuma_params(
         )
 
 
+def _validate_git_params(
+    operation: str, category: str, parameters: dict[str, Parameter], where: str
+) -> None:
+    """A `push` changes a remote, so it is never category `read` (which
+    `admin.tool_create` applies without a human). `repo` and `branch` are
+    strings or enums; what they may contain is `execute_git.check_values`'
+    call-time floor, which no schema can widen."""
+    if category == "read":
+        raise ConfigError(
+            f"{where}: git operation {operation!r} changes a remote -- its "
+            "category must be 'write', not 'read'"
+        )
+    for name in ("repo", "branch"):
+        param = parameters.get(name)
+        if param is not None and param.type not in ("string", "enum"):
+            raise ConfigError(f"{where}: parameter {name!r} must be a string or an enum")
+
+
 def _validate_agent_params(
     operation: str, parameters: dict[str, Parameter], where: str
 ) -> None:
@@ -700,6 +729,22 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
                 f"toolkit {toolkit.name!r}"
             )
 
+    elif toolkit.executor == "git":
+        if not toolkit.allows_git_operation(tool.git_operation or ""):
+            raise Tier1Violation(
+                f"{where}: git operation {tool.git_operation!r} is not in "
+                f"the allowlist {list(toolkit.allowed_git_operations)} of "
+                f"toolkit {toolkit.name!r}"
+            )
+        repo = tool.parameters.get("repo")
+        if repo is not None and repo.type == "enum":
+            unknown = sorted(set(repo.values) - {r.name for r in toolkit.git_repos})
+            if unknown:
+                raise Tier1Violation(
+                    f"{where}: repo values {unknown} are not in the 'repos' of "
+                    f"toolkit {toolkit.name!r}"
+                )
+
     elif toolkit.executor == "agent":
         if not toolkit.allows_agent_operation(tool.agent_operation or ""):
             raise Tier1Violation(
@@ -870,6 +915,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     agent_operation: str | None = None
     artifact_operation: str | None = None
     kuma_operation: str | None = None
+    git_operation: str | None = None
     #: Per-tool base_url override -- only the `http` branch sets this
     #: (0.45.5); every other executor leaves it at None.
     tool_base_url: str | None = None
@@ -1046,6 +1092,18 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         _validate_op_params("kuma", KUMA_OPERATION_PARAMS, kuma_operation, parameters, where)
         _validate_kuma_params(kuma_operation, category, parameters, where)
 
+    elif toolkit.executor == "git":
+        git_operation = spec.get("git_operation") or spec.get("operation")
+        if not isinstance(git_operation, str) or not git_operation:
+            raise ConfigError(f"{where}: field 'git_operation' is missing")
+        if git_operation not in GIT_OPERATION_PARAMS:
+            raise ConfigError(
+                f"{where}: git_operation {git_operation!r} is unknown "
+                f"(known: {sorted(GIT_OPERATION_PARAMS)})"
+            )
+        _validate_op_params("git", GIT_OPERATION_PARAMS, git_operation, parameters, where)
+        _validate_git_params(git_operation, category, parameters, where)
+
     # Every placeholder must point to a declared parameter. A typo
     # in the template would otherwise only surface at runtime -- and
     # then land as an unresolvable placeholder in the request.
@@ -1090,6 +1148,7 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         agent_operation=agent_operation,
         artifact_operation=artifact_operation,
         kuma_operation=kuma_operation,
+        git_operation=git_operation,
         run_as=tool_run_as,
         base_url=tool_base_url,
     )

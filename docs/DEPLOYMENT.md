@@ -257,6 +257,48 @@ What the agent can and cannot do:
 - A timeout after an add or pause was sent is `unknown`: check with
   `kuma.monitor_list` before trying again, or the monitor may exist twice.
 
+## Wiring a feat/* push to GitHub (`executor: git`)
+
+A worker commits into a checkout on the host; gatekeeper pushes the branch.
+The worker never holds the token, and file contents never pass through the
+call.
+
+**1. The token.** At `/app/credentials`, use the `github` slot if you
+already have one (kind `bearer`), or create it: a fine-grained GitHub token
+limited to the repository, with *Contents: read and write*. Branch
+protection on `main` is still worth having; gatekeeper never builds a push
+to it, but the token itself could.
+
+**2. The repository in the container.** Mount the checkout into the
+gatekeeper container, read-only is enough:
+`- /srv/work/gatekeeper:/repos/gatekeeper:ro`. gatekeeper only reads it:
+the branch is fetched into a throwaway repository, so the checkout's own
+remotes, hooks and credential settings play no part. The gatekeeper user
+(uid 568 by default) must be able to read the files.
+
+**3. The toolkit** (Tier 1 — `toolkits.yaml`, redeploy). Copy the `git`
+block from `/app/toolkits/reference` or
+[`config/examples/toolkits.yaml`](../config/examples/toolkits.yaml); each
+entry under `repos` is a name, the mounted `path` and the one https
+`remote` it may push to.
+
+**4. The tool and the grant.** Copy `gkrepo.push` from
+[`config/examples/tools.yaml`](../config/examples/tools.yaml), set the
+`repo` enum to your repo names, enable it and grant it to the identity that
+should push (only that one, e.g. `homelab`). It is category `write`, so a
+proposal for it waits at `/app/requests`.
+
+What a call can and cannot do:
+
+- It pushes `feat/<name>` to `feat/<name>` on the listed remote, as a
+  fast-forward. Anything else — `main`, another prefix, a refspec, `..` —
+  is refused before git runs. There is no force and no delete; a
+  non-fast-forward comes back as refused, with nothing changed.
+- The answer is `status` (`created`, `updated`, `up_to_date`), the remote
+  branch's `old` and `new` SHA, and up to 20 pushed commits as short SHA
+  and subject, with `commits_total`.
+- `git` is in the image since 1.13.0.
+
 ## A new tool does not appear in an agent session
 
 Reported as an admin/agent split: `admin.tool_create` + `admin.tool_enable`

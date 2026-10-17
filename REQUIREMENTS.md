@@ -260,6 +260,7 @@ The point v1 left open: *how* does a container reach the host at all. The founda
 | `file` | Reading and editing files below the path roots | in-process, no shell and no argv | **v1 active** |
 | `opencode` | A headless opencode coding-agent server | HTTP; one operation = one fixed multi-request workflow | **v1 active** |
 | `kuma` | Uptime Kuma monitors | Socket.IO over WebSocket, login from the credential store | **v1 active** |
+| `git` | Pushing a worker's `feat/*` branch to its remote | local `git`, token from the credential store | **v1 active** |
 
 - **FR-8.1** Tools do not select an executor themselves — they belong to a toolkit, and the toolkit binds the executor (FR-4.8). A toolkit whose executor is not enabled at deploy time is rejected along with all its associated tools.
 - **FR-8.2** The `docker` executor gets the socket. This is **root-equivalent on the host** and stands in tension with NFR-1. This is deliberately accepted because gatekeeper is exactly the whitelist *that restricts this access* — but it means: a bug in gatekeeper is a root bug. From this follows the strictness of §6.
@@ -344,6 +345,16 @@ Uptime Kuma creates and pauses monitors only through its web UI's Socket.IO conn
 - **FR-8.30** `monitor_pause` and `monitor_resume` act only on a monitor gatekeeper created, recognised by the description `monitor_add_http` writes. Any other monitor is refused before anything is sent for it.
 - **FR-8.31** The Kuma login is a `basic` credential in the store, bound by the toolkit's `credential:`. It never appears in a response, an error or the audit log, and `monitor_list` returns only id, name, type, URL without userinfo/query, active, interval and whether gatekeeper manages it — Kuma's own monitor objects carry other monitors' passwords and headers. The target rules of FR-8.24 apply unchanged.
 - **FR-8.32** `monitor_list` is category `read`; the three others are `write`, so their tools go through approval. A write operation declared `read` is rejected at load time. A timeout after a write was sent is `unknown` (FR-6.9).
+
+### The `git` Executor
+
+A worker that commits into a checkout on the host still has to get the branch to GitHub. Without an executor the routes are a push token in the worker's environment or the checkout's config, or file contents shipped through an API call by the worker — both rejected.
+
+- **FR-8.33** A tool on a `git` toolkit declares `git_operation: push` and reads exactly two parameters: `repo`, a key of the toolkit's `repos:` (each a local path paired with one remote URL, Tier 1), and `branch`. The executor pushes `refs/heads/<branch>` to `refs/heads/<branch>` on that remote and nothing else.
+- **FR-8.34** `branch` must be `feat/<name>` with plain path components; the prefix is a constant in the code, not a toolkit field. The refspec carries no `+` and the executor has no code for `--force`, `--force-with-lease`, `--delete` or `--mirror`, so a non-fast-forward is rejected by git and reported. The executor checks these on every call regardless of the tool's schema; a `push` declared category `read` is rejected at load time.
+- **FR-8.35** The worker's repository is read, never trusted: no git command runs in it. The branch is fetched into a throwaway bare repository whose configuration gatekeeper writes (no hooks, no system or global config, no credential helper, no redirects, https only), with the worker's object store as an alternate, and pushed from there.
+- **FR-8.36** The token is a `bearer` (or `basic` `user:token`) credential bound by the toolkit's `credential:`. It reaches git only through the child's environment, as an extra header scoped to the remote URL, only for the steps that contact the remote — never in argv, a response, an error or the audit log.
+- **FR-8.37** The result is the remote branch's old and new SHA, the status (`created`, `updated`, `up_to_date`) and the pushed commits as short SHA and subject, at most 20, with the total count. No diff or file content.
 
 ### Toolkit Catalog v1
 

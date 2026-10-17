@@ -1,3 +1,21 @@
+## 1.13.0
+
+A new `git` executor pushes a worker's `feat/*` branch from a repository on the host to its GitHub remote. The worker names the repository and the branch; it never holds the token, and no file content passes through the call.
+
+### Added
+
+- **`executor: git` with one operation, `push`.** The toolkit lists repositories under `repos:`, each a local `path` and the one `remote` it may push to (https, or plain http to a loopback address only). A tool reads exactly `repo` (a key of `repos:`) and `branch`.
+- **Only `feat/<name>`, only fast-forward.** The target is always `refs/heads/feat/<name>`; the prefix is fixed in the code, not a toolkit field. There is no force, no delete and no push to `main` in the executor, and a non-fast-forward is reported as refused with nothing changed. The executor checks this on every call whatever the tool's schema says, and catalog loading refuses a `push` declared category `read`.
+- **The worker's checkout is only read.** Each call fetches the branch into a throwaway bare repository gatekeeper configures itself and pushes from there, so hooks, remotes, `insteadOf` rewrites and credential helpers in the checkout never run. The checkout can be mounted read-only.
+- **The token stays in the credential store.** It is the toolkit's `credential:` (kind `bearer`, or `basic` as `user:token`), passed to git as an Authorization header through the child's environment, only for the steps that contact the remote. It is never in argv, a response, an error or the audit log.
+- **The answer** is `status` (`created`, `updated` or `up_to_date`), the remote branch's `old` and `new` SHA, and up to 20 pushed commits as short SHA and subject, with the total count.
+- `git` is installed in the image.
+- A `git` block on `/app/toolkits/reference`, and the `gkrepo` toolkit and `gkrepo.push` tool in `config/examples/`.
+
+### Setup
+
+See "Wiring a feat/* push to GitHub" in `docs/DEPLOYMENT.md`: the `github` credential, the checkout mounted into the container, the toolkit, then `gkrepo.push` granted to the one identity that should push. The tool ships `enabled: false`.
+
 ## 1.12.0
 
 A new `kuma` executor lets an agent list Uptime Kuma's monitors and add, pause and resume HTTP monitors, with the Kuma login in the credential store. Kuma has no REST API for monitors, so the `http` executor could not do this.

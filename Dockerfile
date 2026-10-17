@@ -119,8 +119,9 @@ FROM python:3.12-slim
 # not /usr/bin/* in here. Startup warns when a `local` toolkit names a
 # binary this image lacks, so the next attempt says so at boot.
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends procps tzdata \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends procps tzdata git \
  && rm -rf /var/lib/apt/lists/* \
+ && test -x /usr/bin/git \
  && test -x /usr/bin/uptime && test -x /usr/bin/free \
  && test -x /usr/bin/df && test -x /bin/cat
 
