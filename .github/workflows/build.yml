@@ -359,8 +359,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Fuer linux/arm64 auf einem amd64-Runner.
-      - uses: docker/setup-qemu-action@v3
+      # Nur linux/amd64 (1.14.1): kein QEMU noetig.
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
@@ -405,7 +404,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -504,7 +503,7 @@ jobs:
           __IMAGE__@__DIGEST__
           ```
 
-          Gebaut fuer `linux/amd64` und `linux/arm64`. Das Buendel unten
+          Gebaut fuer `linux/amd64`. Das Buendel unten
           enthaelt `compose.yaml` und die Beispielkonfigurationen.
           EOF
 

@@ -1,3 +1,11 @@
+## 1.14.1
+
+The image is built for `linux/amd64` only. There is no `arm64` image from this version on.
+
+### Changed
+
+- **No `linux/arm64` image.** The release workflow builds and pushes `linux/amd64` alone, which makes the build shorter. The Dockerfile can still cross-compile for `arm64` when you build it yourself with `--platform linux/arm64`.
+
 ## 1.14.0
 
 A new `git` executor pushes a worker's `feat/*` branch from a repository on the host to its GitHub remote. The worker names the repository and the branch; it never holds the token, and no file content passes through the call.
