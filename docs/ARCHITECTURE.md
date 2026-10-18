@@ -85,6 +85,13 @@ authenticates `/mcp`; the password opens the console (`/app`, via a
 `/api/v1` session). Losing one does not expose
 the other.
 
+Both the console and `/admin/mcp` are mounted only with `--ui` (and
+`/admin/mcp` only when the console may write). `serve --headless` (1.26.0)
+turns that default into a guarantee for an instance whose configuration
+only its deployment may change: a console switch next to it stops the
+start, it loads strictly, never bootstraps, and takes credentials from
+`gatekeeper credential-set` (value on stdin) instead of the console.
+
 `/admin/mcp` is a second MCP endpoint, isolated by construction (FR-2.8/2.9):
 a separate `Server` instance with a hand-written, fixed `admin.*` tool list
 that shares no catalog/tool registry with `/mcp`. `AuthMiddleware` role-gates
@@ -734,7 +741,7 @@ rust/
   Cargo.toml           The release version (`version`), dependencies
   src/
     main.rs, cli.rs    Entry point: CLI (serve/check/init/token/password/
-                       credential-key, plus the hidden build-time
+                       credential-key/credential-set, plus the hidden build-time
                        build-artifacts and openapi), bootstrap, SIGHUP
                        handler
     lib.rs             VERSION (Cargo.toml's), module list

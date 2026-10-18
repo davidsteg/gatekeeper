@@ -396,6 +396,16 @@ impl CredentialStore {
         atomic::revision(&self.path)
     }
 
+    /// Runs the change hook for a write made by another process
+    /// (`gatekeeper credential-set` next to a running server): the server
+    /// calls it on SIGHUP, so output masking and executor caches follow.
+    pub fn notify_changed(&self) {
+        let hook = self.on_change.read().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     pub fn writable(&self) -> bool {
         atomic::writable(&self.path)
     }

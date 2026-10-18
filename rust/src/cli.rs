@@ -491,6 +491,9 @@ pub struct ServeArgs {
     pub ui: bool,
     pub ui_read_only: bool,
     pub no_bootstrap: bool,
+    /// `--headless` / `GATEKEEPER_HEADLESS` (1.26.0): no console and no
+    /// `/admin/mcp`, enforced rather than merely not configured.
+    pub headless: bool,
     pub trusted_proxies: Option<String>,
 }
 
@@ -616,6 +619,74 @@ pub fn cmd_password(files: &FileArgs, identity: &str, password: Option<&str>) ->
     0
 }
 
+/// `gatekeeper credential-set` (1.26.0): stores a credential from stdin,
+/// for an instance without a console (`serve --headless`). Creates the
+/// slot, or replaces the value of an existing slot of the same kind with
+/// no overlap. The value is read from stdin only -- never an argument, so
+/// it stays out of the shell history and the process list -- and the
+/// audit record names the slot and kind, never the value.
+pub fn cmd_credential_set(files: &FileArgs, name: &str, kind: &str, header: Option<&str>, header_format: Option<&str>) -> i32 {
+    use std::io::Read as _;
+    let tier1 = match load_tier1(&files.path("toolkits.yaml")) {
+        Ok(t) => t,
+        Err(exc) => {
+            eprintln!("Configuration error: {exc}");
+            return 2;
+        }
+    };
+    let audit = match AuditLog::new(&tier1.audit_dir) {
+        Ok(a) => Arc::new(a),
+        Err(exc) => {
+            eprintln!("Configuration error: cannot use the audit directory {}: {}", repr_str(&tier1.audit_dir), os_error(&exc, &tier1.audit_dir));
+            return 2;
+        }
+    };
+    let mut value = String::new();
+    if let Err(e) = std::io::stdin().read_to_string(&mut value) {
+        eprintln!("ERROR: cannot read the value from stdin: {e}");
+        return 1;
+    }
+    // One trailing newline is what `echo` or a heredoc adds, not part of it.
+    let value = value.strip_suffix('\n').map(|v| v.strip_suffix('\r').unwrap_or(v)).unwrap_or(&value);
+    if value.is_empty() {
+        eprintln!("ERROR: no value on stdin. Pipe it in: gatekeeper credential-set --name {name} --kind {kind} < file");
+        return 1;
+    }
+    let store = CredentialStore::new(&files.path("credentials.yaml"), audit);
+    let existing = match store.raw() {
+        Ok(section) => section.get(name).and_then(|s| s.get("kind")).and_then(serde_json::Value::as_str).map(str::to_string),
+        Err(exc) => {
+            eprintln!("ERROR: {exc}");
+            return 1;
+        }
+    };
+    let rev = store.revision();
+    let outcome = match existing.as_deref() {
+        None => store.create(name, kind, value, header, None, header_format, "cli", &rev).map(|_| "created"),
+        Some(k) if k == kind => store.rotate(name, value, 0, "cli", &rev).map(|_| "replaced the value of"),
+        Some(k) => {
+            eprintln!(
+                "ERROR: credential {} exists with kind {}, not {}. Delete it first to change its kind.",
+                repr_str(name),
+                repr_str(k),
+                repr_str(kind)
+            );
+            return 1;
+        }
+    };
+    match outcome {
+        Ok(verb) => {
+            println!("Credential {}: {verb} it in {}.", repr_str(name), files.path("credentials.yaml"));
+            println!("Send the running server SIGHUP (or restart it) so its output masking includes the new value.");
+            0
+        }
+        Err(exc) => {
+            eprintln!("ERROR: {exc}");
+            1
+        }
+    }
+}
+
 /// `gatekeeper openapi` (Python's `python -m gatekeeper.api`): prints the
 /// console's OpenAPI schema, the committed `frontend/openapi.json`.
 pub fn cmd_openapi() -> i32 {
@@ -642,6 +713,7 @@ struct Prepared {
     options: AppOptions,
     reload: ReloadPaths,
     trusted_proxies: Option<Vec<String>>,
+    credentials: Arc<CredentialStore>,
 }
 
 /// `cmd_serve`. Returns the exit code.
@@ -671,6 +743,39 @@ pub fn cmd_serve(files: &FileArgs, args: &ServeArgs) -> i32 {
 /// The synchronous startup sequence, in Python's order. `Err` carries the
 /// exit code after the reason was printed.
 fn prepare_serve(files: &FileArgs, args: &ServeArgs) -> Result<Prepared, i32> {
+    // Headless: the configuration is what the deployment mounted, and
+    // nothing at runtime -- no console, no agent proposal -- can change it.
+    // A console flag next to it is a contradiction, refused rather than
+    // resolved either way.
+    let headless = args.headless || env_flag("GATEKEEPER_HEADLESS");
+    if headless {
+        let console: Vec<&str> = [
+            (args.ui, "--ui"),
+            (env_flag("GATEKEEPER_UI"), "GATEKEEPER_UI"),
+            (args.ui_read_only, "--ui-read-only"),
+            (env_flag("GATEKEEPER_UI_READ_ONLY"), "GATEKEEPER_UI_READ_ONLY"),
+        ]
+        .into_iter()
+        .filter_map(|(set, name)| set.then_some(name))
+        .collect();
+        if !console.is_empty() {
+            eprintln!(
+                "Configuration error: headless mode serves no console, but {} is set. \
+                 Remove it, or drop --headless / GATEKEEPER_HEADLESS.",
+                console.join(" and ")
+            );
+            return Err(2);
+        }
+    }
+    let args = &ServeArgs {
+        // A headless instance never invents a configuration of its own, and
+        // a tool its Tier 1 refuses is a broken deployment, not one to run
+        // with that tool quietly disabled.
+        strict: args.strict || headless,
+        no_bootstrap: args.no_bootstrap || headless,
+        ..args.clone()
+    };
+
     // First start: a mounted, empty directory suffices.
     if !(args.no_bootstrap || env_flag("GATEKEEPER_NO_BOOTSTRAP")) {
         if let Some(problem) = bootstrap_on_first_start(&config_dir(), &state_dir()) {
@@ -949,7 +1054,13 @@ fn prepare_serve(files: &FileArgs, args: &ServeArgs) -> Result<Prepared, i32> {
         identities: files.path("identities.yaml"),
     };
 
-    let ui_enabled = args.ui || env_flag("GATEKEEPER_UI");
+    let ui_enabled = !headless && (args.ui || env_flag("GATEKEEPER_UI"));
+    if headless {
+        tracing::info!(
+            "Headless: no console at /app and no admin MCP endpoint at /admin/mcp; \
+             the configuration changes only through its files (SIGHUP reloads them)"
+        );
+    }
     if ui_enabled {
         let identities_path = files.path("identities.yaml");
         if !identities.read().identities.values().any(|i| UI_ROLES.contains(&i.role.as_str())) {
@@ -1030,6 +1141,7 @@ fn prepare_serve(files: &FileArgs, args: &ServeArgs) -> Result<Prepared, i32> {
         .filter(|v| !v.is_empty())
         .map(|v| v.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect());
 
+    let sighup_credentials = credentials.clone();
     let credentials_for_app = store.as_ref().map(|_| credentials.clone());
     let options = AppOptions {
         service,
@@ -1042,7 +1154,7 @@ fn prepare_serve(files: &FileArgs, args: &ServeArgs) -> Result<Prepared, i32> {
         pending,
         toolkit_proposals,
     };
-    Ok(Prepared { options, reload, trusted_proxies })
+    Ok(Prepared { options, reload, trusted_proxies, credentials: sighup_credentials })
 }
 
 /// uvicorn's access log line, at response start.
@@ -1097,7 +1209,7 @@ fn display_addr(host: &str, port: u16) -> String {
 }
 
 async fn run_server(prepared: Prepared, host: String, port: i64) -> i32 {
-    let Prepared { options, reload, trusted_proxies } = prepared;
+    let Prepared { options, reload, trusted_proxies, credentials } = prepared;
     let service = options.service.clone();
     let app = match build_app(options) {
         Ok(app) => app,
@@ -1107,7 +1219,8 @@ async fn run_server(prepared: Prepared, host: String, port: i64) -> i32 {
         }
     };
 
-    // SIGHUP reloads all three configuration files without a restart.
+    // SIGHUP reloads all three configuration files without a restart, and
+    // picks up credentials another process wrote (`credential-set`).
     {
         let service = service.clone();
         if let Ok(mut hup) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
@@ -1123,6 +1236,8 @@ async fn run_server(prepared: Prepared, host: String, port: i64) -> i32 {
                     if let Some(error) = error {
                         tracing::error!("SIGHUP reload failed: {}", error);
                     }
+                    let credentials = credentials.clone();
+                    let _ = tokio::task::spawn_blocking(move || credentials.notify_changed()).await;
                     // On success, reload_config has already logged.
                 }
             });
@@ -1260,6 +1375,15 @@ pub fn command() -> Result<Command, String> {
                 .help("Serve the console without any write functions, whatever the roles say"),
         )
         .arg(
+            Arg::new("headless")
+                .long("headless")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "No console and no /admin/mcp, refusing --ui; implies --strict and --no-bootstrap \
+                     (also GATEKEEPER_HEADLESS)",
+                ),
+        )
+        .arg(
             Arg::new("no_bootstrap")
                 .long("no-bootstrap")
                 .action(ArgAction::SetTrue)
@@ -1292,6 +1416,13 @@ pub fn command() -> Result<Command, String> {
              history -- omit it and gatekeeper generates one.",
         ));
 
+    let credential_set = Command::new("credential-set")
+        .about("Store a credential read from stdin (for a server without the console)")
+        .arg(opt("name", "name").required(true).help("The slot name a toolkit's 'credential:' refers to"))
+        .arg(opt("kind", "kind").required(true).help("Credential kind, e.g. ws_api_key, bearer, api_key_header"))
+        .arg(opt("header", "header").help("Header or query parameter name, for api_key_header/url_query"))
+        .arg(opt("header-format", "header_format").help("Header value format, e.g. 'Bearer {value}'"));
+
     Ok(Command::new("gatekeeper")
         .disable_help_subcommand(true)
         .subcommand_required(true)
@@ -1304,6 +1435,7 @@ pub fn command() -> Result<Command, String> {
         .subcommand(serve)
         .subcommand(Command::new("check").about("Validate the configuration"))
         .subcommand(init)
+        .subcommand(credential_set)
         .subcommand(Command::new("credential-key").about("Generate the credential store's master key"))
         .subcommand(token)
         .subcommand(password)
@@ -1360,6 +1492,7 @@ pub fn run(argv: Vec<String>) -> i32 {
                 ui: sub.get_flag("ui"),
                 ui_read_only: sub.get_flag("ui_read_only"),
                 no_bootstrap: sub.get_flag("no_bootstrap"),
+                headless: sub.get_flag("headless"),
                 trusted_proxies: get("trusted_proxies").map(str::to_string),
             };
             cmd_serve(&files, &args)
@@ -1368,6 +1501,13 @@ pub fn run(argv: Vec<String>) -> i32 {
         "init" => cmd_init(get("config_dir"), get("state_dir"), get("audit_dir"), sub.get_flag("force")),
         "credential-key" => cmd_credential_key(),
         "token" => cmd_token(get("token")),
+        "credential-set" => cmd_credential_set(
+            &files,
+            get("name").unwrap_or_default(),
+            get("kind").unwrap_or_default(),
+            get("header"),
+            get("header_format"),
+        ),
         "password" => cmd_password(&files, get("identity").unwrap_or_default(), get("password")),
         "build-artifacts" => {
             let rest: Vec<String> = sub.get_many::<String>("args").map(|v| v.cloned().collect()).unwrap_or_default();
