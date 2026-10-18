@@ -50,6 +50,7 @@ flowchart LR
 - **Per-tool, per-identity grants** with resource scopes such as `stack:media-*`.
 - **Complete audit trail** of every call, sign-in and admin change, rotated on disk.
 - **Write-only credential store.** Secrets are encrypted at rest, injected into requests by gatekeeper, and masked out of tool output and the audit log. Nobody can read one back, not even an admin.
+- **Secrets the caller brings stay secret.** A parameter marked `secret: true` (a dataset passphrase) reaches the TrueNAS API and nothing else: `***` in the audit log, masked in the output, refused anywhere but a `truenas` tool's `params`.
 - **Secret-shaped values are masked** in `docker`, `local`, `ssh` and `file` output (`DB_PASSWORD=[redacted]`, URL passwords, private keys).
 - **Agents can manage the catalog, humans approve.** An admin agent on `/admin/mcp` proposes tools, grants, credentials and toolkits; anything that widens access waits for a human in the console.
 - **Empty on install.** Nothing ships preconfigured; every capability is a decision you made and can find in the log.
@@ -388,8 +389,8 @@ security model and executors.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full list with reasons. In
 short: no `destinations:` on an `ssh` toolkit (one toolkit per host), no
-TrueNAS SCRAM mutual auth, and no nested `params_template` values for the
-`truenas` executor. gatekeeper also never continues an agent session: the
+TrueNAS SCRAM mutual auth, and secret parameters only on the `truenas`
+executor. gatekeeper also never continues an agent session: the
 recovery supervisor was removed in 0.52.0, and the orchestrating agent handles
 results and follow-ups itself
 ([migration notes](docs/DEPLOYMENT.md#removed-recovery-supervisor)).

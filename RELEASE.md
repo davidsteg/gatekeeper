@@ -1,3 +1,16 @@
+## 1.23.0
+
+Secret parameters and nested TrueNAS params, so a caller can create and unlock passphrase-encrypted datasets through gatekeeper without the passphrase being stored or logged anywhere.
+
+### Added
+
+- **`secret: true` on a tool parameter.** For a value the caller brings and nobody may keep, such as a dataset passphrase. The value is sent to the TrueNAS API and nowhere else: the audit log records `***` in `parameters` and `command`, for granted calls and for calls denied before or after authorization, and the value is masked (raw and as escaped in JSON) in stdout, stderr and the denial detail, so an API error that quotes its input does not return it. The tool's `inputSchema` marks the parameter `writeOnly`. A secret parameter must be a string with a `pattern`, cannot be derived, and may only appear in a `truenas` tool's `params`; a definition that puts it in a scope, a derived value or on another executor does not load.
+- **Nested `params` for `truenas` tools.** A positional argument may now be an object or an array, nested to any depth, whose leaf strings are templates (`pool.dataset.create`'s `{name, quota, encryption_options: {passphrase}}`, `pool.dataset.unlock`'s `datasets: [{name, passphrase}]`, query filters like `[["name", "=", "{dataset}"]]`). Numbers, booleans and null are sent as written, and a leaf that is exactly `{param}` of an `integer` or `boolean` parameter is sent as a JSON number or boolean.
+
+### Upgrading
+
+- Nothing to change. Flat string `params` behave as before.
+
 ## 1.22.1
 
 Two fixes to 1.22.0's `path_roots` proposals.

@@ -38052,7 +38052,7 @@
      "x"
     ]
    },
-   "error": "tool 'nas.x': 'params' must be a mapping of string to string",
+   "error": "tool 'nas.x': 'params' must be a mapping of argument name to template",
    "tier1_violation": false
   },
   {

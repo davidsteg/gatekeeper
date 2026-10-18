@@ -434,3 +434,91 @@ fn rpc_param_value_cannot_change_the_method() {
         assert_eq!(params["name"], malicious);
     }
 }
+
+// -- Class 11b: secret parameters (1.23.0) ---------------------------------------
+
+fn secret_spec(params: Value, scopes: Value, passphrase: Value) -> Value {
+    json!({
+        "id": "demo_truenas.unlock", "toolkit": "demo_truenas", "version": 1,
+        "title": "x", "description": "x", "category": "write", "enabled": true,
+        "method": "pool.dataset.create", "params": params,
+        "parameters": {
+            "name": {"type": "string", "pattern": "^[a-z/]+$", "required": true},
+            "passphrase": passphrase,
+        },
+        "required_scopes": scopes, "timeout_seconds": 10, "max_output_bytes": 4096,
+    })
+}
+
+fn passphrase() -> Value {
+    json!({"type": "string", "pattern": "^[0-9a-f]{64}$", "required": true, "secret": true})
+}
+
+#[test]
+fn a_secret_may_only_be_sent_in_params() {
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = truenas_tier1(dir.path(), &["pool.dataset.create"]);
+    let ok = secret_spec(json!({"data": {"name": "{name}", "key": "{passphrase}"}}), json!(["ds:{name}"]), passphrase());
+    assert!(parse_tool_spec(&ok, &tier1).is_ok());
+
+    // In a scope it would be logged with every call.
+    let in_scope = secret_spec(json!({"data": {"key": "{passphrase}"}}), json!(["ds:{passphrase}"]), passphrase());
+    assert!(err_text(parse_tool_spec(&in_scope, &tier1)).contains("may only be used in 'params'"));
+
+    // Not a string, or derived: refused.
+    for bad in [
+        json!({"type": "integer", "required": true, "secret": true}),
+        json!({"type": "string", "derived": "{name}", "secret": true}),
+    ] {
+        let spec = secret_spec(json!({"data": {"key": "{passphrase}"}}), json!([]), bad);
+        assert!(err_text(parse_tool_spec(&spec, &tier1)).contains("is secret"));
+    }
+}
+
+#[test]
+fn a_secret_on_an_argv_executor_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let sb = sandbox(dir.path());
+    let tier1 = demo_tier1(dir.path(), &sb);
+    let spec = json!({
+        "id": "demo.unlock", "toolkit": "demo", "binary": "/bin/sh", "version": 1,
+        "title": "x", "description": "x", "category": "write", "enabled": true,
+        "argv": ["-c", "true", "sh", "{passphrase}"],
+        "parameters": {"passphrase": passphrase()},
+        "required_scopes": [], "timeout_seconds": 10, "max_output_bytes": 4096,
+    });
+    assert!(err_text(parse_tool_spec(&spec, &tier1)).contains("only supported on truenas tools"));
+}
+
+#[test]
+fn nested_rpc_params_substitute_leaves_and_type_whole_placeholders() {
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = truenas_tier1(dir.path(), &["pool.dataset.create"]);
+    let spec = json!({
+        "id": "demo_truenas.create_dataset", "toolkit": "demo_truenas", "version": 1,
+        "title": "x", "description": "x", "category": "write", "enabled": true,
+        "method": "pool.dataset.create",
+        "params": {"data": {"name": "tank/{name}", "quota": "{quota}", "sparse": "{sparse}",
+                            "label": "q={quota}", "fixed": 3, "filters": [["name", "=", "{name}"]]}},
+        "parameters": {
+            "name": {"type": "string", "pattern": "^[a-z]+$", "required": true},
+            "quota": {"type": "integer", "required": true},
+            "sparse": {"type": "boolean", "required": true},
+        },
+        "required_scopes": [], "timeout_seconds": 10, "max_output_bytes": 4096,
+    });
+    let t = parse_tool_spec(&spec, &tier1).unwrap();
+    let tk = tier1.toolkit("demo_truenas").unwrap();
+    let resolved = resolve(&t, json!({"name": "alpha", "quota": 42, "sparse": true})).unwrap();
+    let (_, params) = build_rpc_call(&t, &resolved, tk).unwrap();
+    assert_eq!(
+        params["data"],
+        json!({"name": "tank/alpha", "quota": 42, "sparse": true, "label": "q=42", "fixed": 3,
+               "filters": [["name", "=", "alpha"]]})
+    );
+
+    // A placeholder inside a nested value still has to be declared.
+    let mut unknown = spec.clone();
+    unknown["params"]["data"]["filters"] = json!([["name", "=", "{nope}"]]);
+    assert!(err_text(parse_tool_spec(&unknown, &tier1)).contains("unknown parameter 'nope'"));
+}
