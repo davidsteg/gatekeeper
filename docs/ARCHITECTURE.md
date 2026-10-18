@@ -968,6 +968,9 @@ gatekeeper itself at `/app` (`api/web.rs`). It is a pure client of
   Markdown subset (headings, lists, fenced code, tables, and links, which
   become `<a>` only for `http(s)://` and `#` targets) is built as React
   elements (`pages/markdown.tsx`) for release notes and the Docs page.
+  Lines made only of HTML tags (the README's centered header and its
+  `<picture>` screenshots) and `![images](src)` are left out there; any
+  other HTML stays text.
 - **Serving.** `index.html` is `no-store`; hashed files under
   `/app/assets/` are `immutable`; any other `/app/...` path without a file
   falls back to `index.html` (client routes, including dotted tool IDs),
@@ -1031,7 +1034,10 @@ that keeps browser-initiated requests out of the audit log's
 other path.
 
 The PWA manifest is `/app/manifest.webmanifest` (`start_url` and `scope`
-`/app/`, icon `/app/icon.svg`), built from `frontend/public/`. The old
+`/app/`, icon `/app/icon.svg`), built from `frontend/public/`. The
+favicon (`/app/favicon.svg`) is also the console's logo in the sidebar and
+on the sign-in page; `icon.svg` is the same mark full-bleed, for maskable
+home-screen icons. The README's copy is `.readme-assets/logo.svg`. The old
 `/ui` manifest, icon and the never-registered service-worker stub are
 gone with the Python package's `_pwa/`.
 

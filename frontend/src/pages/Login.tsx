@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Navigate, useLocation, type Location } from "react-router";
-import { ShieldCheck } from "lucide-react";
 import { useAuth } from "@/auth";
+import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
@@ -39,7 +39,7 @@ export function Login() {
       <Card className="w-full max-w-sm">
         <CardBody className="space-y-4">
           <div className="flex items-center gap-2">
-            <ShieldCheck className="size-6 text-primary" aria-hidden />
+            <Logo className="size-8" />
             <h1 className="text-lg font-semibold">gatekeeper console</h1>
           </div>
           <p className="text-sm text-muted-foreground">
