@@ -7,9 +7,11 @@ streaming responses of the Streamable HTTP transport.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
+import re
 from typing import Any
 
 import mcp.types as types
@@ -59,6 +61,15 @@ ADMIN_MCP_PATH = "/admin/mcp"
 #: transport is terminated and forgotten. Only handshake-era (2025-11-25
 #: and earlier) clients hold sessions at all; see `build_app`.
 SESSION_IDLE_TIMEOUT_SECONDS = 3600.0
+
+#: The shape `gatekeeper token` generates: `gk_` and 43 URL-safe characters.
+_TOKEN_SHAPE = re.compile(r"gk_[A-Za-z0-9_-]{43}")
+
+#: How much of a refused POST body to `/mcp` or `/admin/mcp` is read, and
+#: for how long, to name the MCP client in the audit record. A larger body, a missing Content-Length
+#: or a slow sender is simply not read: the 401 never waits on it for long.
+HINT_BODY_MAX = 8192
+HINT_BODY_TIMEOUT_SECONDS = 0.5
 
 
 #: The longest request path an `auth_failure` record keeps as sent.
@@ -132,7 +143,7 @@ class AuthMiddleware:
         # traced to a machine. `scope["client"]` is the peer address, or the
         # forwarded one when it came through a trusted proxy (--trusted-proxies).
         peer = scope.get("client")
-        caller: dict[str, str] = {
+        caller: dict[str, Any] = {
             "client": peer[0] if peer else "unknown",
             "method": scope.get("method", "?"),
             # Capped like the user agent: the path is the caller's text, and
@@ -144,6 +155,16 @@ class AuthMiddleware:
             # Names the client program (an MCP SDK, curl, a browser); capped
             # so a hostile header cannot bloat the log.
             caller["user_agent"] = agent[:160]
+        # Behind a NAT or a Docker port mapping the peer is a gateway; an
+        # untrusted proxy's header still names the machine behind it. As
+        # sent, unverified, capped.
+        forwarded = _header(scope, "x-forwarded-for") or _header(scope, "x-real-ip")
+        if forwarded:
+            caller["forwarded_for"] = forwarded[:160]
+        # A session ID from before a restart: the client was connected and
+        # is still going. Its value is never logged.
+        if _header(scope, SESSION_ID_HEADER):
+            caller["mcp_session"] = True
         if identity is None:
             if token:
                 # The presented token's lookup index, shortened: the same
@@ -152,6 +173,14 @@ class AuthMiddleware:
                 # failures with the same value are the same stale token. Not
                 # a secret: 48 bits of a hash of 256 random bits.
                 caller["fingerprint"] = hash_token_lookup(token)[:12]
+                # Its shape, not its content: a gatekeeper token, a mangled
+                # one, or some other service's credential.
+                caller["presented_format"] = token_format(token)
+                caller["presented_length"] = len(token)
+                matches = self.identities.lookup_matches(token)
+                if matches:
+                    caller["lookup_identity"] = ", ".join(matches)
+            caller.update(mcp_hint(await _hint_body(scope, receive)))
             self.audit.auth_failure(
                 reason=DenialReason.UNKNOWN_TOKEN.value,
                 detail=f"{scope.get('method', '?')} {caller['path']} from {caller['client']}",
@@ -230,6 +259,73 @@ def _header(scope: Scope, name: str) -> str | None:
         if key == wanted:
             return value.decode("latin-1")
     return None
+
+
+def token_format(token: str) -> str:
+    """`gatekeeper` for the shape `gatekeeper token` generates,
+    `gk_malformed` for a token that has `gk_` in it but not that shape
+    (truncated, quoted, joined), `foreign` for anything else."""
+    if _TOKEN_SHAPE.fullmatch(token):
+        return "gatekeeper"
+    return "gk_malformed" if "gk_" in token else "foreign"
+
+
+def mcp_hint(body: bytes) -> dict[str, str]:
+    """What a refused MCP request was: its JSON-RPC method and, on an
+    `initialize`, the client's own `clientInfo` name and version. Both are
+    the caller's claims, capped; anything not JSON-RPC yields nothing."""
+    try:
+        message = json.loads(body)
+    except (ValueError, RecursionError):
+        return {}
+    if isinstance(message, list):
+        message = message[0] if message else None
+    if not isinstance(message, dict):
+        return {}
+    hint: dict[str, str] = {}
+    method = message.get("method")
+    if isinstance(method, str) and method:
+        hint["mcp_method"] = method[:80]
+    params = message.get("params")
+    info = params.get("clientInfo") if isinstance(params, dict) else None
+    if isinstance(info, dict):
+        parts = [p for p in (info.get("name"), info.get("version")) if isinstance(p, str) and p]
+        if parts:
+            hint["mcp_client"] = " ".join(parts)[:120]
+    return hint
+
+
+async def _hint_body(scope: Scope, receive: Receive) -> bytes:
+    """The body of a refused POST, for `mcp_hint`: only with a
+    Content-Length of at most `HINT_BODY_MAX`, and only what arrives within
+    `HINT_BODY_TIMEOUT_SECONDS`; otherwise empty."""
+    length = _header(scope, "content-length") or ""
+    if scope.get("path") not in (MCP_PATH, ADMIN_MCP_PATH) or scope.get("method") != "POST":
+        return b""
+    if not (length.isascii() and length.isdigit()):
+        return b""
+    if int(length) > HINT_BODY_MAX:
+        return b""
+
+    async def drain() -> bytes:
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return b""
+            chunk = message.get("body", b"")
+            size += len(chunk)
+            if size > HINT_BODY_MAX:
+                return b""
+            chunks.append(chunk)
+            if not message.get("more_body", False):
+                return b"".join(chunks)
+
+    try:
+        return await asyncio.wait_for(drain(), HINT_BODY_TIMEOUT_SECONDS)
+    except TimeoutError:
+        return b""
 
 
 def _client_of(ctx: Any) -> str | None:

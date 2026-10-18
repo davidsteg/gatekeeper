@@ -670,6 +670,37 @@ def test_mixed_indexed_and_unindexed_identities_both_authenticate(tmp_path):
     assert store.authenticate("gk_wrong") is None
 
 
+def test_lookup_matches_names_an_identity_whose_hash_disagrees():
+    """`lookup_matches` is asked only after `authenticate` refused a token.
+    A `token_lookup` copied from one token next to a `token_hash` of
+    another is the one way a match then happens: the audit record names
+    that identity instead of calling the token a stranger's."""
+    from gatekeeper.identity import (
+        Identity,
+        IdentityStore,
+        generate_token,
+        hash_token,
+        hash_token_lookup,
+    )
+
+    presented, other = generate_token(), generate_token()
+    store = IdentityStore(
+        {
+            "broken": Identity(
+                id="broken",
+                role="agent",
+                token_hash=hash_token(other),
+                token_lookup=hash_token_lookup(presented),
+                tools=frozenset(),
+                scopes=(),
+            ),
+        }
+    )
+    assert store.authenticate(presented) is None
+    assert store.lookup_matches(presented) == ["broken"]
+    assert store.lookup_matches(other) == []
+
+
 def test_token_lookup_field_round_trips_through_yaml(tmp_path):
     """`load_identities`/`to_spec` must not drop `token_lookup` on a
     write-then-reload cycle -- otherwise every reload of identities.yaml

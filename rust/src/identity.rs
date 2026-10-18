@@ -356,6 +356,18 @@ impl IdentityStore {
         found
     }
 
+    /// IDs whose `token_lookup` is this token's, without any scrypt.
+    ///
+    /// Only asked after [`IdentityStore::authenticate`] has already refused
+    /// the token, for the audit record: a match then means the identity's
+    /// `token_lookup` and `token_hash` disagree (one was edited by hand, or
+    /// copied from a different token) -- a broken entry, not a stranger's
+    /// token.
+    pub fn lookup_matches(&self, token: &str) -> Vec<String> {
+        let lookup = hash_token_lookup(token);
+        self.identities.values().filter(|i| i.token_lookup == lookup).map(|i| i.id.clone()).collect()
+    }
+
     /// Checks ID and password for sign-in to the console (`/app`). For an
     /// unknown ID scrypt is still computed once, against a decoy hash, so
     /// the response time is no directory of console accounts.
@@ -676,6 +688,18 @@ mod tests {
         assert!(store.authenticate_console("ghost", "x").is_none());
         // A token is not a password.
         assert!(store.authenticate_console("b", "tok-b").is_none());
+    }
+
+    #[test]
+    fn lookup_matches_names_an_identity_whose_hash_disagrees() {
+        let mut broken = identity("broken", "agent", "other", true, None);
+        broken.token_lookup = hash_token_lookup("presented");
+        let mut map = IndexMap::new();
+        map.insert("broken".into(), broken);
+        let store = IdentityStore::new(map);
+        assert!(store.authenticate("presented").is_none());
+        assert_eq!(store.lookup_matches("presented"), ["broken"]);
+        assert!(store.lookup_matches("other").is_empty());
     }
 
     #[test]

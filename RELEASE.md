@@ -1,3 +1,17 @@
+## 1.16.0
+
+A refused `/mcp` request now says more about who sent it. Behind a Docker port mapping every caller shows up as the bridge gateway, so the address alone rarely names the machine or the program with the stale token.
+
+### Added
+
+- **New fields on an `auth_failure` record**, each only when it applies:
+  - `forwarded_for`: the `X-Forwarded-For` (or `X-Real-IP`) header as sent, unverified and capped at 160 characters. It names the machine behind a proxy that is not in `--trusted-proxies`.
+  - `mcp_session: true` when the request carried an `Mcp-Session-Id`, usually a client that was connected before a restart and kept going. The session ID itself is not logged.
+  - `presented_format` and `presented_length`: whether the bearer value has the shape `gatekeeper token` generates (`gatekeeper`), has `gk_` in it but not that shape (`gk_malformed`: truncated, quoted, joined), or is some other credential (`foreign`), and its length. Never the value.
+  - `lookup_identity`: the identity whose `token_lookup` matches the presented token although its `token_hash` does not. That means the entry in `identities.yaml` is inconsistent (one of the two edited by hand), not that a stranger's token was sent.
+  - `mcp_method`, and `mcp_client` on an `initialize`: the JSON-RPC method and the client's own `clientInfo` name and version, read from the refused POST body. Only on `/mcp` and `/admin/mcp`, and only a body with a `Content-Length` of at most 8 KiB, read for at most 500 ms, so the 401 never waits long.
+- The audit page in the console shows these in the detail column, and marks `forwarded_for` and `mcp_client` as unverified, and calls the 12 hex digits a `fingerprint`, not a `token`: they are the start of the SHA-256 of the presented token, not its first characters.
+
 ## 1.15.0
 
 The Stats page has a "Top tools" card: the ten most-called tools in the chosen window, for all toolkits or for one picked from a dropdown.

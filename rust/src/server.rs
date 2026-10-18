@@ -246,6 +246,78 @@ fn header_latin1(headers: &HeaderMap, name: &str) -> Option<String> {
     headers.get(name).map(|v| v.as_bytes().iter().map(|&b| b as char).collect())
 }
 
+/// How much of a refused POST body to `/mcp` or `/admin/mcp` is read, and
+/// for how long, to name the MCP client in the audit record. A larger body, a missing Content-Length
+/// or a slow sender is simply not read: the 401 never waits on it for long.
+pub const HINT_BODY_MAX: usize = 8192;
+pub const HINT_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// `gatekeeper` for the shape `gatekeeper token` generates (`gk_` and 43
+/// URL-safe characters), `gk_malformed` for a token that has `gk_` in it but
+/// not that shape (truncated, quoted, joined), `foreign` for anything else.
+pub fn token_format(token: &str) -> &'static str {
+    let shaped = token.strip_prefix("gk_").is_some_and(|rest| {
+        rest.len() == 43 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    });
+    if shaped {
+        "gatekeeper"
+    } else if token.contains("gk_") {
+        "gk_malformed"
+    } else {
+        "foreign"
+    }
+}
+
+/// What a refused MCP request was: its JSON-RPC method and, on an
+/// `initialize`, the client's own `clientInfo` name and version. Both are
+/// the caller's claims, capped; anything not JSON-RPC yields nothing.
+pub fn mcp_hint(body: &[u8]) -> Map<String, Value> {
+    let mut hint = Map::new();
+    let Ok(mut message) = serde_json::from_slice::<Value>(body) else {
+        return hint;
+    };
+    if let Value::Array(items) = message {
+        message = items.into_iter().next().unwrap_or(Value::Null);
+    }
+    let Value::Object(message) = message else {
+        return hint;
+    };
+    if let Some(method) = message.get("method").and_then(Value::as_str).filter(|m| !m.is_empty()) {
+        hint.insert("mcp_method".into(), Value::String(method.chars().take(80).collect()));
+    }
+    if let Some(info) = message.get("params").and_then(|p| p.get("clientInfo")).and_then(Value::as_object) {
+        let parts: Vec<&str> = ["name", "version"]
+            .iter()
+            .filter_map(|k| info.get(*k).and_then(Value::as_str).filter(|v| !v.is_empty()))
+            .collect();
+        if !parts.is_empty() {
+            hint.insert("mcp_client".into(), Value::String(parts.join(" ").chars().take(120).collect()));
+        }
+    }
+    hint
+}
+
+/// The body of a refused POST, for [`mcp_hint`]: only with a Content-Length
+/// of at most [`HINT_BODY_MAX`], and only what arrives within
+/// [`HINT_BODY_TIMEOUT`]; otherwise empty.
+async fn hint_body(request: Request) -> Vec<u8> {
+    let path = decoded_path(&request);
+    if (path != MCP_PATH && path != ADMIN_MCP_PATH) || request.method() != Method::POST {
+        return Vec::new();
+    }
+    let length = header_latin1(request.headers(), "content-length").unwrap_or_default();
+    if length.is_empty() || !length.bytes().all(|b| b.is_ascii_digit()) {
+        return Vec::new();
+    }
+    if length.parse::<u128>().map_or(true, |n| n > HINT_BODY_MAX as u128) {
+        return Vec::new();
+    }
+    match tokio::time::timeout(HINT_BODY_TIMEOUT, axum::body::to_bytes(request.into_body(), HINT_BODY_MAX)).await {
+        Ok(Ok(bytes)) => bytes.to_vec(),
+        _ => Vec::new(),
+    }
+}
+
 /// `_bearer_token`: the first `Authorization` header that is a non-empty
 /// `Bearer` credential.
 pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -380,12 +452,36 @@ pub async fn auth_middleware(State(state): State<AuthState>, mut request: Reques
         caller.insert("user_agent".into(), Value::String(agent.chars().take(160).collect()));
     }
 
+    // Behind a NAT or a Docker port mapping the peer is a gateway; an
+    // untrusted proxy's header still names the machine behind it. As sent,
+    // unverified, capped.
+    let forwarded = header_latin1(request.headers(), "x-forwarded-for")
+        .filter(|v| !v.is_empty())
+        .or_else(|| header_latin1(request.headers(), "x-real-ip").filter(|v| !v.is_empty()));
+    if let Some(forwarded) = forwarded {
+        caller.insert("forwarded_for".into(), Value::String(forwarded.chars().take(160).collect()));
+    }
+    // A session ID from before a restart: the client was connected and is
+    // still going. Its value is never logged.
+    if header_latin1(request.headers(), SESSION_ID_HEADER).is_some_and(|v| !v.is_empty()) {
+        caller.insert("mcp_session".into(), Value::Bool(true));
+    }
+
     let Some(identity) = identity else {
         if let Some(token) = token.as_deref().filter(|t| !t.is_empty()) {
             // The presented token's lookup index, shortened: matchable
             // against an older identities.yaml, never a secret.
             caller.insert("fingerprint".into(), Value::String(hash_token_lookup(token)[..12].to_string()));
+            // Its shape, not its content: a gatekeeper token, a mangled one,
+            // or some other service's credential.
+            caller.insert("presented_format".into(), Value::String(token_format(token).into()));
+            caller.insert("presented_length".into(), json!(token.chars().count()));
+            let matches = state.identities.read().lookup_matches(token);
+            if !matches.is_empty() {
+                caller.insert("lookup_identity".into(), Value::String(matches.join(", ")));
+            }
         }
+        caller.extend(mcp_hint(&hint_body(request).await));
         let detail = format!("{method} {logged_path} from {client}");
         if state.audit.auth_failure(DenialReason::UnknownToken.as_str(), &detail, caller).is_err() {
             return internal_error();

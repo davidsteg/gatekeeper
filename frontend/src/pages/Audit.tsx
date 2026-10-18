@@ -17,9 +17,15 @@ const TONE: Record<string, Tone> = { ok: "ok", denied: "deny", failed: "deny", u
 
 const s = (v: unknown) => (v === undefined || v === null ? "" : typeof v === "string" ? v : JSON.stringify(v));
 
+const FORMAT: Record<string, string> = {
+  gk_malformed: "malformed gatekeeper token",
+  foreign: "not a gatekeeper token",
+};
+
 /** The detail column. A failed sign-in spells out where it came from:
- *  address, token fingerprint and client program. Records written before
- *  1.5.0 have none of these and fall back to their own `detail`. */
+ *  address, token fingerprint and client program, and since 1.16.0 what
+ *  else the request said about its sender. Records written before 1.5.0
+ *  have none of these and fall back to their own `detail`. */
 function detailOf(r: Record<string, unknown>): string {
   const primary = s(r.denial_reason ?? r.reason ?? r.target);
   if (r.kind !== "auth_failure") return primary || s(r.detail);
@@ -27,8 +33,13 @@ function detailOf(r: Record<string, unknown>): string {
   return [
     primary,
     `from ${s(r.client)}`,
-    r.fingerprint ? `token ${s(r.fingerprint)}` : "no token sent",
+    r.forwarded_for ? `forwarded for ${s(r.forwarded_for)} (unverified)` : "",
+    r.fingerprint ? `fingerprint ${s(r.fingerprint)}` : "no token sent",
+    FORMAT[s(r.presented_format)] ?? "",
+    r.lookup_identity ? `matches ${s(r.lookup_identity)}'s token_lookup, not its token_hash` : "",
+    r.mcp_client ? `client ${s(r.mcp_client)} (unverified)` : "",
     r.user_agent ? s(r.user_agent) : "",
+    r.mcp_session ? "stale session" : "",
   ].filter(Boolean).join(" · ");
 }
 
