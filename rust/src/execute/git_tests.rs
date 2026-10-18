@@ -918,3 +918,80 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     }
     out
 }
+
+/// A worker that can write the checkout plants these to make git quote a
+/// file in its errors, or read a different repository altogether.
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_layout_tricks_are_refused_and_never_echo_files() {
+    let (_, backend) = need_git!();
+    let e = env();
+    create_token(&e.store);
+    let dir = e.dir.path();
+    let remote = remote(dir, &backend).await;
+    let secret = dir.join("credential-key");
+    std::fs::write(&secret, "FERNETKEY_abcdefghijklmnop=\nsecond-line-secret\n").unwrap();
+
+    // objects/info/alternates -> a secret: git lists each line in an error.
+    let worker = worker(dir, &remote);
+    sh_git(&["branch", "feat/x"], Some(&worker), true);
+    std::os::unix::fs::symlink(&secret, worker.join(".git/objects/info/alternates")).unwrap();
+    let tk = toolkit(dir, &worker, &remote, json!({}));
+    let result = push(&tk, &e.store, "feat/x", "proj").await;
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert_eq!(result.stderr, "Repository 'proj' cannot be pushed from: it has objects/info/alternates.");
+    std::fs::remove_file(worker.join(".git/objects/info/alternates")).unwrap();
+
+    // A plain alternates file borrows another object store just the same.
+    std::fs::write(worker.join(".git/objects/info/alternates"), "/elsewhere/objects\n").unwrap();
+    let result = push(&tk, &e.store, "feat/x", "proj").await;
+    assert_eq!(result.stderr, "Repository 'proj' cannot be pushed from: it has objects/info/alternates.");
+    std::fs::remove_file(worker.join(".git/objects/info/alternates")).unwrap();
+
+    // packed-refs -> a secret: git quotes the first line it cannot parse.
+    std::os::unix::fs::symlink(&secret, worker.join(".git/packed-refs")).unwrap();
+    let result = push(&tk, &e.store, "feat/x", "proj").await;
+    assert_eq!(result.stderr, "Repository 'proj' cannot be pushed from: packed-refs is a symlink.");
+    std::fs::remove_file(worker.join(".git/packed-refs")).unwrap();
+
+    // A .git file sends the fetch to another repository.
+    let other = dir.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    sh_git(&["init", "--quiet", "-b", "main"], Some(&other), true);
+    commit(&other, "secret.txt");
+    sh_git(&["branch", "feat/steal"], Some(&other), true);
+    std::fs::rename(worker.join(".git"), dir.join("orig.git")).unwrap();
+    std::fs::write(worker.join(".git"), format!("gitdir: {}\n", other.join(".git").display())).unwrap();
+    let result = push(&tk, &e.store, "feat/steal", "proj").await;
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert!(result.stderr.starts_with("Repository 'proj' cannot be pushed from: its .git is not a directory"), "{}", result.stderr);
+    std::fs::remove_file(worker.join(".git")).unwrap();
+
+    // ... and so does a symlinked one.
+    std::os::unix::fs::symlink(other.join(".git"), worker.join(".git")).unwrap();
+    let result = push(&tk, &e.store, "feat/steal", "proj").await;
+    assert!(result.stderr.starts_with("Repository 'proj' cannot be pushed from: its .git is not a directory"), "{}", result.stderr);
+    std::fs::remove_file(worker.join(".git")).unwrap();
+    std::fs::rename(dir.join("orig.git"), worker.join(".git")).unwrap();
+
+    // Whatever else git says about local files stays out of the result: a
+    // branch pointing at an object that does not exist fails in the fetch
+    // with only the step named.
+    std::fs::write(worker.join(".git/refs/heads/feat/x"), "1111111111111111111111111111111111111111\n").unwrap();
+    let result = push(&tk, &e.store, "feat/x", "proj").await;
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert_eq!(result.stderr, "git reading the branch from the repository failed.");
+    assert!(!result.stderr.contains("FERNETKEY"));
+}
+
+#[test]
+fn only_remote_lines_of_stderr_pass() {
+    let stderr = "error: object directory /x/FERNETKEY does not exist; check .git/objects/info/alternates\n\
+                  remote: Permission to o/r.git denied.\n\
+                  fatal: unexpected line in ./packed-refs: SECRET\n\
+                  fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403";
+    assert_eq!(
+        passed_stderr(stderr),
+        "remote: Permission to o/r.git denied.\n\
+         fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403"
+    );
+}

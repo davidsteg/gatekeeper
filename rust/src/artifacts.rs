@@ -1163,7 +1163,7 @@ mod tests {
 
     /// Byte-identical to Python for the same tree: the SHA-256 of what the
     /// Python implementation's `_deterministic_tar` produced for exactly
-    /// this tree, frozen when it was removed (1.16.0).
+    /// this tree, frozen when it was removed (1.17.0).
     #[test]
     fn tar_gz_is_byte_identical_to_python() {
         use sha2::Digest as _;

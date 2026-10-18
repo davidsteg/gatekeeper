@@ -202,7 +202,16 @@ absolute). A call names a repo key and a branch. `execute_git.check_values`
 constant) and a listed repo. The push never runs in the worker's checkout,
 whose `.git/config` and hooks the worker controls (a `pre-push` hook, an
 `url.<x>.insteadOf` or a `credential.helper` there would run code or move
-the token elsewhere). Each call instead `git init --bare --template=` a
+the token elsewhere). The worker also controls the checkout's *layout*, and
+git follows that: a `.git` file or symlink reads another repository, and a
+symlinked `objects/info/alternates` or `packed-refs` makes git quote the
+file it points at in its errors. So before anything runs, `.git` must be a
+real directory (or the path a bare repository), `objects`, `refs`, `HEAD`,
+`packed-refs`, `config`, `objects/info` and `objects/pack` must not be
+symlinks, and there must be no `commondir` or worker-side alternates (1.14.2);
+and a failure passes on only the stderr lines git got from the remote
+(`remote: ...`) or wrote about reaching it, never what a local step said.
+Each call then `git init --bare --template=` a
 tempdir, points `objects/info/alternates` at the checkout's object store,
 fetches `refs/heads/<branch>` from the checkout's path (only `upload-pack`
 touches it), `ls-remote`s the remote for the old SHA, lists the new commits
@@ -602,7 +611,7 @@ Files belong to the Gatekeeper process user; `run_as` is not supported on
 ## Project structure
 
 gatekeeper is one Rust crate. It was ported from a Python package (removed
-in 1.16.0) and its module names follow the Python modules they replaced,
+in 1.17.0) and its module names follow the Python modules they replaced,
 so a module named elsewhere in this document is under `rust/src/` (an
 executor under `rust/src/execute/`, the console API under `rust/src/api/`;
 see "Rust implementation" below).
@@ -853,7 +862,9 @@ writes through these routes.
 - **Stats, documents, OAuth sign-in (`api/extras.rs`, 0.57.0).** `GET
   /stats?window=24h|7d|30d` (`service.stats_view`:
   tiles, an hourly or daily series, per-toolkit, per-identity, latency
-  and admin-action tables). Since 1.1.2 each window reads exactly its own
+  and admin-action tables, and since 1.15.0 a per-tool `tools` list,
+  each row tagged with its toolkit, that the console's "Top tools" card
+  filters by a toolkit dropdown). Since 1.1.2 each window reads exactly its own
   span: `read_audit(since=...)` walks back until the first older record,
   bounded by the same 2 MiB tail, and `truncated` means that tail ended
   before the window's start. `GET /documents`
@@ -997,10 +1008,24 @@ a bearer token was sent, `fingerprint`: the first 12 hex digits of that
 token's `token_lookup` (SHA-256). The token itself is never logged. Two
 failures with the same fingerprint are the same stale token, and comparing
 it with the `token_lookup` values in an older `identities.yaml` says whose
-token it was.
+token it was. Compute it for a candidate token with
+`printf %s "$TOKEN" | sha256sum | cut -c1-12`.
+
+Since 1.16.0 the record also carries, each only when it applies:
+`forwarded_for` (the `X-Forwarded-For`, else `X-Real-IP`, header as sent,
+unverified, capped at 160), `mcp_session: true` (an `Mcp-Session-Id` was
+sent; its value is not logged), and for a refused token `presented_format`
+(`gatekeeper`, `gk_malformed` or `foreign`: the value's shape, never the
+value), `presented_length`, and `lookup_identity` when an identity's
+`token_lookup` matches but its `token_hash` does not (an inconsistent
+`identities.yaml` entry). On a refused POST to `/mcp` or `/admin/mcp` with a
+`Content-Length` of at most 8 KiB the body is read for at most 500 ms, and its JSON-RPC
+`mcp_method` and, on `initialize`, `mcp_client` (`clientInfo` name and
+version, capped at 120) are added. The field names avoid "token" because
+the audit log masks every key containing it.
 
 ```json
-{"kind": "auth_failure", "reason": "unknown_token", "detail": "POST /mcp from 10.10.110.102", "client": "10.10.110.102", "method": "POST", "path": "/mcp", "user_agent": "python-httpx/0.28", "fingerprint": "a1b2c3d4e5f6", "ts": "..."}
+{"kind": "auth_failure", "reason": "unknown_token", "detail": "POST /mcp from 10.10.110.102", "client": "10.10.110.102", "method": "POST", "path": "/mcp", "user_agent": "python-httpx/0.28", "fingerprint": "a1b2c3d4e5f6", "presented_format": "gatekeeper", "presented_length": 46, "mcp_method": "initialize", "mcp_client": "hermes 0.9.1", "ts": "..."}
 ```
 
 ## Telling connected agents the catalog changed
@@ -1087,7 +1112,7 @@ itself, which already documents its own single-instance assumption.
 
 ## Rust implementation (`rust/`)
 
-`rust/` is a port of the original Python package (1.13.0), and since 1.16.0
+`rust/` is a port of the original Python package (1.13.0), and since 1.17.0
 the only implementation: the Python package and its tests were removed.
 The port kept the Python behavior on purpose -- same validation and check
 order, same user-visible strings, same file and wire formats -- so a

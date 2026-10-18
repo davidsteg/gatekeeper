@@ -81,7 +81,7 @@ and the tests skip with a note when it cannot import `mcp`. The Python
 pytest suite needs the scripts' own dependencies:
 `pip install -c constraints.txt "google-api-python-client>=2.100" "google-auth-oauthlib>=1.0" pytest`.
 
-The Python implementation the crate was ported from is gone (1.16.0).
+The Python implementation the crate was ported from is gone (1.17.0).
 What it produced is kept as frozen fixtures in `rust/tests/fixtures/`
 (error messages, the examples as loaded, `init` output, the admin tool
 list, the MCP wire transcript, files it wrote). They are expectations, not

@@ -4,7 +4,7 @@
 //! specs -- one per validation branch of the retired Python `tier1.py`/
 //! `catalog.py` -- with the exact `ConfigError` text Python produced for
 //! each, or a summary of what loaded. It was generated from the Python
-//! implementation and is frozen since that was removed (1.16.0): a change
+//! implementation and is frozen since that was removed (1.17.0): a change
 //! to a message is a change to this file, made by hand. Operators grep
 //! logs for these messages, so they must match character for character.
 //!

@@ -3,7 +3,7 @@
 //! Agents do not get a shell, but a fixed set of validated actions -- each
 //! with its own token, own permissions, and full audit. Module names follow
 //! the Python modules of the implementation this crate replaced (removed
-//! in 1.16.0): `tier1.py` -> [`tier1`], `execute_http.py` -> `execute::http`.
+//! in 1.17.0): `tier1.py` -> [`tier1`], `execute_http.py` -> `execute::http`.
 
 /// The release version: `version` in `rust/Cargo.toml`. Every change on
 /// `main` is a release and bumps it (RELEASE.md, "The rule").

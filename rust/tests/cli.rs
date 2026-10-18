@@ -160,7 +160,7 @@ fn a_missing_subcommand_is_a_usage_error() {
 /// The files `init` writes match the Python CLI's, secrets aside: what
 /// `python -m gatekeeper init --audit-dir /audit` wrote, frozen in
 /// `fixtures/init_golden/` when the Python implementation was removed
-/// (1.16.0), with the hash values masked.
+/// (1.17.0), with the hash values masked.
 #[test]
 fn init_writes_what_the_python_cli_writes() {
     let tmp = tempfile::tempdir().unwrap();

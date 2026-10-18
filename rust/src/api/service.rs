@@ -1268,6 +1268,25 @@ pub fn duration_stats(
     result
 }
 
+/// Counts calls per tool ID, each tagged with its toolkit (`_unknown` if
+/// none): the Stats page's "Top tools" card.
+pub fn per_tool_call_stats(
+    records: &[Value],
+    tools_by_kit: &IndexMap<String, BTreeSet<String>>,
+) -> IndexMap<String, (String, Counts)> {
+    let lookup = tool_to_kit(tools_by_kit);
+    let mut stats: IndexMap<String, (String, Counts)> = IndexMap::new();
+    for record in records.iter().filter(|r| is_call(r)) {
+        let tool = key_or_empty(record, "tool");
+        if tool.is_empty() {
+            continue;
+        }
+        let kit = lookup.get(&tool).cloned().unwrap_or_else(|| "_unknown".into());
+        stats.entry(tool).or_insert_with(|| (kit, Counts::default())).1.add(record);
+    }
+    stats
+}
+
 const STATS_WINDOWS: [(&str, &str, i64); 3] =
     [("24h", "Last 24 hours", 24), ("7d", "Last 7 days", 7), ("30d", "Last 30 days", 30)];
 
@@ -1285,8 +1304,8 @@ fn stats_rows(stats: &IndexMap<String, Counts>) -> Vec<Value> {
 }
 
 /// The Stats page as data: tiles, an activity series (hourly for 24 h,
-/// daily otherwise), and per-toolkit, per-identity, latency and admin
-/// tables.
+/// daily otherwise), and per-toolkit, per-identity, per-tool, latency and
+/// admin tables.
 pub fn stats_view(service: &Service, window: &str) -> Value {
     let (key, label, span) = STATS_WINDOWS.iter().copied().find(|w| w.0 == window).unwrap_or(STATS_WINDOWS[0]);
     let now = local_now();
@@ -1301,6 +1320,8 @@ pub fn stats_view(service: &Service, window: &str) -> Value {
     let totals = outcome_totals(&records);
     let idents = call_stats(&records);
     let kits = tool_call_stats(&records, &by_kit);
+    let mut per_tool: Vec<(String, (String, Counts))> = per_tool_call_stats(&records, &by_kit).into_iter().collect();
+    per_tool.sort_by(|a, b| b.1 .1.total.cmp(&a.1 .1.total).then_with(|| a.0.cmp(&b.0)));
     let admin = admin_action_stats(&records);
     let durations = duration_stats(&records, Some(&by_kit));
     let series: Vec<Value> = if key == "24h" {
@@ -1340,6 +1361,9 @@ pub fn stats_view(service: &Service, window: &str) -> Value {
         "series": series,
         "toolkits": stats_rows(&kits),
         "identities": stats_rows(&idents),
+        "tools": per_tool.iter().map(|(name, (kit, c))| {
+            json!({"ok": c.ok, "denied": c.denied, "failed": c.failed, "total": c.total, "name": name, "toolkit": kit})
+        }).collect::<Vec<_>>(),
         "admin": admin.iter().map(|(a, n)| json!({"action": a, "count": n})).collect::<Vec<_>>(),
         "latency": latency.iter().map(|(kit, d)| json!({
             "toolkit": kit, "avg_ms": d.avg as i64, "p95_ms": d.p95 as i64, "count": d.count as i64,

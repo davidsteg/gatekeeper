@@ -446,7 +446,7 @@ async fn a_pending_change_goes_to_the_queue_not_live() {
 
 /// The Rust list against the Python module it was generated from
 /// (`admin_server._TOOLS`, dumped into `fixtures/admin_tools_golden.json`
-/// when the Python implementation was removed, 1.16.0).
+/// when the Python implementation was removed, 1.17.0).
 #[test]
 fn the_admin_tool_list_matches_the_python_module() {
     let python_tools: Value = serde_json::from_str(include_str!("fixtures/admin_tools_golden.json")).unwrap();

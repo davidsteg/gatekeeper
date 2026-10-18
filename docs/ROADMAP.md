@@ -107,9 +107,9 @@ item.
   sources are declared since 0.52.0, when the Hermes recovery adapter (the
   only artifact) was removed.
 
-- **One implementation, in Rust** (1.13.0, 1.16.0). The image runs the
+- **One implementation, in Rust** (1.13.0, 1.17.0). The image runs the
   Rust crate in `rust/` since 1.13.0; the Python package it was ported
-  from was removed in 1.16.0, its parity checks replaced by frozen
+  from was removed in 1.17.0, its parity checks replaced by frozen
   fixtures of its output. Only the vendored Google and Microsoft CLI
   scripts (`scripts/`) are still Python.
 

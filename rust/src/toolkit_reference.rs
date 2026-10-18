@@ -313,7 +313,7 @@ mod tests {
 
     /// Verbatim against the Python module's `REFERENCES`, frozen in
     /// `tests/fixtures/toolkit_reference_golden.json` when the Python
-    /// implementation was removed (1.16.0).
+    /// implementation was removed (1.17.0).
     #[test]
     fn text_matches_python_verbatim() {
         let theirs: Value =

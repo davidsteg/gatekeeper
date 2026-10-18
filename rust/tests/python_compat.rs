@@ -1,5 +1,5 @@
 //! Files and strings the retired Python implementation wrote, frozen in
-//! `tests/fixtures/python_written/` before it was removed (1.16.0), and
+//! `tests/fixtures/python_written/` before it was removed (1.17.0), and
 //! read back here: an existing deployment's identities, credential store
 //! and audit log were written by Python, and must stay readable.
 //!

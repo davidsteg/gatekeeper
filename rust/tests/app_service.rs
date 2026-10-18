@@ -186,6 +186,21 @@ async fn metrics_count_ok_and_denied() {
     assert!(text.starts_with("# HELP gatekeeper_tool_calls_total"));
 }
 
+#[tokio::test]
+async fn unknown_tool_names_share_one_series_and_cannot_forge_lines() {
+    let e = AppEnv::new();
+    let forged = "x\"} 1\ngatekeeper_executor_ready{executor=\"evil\"} 1\n#";
+    for name in [forged.to_string(), "y".repeat(100_000)] {
+        let denied = denial(call(&e, &full(), &name, json!({})).await);
+        assert!(denied.detail.len() < 1000, "{}", denied.detail.len());
+    }
+    let m = e.service.metrics();
+    assert_eq!(m[&("<unknown>".into(), "full".into(), "denied".into())], 2);
+    assert_eq!(m.len(), 1);
+    let text = e.service.render_metrics();
+    assert!(!text.contains("executor=\"evil\""), "{text}");
+}
+
 // -- test_negative_corpus.py (service-level) --------------------------------------
 
 #[tokio::test]

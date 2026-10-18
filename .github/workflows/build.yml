@@ -92,7 +92,7 @@ jobs:
             # fehlt (ein abgebrochener Lauf): die Version muss sich gegenueber
             # dem vorherigen main-Stand bewegt haben.
             if [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-              # Ein Vorgaenger von vor 1.16.0 hat dort noch 0.0.0 (die Version
+              # Ein Vorgaenger von vor 1.17.0 hat dort noch 0.0.0 (die Version
               # stand noch beim Python-Paket) -- das ist nie gleich und genuegt.
               previous=$(git show "$BEFORE:rust/Cargo.toml" 2>/dev/null | python -c \
                 "import sys,tomllib; print(tomllib.loads(sys.stdin.read())['package']['version'])" \

@@ -274,7 +274,12 @@ gatekeeper container, read-only is enough:
 `- /srv/work/gatekeeper:/repos/gatekeeper:ro`. gatekeeper only reads it:
 the branch is fetched into a throwaway repository, so the checkout's own
 remotes, hooks and credential settings play no part. The gatekeeper user
-(uid 568 by default) must be able to read the files.
+(uid 568 by default) must be able to read the files. Mount the main
+checkout: a linked worktree or submodule (whose `.git` is a file) is
+refused, and so is a checkout with symlinks inside `.git` or its own
+`objects/info/alternates` (since 1.14.2 -- the worker writes that
+directory, and git would follow them out of it). A read-only mount does
+not stop this, since the worker writes the checkout from its side.
 
 **3. The toolkit** (Tier 1 — `toolkits.yaml`, redeploy). Copy the `git`
 block from `/app/toolkits/reference` or

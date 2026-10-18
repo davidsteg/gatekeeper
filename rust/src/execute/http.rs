@@ -692,7 +692,11 @@ pub async fn run(
     };
 
     let request = Prepared { scheme: scheme.clone(), host: host.clone(), addr: resolved.addr, method, target, headers, content };
-    let sent = tokio::time::timeout(seconds(timeout_seconds), send(&request)).await;
+    // PORT NOTE: one deadline for the headers *and* the body. httpx's own
+    // timeouts are per read, so a target trickling a byte every few seconds
+    // kept a call (and its scope's resource lock) for as long as it liked.
+    let deadline = tokio::time::Instant::now() + seconds(timeout_seconds);
+    let sent = tokio::time::timeout_at(deadline, send(&request)).await;
     let (status, response_headers, response_body) = match sent {
         Err(_) | Ok(Err(Failure::Timeout)) => return Ok(timeout_result(started)),
         Ok(Err(Failure::Http(exc))) => return Ok(failed_result(exc, started)),
@@ -700,10 +704,10 @@ pub async fn run(
     };
 
     let max = max_output_bytes.max(0) as usize;
-    let (raw, truncated) = match read_capped(response_body, &response_headers, max).await {
-        Ok(r) => r,
-        Err(Failure::Timeout) => return Ok(timeout_result(started)),
-        Err(Failure::Http(exc)) => return Ok(failed_result(exc, started)),
+    let (raw, truncated) = match tokio::time::timeout_at(deadline, read_capped(response_body, &response_headers, max)).await {
+        Ok(Ok(r)) => r,
+        Err(_) | Ok(Err(Failure::Timeout)) => return Ok(timeout_result(started)),
+        Ok(Err(Failure::Http(exc))) => return Ok(failed_result(exc, started)),
     };
 
     let content_type = header_text(&response_headers, "content-type");
@@ -1009,18 +1013,20 @@ enum Decoder {
 }
 
 impl Decoder {
-    fn decode(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
+    /// Decodes `data`, producing at most `cap` bytes; anything past that is
+    /// dropped, so only call it where the caller truncates at `cap` anyway.
+    fn decode(&mut self, data: &[u8], cap: usize) -> Result<Vec<u8>, String> {
         match self {
-            Decoder::Gzip(d) => inflate(d, data),
+            Decoder::Gzip(d) => inflate(d, data, cap),
             Decoder::Deflate { inner, first_attempt } => {
                 let was_first = *first_attempt;
                 *first_attempt = false;
-                match inflate(inner, data) {
+                match inflate(inner, data, cap) {
                     Ok(out) => Ok(out),
                     Err(_) if was_first => {
                         // httpx: retry as raw deflate (no zlib header).
                         *inner = flate2::Decompress::new(false);
-                        inflate(inner, data)
+                        inflate(inner, data, cap)
                     }
                     Err(e) => Err(e),
                 }
@@ -1029,11 +1035,16 @@ impl Decoder {
     }
 }
 
-fn inflate(d: &mut flate2::Decompress, mut data: &[u8]) -> Result<Vec<u8>, String> {
-    let mut out: Vec<u8> = Vec::with_capacity(data.len() * 2 + 64);
+fn inflate(d: &mut flate2::Decompress, mut data: &[u8], cap: usize) -> Result<Vec<u8>, String> {
+    let mut out: Vec<u8> = Vec::with_capacity((data.len() * 2 + 64).min(cap.saturating_add(1)));
     loop {
+        // PORT NOTE: Python inflated each chunk whole before its cap check,
+        // so a few KB of gzip could expand to gigabytes in memory.
+        if out.len() > cap {
+            return Ok(out);
+        }
         if out.capacity() - out.len() < 4096 {
-            out.reserve(out.capacity().max(4096));
+            out.reserve(out.capacity().max(4096).min(cap.saturating_add(4096)));
         }
         let before_in = d.total_in();
         let before_out = d.total_out();
@@ -1073,11 +1084,20 @@ fn decoders_for(headers: &HeaderMap) -> Vec<Decoder> {
     decoders
 }
 
+/// PORT NOTE: httpx chains any number of codings. Only the last one in the
+/// chain can be cut off at the output cap without corrupting the stream, and
+/// every one in front of it could inflate without bound (`gzip, gzip` turned
+/// under 1 KB into 512 MiB), so a response with more than one is refused.
+const DOUBLE_ENCODING: &str = "Response uses more than one Content-Encoding, which is not supported";
+
 /// Streams the (decoded) body, stopping at `max` bytes the way Python's
 /// chunk loop did: the chunk that would cross the cap is cut and marks the
 /// result truncated. Each read waits at most httpx's 5 s read timeout.
 async fn read_capped(mut body: Incoming, headers: &HeaderMap, max: usize) -> Result<(Vec<u8>, bool), Failure> {
     let mut decoders = decoders_for(headers);
+    if decoders.len() > 1 {
+        return Err(Failure::Http(DOUBLE_ENCODING.to_string()));
+    }
     let mut out: Vec<u8> = Vec::new();
     loop {
         let frame = match tokio::time::timeout(HTTPX_DEFAULT_TIMEOUT, body.frame()).await {
@@ -1088,8 +1108,10 @@ async fn read_capped(mut body: Incoming, headers: &HeaderMap, max: usize) -> Res
         };
         let Ok(data) = frame.into_data() else { continue };
         let mut chunk = data.to_vec();
-        for decoder in decoders.iter_mut() {
-            chunk = decoder.decode(&chunk).map_err(Failure::Http)?;
+        if let Some(decoder) = decoders.first_mut() {
+            // One byte past the room left, so the cut below still marks the
+            // result truncated.
+            chunk = decoder.decode(&chunk, max - out.len() + 1).map_err(Failure::Http)?;
         }
         if chunk.is_empty() {
             continue;

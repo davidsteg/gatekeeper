@@ -1,4 +1,4 @@
-## 1.16.0
+## 1.17.0
 
 The Python implementation is gone from the repository. The Rust crate in `rust/`, which the image has run since 1.13.0, is now the only one. Nothing changes for an operator: the image, its CLI, endpoints, environment variables, configuration files and their formats are the same as in the previous release.
 
@@ -14,6 +14,49 @@ The Python implementation is gone from the repository. The Rust crate in `rust/`
 - **`frontend/openapi.json` is the committed API schema**, edited together with the Rust API instead of generated from the Python package. The console's TypeScript types are still generated from it, and the Rust tests check that the routes match it.
 - What the Python implementation produced and the Rust tests compared against live (error messages, the examples as loaded, `init` output, the admin tool list, the MCP wire transcript, token hashes, a credential store and audit lines it wrote) is kept as frozen fixtures in `rust/tests/fixtures/`. The interop tests that drive the server with the official Python MCP SDK client still run in CI, with only `mcp` installed.
 - Development is `cargo build` and `cargo test` in `rust/`; the remaining `pytest` suite covers the vendored scripts and the Dockerfile checks. See AGENTS.md.
+
+## 1.16.0
+
+A refused `/mcp` request now says more about who sent it. Behind a Docker port mapping every caller shows up as the bridge gateway, so the address alone rarely names the machine or the program with the stale token.
+
+### Added
+
+- **New fields on an `auth_failure` record**, each only when it applies:
+  - `forwarded_for`: the `X-Forwarded-For` (or `X-Real-IP`) header as sent, unverified and capped at 160 characters. It names the machine behind a proxy that is not in `--trusted-proxies`.
+  - `mcp_session: true` when the request carried an `Mcp-Session-Id`, usually a client that was connected before a restart and kept going. The session ID itself is not logged.
+  - `presented_format` and `presented_length`: whether the bearer value has the shape `gatekeeper token` generates (`gatekeeper`), has `gk_` in it but not that shape (`gk_malformed`: truncated, quoted, joined), or is some other credential (`foreign`), and its length. Never the value.
+  - `lookup_identity`: the identity whose `token_lookup` matches the presented token although its `token_hash` does not. That means the entry in `identities.yaml` is inconsistent (one of the two edited by hand), not that a stranger's token was sent.
+  - `mcp_method`, and `mcp_client` on an `initialize`: the JSON-RPC method and the client's own `clientInfo` name and version, read from the refused POST body. Only on `/mcp` and `/admin/mcp`, and only a body with a `Content-Length` of at most 8 KiB, read for at most 500 ms, so the 401 never waits long.
+- The audit page in the console shows these in the detail column, and marks `forwarded_for` and `mcp_client` as unverified, and calls the 12 hex digits a `fingerprint`, not a `token`: they are the start of the SHA-256 of the presented token, not its first characters.
+
+## 1.15.0
+
+The Stats page has a "Top tools" card: the ten most-called tools in the chosen window, for all toolkits or for one picked from a dropdown.
+
+### Added
+
+- **Top tools on `/app/stats`.** Each row shows a tool's calls split into ok, denied and failed, and links to the audit log filtered to that tool. The toolkit dropdown lists every toolkit with calls in the window and is kept in the URL (`?toolkit=`), so a reload or a shared link keeps it.
+- **`GET /api/v1/stats` returns `tools`**: every tool called in the window, most calls first, as `name`, `toolkit` and the usual `ok`/`denied`/`failed`/`total` counts. A tool the current catalog no longer has is tagged `_unknown`, as in the per-toolkit table.
+
+## 1.14.2
+
+Security fixes from an audit of the Rust build. The first two were reachable from the network without a token; the rest need a token, a console session, or a file or repository an agent can write. None of them got anyone past authentication.
+
+### Fixed
+
+- **The console API no longer reads a request body of any size.** `/api/v1` is reachable before sign-in, and its body was read whole into memory: one 1.5 GB request took the process to 7 GB. Bodies over 4 MiB are now refused with 413 before any route runs, the same ceiling the MCP endpoints already had.
+- **A request with a bad token can no longer flood the audit log.** Each one wrote its full request path into the `auth_failure` record, twice, so a few thousand requests with 60 KB paths rotated all earlier history out of the log. The path is now cut at 256 characters. An agent could do the same through `tools/call` with a megabyte-long tool name, which also added a metrics series per name forever and could forge lines in `/metrics`; unknown names are now cut at 200 characters in the audit record and counted under one `<unknown>` series, and metric labels are escaped.
+- **A demoted admin's console session no longer keeps admin rights.** A session kept the role it signed in with until it expired, so an admin demoted to viewer (by an edit, an approved `admin.role_set` or a reload) could still write, including creating a new admin. Every request now checks the session's role against the identity as it is now, and ends the session if it changed or the identity is gone.
+
+- **`git` push: no file contents in errors, and only the configured repository.** A worker that can write the checkout could symlink `.git/objects/info/alternates` or `.git/packed-refs` to any file gatekeeper can read, such as `credentials.yaml` or the credential key file, and git quoted its lines in the error the tool returned. A `.git` file or symlink made the push take a branch from a different repository. Now a failure passes on only the lines git received from the remote or wrote about reaching it, and the checkout is checked before git runs: `.git` must be a real directory, the parts git reads must not be symlinks, and a worker-side `alternates` or `commondir` is refused. A linked worktree or submodule checkout is therefore refused too; mount the main checkout.
+- **`file` executor: a path can no longer escape its root through many symlink hops.** Path resolution stopped following links after 40 hops and treated the rest of the path as plain directories, so a path that went through a symlink pointing outside the root 40 times and then once more was accepted, and the file outside was read or written. More than 40 links in one path is now refused. `must_resolve_under` uses the same resolution and now refuses such a path too.
+- **Child processes no longer inherit the credential master key.** A `local` or `docker` tool without its own environment got gatekeeper's whole environment, including `GATEKEEPER_CREDENTIAL_KEY` and `GATEKEEPER_NOTIFY_SECRET`, so a binary that prints its environment returned the key. Both are now removed from every inherited environment.
+- **`drive download` without `--output` writes only into the working directory.** The file name came from Drive, where a name may contain `/`, so a shared file named `/etc/gatekeeper/toolkits.yaml` or `../x` was written to that path. Only the last component of the name is used now.
+- **`http` responses are bounded in memory and time.** A compressed body was fully inflated before the size cap applied, so under 1 KB of doubly gzipped data took over 500 MB of memory. Now it inflates only up to the cap, and a response with more than one `Content-Encoding` is refused. The tool's `timeout_seconds` now covers reading the body as well, so a target that trickles bytes can no longer hold a call, and its scope's lock, indefinitely.
+
+### Changed
+
+- The example `drive` toolkit's comment no longer claims `path_roots` sandboxes Drive transfers by itself. A tool that moves files has to take its local path as `type: path` with `must_resolve_under`.
 
 ## 1.14.1
 

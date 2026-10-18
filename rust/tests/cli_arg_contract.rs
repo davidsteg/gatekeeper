@@ -336,7 +336,7 @@ fn shipped_catalog_census() {
 /// The argv every shipped google/microsoft tool builds with only its
 /// required (and derived) parameters supplied -- the shape an omitted
 /// optional flag leaves behind -- is the argv the Python implementation
-/// built, frozen in `fixtures/shipped_cli_argv_golden.json` (1.16.0).
+/// built, frozen in `fixtures/shipped_cli_argv_golden.json` (1.17.0).
 /// `tests/test_cli_grammar.py` runs exactly those argvs against the two
 /// real CLI grammars (`scripts/google`, `scripts/microsoft`), so together
 /// they pin that what Rust builds is what the scripts accept. A change to a

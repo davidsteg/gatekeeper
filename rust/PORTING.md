@@ -9,7 +9,7 @@ an existing deployment switched binaries without touching a config file.
 - **1.13.0** -- the image runs this crate instead of the Python package.
   The Python package stayed in the repository as the reference, and the
   parity tests compared against it live.
-- **1.16.0** -- the Python package, its tests and `pyproject.toml` were
+- **1.17.0** -- the Python package, its tests and `pyproject.toml` were
   removed. What it produced is frozen in `tests/fixtures/` (see below);
   the release version moved to `Cargo.toml`. Only the vendored Google and
   Microsoft CLI scripts (`../scripts/`) are still Python.

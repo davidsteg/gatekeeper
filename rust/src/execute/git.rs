@@ -71,6 +71,21 @@ const MAX_EXCLUDED_HEADS: usize = 256;
 /// How much of git's own stderr a failure carries.
 const MAX_ERROR_CHARS: usize = 2000;
 
+/// The only lines of git's stderr a failure passes on to the caller: what
+/// the remote said (`remote: ...`) and git's own words about reaching it.
+/// Everything else stays out, because git quotes local files in its errors
+/// -- an `objects/info/alternates` or `packed-refs` the worker pointed at
+/// `/etc/gatekeeper/credentials.yaml` comes back one line per error, and
+/// the caller is the worker.
+const PASSED_STDERR_PREFIXES: &[&str] = &[
+    "remote: ",
+    "fatal: unable to access ",
+    "fatal: Authentication failed",
+    "fatal: could not read Username",
+    "error: failed to push some refs",
+    "error: RPC failed",
+];
+
 const MAX_BRANCH_CHARS: usize = 200;
 
 /// `/dev/null` (`os.devnull`).
@@ -169,17 +184,58 @@ fn auth_header(credential: &ResolvedCredential) -> Result<(String, Vec<String>),
     Ok((format!("Authorization: Basic {encoded}"), secrets))
 }
 
-/// The worker repository's object store, for use as an alternate.
-///
-/// A checkout (`<path>/.git/objects`) or a bare repository
-/// (`<path>/objects`). A `.git` *file* (a linked worktree, a submodule)
-/// gets none: the fetch below still works, it just copies the objects.
-fn object_dir(path: &str) -> Option<String> {
-    let base = std::path::Path::new(path);
-    [base.join(".git").join("objects"), base.join("objects")]
+/// `stderr` with only the [`PASSED_STDERR_PREFIXES`] lines left.
+fn passed_stderr(stderr: &str) -> String {
+    splitlines(stderr)
         .into_iter()
-        .find(|candidate| candidate.is_dir())
-        .map(|candidate| candidate.to_string_lossy().into_owned())
+        .filter(|line| PASSED_STDERR_PREFIXES.iter().any(|prefix| line.starts_with(prefix)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Checks the worker repository's layout before anything reads it, and
+/// returns its object store (for use as an alternate).
+///
+/// The worker writes this directory, and git follows what it finds there:
+/// a `.git` *file* (`gitdir: /some/other/repo/.git`) or a symlinked `.git`
+/// makes the fetch read a different repository, and a worker-side
+/// `objects/info/alternates` makes every git step here open whatever paths
+/// it lists. So `.git` must be a real directory (or the path itself a bare
+/// repository), the parts git reads must not be symlinks, and the worker's
+/// object store must not borrow from anywhere else. A linked worktree or a
+/// submodule checkout, whose `.git` is a file, is refused: push from the
+/// main checkout.
+fn checked_object_dir(repo: &GitRepo) -> Result<String, Denied> {
+    let refuse = |what: String| {
+        Denied::new(
+            DenialReason::ExecutorUnavailable,
+            format!("Repository {} cannot be pushed from: {what}.", repr_str(&repo.name)),
+        )
+    };
+    let base = std::path::Path::new(&repo.path);
+    let dotgit = base.join(".git");
+    let gitdir = match std::fs::symlink_metadata(&dotgit) {
+        Ok(meta) if meta.file_type().is_dir() => dotgit,
+        Ok(_) => return Err(refuse("its .git is not a directory (a symlink, or a worktree or submodule file)".into())),
+        Err(_) => base.to_path_buf(),
+    };
+    for part in ["objects", "refs", "HEAD", "packed-refs", "config", "commondir", "objects/info", "objects/pack"] {
+        if let Ok(meta) = std::fs::symlink_metadata(gitdir.join(part)) {
+            if meta.file_type().is_symlink() {
+                return Err(refuse(format!("{part} is a symlink")));
+            }
+        }
+    }
+    for part in ["commondir", "objects/info/alternates", "objects/info/http-alternates"] {
+        if std::fs::symlink_metadata(gitdir.join(part)).is_ok() {
+            return Err(refuse(format!("it has {part}")));
+        }
+    }
+    let objects = gitdir.join("objects");
+    match std::fs::symlink_metadata(&objects) {
+        Ok(meta) if meta.file_type().is_dir() => Ok(objects.to_string_lossy().into_owned()),
+        _ => Err(refuse("it is not a git repository".into())),
+    }
 }
 
 /// `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`.
@@ -345,7 +401,10 @@ pub async fn run(
             let result = failure.result;
             let timed_out = result.exit_code.is_none();
             let mut message = failure.message;
-            let stderr = py_strip(&result.stderr);
+            // PORT NOTE (both sides): only the lines git got from the remote
+            // or wrote about reaching it; see PASSED_STDERR_PREFIXES.
+            let passed = passed_stderr(&result.stderr);
+            let stderr = py_strip(&passed);
             if !stderr.is_empty() {
                 let chars: Vec<char> = stderr.chars().collect();
                 let tail: String = chars[chars.len().saturating_sub(MAX_ERROR_CHARS)..].iter().collect();
@@ -442,6 +501,20 @@ impl Push<'_> {
         )
         .await?;
         if result.outcome != OUTCOME_OK {
+            let mut result = result;
+            // Only the steps that carry the token talk to the remote. A
+            // local step's stderr is about local files, so none of it is
+            // kept -- not even as `remote: ` lines, which is how
+            // upload-pack's own errors from the worker's side arrive --
+            // except the one line the fetch's caller looks for.
+            let talks_to_remote = config.iter().any(|(key, _)| key.ends_with(".extraHeader"));
+            if !talks_to_remote {
+                result.stderr = splitlines(&result.stderr)
+                    .into_iter()
+                    .filter(|line| line.starts_with("fatal: couldn't find remote ref "))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
             return Err(Stop::Failed(Failed { message: format!("git {what} failed."), result }));
         }
         Ok(result)
@@ -472,13 +545,12 @@ impl Push<'_> {
         remote_config.push((format!("http.{}.extraHeader", repo.remote), self.header.to_string()));
 
         let gd = format!("--git-dir={bare}");
+        let objects = checked_object_dir(repo)?;
         self.git(args(&["init", "--bare", "--quiet", "--template=", &bare]), &hardening, true, "init").await?;
-        if let Some(objects) = object_dir(&repo.path) {
-            let info = format!("{bare}/objects/info");
-            std::fs::create_dir_all(&info).map_err(|e| os_failure("objects/info", &e))?;
-            std::fs::write(format!("{info}/alternates"), format!("{}\n", crate::pathutil::abspath(&objects)))
-                .map_err(|e| os_failure("alternates", &e))?;
-        }
+        let info = format!("{bare}/objects/info");
+        std::fs::create_dir_all(&info).map_err(|e| os_failure("objects/info", &e))?;
+        std::fs::write(format!("{info}/alternates"), format!("{}\n", crate::pathutil::abspath(&objects)))
+            .map_err(|e| os_failure("alternates", &e))?;
 
         let mut fetch_config = hardening.clone();
         fetch_config.push(("protocol.file.allow".to_string(), "always".to_string()));

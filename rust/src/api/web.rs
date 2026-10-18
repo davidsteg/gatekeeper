@@ -81,10 +81,10 @@ pub fn web_dir() -> Option<String> {
 
 /// `rel` inside `base`, or `None` for anything that escapes it.
 fn resolve(base: &str, rel: &str) -> Option<String> {
-    let root = realpath(base);
+    let root = realpath(base).ok()?;
     // os.path.join: an absolute `rel` replaces the root.
     let joined = if rel.starts_with('/') { rel.to_string() } else { format!("{}/{rel}", root.trim_end_matches('/')) };
-    let target = realpath(&joined);
+    let target = realpath(&joined).ok()?;
     if target != root && !target.starts_with(&format!("{}/", root.trim_end_matches('/'))) {
         return None;
     }

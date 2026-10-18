@@ -11,7 +11,7 @@
 //!   identical to the one the same probe recorded against the Python SDK
 //!   server configured like gatekeeper was
 //!   (`tests/fixtures/mcp_wire_python_transcript.txt`, frozen when the
-//!   Python implementation was removed, 1.16.0).
+//!   Python implementation was removed, 1.17.0).
 //!
 //! Both need an interpreter with the MCP SDK and skip (pass with a note)
 //! without one -- see `common::mcp_python`. Set

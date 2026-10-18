@@ -72,7 +72,7 @@ Once started with `--ui`, gatekeeper hosts an admin console at `/app` where you:
 - **Grant permissions** — link identities to tools with scopes
 - **Monitor audit log** — search activity, track denials, find mistakes
 - **Decide requests as they arrive** — new requests, calls and changes appear without a reload (live updates over Server-Sent Events)
-- **See statistics** — aggregate call stats, success rates, latency, admin activity at `/app/stats`
+- **See statistics** — aggregate call stats, success rates, latency, admin activity, and the top tools of a toolkit picked from a dropdown, at `/app/stats`
 - **Change passwords** — rotate console access for people
 - **Use it from a phone** — tabs at the bottom for Overview, Requests, Tools and Audit, everything else under More; add it to the home screen to open it like an app
 
