@@ -10,7 +10,21 @@ The audit log now says what each tool call actually ran. Until now a successful 
 ### Changed
 
 - **Long values are cut in call records.** Every string in a call's `parameters` is cut after 1000 characters and the `command` after 2000, ending in `… [+N chars]`, so one call with a large file or blob cannot flood the log or push older records out of rotation sooner. Secrets are masked before the cut, so one that straddles it is never left half-visible.
-- **A secret-named parameter is masked in the command too.** A parameter whose name marks it secret (`token`, `api_key`, `password`, ...) was already logged as `***`; its value is now also replaced wherever it lands in the command (`--token=***`), and an `http` body or `truenas` param with such a key is masked the same way. Credentials gatekeeper holds are masked by the existing redactor as before.
+- **A secret-named parameter is masked in the command too.** A parameter whose name marks it secret (`token`, `api_key`, `password`, ...) was already logged as `***`; its value is now also replaced wherever it lands in the command (`--token=***`), and an `http` body or `truenas` param with such a key is masked the same way. Credentials gatekeeper holds are masked by the existing redactor as before, and the secret-shape masking from 1.18.0 runs over every logged parameter and command, whatever the toolkit's `redact_secrets` says, so a command parameter like `export API_TOKEN=...` is masked too.
+
+## 1.18.0
+
+Tools that print config files no longer hand out the secrets in them. On `docker`, `local`, `ssh` and `file` toolkits, values that look like secrets come back as `[redacted]`.
+
+### Added
+
+- **Secret-shaped values are masked in tool output.** A `cat .env`, `docker compose config` or `file` read of a config returns `DB_PASSWORD=[redacted]`, `"token": "[redacted]"`, `postgres://app:[redacted]@db` and private-key blocks with the key replaced. Keys are matched by the same rule as the audit log's secret fields (`token`, `password`, `secret`, `apikey`, `authorization`) plus `passwd`, `private_key`, `access_key` and `cookie`, so a harmless `max_tokens: 4096` is masked too.
+- **New Tier 1 toolkit field `redact_secrets`.** On by default for `docker`, `local`, `ssh` and `file`, off for the other executors. Set `redact_secrets: false` on a toolkit whose agent must see files exactly as they are, such as one that edits source code; set `true` to mask any other toolkit's output.
+- **A masked read cannot be written back.** On a redacting `file` toolkit, a `write` or `edit` whose text contains `[redacted]` is refused with `param_invalid`, because it would replace the real secret on disk with the mask. Edit the lines you mean to change instead.
+
+### Fixed
+
+- **Known credential values are now masked in `local`, `docker` and `file` output too.** Secrets from the credential store were scrubbed only from the executors that were handed the redactor (`http`, `ssh`, `truenas` and the rest); a `local` or `file` tool that printed one returned it as is.
 
 ## 1.17.1
 

@@ -124,10 +124,17 @@ pub fn clip(text: &str, max: usize) -> String {
     format!("{kept}… [+{} chars]", total - max)
 }
 
-/// Every string in `value` clipped to `max` characters.
+/// A string as a call record logs it: secret-shaped values masked
+/// ([`crate::secretmask`], a `cmd` parameter of `export TOKEN=...` is not
+/// caught by its key name), then clipped to `max` characters.
+fn loggable(text: &str, max: usize) -> String {
+    clip(&crate::secretmask::mask_secrets(text), max)
+}
+
+/// Every string in `value` masked and clipped, as [`loggable`].
 fn clip_strings(value: Value, max: usize) -> Value {
     match value {
-        Value::String(s) => Value::String(clip(&s, max)),
+        Value::String(s) => Value::String(loggable(&s, max)),
         Value::Array(items) => Value::Array(items.into_iter().map(|i| clip_strings(i, max)).collect()),
         Value::Object(map) => Value::Object(map.into_iter().map(|(k, v)| (k, clip_strings(v, max))).collect()),
         other => other,
@@ -260,12 +267,12 @@ impl AuditLog {
         event.insert("identity".into(), record.identity.into());
         event.insert("tool".into(), record.tool_id.into());
         event.insert("tool_version".into(), record.tool_version.into());
-        // Scrubbed before clipping: a known secret cut in half by the clip
-        // would no longer match the redactor, and half of it would land.
+        // Scrubbed and masked before clipping: a secret cut in half by the
+        // clip would no longer match, and half of it would land.
         let parameters = clip_strings(scrub(record.parameters, &self.redact), MAX_PARAMETER_CHARS);
         event.insert("parameters".into(), parameters);
         if let Some(command) = record.command {
-            event.insert("command".into(), clip(&self.redact.redact(&command), MAX_COMMAND_CHARS).into());
+            event.insert("command".into(), loggable(&self.redact.redact(&command), MAX_COMMAND_CHARS).into());
         }
         event.insert("scopes".into(), record.scopes.into());
         event.insert("outcome".into(), record.outcome.into());

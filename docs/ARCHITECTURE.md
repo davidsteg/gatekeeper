@@ -341,7 +341,24 @@ Never generated implicitly, never stored next to the ciphertext.
 
 Masking: known credential values are scrubbed (`***`) out of tool output and
 audit log entries via `audit.Redactor`, refreshed whenever a credential is
-created or rotated.
+created or rotated. Since 1.18.0 this covers the output of every executor,
+`local`, `docker` and `file` included.
+
+Secrets gatekeeper does not hold (a database password in a compose file,
+another service's token in an `.env`) are masked by shape
+(`rust/src/secretmask.rs`), as `[redacted]`: an assignment whose key names a
+secret (`DB_PASSWORD=...`, `api_key: ...`, `"token": "..."`, `--token=...`,
+`Authorization: ...`, by the same normalized key rule as the audit log plus
+`passwd`, `private_key`, `access_key` and `cookie`), the password in a URL
+(`postgres://user:pw@host`), and PEM private-key blocks. The Tier 1 toolkit
+field `redact_secrets` switches it: on by default for `docker`, `local`,
+`ssh` and `file`, whose tools print host files and command output, off for
+the other executors; `redact_secrets: false` turns it off for a toolkit that
+must see files verbatim (an agent editing source code), `true` turns it on
+for any other. It is generous on purpose: `max_tokens: 4096` comes back
+masked too. On a redacting `file` toolkit a `write` or `edit` whose text
+contains `[redacted]` is refused (`param_invalid`), since writing a masked
+read back would replace the real secret with the mask.
 
 ## Reaching other services
 
@@ -1014,7 +1031,10 @@ does a call denied before a request was built. The environment, where
 credentials travel, is never part of it. The value of a parameter whose name
 marks it secret is masked to `***` wherever it lands in the command, as it
 is in `parameters`, and an `http` body or `truenas` param with such a key
-is masked the same way; the known-credential redactor then runs over both.
+is masked the same way; the known-credential redactor and the
+secret-shape masking of 1.18.0 (`secretmask`, `[redacted]`) then run over
+both, whatever the toolkit's `redact_secrets` says, so a `cmd` parameter of
+`export API_TOKEN=...` is masked too.
 
 So that one call cannot flood the log, every string in `parameters` is cut
 after 1000 characters and `command` after 2000, with a `… [+N chars]` note of

@@ -534,6 +534,81 @@ async fn tool_run_as_empty_string_clears_toolkit_run_as() {
     assert_eq!(captured_run_as(&path), None);
 }
 
+// -- Secret masking in tool output (1.18.0) ----------------------------------------
+
+/// A `file` toolkit with a read and a write tool, `redact_secrets` as given
+/// (`None` leaves the executor default, which is on).
+fn masking_env(redact_secrets: Option<bool>) -> (AppEnv, String) {
+    let dir = tempfile::tempdir().unwrap().keep();
+    let root = dir.to_str().unwrap().to_string();
+    let mut tk = json!({"executor": "file", "path_roots": [root]});
+    if let Some(on) = redact_secrets {
+        tk["redact_secrets"] = json!(on);
+    }
+    let mut tools = Vec::new();
+    for op in ["read", "write"] {
+        let mut params = json!({"path": {"type": "string", "required": true, "pattern": "^/.*"}});
+        if op == "write" {
+            params["content"] = json!({"type": "string", "required": true, "pattern": "[\\s\\S]*",
+                                       "allow_control_characters": true});
+        }
+        tools.push(json!({"id": format!("files.{op}"), "toolkit": "files",
+                          "category": op, "file_operation": op, "enabled": true, "parameters": params}));
+    }
+    let e = builder().tier1(json!({"toolkits": {"files": tk}})).tools(tools).build();
+    (e, root)
+}
+
+#[tokio::test]
+async fn config_reads_come_back_with_secrets_masked() {
+    let (e, root) = masking_env(None);
+    let path = format!("{root}/.env");
+    std::fs::write(&path, "APP_NAME=web\nDB_PASSWORD=hunter2\nDATABASE_URL=postgres://app:s3cret@db/app\n").unwrap();
+    let result = call(&e, &file_agent(), "files.read", json!({"path": path})).await.unwrap();
+    assert_eq!(result.outcome, OUTCOME_OK);
+    assert!(result.stdout.contains("APP_NAME=web"), "{}", result.stdout);
+    assert!(result.stdout.contains("DB_PASSWORD=[redacted]"), "{}", result.stdout);
+    assert!(result.stdout.contains("postgres://app:[redacted]@db/app"), "{}", result.stdout);
+    assert!(!result.stdout.contains("hunter2") && !result.stdout.contains("s3cret"));
+}
+
+#[tokio::test]
+async fn writing_a_masked_value_back_is_refused() {
+    let (e, root) = masking_env(None);
+    let path = format!("{root}/.env");
+    std::fs::write(&path, "DB_PASSWORD=hunter2\n").unwrap();
+    let result = call(&e, &file_agent(), "files.write",
+                      json!({"path": path, "content": "DB_PASSWORD=[redacted]\nNEW=1\n"})).await.unwrap();
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert_eq!(result.denial_reason.as_deref(), Some("param_invalid"));
+    assert!(result.stderr.contains("[redacted]"), "{}", result.stderr);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "DB_PASSWORD=hunter2\n");
+    assert_eq!(last_audit(&e)["denial_reason"], "param_invalid");
+}
+
+#[tokio::test]
+async fn redact_secrets_false_returns_the_file_as_is() {
+    let (e, root) = masking_env(Some(false));
+    let path = format!("{root}/.env");
+    std::fs::write(&path, "DB_PASSWORD=hunter2\n").unwrap();
+    let result = call(&e, &file_agent(), "files.read", json!({"path": path})).await.unwrap();
+    assert!(result.stdout.contains("DB_PASSWORD=hunter2"), "{}", result.stdout);
+    let written = call(&e, &file_agent(), "files.write",
+                       json!({"path": path, "content": "note: [redacted] stays literal\n"})).await.unwrap();
+    assert_eq!(written.outcome, OUTCOME_OK);
+}
+
+#[tokio::test]
+async fn local_tool_output_carries_no_known_credential() {
+    // Known-secret masking now reaches `local`/`docker` and `file` output
+    // too, not only the executors that were handed the redactor.
+    let e = AppEnv::new();
+    e.audit.set_secrets(vec!["media-jellyfin".into()]);
+    let result = call(&e, &full(), "demo.show", json!({"stack": "media-jellyfin"})).await.unwrap();
+    assert!(!result.stdout.contains("media-jellyfin"), "{}", result.stdout);
+    assert!(result.stdout.contains("***"), "{}", result.stdout);
+}
+
 // -- Mailbox through the service (test_agent_messaging.py / test_mailbox_notify.py) --
 
 fn agent_env() -> AppEnv {
