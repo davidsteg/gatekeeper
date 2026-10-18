@@ -14,7 +14,10 @@ use crate::tier1::{load_tier1, Tier1};
 /// Every method frame the fake server received.
 type Seen = Arc<parking_lot::Mutex<Vec<Value>>>;
 
-async fn fake_truenas(stream: tokio::net::TcpStream, seen: Seen) {
+async fn fake_truenas<S>(stream: S, seen: Seen)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { return };
     while let Some(Ok(msg)) = ws.next().await {
         let Message::Text(raw) = msg else { continue };
@@ -37,6 +40,27 @@ async fn fake_truenas(stream: tokio::net::TcpStream, seen: Seen) {
             "pool.dataset.create" => {
                 let name = request["params"].get(0).cloned().unwrap_or(Value::Null);
                 json!({"msg": "result", "id": id, "result": {"name": name}})
+            }
+            // Jobs: 41 succeeds, 42 fails, 43 never ends; anything else is unknown.
+            "pool.dataset.unlock" => {
+                let job = match request["params"][0].as_str() {
+                    Some("ok") => 41,
+                    Some("fail") => 42,
+                    _ => 43,
+                };
+                json!({"msg": "result", "id": id, "result": job})
+            }
+            "core.get_jobs" => {
+                let job = request["params"][0][0][2].as_i64().unwrap_or_default();
+                let found = match job {
+                    41 => json!([{"id": 41, "state": "SUCCESS", "result": {"unlocked": ["tank/a"]},
+                                  "arguments": ["secret-args"]}]),
+                    42 => json!([{"id": 42, "state": "FAILED", "error": "[EINVAL] bad passphrase",
+                                  "arguments": ["secret-args"]}]),
+                    43 => json!([{"id": 43, "state": "RUNNING"}]),
+                    _ => json!([]),
+                };
+                json!({"msg": "result", "id": id, "result": found})
             }
             "slow.method" => {
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -250,4 +274,143 @@ fn close_texts_match_websockets() {
     let frame = CloseFrame { code: 4001.into(), reason: "bye".into() };
     assert_eq!(close_str(Some(&frame)), "4001 (private use) bye");
     assert_eq!(close_str(None), "1005 (no status received [internal])");
+}
+
+// -- Jobs and pinned TLS (1.24.0) -------------------------------------------------
+
+const JOB_METHODS: &str = "[\"pool.dataset.unlock\", \"core.get_jobs\"]";
+
+async fn unlock(tk: &Toolkit, which: &str, timeout: f64, idempotent: bool) -> ExecResult {
+    run_call("pool.dataset.unlock", &params(&[("id", which)]), tk, None, timeout, 65536, idempotent, true, None)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_job_tool_returns_the_jobs_result() {
+    let (url, seen) = ws_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = toolkit_yaml(dir.path(), "tk.yaml", &url, JOB_METHODS, false);
+    let tk = tier1.toolkit("demo_truenas").unwrap();
+
+    let ok = unlock(tk, "ok", 5.0, true).await;
+    assert_eq!(ok.outcome, OUTCOME_OK, "{}", ok.stderr);
+    assert_eq!(serde_json::from_str::<Value>(&ok.stdout).unwrap(), json!({"unlocked": ["tank/a"]}));
+    let polled = seen.lock().iter().filter(|f| f["method"] == "core.get_jobs").count();
+    assert_eq!(polled, 1);
+
+    let failed = unlock(tk, "fail", 5.0, true).await;
+    assert_eq!(failed.outcome, OUTCOME_FAILED);
+    assert!(failed.stderr.contains("FAILED") && failed.stderr.contains("bad passphrase"), "{}", failed.stderr);
+    // Only state, result and error are read: the job's arguments never come back.
+    assert!(!format!("{}{}", ok.stdout, failed.stderr).contains("secret-args"));
+}
+
+#[tokio::test]
+async fn a_job_that_does_not_end_times_out() {
+    let (url, _) = ws_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = toolkit_yaml(dir.path(), "tk.yaml", &url, JOB_METHODS, false);
+    let tk = tier1.toolkit("demo_truenas").unwrap();
+    let started = Instant::now();
+    let r = unlock(tk, "forever", 1.2, false).await;
+    assert_eq!(r.outcome, OUTCOME_UNKNOWN, "{}", r.stderr);
+    assert!(started.elapsed() < Duration::from_secs(4));
+    let r = unlock(tk, "forever", 1.2, true).await;
+    assert_eq!(r.outcome, OUTCOME_FAILED);
+}
+
+#[tokio::test]
+async fn without_job_the_job_id_is_the_result() {
+    let (url, _) = ws_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = toolkit_yaml(dir.path(), "tk.yaml", &url, JOB_METHODS, false);
+    let tk = tier1.toolkit("demo_truenas").unwrap();
+    let r = run("pool.dataset.unlock", &params(&[("id", "ok")]), tk, None, 5.0, 65536, true, None).await.unwrap();
+    assert_eq!(r.stdout, "41");
+}
+
+/// A wss:// fake TrueNAS with a fresh self-signed certificate, and the
+/// SHA-256 of that certificate.
+async fn wss_server() -> (String, String) {
+    use sha2::{Digest, Sha256};
+    let cert = rcgen::generate_simple_self_signed(vec!["nas.invalid".to_string()]).unwrap();
+    let der = cert.cert.der().clone();
+    let pin = hex::encode(Sha256::digest(der.as_ref()));
+    let key = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![der], key)
+        .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else { return };
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                if let Ok(tls) = acceptor.accept(stream).await {
+                    fake_truenas(tls, Seen::default()).await;
+                }
+            });
+        }
+    });
+    (format!("wss://127.0.0.1:{port}"), pin)
+}
+
+fn pinned_yaml(dir: &std::path::Path, ws_url: &str, pins: &str) -> Result<Tier1, ConfigError> {
+    let path = dir.join("pinned.yaml");
+    std::fs::write(
+        &path,
+        format!(
+            "toolkits:\n  demo_truenas:\n    executor: truenas\n    ws_url: \"{ws_url}\"\n    allowed_rpc_methods: [\"pool.query\"]\n    tls_pin_sha256: {pins}\naudit:\n  dir: {}\n",
+            dir.join("logs").display()
+        ),
+    )
+    .unwrap();
+    load_tier1(path.to_str().unwrap())
+}
+
+#[tokio::test]
+async fn a_pinned_certificate_is_accepted_and_any_other_refused() {
+    let (url, pin) = wss_server().await;
+    let dir = tempfile::tempdir().unwrap();
+
+    let tier1 = pinned_yaml(dir.path(), &url, &format!("[\"{}\"]", pin.to_uppercase())).unwrap();
+    let tk = tier1.toolkit("demo_truenas").unwrap();
+    let r = run("pool.query", &IndexMap::new(), tk, None, 5.0, 65536, true, None).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
+    assert!(probe(tk).await);
+
+    let other = "0".repeat(64);
+    let tier1 = pinned_yaml(dir.path(), &url, &format!("[\"{other}\"]")).unwrap();
+    let tk = tier1.toolkit("demo_truenas").unwrap();
+    let r = run("pool.query", &IndexMap::new(), tk, None, 5.0, 65536, true, None).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_FAILED);
+    assert!(r.stderr.contains("not pinned"), "{}", r.stderr);
+    assert!(!probe(tk).await);
+
+    // Without a pin the self-signed certificate is not trusted either.
+    let tier1 = toolkit_yaml(dir.path(), "plain.yaml", &url, "[\"pool.query\"]", false);
+    let r = run("pool.query", &IndexMap::new(), tier1.toolkit("demo_truenas").unwrap(), None, 5.0, 65536, true, None)
+        .await
+        .unwrap();
+    assert_eq!(r.outcome, OUTCOME_FAILED);
+}
+
+#[test]
+fn bad_pins_are_refused_at_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let pin = "a".repeat(64);
+    for (url, pins, needle) in [
+        ("wss://127.0.0.1:1", "[\"abc\"]".to_string(), "is not a SHA-256"),
+        ("wss://127.0.0.1:1", "[]".to_string(), "tls_pin_sha256"),
+        ("ws://127.0.0.1:1", format!("[\"{pin}\"]"), "needs a wss:// ws_url"),
+    ] {
+        let err = pinned_yaml(dir.path(), url, &pins).unwrap_err();
+        assert!(err.message.contains(needle), "{}", err.message);
+    }
 }

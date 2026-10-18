@@ -282,6 +282,9 @@ pub struct ToolDef {
 
     // -- `truenas` --
     pub rpc_method: Option<String>,
+    /// The method starts a middleware job (`job: true`, 1.24.0): its answer
+    /// is a job id, and the call waits for the job's own result.
+    pub rpc_job: bool,
     /// One template per positional RPC argument. A value is a string or a
     /// nested object/array whose leaf strings are `{param}` templates
     /// (1.23.0); a leaf that is exactly `{param}` of an integer or boolean
@@ -799,6 +802,13 @@ pub fn validate_against_tier1(tool: &ToolDef, toolkit: &Toolkit) -> ConfigResult
                     repr_list(&toolkit.allowed_rpc_methods)
                 )));
             }
+            if tool.rpc_job && !toolkit.allows_rpc_method(crate::execute::truenas::JOB_METHOD) {
+                return Err(ConfigError::tier1(format!(
+                    "{where_}: a job tool waits with {}, which is not in the allowlist {} of toolkit {tk_name}",
+                    repr_str(crate::execute::truenas::JOB_METHOD),
+                    repr_list(&toolkit.allowed_rpc_methods)
+                )));
+            }
         }
         "google" => {
             if !toolkit.allows_google_action(tool.google_action.as_deref().unwrap_or("")) {
@@ -1152,7 +1162,7 @@ fn executor_tool_fields(executor: &str) -> &'static [&'static str] {
     match executor {
         "docker" | "local" | "ssh" => &["argv", "binary"],
         "http" => &["base_url", "body", "max_file_bytes", "method", "path", "query"],
-        "truenas" => &["method", "params"],
+        "truenas" => &["job", "method", "params"],
         "file" => &["file_operation", "operation", "run_as"],
         "google" => &["google_action", "google_args"],
         "microsoft" => &["microsoft_action", "microsoft_args"],
@@ -1334,6 +1344,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         max_file_bytes: None,
         base_url: None,
         rpc_method: None,
+        rpc_job: false,
         params_template: None,
         file_operation: None,
         google_action: None,
@@ -1458,6 +1469,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
                 return Err(ConfigError::new(format!("{where_}: field 'method' is missing")));
             };
             tool.rpc_method = Some(method.clone());
+            tool.rpc_job = spec.get("job").is_some_and(py_truthy);
             let params = rpc_params_map(spec.get("params"), where_)?;
             for value in params.values() {
                 all_templates.extend(collect_template_strings(Some(value)));

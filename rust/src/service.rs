@@ -813,7 +813,7 @@ impl Service {
                     .await
                 }
                 Request::Rpc { method, params } => {
-                    execute::truenas::run(
+                    execute::truenas::run_call(
                         &method,
                         &params,
                         &toolkit,
@@ -821,6 +821,7 @@ impl Service {
                         timeout_seconds as f64,
                         max_output_bytes,
                         tool.idempotent,
+                        tool.rpc_job,
                         Some(&redact),
                     )
                     .await?

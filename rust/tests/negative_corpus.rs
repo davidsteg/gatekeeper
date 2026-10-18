@@ -522,3 +522,19 @@ fn nested_rpc_params_substitute_leaves_and_type_whole_placeholders() {
     unknown["params"]["data"]["filters"] = json!([["name", "=", "{nope}"]]);
     assert!(err_text(parse_tool_spec(&unknown, &tier1)).contains("unknown parameter 'nope'"));
 }
+
+#[test]
+fn a_job_tool_needs_core_get_jobs_in_the_allowlist() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = json!({
+        "id": "demo_truenas.unlock", "toolkit": "demo_truenas", "version": 1,
+        "title": "x", "description": "x", "category": "write", "enabled": true,
+        "method": "pool.dataset.unlock", "job": true, "params": {"id": "{name}"},
+        "parameters": {"name": {"type": "string", "pattern": "^[a-z/]+$", "required": true}},
+        "required_scopes": [], "timeout_seconds": 10, "max_output_bytes": 4096,
+    });
+    let without = truenas_tier1(dir.path(), &["pool.dataset.unlock"]);
+    assert!(parse_tool_spec(&spec, &without).unwrap_err().is_tier1_violation());
+    let with = truenas_tier1(dir.path(), &["pool.dataset.unlock", "core.get_jobs"]);
+    assert!(parse_tool_spec(&spec, &with).unwrap().rpc_job);
+}
