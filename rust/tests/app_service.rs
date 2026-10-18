@@ -65,6 +65,54 @@ async fn successful_call() {
 }
 
 #[tokio::test]
+async fn audit_records_the_command_and_clips_long_values() {
+    let e = AppEnv::new();
+    call(&e, &full(), "demo.show", json!({"stack": "media-jellyfin"})).await.unwrap();
+    let record = last_audit(&e);
+    let command = record["command"].as_str().unwrap();
+    assert!(command.starts_with(&format!("{SH} -c ")), "{command}");
+    assert!(command.ends_with("/media-jellyfin/compose.yaml"), "{command}");
+    assert_eq!(record["parameters"]["stack"], "media-jellyfin");
+
+    let long = "x".repeat(5000);
+    call(&e, &full(), "demo.echo", json!({"text": long})).await.unwrap();
+    let record = last_audit(&e);
+    let text = record["parameters"]["text"].as_str().unwrap();
+    assert!(text.ends_with("… [+4000 chars]"), "{}", &text[990..]);
+    let command = record["command"].as_str().unwrap();
+    assert!(command.chars().count() < 2100, "{}", command.len());
+    assert!(command.contains("chars]"));
+
+    // Denied before a request existed: no command.
+    denial(call(&e, &narrow(), "demo.echo", json!({"text": "x"})).await);
+    assert!(last_audit(&e).get("command").is_none());
+}
+
+#[tokio::test]
+async fn audit_command_masks_secret_named_parameters() {
+    let dir = tempfile::tempdir().unwrap();
+    let sb = sandbox(dir.path());
+    let mut specs = sh_specs(&sb);
+    specs.push(json!({
+        "id": "demo.login", "toolkit": "demo", "binary": SH, "version": 1,
+        "title": "Login", "description": "Takes a token.",
+        "category": "read", "idempotent": true, "enabled": true,
+        "argv": ["-c", "true", "sh", "--token={api_token}"],
+        "parameters": {"api_token": {"type": "string", "required": true, "pattern": "^.+$",
+                                     "description": "a token"}},
+        "required_scopes": [],
+        "timeout_seconds": 10, "max_output_bytes": 4096,
+    }));
+    let e = builder().tier1(demo_tier1_doc(dir.path(), &sb)).tools(specs).build();
+    let who = agent("full", &["demo.login"], &[]);
+    call(&e, &who, "demo.login", json!({"api_token": "s3cr3t-value"})).await.unwrap();
+    let line = e.audit_lines().pop().unwrap();
+    assert_eq!(line["parameters"]["api_token"], "***");
+    assert!(line["command"].as_str().unwrap().ends_with("--token=***"), "{}", line["command"]);
+    assert!(!line.to_string().contains("s3cr3t-value"));
+}
+
+#[tokio::test]
 async fn narrow_identity_within_scope_and_sibling_prefix_rejected() {
     let e = AppEnv::new();
     let result = call(&e, &narrow(), "demo.show", json!({"stack": "media-jellyfin"})).await.unwrap();

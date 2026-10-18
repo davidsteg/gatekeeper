@@ -135,7 +135,7 @@ Create agents, viewers, admins. Each gets a token (for `/mcp`) and/or password (
 
 ![](.readme-assets/audit.png)
 
-Every call logged—granted and denied. Real denial reasons stored, opaque message sent to agent. Search by identity, tool and outcome. The log itself is a JSON Lines file on disk (`audit.dir`), ready for any log shipper.
+Every call logged—granted and denied. Real denial reasons stored, opaque message sent to agent. Each call also records what it actually ran (the argv, the HTTP request line and body, the RPC method), with secrets masked and long values cut, and the Detail column shows it. Search by identity, tool and outcome. The log itself is a JSON Lines file on disk (`audit.dir`), ready for any log shipper.
 
 ---
 

@@ -1,3 +1,17 @@
+## 1.19.0
+
+The audit log now says what each tool call actually ran. Until now a successful call's Detail column on `/app/audit` was empty, so a row read "docker.exec, ok" and nothing else.
+
+### Added
+
+- **Call records carry a `command`:** what the executor was handed, as one line. A `docker`, `local` or `ssh` tool records its argv, shell-quoted (`/usr/bin/docker exec web sh -c 'ls /srv'`); an `http` tool its method, path, query and JSON body; a `truenas` tool its RPC method and params; a `google` or `microsoft` tool its action and CLI arguments; the `git`, `kuma`, `opencode`, `agent` and `artifact` tools their operation. A `file` call and a call denied before its request was built have none; their `parameters` are already in the record. The environment, where credentials travel, is never recorded.
+- **The Detail column shows it.** A call's detail is now its denial reason and detail when it was denied, then the command. Records written before this release show their parameters as `name=value` instead. Long details are cut at 300 characters in the table, with the full text as the cell's tooltip.
+
+### Changed
+
+- **Long values are cut in call records.** Every string in a call's `parameters` is cut after 1000 characters and the `command` after 2000, ending in `… [+N chars]`, so one call with a large file or blob cannot flood the log or push older records out of rotation sooner. Secrets are masked before the cut, so one that straddles it is never left half-visible.
+- **A secret-named parameter is masked in the command too.** A parameter whose name marks it secret (`token`, `api_key`, `password`, ...) was already logged as `***`; its value is now also replaced wherever it lands in the command (`--token=***`), and an `http` body or `truenas` param with such a key is masked the same way. Credentials gatekeeper holds are masked by the existing redactor as before.
+
 ## 1.17.1
 
 Security fixes for the admin agent's path on `/admin/mcp`. They matter if an admin-role agent is ever prompt-injected or compromised: it could change what a granted tool runs without a human seeing it, and a human could approve a credential probe without seeing where the secret goes.
