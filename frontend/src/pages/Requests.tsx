@@ -173,9 +173,10 @@ function ChangeTab({ items }: { items: Pending[] }) {
   const decided = useDecided();
   const live = items.filter((i) => !DONE_CHANGE.has(i.status));
   const open = live.filter((i) => i.status === "pending");
-  // A credential proposal needs a typed value, so it cannot be approved in
-  // a batch; rejecting one needs nothing, so Reject all takes it too.
-  const batchable = open.filter((i) => i.action !== "cred_propose");
+  // A credential proposal needs a typed value, and a risky change needs its
+  // own second look, so neither is approved in a batch; rejecting needs
+  // nothing, so Reject all takes them too.
+  const batchable = open.filter((i) => i.action !== "cred_propose" && approvalRisks(i).length === 0);
   if (decided.isError) return <QueryError error={decided.error} />;
   if (decided.isPending) return <Loading />;
   if (!live.length && !decided.data.pages[0]?.total) {
@@ -215,8 +216,35 @@ function Review({ review }: { review: Pending["review"] }) {
   );
 }
 
+/** Why approving this needs a second look, in the reviewer's terms; empty
+ *  for a routine change. A grant_set replaces the identity's whole list,
+ *  so an agent asking to add one tool can also strip every other grant. */
+export function approvalRisks(item: Pending): string[] {
+  const risks: string[] = [];
+  const identity = String(item.payload.identity_id ?? "");
+  if (item.action === "grant_set") {
+    const removed = item.review.tools.filter((t) => t.marker === "-").length;
+    const missing = item.review.tools.filter((t) => t.marker !== "-" && t.state === "missing").length;
+    if (removed) {
+      risks.push(`It takes away ${removed} existing grant${removed === 1 ? "" : "s"} from ${identity}: a grant proposal replaces the whole list.`);
+    }
+    if (missing) {
+      risks.push(`It grants ${missing} tool${missing === 1 ? "" : "s"} that ${missing === 1 ? "is" : "are"} not in the catalog.`);
+    }
+  }
+  if (item.action === "role_set") {
+    risks.push(item.payload.role === "admin"
+      ? `It makes ${identity} an admin, the most privileged role.`
+      : `It changes the role of ${identity}.`);
+  }
+  if (item.action === "tool_delete") {
+    risks.push(`It deletes tool ${String(item.payload.id ?? "")}: every identity granted it loses it.`);
+  }
+  return risks;
+}
+
 function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean }) {
-  const [mode, setMode] = useState<"" | "reject" | "fill">("");
+  const [mode, setMode] = useState<"" | "reject" | "fill" | "confirm">("");
   const [reason, setReason] = useState("");
   const [value, setValue] = useState("");
   const base = `/requests/pending/${encodeURIComponent(item.id)}`;
@@ -228,6 +256,7 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
   );
   const open = item.status === "pending" && canDecide;
   const working = approve.isPending || reject.isPending || fill.isPending;
+  const risks = approvalRisks(item);
   return (
     <Card aria-busy={working || undefined}>
       <CardHeader
@@ -248,11 +277,30 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
             {item.action === "cred_propose" ? (
               <Button size="sm" onClick={() => setMode("fill")}><Check className="size-3.5" /> Approve</Button>
             ) : (
-              <Button size="sm" busy={approve.isPending} busyLabel="Approving…" onClick={() => approve.mutate(undefined)}>
+              <Button
+                size="sm" busy={approve.isPending} busyLabel="Approving…"
+                onClick={() => (risks.length ? setMode("confirm") : approve.mutate(undefined))}
+              >
                 <Check className="size-3.5" /> Approve
               </Button>
             )}
             <Button size="sm" variant="outline" disabled={working} onClick={() => setMode("reject")}><X className="size-3.5" /> Reject</Button>
+          </div>
+        )}
+        {open && mode === "confirm" && (
+          <div className="space-y-2">
+            <Notice tone="bad">
+              <strong>Check this before approving.</strong>
+              <ul className="list-disc space-y-1 pl-4">
+                {risks.map((r) => <li key={r}>{r}</li>)}
+              </ul>
+            </Notice>
+            <div className="flex gap-2">
+              <Button size="sm" variant="destructive" busy={approve.isPending} busyLabel="Approving…" onClick={() => approve.mutate(undefined)}>
+                Approve anyway
+              </Button>
+              <Button size="sm" variant="ghost" disabled={working} onClick={() => setMode("")}>Cancel</Button>
+            </div>
           </div>
         )}
         {open && mode === "reject" && (
@@ -287,25 +335,32 @@ function PendingCard({ item, canDecide }: { item: Pending; canDecide: boolean })
 
 function DecideAll({ approvable, rejectable }: { approvable: Pending[]; rejectable: Pending[] }) {
   const [asking, setAsking] = useState<"" | "approve" | "reject">("");
+  // The list as it stood when the question opened. A proposal that arrives
+  // over the live stream while it is open must not join a batch nobody saw.
+  const [listed, setListed] = useState<Pending[]>([]);
   const [reason, setReason] = useState("");
   const approve = useWrite(
     () => apiSend<Schemas["ApproveAllResult"]>("POST", "/requests/pending/approve-all", {
       // Exactly what is listed here; anything filed meanwhile stays pending.
-      body: { ids: approvable.map((i) => i.id) },
+      body: { ids: listed.map((i) => i.id) },
     }),
     INVALIDATES,
     () => setAsking(""),
   );
   const reject = useWrite(
     () => apiSend<Schemas["RejectAllResult"]>("POST", "/requests/pending/reject-all", {
-      body: { ids: rejectable.map((i) => i.id), reason },
+      body: { ids: listed.map((i) => i.id), reason },
     }),
     INVALIDATES,
     () => { setAsking(""); setReason(""); },
   );
   const working = approve.isPending || reject.isPending;
-  const start = (mode: "approve" | "reject") => { approve.reset(); reject.reset(); setAsking(mode); };
-  const items = asking === "reject" ? rejectable : approvable;
+  const start = (mode: "approve" | "reject") => {
+    approve.reset(); reject.reset();
+    setListed(mode === "approve" ? approvable : rejectable);
+    setAsking(mode);
+  };
+  const items = listed;
   return (
     <Card aria-busy={working || undefined}>
       <CardBody className="space-y-2 text-sm">
@@ -327,8 +382,8 @@ function DecideAll({ approvable, rejectable }: { approvable: Pending[]; rejectab
             </p>
             <p className="text-xs text-muted-foreground">
               {asking === "approve"
-                ? "Each is applied on its own, oldest first. A refusal (a stale proposal, say) does not stop the rest. Credential proposals are not included; each needs its value."
-                : "Each is rejected with the same reason, credential proposals included. Nothing is applied. A proposal filed after this page loaded stays pending."}
+                ? "Each is applied on its own, oldest first. A refusal (a stale proposal, say) does not stop the rest. Credential proposals and changes that need a second look (removed grants, unknown tools, role changes, deletions) are not included; approve those one at a time. A proposal filed after you opened this stays pending."
+                : "Each is rejected with the same reason, credential proposals included. Nothing is applied. A proposal filed after you opened this stays pending."}
             </p>
             <ul className="space-y-1">
               {items.map((i) => (

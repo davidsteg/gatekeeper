@@ -959,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "gatekeeper"
-version = "1.18.1"
+version = "1.19.0"
 dependencies = [
  "anyhow",
  "async-stream",
