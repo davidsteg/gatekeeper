@@ -1,3 +1,16 @@
+## 1.19.1
+
+gatekeeper has a logo, and the README has been rewritten around screenshots of the current console.
+
+### Changed
+
+- **New logo in the console.** An archway with a keyhole on a blue tile replaces the shield as the favicon, the home-screen icon, and the mark in the sidebar and on the sign-in page.
+- **README rewritten.** It now opens with the logo and an Overview screenshot, explains the call pipeline with a diagram, and tours the console page by page (Requests, Stats with Top tools, Audit log, Tools, Identities, Credentials), with light and dark screenshots taken from a demo configuration. It describes the current state: Rust is the only implementation, the image is `linux/amd64`, and twelve executors.
+
+### Fixed
+
+- **The Docs page renders the README cleanly.** Markdown images and lines made only of HTML tags are left out instead of being printed as raw text; any other HTML still shows as text.
+
 ## 1.18.0
 
 Tools that print config files no longer hand out the secrets in them. On `docker`, `local`, `ssh` and `file` toolkits, values that look like secrets come back as `[redacted]`.

@@ -1,222 +1,252 @@
+<div align="center">
+<img src=".readme-assets/logo.svg" width="112" alt="gatekeeper logo">
+
 # gatekeeper
 
-**A controlled MCP server for host operations.** Agents get a curated set of safe, audited actions instead of a shell. Each tool has its own token, granular permissions, and full audit trail.
+**An MCP server that gives AI agents a fixed set of audited actions instead of a shell.**
 
-→ [Full requirements](REQUIREMENTS.md) | [Architecture](docs/ARCHITECTURE.md) | [Deployment](docs/DEPLOYMENT.md) | [Roadmap](docs/ROADMAP.md) | [For agents](AGENTS.md) | [Release notes](RELEASE.md)
+<a href="https://github.com/davidsteg/gatekeeper/releases"><img alt="Release" src="https://img.shields.io/github/v/release/davidsteg/gatekeeper?label=release&color=3b5bdb"></a> <a href="https://hub.docker.com/r/davidsteg/gatekeeper"><img alt="Docker image" src="https://img.shields.io/badge/docker-davidsteg%2Fgatekeeper-3b5bdb?logo=docker&logoColor=white"></a> <img alt="Platform" src="https://img.shields.io/badge/platform-linux%2Famd64-555"> <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-b7410e?logo=rust&logoColor=white">
+
+[Quick start](#quick-start) · [Console tour](#a-tour-of-the-console) · [Architecture](docs/ARCHITECTURE.md) · [Deployment](docs/DEPLOYMENT.md) · [Requirements](REQUIREMENTS.md) · [Roadmap](docs/ROADMAP.md) · [Release notes](RELEASE.md)
+
+</div>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".readme-assets/overview-dark.png">
+  <img alt="The gatekeeper console's Overview page: counts, a 12-hour activity chart, recent events and the access map of identities to toolkits" src=".readme-assets/overview-light.png">
+</picture>
 
 ---
 
-## What it does
+## Why gatekeeper
 
-Imagine you want an AI agent to safely operate Docker stacks on your homelab. Giving it shell access is too risky. gatekeeper sits in the middle:
+You want an AI agent to run your homelab: restart a Docker stack, look at a
+ZFS pool, read a mailbox, push a feature branch. Handing it a shell is too
+much power, and a shell is impossible to audit in any useful way.
 
-- **Agent requests** `docker.compose_up` for a specific stack
-- **gatekeeper checks**: Does this agent have permission? Is the stack name valid? Is the resource protected?
-- **gatekeeper executes** the exact command, never a shell
-- **Everything is logged** with who did what, when, and why
+gatekeeper sits in the middle. Each agent gets an API token and sees only the
+tools it has been granted. Every call goes through the same pipeline:
 
-No shell injection. No command confusion. No hidden side effects.
+```mermaid
+flowchart LR
+    A["Agent<br/>(MCP client)"] -->|"docker.compose_up<br/>stack=immich"| G
+    subgraph G["gatekeeper"]
+        direction TB
+        V["Authenticate · authorize · validate"] --> X["Build exact argv / request<br/>(never a shell)"]
+    end
+    G --> H["Docker, TrueNAS, SSH host,<br/>HTTP API, mailbox, …"]
+    G -.->|every call, allowed or not| L[("Audit log<br/>JSON Lines")]
+```
 
-### Key guarantees
+- **The agent asks** for a tool by name, for example `docker.compose_up` with `stack=immich`.
+- **gatekeeper checks** that this identity holds the tool, that the parameters match their rules, that the scope (`stack:immich`) is granted and the stack is not protected.
+- **gatekeeper runs** exactly the command or request the tool defines. There is no shell anywhere, so there is nothing to inject into.
+- **Everything is logged**, including every denial with its real reason. The agent only ever sees "Unknown tool, or not available".
 
-- **No shell interpreter** — only safe argv-based execution
-- **Two-tier config** — deploy-time safety (Tier 1) + runtime flexibility (Tier 2)
-- **Granular permissions** — per-tool, per-identity, scoped by resource
-- **Complete audit trail** — every call logged, even the rejected ones
-- **Empty on install** — nothing ships preconfigured; every capability is an audited decision
-- **Not just local commands** — `http`, `truenas`, `ssh`, `opencode`, `kuma` and `git` executors
-  reach outside APIs, remote hosts, a headless coding agent, Uptime Kuma's
-  monitors and a `feat/*` push to GitHub the same way, with
-  SSRF-safe target checks, mandatory SSH
-  host-key pinning, and secrets kept in a write-only credential store; see
-  [Reaching other services](#reaching-other-services-http-ssh-truenas-opencode) below
-- **Agents can leave each other messages** — the `agent` executor is a mailbox
-  between identities: `agent.send_message` addresses another identity,
-  `agent.read_messages` collects your own. The sender is your authenticated
-  identity, never an argument; delivery is on the recipient's next call, because
-  MCP has no way to push into a running session
-- **Release-bound artifacts** — files built from fixed repository paths ship
-  inside the image, bound to the release commit and listed in a sha256
-  manifest. They are available over MCP (`artifact.list`/`info`/`read`/
-  `transfer` into a fixed handover directory, sha256-verified) and over an
-  authenticated download; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). The
-  current release declares no artifact sources
-- **No session recovery.** Gatekeeper executes tools, enforces permissions,
-  audits and serves artifacts. It never continues an agent session: the
-  recovery supervisor and its Hermes adapter were removed in 0.52.0, and
-  Hermes's own orchestration handles results, wakes and follow-ups (migration:
-  [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#removed-recovery-supervisor))
+## Highlights
+
+- **No shell, ever.** Commands run as argv lists; HTTP, JSON-RPC and SSH calls are built from fixed templates.
+- **Two-tier configuration.** Tier 1 (`toolkits.yaml`) is the outer boundary, set at deploy time: which binaries, hosts, paths and methods exist at all. Tier 2 (tools, identities, credentials) is edited at runtime, and every edit is validated against Tier 1.
+- **Per-tool, per-identity grants** with resource scopes such as `stack:media-*`.
+- **Complete audit trail** of every call, sign-in and admin change, rotated on disk.
+- **Write-only credential store.** Secrets are encrypted at rest, injected into requests by gatekeeper, and masked out of tool output and the audit log. Nobody can read one back, not even an admin.
+- **Secret-shaped values are masked** in `docker`, `local`, `ssh` and `file` output (`DB_PASSWORD=[redacted]`, URL passwords, private keys).
+- **Agents can manage the catalog, humans approve.** An admin agent on `/admin/mcp` proposes tools, grants, credentials and toolkits; anything that widens access waits for a human in the console.
+- **Empty on install.** Nothing ships preconfigured; every capability is a decision you made and can find in the log.
+- **A console that works on a phone**, with live updates, light and dark mode, and a home-screen install.
+
+### Twelve executors
+
+| Executor | Reaches | Executor | Reaches |
+| --- | --- | --- | --- |
+| `local` | a binary inside the container | `google` | Gmail, Calendar, Drive (OAuth) |
+| `docker` | Docker Compose stacks, local or remote over TLS | `microsoft` | Outlook mail (OAuth) |
+| `http` | any REST API (Sonarr, Home Assistant, GitHub, …) | `opencode` | a headless opencode coding agent |
+| `ssh` | a Linux host, with mandatory host-key pinning | `kuma` | Uptime Kuma monitors |
+| `truenas` | the TrueNAS JSON-RPC API | `git` | a `feat/*` push to GitHub |
+| `file` | read, write, patch and list files under fixed roots | `agent` | a mailbox between identities |
+
+Outbound targets are checked against SSRF rules, host and CIDR allowlists, and
+method and path-prefix allowlists. **Toolkits → Reference YAML** in the console
+prints a copy-pasteable starting block for each executor, and
+[config/examples/toolkits.yaml](config/examples/toolkits.yaml) is the long
+form with the reasoning.
+
+---
+
+## A tour of the console
+
+Start gatekeeper with `serve --ui` and the admin console is at `/app`. It is a
+React app backed by a typed JSON API at `/api/v1`, and it signs in with a
+console password (an API token is refused there). The screenshots below come
+from a demo configuration with made-up hosts and activity.
+
+### Requests: agents propose, humans decide
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".readme-assets/requests-dark.png">
+  <img alt="The Requests page with pending grant and credential proposals from the admin agent hermes" src=".readme-assets/requests-light.png">
+</picture>
+
+When an admin agent asks for something that expands what an agent can do
+(a grant, enabling a write tool, a new credential slot), it lands here. The
+review shows exactly what changes: which tools get added, whether they are
+enabled, and their category. A credential proposal carries a name and a kind,
+never a value; the human types the secret on approval.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".readme-assets/requests-toolkit-dark.png">
+  <img alt="The Toolkit tab of the Requests page showing a proposed http toolkit for Sonarr with Approve and deploy" src=".readme-assets/requests-toolkit-light.png">
+</picture>
+
+Toolkit proposals get their own tab and a heavier confirmation, because they
+change what is possible at all. Only a human clicking **Approve and deploy**
+writes `toolkits.yaml`; gatekeeper validates the merged file with the startup
+loader, writes it atomically and reloads it without a restart.
+
+### Stats: what your agents actually do
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".readme-assets/stats-dark.png">
+  <img alt="The Stats page: totals, a 24-hour activity chart, calls by toolkit and identity, top tools, latency and admin actions" src=".readme-assets/stats-light.png">
+</picture>
+
+Calls, success rate, denials and failures over 24 hours, 7 or 30 days, broken
+down by toolkit and identity. **Top tools** lists the busiest tools, across
+everything or for one toolkit picked from the dropdown. Latency shows average
+and p95 per toolkit.
+
+### Audit log: the real reason for every denial
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".readme-assets/audit-dark.png">
+  <img alt="The Audit log page with calls, denials with reasons such as not_granted and scope_mismatch, sign-ins and admin changes" src=".readme-assets/audit-light.png">
+</picture>
+
+Every call, granted or denied, plus sign-ins and admin changes. The agent gets
+an opaque answer; the log keeps the real reason (`not_granted`,
+`scope_mismatch`, `protected_resource`, …), the client address, the duration
+and which credential a call used, so you know what to rotate after a leak.
+Filter by identity, tool and outcome. On disk it is JSON Lines in `audit.dir`,
+ready for any log shipper.
+
+### Tools: templates, not commands
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".readme-assets/tools-dark.png">
+  <img alt="The Tools page in card view, grouped by toolkit, with category, status, grantees and scopes per tool" src=".readme-assets/tools-light.png">
+</picture>
+
+Each tool is a fixed action: a binary with an argv template and parameter
+rules, or a method and path on an HTTP toolkit. Switch between **Cards**
+(grouped by toolkit) and **Matrix** (status, category, idempotency and who may
+call each tool). The editor shows the Tier 1 limits a tool has to stay
+inside. Defining and granting are separate steps: a tool with no grantees
+exists but no agent can see it.
+
+### Identities and credentials
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".readme-assets/identities-dark.png">
+  <img alt="The Identities page with agents, their granted tools and scopes" src=".readme-assets/identities-light.png">
+</picture>
+
+Identities are agents, viewers and admins. Agents get an API token for `/mcp`;
+people get a console password. Grants name individual tool IDs, never a whole
+toolkit, plus scopes. Tokens and passwords are stored as scrypt hashes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".readme-assets/credentials-dark.png">
+  <img alt="The Credentials page: write-only secrets with kind, usage and Rotate and Delete actions, and a warning for referenced but missing credentials" src=".readme-assets/credentials-light.png">
+</picture>
+
+A credential is created, rotated or deleted, and that is all. There is no
+view button for any role. A toolkit refers to a credential by name
+(`credential: sonarr`), and gatekeeper attaches it the way the service
+expects:
+
+| Kind | How it reaches the request | Typical service |
+| --- | --- | --- |
+| `api_key_header` | a header you name, optionally wrapped with `header_format` | Sonarr, Radarr (`X-Api-Key`), Jellyfin |
+| `bearer` | `Authorization: Bearer …` (for `git`, the push token) | Home Assistant, GitHub |
+| `basic` | `Authorization: Basic …` (for `kuma`, the Socket.IO login) | HTTP basic auth, Uptime Kuma |
+| `url_query` | a query parameter, for services with no header option | SABnzbd |
+| `url_path` | substituted into the toolkit's `base_url` | Telegram's bot API |
+| `ws_api_key` | the JSON-RPC login call | TrueNAS |
+| `docker_tls` | a PEM bundle in a private temp dir | a TLS-secured remote Docker daemon |
+| `ssh_private_key` | the key the `ssh` executor authenticates with | Linux over SSH |
+| `oauth2` | a refresh token captured by **Connect Google / Microsoft** | Gmail, Calendar, Drive, Outlook |
+
+If a toolkit names a credential that does not exist yet, startup warns and the
+page says so; calls through it are refused until a value is entered. Setting
+up the master key is step one of
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#credentials-from-zero-to-a-working-call).
 
 ---
 
 ## Quick start
 
-```bash
-# Development (Linux; Rust toolchain from rustup)
-cd rust && cargo build && cargo test && cd ..
-alias gatekeeper="$PWD/rust/target/debug/gatekeeper"
+The image is published as
+[`davidsteg/gatekeeper`](https://hub.docker.com/r/davidsteg/gatekeeper) for
+**linux/amd64**. Pin a fixed version (the one on the
+[latest release](https://github.com/davidsteg/gatekeeper/releases/latest)),
+not `latest`: this service can hold root-equivalent access to the host.
 
-# Validate config without starting
-gatekeeper --toolkits config/toolkits.yaml --tools config/tools.yaml \
-  --identities config/identities.yaml check
-```
-
----
-
-## The console UI
-
-Once started with `--ui`, gatekeeper hosts an admin console at `/app` where you:
-
-- **View access** — who can call what, which resources are protected
-- **Manage tools** — add, edit, enable/disable without restarting
-- **Grant permissions** — link identities to tools with scopes
-- **Monitor audit log** — search activity, track denials, find mistakes
-- **Decide requests as they arrive** — new requests, calls and changes appear without a reload (live updates over Server-Sent Events)
-- **See statistics** — aggregate call stats, success rates, latency, admin activity, and the top tools of a toolkit picked from a dropdown, at `/app/stats`
-- **Change passwords** — rotate console access for people
-- **Use it from a phone** — tabs at the bottom for Overview, Requests, Tools and Audit, everything else under More; add it to the home screen to open it like an app
-
-The console is a React single-page app served from the image, backed by a typed JSON API at `/api/v1`. It signs in with a console password; an API token is refused there. Since 1.0.0 it is the only console: the old server-rendered one at `/ui` is gone, and a `/ui/...` bookmark redirects to the same page under `/app/...`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#console-api-api-apiv1).
-
-### Overview: At a glance
-
-![](.readme-assets/overview.png)
-
-**Left column:** navigation. **Top row:** counts. **Access map:** which identities reach which toolkits (green=granted, red-dashed=protected). **Call history:** recent activity.
-
-### Tools: Manage the catalog
-
-![](.readme-assets/tools.png)
-
-Toggle between **Cards** (grouped by toolkit, one card per tool with parameters, scopes, and limits) and **Matrix** (a dense table: status, category, idempotency, and who may call each tool).
-
-Each tool is a template — a fixed action, not a free-form command. For a local binary that's a program path, arguments, and parameter rules; for an HTTP service (see Reaching other services below) it's a method and path instead, shown as `REQUEST` on the card. Either way the editor shows the Tier 1 limits it has to stay inside, so you know what's allowed before you save. Defining and granting are two steps — a tool with no grantees exists but is invisible to every agent.
-
-### Reaching other services: http, ssh, truenas, opencode
-
-Reaching an outside service (Sonarr, Home Assistant, pfSense, TrueNAS, a plain Linux host over SSH, a headless opencode server, Uptime Kuma, …) takes two steps. First a **toolkit**: which host, which address range, which credential. That is a deploy-time decision you paste into `toolkits.yaml` by hand and redeploy. The console can create *tools*, never *toolkits*, on purpose: that boundary is what keeps a compromised admin session from reaching an address nobody approved. **Toolkits → Reference YAML** has a copy-pasteable starting block for every executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`, `google`, `microsoft`, `opencode`, `kuma`, `git`, `agent`) with the safe defaults already in place, and `config/examples/toolkits.yaml` is the long form with the reasoning.
-
-Then the **tools**: a method and a path under the toolkit's allowed prefixes, written in the tool editor or created by an admin agent over `/admin/mcp` (`admin.tool_validate`, `admin.tool_create`). Either way each one is checked against the toolkit's limits before it's saved.
-
-### Credentials: store a secret without ever showing it again
-
-![](.readme-assets/credentials.png)
-
-Sonarr's API key, a Home Assistant token, TrueNAS's key — each gets a name here, encrypted at rest. After it's saved there is no "view" button anywhere, for any role: create, rotate, and delete are the only three things you can do with it. gatekeeper injects it into the request itself when a tool calls out; it never comes back through the console, the audit log, or a tool's response.
-
-An agent never sees a key and never sends one. It asks for a tool by name; gatekeeper looks up which credential that tool's toolkit is bound to, decrypts it, and attaches it the way the target service expects:
-
-| Kind | How it reaches the request | Typical service |
-| --- | --- | --- |
-| `api_key_header` | A named header you choose | Sonarr, Radarr, Prowlarr, Bazarr, Jellyseerr (`X-Api-Key`), Jellyfin (`X-Emby-Token`) |
-| `bearer` | `Authorization: Bearer …`; for `git`, the push token (sent as Basic, the way git over https expects) | Home Assistant, Netdata, GitHub |
-| `basic` | `Authorization: Basic …` (value stored as `user:pass`); for `kuma`, the Socket.IO login | anything with HTTP basic auth, Uptime Kuma |
-| `url_query` | A query parameter — the one documented exception, for services with no header option at all | SABnzbd (`?apikey=`) |
-| `url_path` | Substituted into the toolkit's `base_url` | Telegram's bot API |
-| `ws_api_key` | The JSON-RPC login call, not a header | TrueNAS |
-| `docker_tls` | A PEM bundle materialized to a private temp dir | a TLS-secured remote Docker daemon |
-| `ssh_private_key` | The key the `ssh` executor authenticates with | Linux-over-SSH |
-
-The binding lives in `toolkits.yaml` (Tier 1, deploy-time) as a single line — `credential: sonarr` — and names the secret, never holds it. The console cannot repoint a toolkit at a different credential, which is why a compromised admin session cannot make one service's key travel to another host.
-
-Because the two halves live in different tiers, they can disagree: a binding may name a credential nobody has created yet. Startup says so — naming the credential, what refers to it, and where the value is entered — and the Credentials page repeats it, because a binding with nothing behind it has no card of its own to appear in. Calls through it are refused until a value exists; everything else keeps serving.
-
-Two things follow for the audit log. Every call record names the credential it used (`"credentials": ["sonarr"]`) so you know what to rotate after a leak — and the value itself is masked everywhere it could surface: in the record, in the tool's own response before that response reaches the agent, and in any field whose name looks like a secret. Setting up the master key that encrypts all of this is step 1 of [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#credentials-from-zero-to-a-working-call).
-
-An admin agent on `/admin/mcp` can propose a new credential's *name*, *kind*, and *header* (`admin.cred_propose`) — but never a value; the tool has no such parameter, and one sent anyway is refused, not stored. The proposal waits in `/app/requests` until a human reviews exactly what was proposed and types the secret themselves, the same write-only guarantee as creating one by hand. The matching half, `admin.credential_bind`, proposes which *toolkit* uses that credential — again two names and nothing value-shaped — and lands on the Toolkit tab, because the binding is Tier 1 (FR-10.4): only a human clicking "Approve & Deploy" ever writes it into `toolkits.yaml`. `admin.cred_delete` removes a slot again by name — refused while any toolkit or destination still references it, and audited by name — so a slot created with the wrong *kind* (a token typed as `bearer` for a service that wants an API-key header) can be deleted and proposed again correctly without a console session. To repair a slot without losing its value, `admin.cred_update` proposes a new *kind*, *header*, probe URL or name for an existing slot; a human approves it in `/app/requests` and the stored secret stays as it is. The kind can only change between kinds that take the same value (a plain token can move from `X-Emby-Token` as `api_key_header` to `bearer`, never to a TLS bundle), and a rename is refused while anything still references the slot. An `api_key_header` slot can also carry a `header_format` such as `MediaBrowser Token="{value}"` for services that want the secret wrapped in a fixed header value (Jellyfin), settable through either proposal.
-
-### Identities: Manage access
-
-![](.readme-assets/identities.png)
-
-Create agents, viewers, admins. Each gets a token (for `/mcp`) and/or password (for the console at `/app`). Grant per-tool access with scopes. Change passwords on `/app/account`. Rotate tokens to force reconnection.
-
-### Audit log: Search activity
-
-![](.readme-assets/audit.png)
-
-Every call logged—granted and denied. Real denial reasons stored, opaque message sent to agent. Search by identity, tool and outcome. The log itself is a JSON Lines file on disk (`audit.dir`), ready for any log shipper.
-
----
-
-## Deployment
-
-### 1. Choose storage
-
-```bash
-# On TrueNAS/ZFS
-zfs create <pool>/raid/gatekeeper
-```
-
-### 2. Set up directories
+### 1. Prepare a directory
 
 ```bash
 mkdir -p /mnt/raid/gatekeeper/config /mnt/raid/gatekeeper/logs
 chown -R 568:568 /mnt/raid/gatekeeper
 ```
 
-### 3. Start (first time auto-configures)
+### 2. Start it
+
+Use [compose.yaml](compose.yaml) as the template: it runs unprivileged
+(`568:568`), read-only, with all capabilities dropped, and every line is
+commented. Uncomment `command: ["serve", "--ui"]` to get the console, then:
 
 ```bash
 docker compose up -d
 docker compose logs gatekeeper | grep 'Administrator'
 ```
 
-Output shows the admin password and API token—**shown once only**. After login, change password under `/app/account`.
+The first start finds an empty config directory and creates an empty
+`toolkits.yaml`, an empty `tools.yaml` and an `identities.yaml` with one
+admin. The admin's console password and API token are printed to the log
+**once**. Sign in at `http://<host>:8080/app` and change the password under
+**Account**.
 
-Config files created:
-- `toolkits.yaml` (Tier 1: deploy-time, immutable) — empty, add your clusters
-- `tools.yaml` (Tier 2: runtime, changes via UI) — empty, build from examples
-- `identities.yaml` (Tier 2: runtime) — one admin account
+### 3. Define what is possible (Tier 1)
 
-### 4. Add permissions (Tier 1)
-
-Edit `toolkits.yaml` — this is deploy-time config. Example for Docker:
+Edit `toolkits.yaml` on the host. This is deploy-time configuration; the
+console can never write it on its own. A Docker toolkit looks like this:
 
 ```yaml
 toolkits:
   docker:
     executor: docker
-    binaries:
-      - /usr/bin/docker
+    binaries: [/usr/bin/docker]
     denied_args: [rm, kill, exec, build, push, login, system, prune, cp, --privileged, -v, --volumes, --rmi]
-    path_roots:
-      - /mnt/raid
-    protected_resources: [gatekeeper, dockhand, traefik]  # these cannot be touched
+    path_roots: [/mnt/raid]
+    protected_resources: [gatekeeper, traefik]   # these stacks cannot be touched
     max_timeout_seconds: 300
     max_output_bytes: 262144
 ```
 
-See [toolkits example](config/examples/toolkits.yaml) for full reference.
+Reload with `SIGHUP` or a restart. See
+[config/examples/toolkits.yaml](config/examples/toolkits.yaml) for every
+executor.
 
-**`local` means "a program inside this container", not "on the NAS".** The
-distinction bites hardest with ZFS: `/usr/bin/zfs` is not in the image and
-installing it would not help, because the `zfs` command is a wrapper around
-an ioctl on `/dev/zfs` that only the host kernel answers. Pool and dataset
-work belongs on the `truenas` executor (`pool.query`,
-`pool.dataset.query`, `pool.dataset.create`, `zfs.snapshot.*` — see the
-worked example), and anything with no API equivalent belongs on `ssh`,
-where the paths are the host's `/usr/sbin/zfs` and `/usr/sbin/zpool`. The
-same holds for `ps aux` and `top`. Startup now warns, by name and path,
-when a `local` toolkit points at a binary this image does not contain —
-otherwise the tools stay listed and the first sign of trouble is a "No
-such file or directory" on an agent call hours later.
+> **`local` means a program inside this container, not on the host.** ZFS is
+> the classic trap: `zfs` talks to the host kernel through `/dev/zfs`, so
+> installing it in the image would not help. Pool and dataset work belongs on
+> the `truenas` executor, and anything without an API on `ssh`. Startup warns
+> by name when a `local` toolkit points at a binary the image does not have.
 
-A `file` toolkit (`executor: file` — read/write/patch/list, no binary and no
-argv) performs its operations as the container user. If it has to reach files
-owned by somebody else, it can declare `run_as: "3001:3001"` (or an account
-name); operations then run as that user, and only for that toolkit. It needs
-`CAP_SETUID` and `CAP_SETGID` — in practice `user: "0:0"` *and* `cap_add:
-[SETUID, SETGID]`, since Docker grants those to uid 0 alone. Changing it over
-`/admin/mcp` needs a human approval at `/app/requests`, and where the privilege
-is missing the calls fail rather than quietly running as the container user — see
-[DEPLOYMENT.md](docs/DEPLOYMENT.md#running-file-operations-as-another-user-run_as).
+### 4. Create a tool and grant it
 
-### 5. Create tools and grant access
-
-Use the console at `/app` (logged in as admin) or copy from [tools example](config/examples/tools.yaml).
-
-Example tool:
+In the console under **Tools → New tool**, or in `tools.yaml`
+([examples](config/examples/tools.yaml)):
 
 ```yaml
 - id: docker.compose_ps
@@ -240,11 +270,10 @@ Example tool:
   max_output_bytes: 65536
 ```
 
-Then grant access: go to **Identities**, pick an agent, add `docker.compose_ps` with scope `stack:*` or `stack:media-*`.
+Then open **Identities**, pick an agent, and grant `docker.compose_ps` with
+the scope `stack:*` or `stack:media-*`.
 
-### 6. Connect an agent
-
-In the agent's MCP config:
+### 5. Connect an agent
 
 ```yaml
 mcp_servers:
@@ -255,200 +284,118 @@ mcp_servers:
       Authorization: "Bearer gk_..."
 ```
 
-The agent now sees only tools it has permission for.
+The agent now sees exactly the tools it was granted, and nothing else.
 
 ---
 
-## Authentication: Two systems
+## How it works
 
-### Console (human, `/app`)
+### Every call passes eight layers
 
-- **Who**: viewers and admins
-- **Credential**: password (console login only)
-- **Session**: separate cookie-based session, scoped to `/api/v1`
-- **Change it**: `/app/account` (requires old password)
+1. **MCP**: JSON-RPC 2.0 over Streamable HTTP.
+2. **Auth**: the bearer token is matched to an identity.
+3. **Authorize**: does this identity hold this tool, with this scope?
+4. **Registry**: is the tool known and enabled?
+5. **Validate**: types, patterns, path resolution, protected resources.
+6. **Build**: parameters are substituted into argv, an HTTP request or an RPC call, then checked again against denied args and the target allowlists.
+7. **Execute**: the process or call runs with a timeout and an output cap.
+8. **Audit**: the result is written to the log.
 
-### API (agent, `/mcp`)
+Any layer can deny, and every denial looks the same to the agent.
 
-- **Who**: agents, viewers, admins
-- **Credential**: token (in `Authorization: Bearer` header)
-- **Session**: authorization is per request and token-based — every request
-  is authenticated on its own, and no cookie is ever read. The transport
-  keeps a session for older-protocol clients so `notifications/tools/list_changed`
-  has a stream to travel on; it carries no authority of its own.
-- **Rotate it**: `/app/identities` (for admins/viewers) or via CLI for new tokens
+### Two ways in, kept apart
 
-These are intentionally separate. A leaked console password doesn't open `/mcp`. A leaked token doesn't open the dashboard.
+| | Console (`/app`) | MCP (`/mcp`) |
+| --- | --- | --- |
+| **Who** | viewers and admins | agents (admin agents use `/admin/mcp`) |
+| **Credential** | console password | API token in `Authorization: Bearer` |
+| **Session** | cookie scoped to `/api/v1`, CSRF token on writes | none that carries authority: every request is authenticated on its own |
 
----
+A leaked console password does not open `/mcp`, and a leaked token does not
+open the console.
 
-## What admins can do
+### What admins can and cannot do
 
-From the console at `/app` (when logged in):
+From the console an admin adds, edits and disables tools, manages identities,
+grants and scopes, rotates tokens and handles credentials. Every write is
+checked against Tier 1, sent with the revision it read (`If-Match`), written
+atomically (temp file, fsync, rename) and re-read from disk afterwards. The
+last admin with a console password cannot be deleted or demoted.
 
-- **Add/edit/disable/delete tools** — modify Tier 2 (runtime)
-- **Create/edit/delete identities** — manage users and agents
-- **Grant/revoke tool access** — assign permissions and scopes
-- **Change passwords and rotate tokens** — via Identities view or personal account
-- **View audit log** — search and filter
+What an admin cannot do is edit Tier 1. There is no route that writes
+`toolkits.yaml` except **Approve and deploy** on a toolkit proposal, which a
+human has to click. Deletions are logged with the full definition, so nothing
+disappears without a trace.
 
-### What they can't do (by design)
+### Agents that manage the catalog: `/admin/mcp`
 
-- **Edit Tier 1** — no route to write `toolkits.yaml`. Binary allowlist, denied args, path roots, protected resources are deploy-time only. This is intentional: Tier 1 is the outer boundary that makes tool creation safe.
-- **Bypass the sandbox** — every tool definition runs through the same Tier 1 validation as startup loading. A malformed tool is rejected, not loosened.
-- **Hide actions** — everything goes to the audit log with the admin's identity. Deletions record the full definition so they're recoverable.
+A second MCP endpoint gives an `admin`-role agent (an orchestrator such as
+Hermes) the same management tools a human has, as a separate, hand-written
+`admin.*` tool list. Admin tokens are refused on `/mcp`, and every other role
+is refused on `/admin/mcp`.
 
-### Protections
+- **Applied at once:** read-only queries, creating a tool (always disabled), disabling a tool, and enabling or updating a `read` tool.
+- **Queued for a human** at `/app/requests`: enabling or updating a `write`/`write_external` tool, deleting a tool, grants (`admin.grant_set`), role changes, credential slots (`admin.cred_propose`, `admin.cred_update`) and toolkit changes (`admin.toolkit_propose`, `admin.toolkit_update`, `admin.toolkit_delete`, `admin.credential_bind`).
+- **Self-approval does not exist.** Approve and reject are not in the `admin.*` tool list, so there is no permission check to get around.
+- Tool definitions are versioned and append-only, and deletions are soft.
+- `admin.release_notes` (and `GET /release`) return this deployment's release notes, so an agent proposing changes can read the release rule it has to follow.
 
-- **Last admin protected** — can't delete or demote the last admin with a console password
-- **CSRF token on writes** — every write carries a session-scoped `X-CSRF-Token` header
-- **Optimistic locking** — every write sends the revision it read (`If-Match`); concurrent edits are detected and rejected
-- **Atomic writes** — temp file + fsync + atomic rename; crashes leave the old file intact
-- **After write, re-read** — nothing assumes the write succeeded; the server reloads the file from disk and the console refetches what it shows
+See [`admin_service.rs`](rust/src/admin_service.rs) for the per-action rules
+and [REQUIREMENTS.md](REQUIREMENTS.md) (FR-2.8 to FR-3.7) for the spec.
 
----
+### Also built in
 
-## Self-service catalog management via `/admin/mcp`
-
-A second MCP endpoint, `/admin/mcp`, lets an `admin`-role agent (e.g. an
-always-on orchestrator like Hermes) manage the tool catalog and grants the
-same way a human does at `/app`, without a human being the bottleneck for
-every routine change.
-
-- **Isolated by construction, not by filter.** `/admin/mcp` is a second,
-  hand-written `admin.*` tool list on its own `Server` instance, sharing no
-  catalog with `/mcp`. `admin`-role tokens are rejected outright on `/mcp`;
-  every other role is rejected outright on `/admin/mcp`.
-- **Low-risk changes apply immediately:** read-only queries, creating a new
-  tool (always created disabled), disabling a tool, and enabling/updating a
-  `read`-category tool.
-- **Everything that expands what an agent can do goes to a pending queue**
-  at `/app/requests` (Change tab) instead: enabling/updating a
-  `write`/`write_external` tool, deleting a tool, granting access
-  (`admin.grant_set`), and changing an identity's role (`admin.role_set`).
-  A human approves or rejects from the console — the applied change and
-  its audit entry are identical to a human doing the same edit directly.
-- **Self-approval is impossible, structurally.** `approve`/`reject` are not
-  part of the `admin.*` tool list and have no code path from `/admin/mcp` —
-  there is no permission check to bypass, because the capability doesn't
-  exist there.
-- **Tool definitions are versioned and append-only** (`tool_update` never
-  overwrites; old versions stay fetchable) and deletions are soft
-  (`admin.tool_delete` marks a definition deleted with its history intact,
-  rather than erasing it).
-- **Drafting a new toolkit is possible, deploying it never is — from here.**
-  `admin.toolkit_list` reads the live Tier 1 configuration; `admin.toolkit_propose`
-  drafts a brand-new toolkit, `admin.toolkit_update` proposes a narrow
-  edit (including an http toolkit's `allowed_hosts`/`allowed_cidrs`,
-  `allowed_methods`/`allowed_path_prefixes` and its two limits), `admin.toolkit_delete` proposes removing one (refused at
-  deploy time if a tool still references it), and `admin.credential_bind`
-  proposes pointing an existing toolkit at an existing credential *name*
-  (never a value, never a destination-level override) — all four always
-  land in their own review surface, the Toolkit tab of `/app/requests` — never the
-  Change tab — a toolkit changes what is *possible* at all (Tier 1), not
-  just who can do what (Tier 2), so it gets a heavier,
-  explicit confirmation. A human clicking "Approve & Deploy" is the only
-  thing that ever writes `toolkits.yaml`: gatekeeper validates the merged
-  config with the same loader startup uses, writes it atomically, and
-  reloads it into the running process immediately — no redeploy, no
-  restart, and still no path from `/admin/mcp` to make it happen on its own.
-  A `toolkit_propose` for a name that already exists is refused on the
-  call, with the way to change that toolkit instead. `admin.proposal_list`
-  shows the toolkit-proposal queue (which `admin.pending_list` does not),
-  and `admin.proposal_withdraw` lets the proposer take its own pending
-  proposal back. A withdrawal decides nothing, so it is no self-approval.
-
-- **The deployment's own release notes are readable from here.**
-  `admin.release_notes` returns RELEASE.md — every version's notes, newest
-  first, narrowable by `version`/`search`/`limit`, or `full: true` for the
-  whole file including the release rule and the procedure. An agent that
-  proposes changes to this gatekeeper has to follow the same release rule a
-  human does, and that rule used to live in a file it could not read. The
-  same text is available over plain HTTP at `GET /release` (bearer token
-  required, like every non-health route): `?version=`, `?search=`,
-  `?limit=`, `?format=markdown`, `?full=1`.
-
-See [`admin_service.rs`](rust/src/admin_service.rs) for the exact
-per-action rules and [REQUIREMENTS.md §3](REQUIREMENTS.md) (FR-2.8–FR-3.7)
-for the full spec.
-
----
-
-## Audit & visibility
-
-### Call flow (8 layers every request passes)
-
-Each request passes through 8 validation stages:
-
-1. **MCP protocol** — JSON-RPC 2.0 via Streamable HTTP
-2. **Auth** — Bearer token verification
-3. **Authorize** — does this identity have permission?
-4. **Registry** — is the tool known?
-5. **Validate** — are the parameters OK?
-6. **Build the request** — substitute parameters into argv / an HTTP
-   request / a JSON-RPC call (whichever the toolkit's executor uses), and
-   check the result against denied args / target allowlist / RPC whitelist
-7. **Execute** — run the process or call, enforce timeout & output limits
-8. **Audit** — log the result
-
-Any layer can deny; all denials look the same to the agent ("Unknown tool, or not available"). The audit log knows the real reason.
-
-### Audit log format
-
-JSON Lines, one entry per call:
-
-```json
-{"timestamp":"2026-08-16T12:39:48Z","identity":"homelab","tool":"diag.uptime","status":"ok","exit":0,...}
-```
-
-Stored in `audit.dir` from `toolkits.yaml`. Automatically rotated (default: 10 files × 32MB each). Search from `/app/audit` with filters.
+- **Agent mailbox.** `agent.send_message` and `agent.read_messages` let identities leave each other messages. The sender is always the authenticated identity; delivery happens on the recipient's next call.
+- **Release-bound artifacts.** Files built from fixed repository paths can ship inside the image with a sha256 manifest and be read or handed over through `artifact.*` tools. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#release-bound-artifacts).
+- **`run_as` for file toolkits.** A `file` toolkit can perform its operations as another user when the container has `CAP_SETUID`/`CAP_SETGID`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#running-file-operations-as-another-user-run_as).
+- **Health endpoints** at `/health/live` and `/health/ready`, the latter probing each executor.
 
 ---
 
 ## Security notes
 
-- **The Docker socket is root-equivalent on the host.** A bug here is a host compromise. That's why the config is two-tier (outer safety boundary) and the negative corpus of attack tests is kept.
-- **Tool output can carry secrets gatekeeper doesn't manage.** Anything created through the credential store (Credentials page) is masked out of tool output and the audit log wherever it appears (FR-10.6). Other secrets, such as a password in a compose file or a token in a container's environment, are masked by shape on `docker`, `local`, `ssh` and `file` toolkits (`DB_PASSWORD=[redacted]`, URL passwords, private keys; the toolkit's `redact_secrets`, on by default there). That catches the usual config and log formats, not every secret: a value under a harmless-looking name still comes through, so a tool that prints whole configs stays a tool to grant sparingly.
-- **Admin access is powerful.** An admin can create any tool within Tier 1 bounds, grant it to agents, and they'll run. Treat console password like a host SSH key: one per person, changed regularly, `viewer` role for observers.
-- **No shell history in passwords.** Always use `gatekeeper password --identity <id>` without `--password <value>` to avoid the password landing in shell history.
-- **TLS required for the console.** The session cookie gets the `Secure` flag only when the request arrives over HTTPS (directly, or via `X-Forwarded-Proto` from a trusted proxy); over plain HTTP it travels in the clear. Deploy behind a reverse proxy with HTTPS, or on a private network only.
+- **The Docker socket is root-equivalent.** A bug here is a host compromise, which is why the boundary is two-tier and the repository keeps a corpus of attack tests.
+- **Output masking is not a guarantee.** Values from the credential store are masked everywhere. Other secrets are masked by shape on `docker`, `local`, `ssh` and `file` toolkits (`redact_secrets`, on by default there), which catches the usual config and log formats but not a secret under a harmless-looking name. Grant tools that print whole configs sparingly.
+- **Admin access is powerful.** An admin can create any tool within Tier 1 and grant it. Treat a console password like an SSH key, and give observers the `viewer` role.
+- **Use TLS for the console.** The session cookie is marked `Secure` only over HTTPS (directly or via a trusted proxy's `X-Forwarded-Proto`). Run behind a reverse proxy or on a private network.
+- **Keep passwords out of shell history:** run `gatekeeper password --identity <id>` without `--password`.
 
 ---
 
-## Development & contribution
+## Development
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for:
-- Code structure and invariants
-- The two-tier security model, executors, and credential store
-- Security-critical modules and the UI architecture
+gatekeeper is a Rust crate in [rust/](rust/); it builds on Linux only
+(privilege dropping, `SIGHUP` reload, `/proc`). The console lives in
+[frontend/](frontend/). The only Python left is the vendored Google and
+Microsoft CLI scripts in [scripts/](scripts/), which the image runs as
+subprocesses.
 
-See [REQUIREMENTS.md](REQUIREMENTS.md) for:
-- Complete feature list
-- Functional and non-functional requirements
-- Specification of each guarantee
+```bash
+cd rust && cargo build && cargo test          # the server
+cd frontend && npm ci --ignore-scripts && npm test   # the console
+python -m pytest -q                           # scripts/ and Dockerfile checks
+```
 
-gatekeeper is the Rust crate in [rust/](rust/) (`cd rust && cargo test`).
-The only Python left is the vendored Google and Microsoft CLI scripts in
-[scripts/](scripts/), which the image runs as subprocesses
-(`python -m pytest -q` tests them). See "Rust implementation" in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-See [AGENTS.md](AGENTS.md) if you're an AI agent working in this repo — release
-workflow, testing, and known pitfalls.
-
----
+`npm run dev` in `frontend/` serves the console on `:5173` against a local
+`cargo run -- serve --ui`. [AGENTS.md](AGENTS.md) has the full test matrix,
+the release workflow and the known pitfalls;
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the code structure,
+security model and executors.
 
 ## What's not here (yet)
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the full list with rationale.
-Short version: OAuth2 is supported for Google Workspace via the `google`
-executor (0.38.0) and for Outlook mail via the `microsoft` executor, both
-with consent and refresh-token capture in the console; no `destinations:`
-on an `ssh` toolkit (one toolkit per host), no TrueNAS SCRAM mutual auth,
-and no nested `params_template` values for the `truenas` executor.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the full list with reasons. In
+short: no `destinations:` on an `ssh` toolkit (one toolkit per host), no
+TrueNAS SCRAM mutual auth, and no nested `params_template` values for the
+`truenas` executor. gatekeeper also never continues an agent session: the
+recovery supervisor was removed in 0.52.0, and the orchestrating agent handles
+results and follow-ups itself
+([migration notes](docs/DEPLOYMENT.md#removed-recovery-supervisor)).
 
 ---
 
-## License & attribution
+<div align="center">
 
-Built for a homelab. Designed to be paranoid about safety. Used in production.
+Built for a homelab. Paranoid about safety. Used in production.
+
+</div>

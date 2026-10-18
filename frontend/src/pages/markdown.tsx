@@ -1,7 +1,9 @@
 // A deliberately small Markdown renderer for the bundled docs and
 // RELEASE.md: headings, bullet and numbered lists (one level of nesting),
 // fenced code, pipe tables, rules, > quotes, paragraphs, **bold**, *italic*,
-// `code` and [links](url).
+// `code` and [links](url). Lines made only of HTML tags (the README's
+// centered header and its <picture> screenshots) and ![images](src) are
+// left out, since neither has anything to show here.
 // It builds React elements -- never an HTML string -- so it needs no
 // innerHTML and stays inside Trusted Types. Anything it does not recognise
 // is text.
@@ -11,16 +13,21 @@ import { Fragment, type ReactNode } from "react";
 // (javascript:, data:, a relative path into the repo) stays as its text.
 const SAFE_HREF = /^(https?:\/\/|#)/i;
 
+// A line that is nothing but HTML tags, e.g. `<picture>` or `<img src=...>`.
+const TAGS_ONLY = /^\s*(<\/?[a-zA-Z][^<>]*>\s*)+$/;
+
 export function inline(text: string): ReactNode[] {
   const out: ReactNode[] = [];
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\)|\*[^*\s][^*]*\*)/g;
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|!?\[[^\]]*\]\([^)\s]+\)|\*[^*\s][^*]*\*)/g;
   let last = 0;
   let key = 0;
   for (const match of text.matchAll(pattern)) {
     const index = match.index ?? 0;
     if (index > last) out.push(text.slice(last, index));
     const token = match[0];
-    if (token.startsWith("**")) {
+    if (token.startsWith("![")) {
+      // An image: nothing to draw.
+    } else if (token.startsWith("**")) {
       out.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
     } else if (token.startsWith("*")) {
       out.push(<em key={key++}>{token.slice(1, -1)}</em>);
@@ -146,6 +153,8 @@ export function Markdown({ text }: { text: string }) {
       fence = [];
     } else if (!line.trim()) {
       flushAll();
+    } else if (TAGS_ONLY.test(line)) {
+      // HTML for GitHub's rendering of the README; nothing to show here.
     } else if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) {
       flushAll();
       blocks.push(<hr key={key++} className="border-border" />);

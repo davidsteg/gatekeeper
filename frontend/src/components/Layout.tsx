@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import {
-  Activity, BarChart3, BookOpen, Boxes, FileText, Gauge, Inbox, KeyRound, Lock, LogOut, Menu, ScrollText, SlidersHorizontal, UserRound, X,
+  Activity, BarChart3, BookOpen, Boxes, FileText, Gauge, Inbox, KeyRound, Lock, LogOut, Menu, SlidersHorizontal, UserRound, X,
 } from "lucide-react";
 import { useAuth } from "@/auth";
+import { Logo } from "@/components/Logo";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { LiveProvider, useLiveState } from "@/live";
@@ -108,7 +109,7 @@ function Shell() {
       {/* Desktop: the sidebar. */}
       <aside className="hidden border-r border-border bg-card md:sticky md:top-0 md:flex md:h-screen md:w-56 md:shrink-0 md:flex-col">
         <div className="flex items-center gap-2 px-4 py-4">
-          <ScrollText className="size-5 text-primary" aria-hidden />
+          <Logo />
           <span className="font-semibold">gatekeeper</span>
           <span className="ml-auto flex items-center gap-2">
             <LiveIndicator />
@@ -124,7 +125,7 @@ function Shell() {
       {/* Phone: a slim top bar, tabs at the bottom, everything else under More. */}
       <header className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-card/95 px-4 pt-[env(safe-area-inset-top)] backdrop-blur md:hidden">
         <span className="flex h-12 items-center gap-2">
-          <ScrollText className="size-5 text-primary" aria-hidden />
+          <Logo />
           <span className="font-semibold">gatekeeper</span>
         </span>
         <span className="ml-auto"><LiveIndicator /></span>
