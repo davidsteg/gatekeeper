@@ -1028,3 +1028,19 @@ fn cred_propose_carries_a_header_format() {
         .unwrap_err();
     assert!(err.message.contains("exactly once"));
 }
+
+// -- cred_list warnings (1.22.0) ---------------------------------------------------------
+
+#[test]
+fn cred_list_warns_about_an_authorization_header_without_a_format() {
+    let e = env_creds();
+    create_cred(&e, "github", "api_key_header", Some("Authorization"), "ghp_value");
+    create_cred(&e, "paperless-token", "bearer", None, "v");
+    let listed = call(&e.admin(), "cred_list", json!({})).unwrap();
+    let by_name = |name: &str| listed["credentials"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap().clone();
+    let warnings = by_name("github")["warnings"].clone();
+    assert_eq!(warnings.as_array().unwrap().len(), 1);
+    assert!(warnings[0].as_str().unwrap().contains("no header_format"));
+    assert_eq!(by_name("paperless-token")["warnings"], json!([]));
+    assert!(!listed.to_string().contains("ghp_value"));
+}

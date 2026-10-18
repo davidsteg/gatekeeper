@@ -26,6 +26,10 @@ item.
   `max_file_bytes` before reading, a never-send name list; path and size in
   the audit, never content
 - Strict tool definitions (1.21.0) — writes refuse fields nothing reads
+- `path_roots` by proposal (1.22.0) — `admin.toolkit_update`, human-approved,
+  existing directories only, refused while it would strand a tool
+- Credential probe sends what the tools send (1.22.0), plus `cred_list`
+  warnings for an `Authorization` header without `header_format`
 - `truenas` executor — JSON-RPC 2.0 over WebSocket, RPC-method whitelist
   (`execute/truenas.rs`)
 - `ssh` executor — reuses the `docker`/`local` binary+argv tool shape

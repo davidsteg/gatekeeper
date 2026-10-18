@@ -407,6 +407,13 @@
             },
             "title": "Used By",
             "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
         "required": [
@@ -421,7 +428,8 @@
           "probe_status",
           "probe_checked_at",
           "suspect_status",
-          "suspect_at"
+          "suspect_at",
+          "warnings"
         ],
         "title": "CredentialMeta",
         "type": "object"

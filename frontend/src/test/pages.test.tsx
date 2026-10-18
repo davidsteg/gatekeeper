@@ -108,6 +108,13 @@ describe("credentials page", () => {
             name: "demo-key", kind: "bearer", header: null, created_at: "2026-10-10T10:00:00+0000",
             rotated_at: null, in_overlap: false, used_by: ["demo"], probe_url: null,
             probe_status: "no_probe_url", probe_checked_at: null, suspect_status: null, suspect_at: null,
+            warnings: [],
+          }, {
+            name: "github", kind: "api_key_header", header: "Authorization", header_format: null,
+            created_at: "2026-10-10T10:00:00+0000", rotated_at: null, in_overlap: false, used_by: ["github"],
+            probe_url: "https://api.github.com/user", probe_status: "auth_failed", probe_checked_at: null,
+            suspect_status: null, suspect_at: null,
+            warnings: ["Sent as 'Authorization: <value>' with no scheme: this slot has no header_format."],
           }],
         });
       }
@@ -116,6 +123,9 @@ describe("credentials page", () => {
     renderAt("/credentials");
     expect(await screen.findByText("demo-key")).toBeInTheDocument();
     expect(screen.getByText("ghost-key")).toBeInTheDocument();
+    // A slot the tools would send without a scheme says so.
+    expect(screen.getByText(/with no scheme: this slot has no header_format/)).toBeInTheDocument();
+    expect(screen.getByText("auth failed")).toBeInTheDocument();
     // Write-only store: nothing on the page offers to reveal a value.
     expect(screen.queryByText(/show value|reveal/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /value/i })).toBeNull();
@@ -513,6 +523,30 @@ describe("requests", () => {
     expect(submit).toBeEnabled();
     if (submit) await user.click(submit);
     await waitFor(() => expect(body).toEqual({ confirm: true }));
+  });
+
+  it("shows a path_roots update as a before/after diff and warns before deploying it", async () => {
+    const current = {
+      name: "github", executor: "http", path_roots: ["/srv/old", "/srv/keep"],
+    };
+    const update = {
+      ...PROPOSAL, name: "github", kind: "update", current,
+      spec: { path_roots: ["/srv/keep", "/srv/new"] },
+      spec_yaml: "path_roots:\n- /srv/keep\n- /srv/new\n",
+    };
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, []);
+      if (url.endsWith("/requests/toolkits")) return json(200, [update]);
+      return json(200, {});
+    });
+    renderAt("/requests?tab=toolkit");
+    expect(await screen.findByText("Path roots")).toBeInTheDocument();
+    expect(screen.getByText((_, el) => el?.tagName === "PRE" && el.textContent === "− /srv/old\n  /srv/keep\n+ /srv/new")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Approve and deploy" }));
+    expect(screen.getByText(/This proposal changes path_roots/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve and deploy update" })).toBeDisabled();
   });
 });
 

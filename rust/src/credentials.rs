@@ -772,7 +772,8 @@ impl CredentialStore {
         Ok(values)
     }
 
-    /// Detection-only credential probe: one bearer GET, no retries. Only
+    /// Detection-only credential probe: one GET, no retries, carrying the
+    /// credential exactly as an `http` tool would ([`probe_auth`]). Only
     /// display metadata is persisted.
     pub async fn probe_credential(&self, name: &str) -> ConfigResult<String> {
         let resolved = self.resolve(name)?;
@@ -784,7 +785,7 @@ impl CredentialStore {
             }
         };
         let status = match resolved {
-            Some(resolved) if !probe_url.is_empty() => probe(&probe_url, &resolved.value).await,
+            Some(resolved) if !probe_url.is_empty() => probe(&probe_url, &resolved).await,
             _ => "no_probe_url",
         };
 
@@ -853,14 +854,52 @@ impl CredentialStore {
     }
 }
 
-/// One `GET probe_url` with `Authorization: Bearer <value>`, TLS verified,
-/// 3 s timeout. Any transport failure is `unreachable`.
-async fn probe(url: &str, value: &str) -> &'static str {
+/// The headers and query parameters a probe sends: for every kind an
+/// `http` tool authenticates with (`api_key_header` with its
+/// `header_format`, `bearer`, `basic`, `url_query`), the very
+/// `credential_headers`/`credential_query` the executor calls, so a probe
+/// cannot pass with a header the tools never send (1.22.0). The other
+/// kinds never reach an http request; they keep the `Bearer` GET the probe
+/// always sent, which is how a TrueNAS REST API, say, takes the key.
+pub fn probe_auth(credential: &ResolvedCredential) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    use crate::execute::http::{credential_headers, credential_query};
+    if matches!(credential.kind.as_str(), "api_key_header" | "bearer" | "basic" | "url_query") {
+        return (credential_headers(Some(credential)), credential_query(Some(credential)));
+    }
+    (vec![("Authorization".into(), format!("Bearer {}", credential.value))], Vec::new())
+}
+
+/// Why a slot is likely to fail every call, from its metadata alone; for
+/// `cred_list` and the console. Never looks at the value.
+pub fn credential_warnings(meta: &CredentialMeta) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let authorization = meta.header.as_deref().is_some_and(|h| h.eq_ignore_ascii_case("authorization"));
+    if meta.kind == "api_key_header" && authorization && meta.header_format.as_deref().is_none_or(str::is_empty) {
+        warnings.push(
+            "Sent as 'Authorization: <value>' with no scheme: this slot has no header_format. Most APIs \
+             want 'Bearer {value}' (or 'token {value}'); set header_format, or use kind 'bearer'."
+                .to_string(),
+        );
+    }
+    warnings
+}
+
+/// One `GET probe_url` with the credential as [`probe_auth`] builds it,
+/// TLS verified, 3 s timeout. Any transport failure is `unreachable`.
+async fn probe(url: &str, credential: &ResolvedCredential) -> &'static str {
     let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(3)).build() {
         Ok(c) => c,
         Err(_) => return "unreachable",
     };
-    match client.get(url).header("Authorization", format!("Bearer {value}")).send().await {
+    let (headers, query) = probe_auth(credential);
+    let mut request = client.get(url);
+    if !query.is_empty() {
+        request = request.query(&query);
+    }
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+    match request.send().await {
         Ok(response) => classify_probe_status(response.status().as_u16()),
         Err(_) => "unreachable",
     }
@@ -1263,6 +1302,79 @@ pub(crate) mod tests {
         assert_probe(Some(401), "auth_failed").await;
         assert_probe(Some(500), "unreachable").await;
         assert_probe(None, "unreachable").await;
+    }
+
+    /// A one-shot server that, like GitHub, takes only `Authorization:
+    /// Bearer secret-token` and answers 401 to anything else.
+    async fn serve_bearer_only() -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap();
+            let lines: Vec<String> = String::from_utf8_lossy(&buf[..n]).lines().map(str::to_string).collect();
+            let ok = lines.iter().any(|l| l.eq_ignore_ascii_case("authorization: Bearer secret-token"));
+            let status = if ok { 200 } else { 401 };
+            let reply = format!("HTTP/1.1 {status} X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+            sock.write_all(reply.as_bytes()).await.unwrap();
+            lines
+        });
+        (format!("http://{addr}/user"), handle)
+    }
+
+    /// 1.22.0: the probe sends what the http tools send. An
+    /// `api_key_header` slot on `Authorization` without the `Bearer`
+    /// scheme used to probe as "verified" (the probe added `Bearer` on its
+    /// own) while every tool call got a 401.
+    #[tokio::test]
+    async fn probe_sends_the_header_exactly_as_the_tools_do() {
+        for (kind, header, format, expected, sent) in [
+            ("api_key_header", Some("Authorization"), None, "auth_failed", "authorization: secret-token"),
+            ("api_key_header", Some("Authorization"), Some("token {value}"), "auth_failed", "authorization: token secret-token"),
+            ("api_key_header", Some("Authorization"), Some("Bearer {value}"), "verified", "authorization: Bearer secret-token"),
+            ("bearer", None, None, "verified", "authorization: Bearer secret-token"),
+        ] {
+            let e = env();
+            let (url, server) = serve_bearer_only().await;
+            e.store.create("github", kind, "secret-token", header, Some(&url), format, "admin", "").unwrap();
+            assert_eq!(e.store.probe_credential("github").await.unwrap(), expected, "{kind} {format:?}");
+            let request = server.await.unwrap();
+            assert!(request.iter().any(|l| l.eq_ignore_ascii_case(sent)), "{kind} {format:?}: {request:?}");
+            // The same function the http executor calls builds it.
+            let resolved = e.store.resolve("github").unwrap().unwrap();
+            assert_eq!(probe_auth(&resolved).0, crate::execute::http::credential_headers(Some(&resolved)));
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_puts_a_url_query_credential_in_the_query() {
+        let e = env();
+        let (url, server) = serve(200).await;
+        e.store.create("tg", "url_query", "secret-token", Some("apikey"), Some(&url), None, "admin", "").unwrap();
+        assert_eq!(e.store.probe_credential("tg").await.unwrap(), "verified");
+        let request = server.await.unwrap();
+        assert!(request[0].starts_with("GET /me?apikey=secret-token "), "{request:?}");
+        assert!(!request.iter().any(|l| l.to_ascii_lowercase().starts_with("authorization:")));
+    }
+
+    #[test]
+    fn authorization_header_without_a_format_is_warned_about() {
+        let e = env();
+        e.store.create("github", "api_key_header", "t", Some("Authorization"), None, None, "admin", "").unwrap();
+        e.store.create("fine", "api_key_header", "t", Some("authorization"), None, Some("Bearer {value}"), "admin", "").unwrap();
+        e.store.create("other", "api_key_header", "t", Some("X-Api-Key"), None, None, "admin", "").unwrap();
+        e.store.create("tok", "bearer", "t", None, None, None, "admin", "").unwrap();
+        let warned: Vec<String> = e
+            .store
+            .names(None)
+            .unwrap()
+            .iter()
+            .filter(|m| !credential_warnings(m).is_empty())
+            .map(|m| m.name.clone())
+            .collect();
+        assert_eq!(warned, ["github"]);
     }
 
     #[tokio::test]

@@ -63,17 +63,16 @@ const BIND_VALUE_ARGS: [&str; 9] =
     ["value", "secret", "token", "password", "passphrase", "api_key", "apikey", "key", "credential_value"];
 
 /// Tier 1 fields that stay deploy-time only (FR-4.11).
-const BIND_DEPLOY_TIME_ARGS: [&str; 6] = [
+const BIND_DEPLOY_TIME_ARGS: [&str; 5] = [
     "destination",
     "destinations",
-    "path_roots",
     "protected_resources",
     "max_timeout_seconds",
     "max_output_bytes",
 ];
 
 /// Fields that are proposable, just not from `credential_bind`.
-const BIND_UPDATE_ARGS: [&str; 4] = ["executor", "binaries", "denied_args", "run_as"];
+const BIND_UPDATE_ARGS: [&str; 5] = ["executor", "binaries", "denied_args", "run_as", "path_roots"];
 
 /// The complete, fixed set of `admin.*` actions reachable from
 /// `/admin/mcp` (FR-2.8/2.9), in Python's `_EXPOSED` order.
@@ -626,8 +625,8 @@ impl AdminService {
 
     /// Proposes changing a toolkit's executor, binaries, denied_args,
     /// run_as, an http/opencode/kuma toolkit's allowed_hosts/allowed_cidrs, an
-    /// http toolkit's allowed_methods/allowed_path_prefixes and the two
-    /// limits (`toolkit_proposals::UPDATE_WRITABLE_FIELDS`).
+    /// http toolkit's allowed_methods/allowed_path_prefixes, path_roots and
+    /// the two limits (`toolkit_proposals::UPDATE_WRITABLE_FIELDS`).
     pub fn toolkit_update(&self, actor: &str, args: &Args) -> ConfigResult<Value> {
         let name = require_str(args, "name")?;
         let updates = require_dict(args, "updates")?.clone();
@@ -667,8 +666,8 @@ impl AdminService {
         if let Some(deploy_time) = args_in(args, &BIND_DEPLOY_TIME_ARGS) {
             return Err(admin_error(format!(
                 "{deploy_time} cannot be proposed -- this binds a credential at the toolkit level \
-                 only. Destination-level credential overrides, path_roots, protected_resources and \
-                 limits stay deploy-time only (FR-4.11) and need a redeploy."
+                 only. Destination-level credential overrides, protected_resources and limits \
+                 stay deploy-time only here (FR-4.11) and need a redeploy."
             )));
         }
         if let Some(update_args) = args_in(args, &BIND_UPDATE_ARGS) {

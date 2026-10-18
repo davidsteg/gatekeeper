@@ -382,24 +382,17 @@ fn run_as_and_executor_can_change_in_one_proposal() {
 }
 
 #[test]
-fn path_roots_and_friends_stay_redeploy_only() {
+fn protected_resources_stays_redeploy_only() {
     let e = env_with_file_toolkit(json!({}));
-    for (field, value) in [
-        ("path_roots", json!(["/"])),
-        ("protected_resources", json!([])),
-    ] {
-        let mut spec = Map::new();
-        spec.insert(field.into(), value);
-        let err = e.proposals.propose("files", spec, "hermes", "update").unwrap_err();
-        assert!(err.message.contains(field));
-    }
-    let err = propose(&e, "files", json!({"path_roots": ["/"], "limits": 1}), "update").unwrap_err();
+    let err = propose(&e, "files", json!({"protected_resources": []}), "update").unwrap_err();
+    assert!(err.message.contains("protected_resources"));
+    let err = propose(&e, "files", json!({"protected_resources": [], "limits": 1}), "update").unwrap_err();
     assert_eq!(
         err.message,
-        "Cannot propose changing ['limits', 'path_roots'] -- only ['allowed_cidrs', 'allowed_hosts', 'allowed_methods', \
-         'allowed_path_prefixes', 'binaries', 'denied_args', 'executor', 'max_output_bytes', 'max_timeout_seconds', 'run_as'] \
-         are writable via an update proposal. path_roots and protected_resources have no proposal path -- edit \
-         toolkits.yaml and reload (SIGHUP or restart)."
+        "Cannot propose changing ['limits', 'protected_resources'] -- only ['allowed_cidrs', 'allowed_hosts', \
+         'allowed_methods', 'allowed_path_prefixes', 'binaries', 'denied_args', 'executor', 'max_output_bytes', \
+         'max_timeout_seconds', 'path_roots', 'run_as'] are writable via an update proposal. protected_resources \
+         has no proposal path -- edit toolkits.yaml and reload (SIGHUP or restart)."
     );
 }
 
@@ -408,13 +401,14 @@ fn update_writable_fields_is_exactly_these() {
     // allowed_hosts/allowed_cidrs joined in 1.10.0 (network targets by
     // proposal, allowed_hosts tests); path_roots and friends did not.
     // 1.11.0: an http toolkit's methods/path prefixes and the two limits.
+    // 1.22.0: path_roots.
     let mut f = UPDATE_WRITABLE_FIELDS.to_vec();
     f.sort();
     assert_eq!(
         f,
         [
             "allowed_cidrs", "allowed_hosts", "allowed_methods", "allowed_path_prefixes", "binaries", "denied_args",
-            "executor", "max_output_bytes", "max_timeout_seconds", "run_as",
+            "executor", "max_output_bytes", "max_timeout_seconds", "path_roots", "run_as",
         ]
     );
 }
@@ -442,17 +436,30 @@ fn deploy_update_rejects_unknown_toolkit_and_rechecks_fields() {
     let mut raw = e.load_yaml(&path);
     for p in raw["proposals"].as_array_mut().unwrap() {
         if p["id"] == json!(item.id) {
-            p["spec"]["path_roots"] = json!(["/"]);
+            p["spec"]["protected_resources"] = json!([]);
         }
     }
     write(std::path::Path::new(&path), &gatekeeper::yaml::dump(&raw));
     let err = e.proposals.deploy(&item.id, "root").unwrap_err();
     assert_eq!(
         err.message,
-        "Cannot change ['path_roots'] at runtime -- only ['allowed_cidrs', 'allowed_hosts', 'allowed_methods', \
-         'allowed_path_prefixes', 'binaries', 'denied_args', 'executor', 'max_output_bytes', 'max_timeout_seconds', \
-         'run_as'] are writable via an update proposal."
+        "Cannot change ['protected_resources'] at runtime -- only ['allowed_cidrs', 'allowed_hosts', \
+         'allowed_methods', 'allowed_path_prefixes', 'binaries', 'denied_args', 'executor', 'max_output_bytes', \
+         'max_timeout_seconds', 'path_roots', 'run_as'] are writable via an update proposal."
     );
+    // A path_roots edited into the file is held to the same rules as one
+    // proposed: "/" never deploys.
+    let item = propose(&e, "demo", json!({"executor": "local"}), "update").unwrap();
+    let mut raw = e.load_yaml(&path);
+    for p in raw["proposals"].as_array_mut().unwrap() {
+        if p["id"] == json!(item.id) {
+            p["spec"]["path_roots"] = json!(["/"]);
+        }
+    }
+    write(std::path::Path::new(&path), &gatekeeper::yaml::dump(&raw));
+    let err = e.proposals.deploy(&item.id, "root").unwrap_err();
+    assert!(err.message.contains("is the filesystem root"), "{}", err.message);
+    assert_eq!(toolkits_text(&e), before);
 }
 
 // -- kind="bind" ---------------------------------------------------------------
@@ -589,7 +596,11 @@ fn toolkit_update_only_proposes_never_applies() {
 fn toolkit_update_rejects_security_critical_fields_and_empty_updates() {
     let e = env();
     let admin = e.admin();
-    let err = admin.call("hermes", "toolkit_update", &args(json!({"name": "demo", "updates": {"path_roots": ["/etc"]}}))).unwrap_err();
+    let err = admin
+        .call("hermes", "toolkit_update", &args(json!({"name": "demo", "updates": {"protected_resources": []}})))
+        .unwrap_err();
+    assert!(err.message.contains("protected_resources"));
+    let err = admin.call("hermes", "toolkit_update", &args(json!({"name": "demo", "updates": {"path_roots": ["/"]}}))).unwrap_err();
     assert!(err.message.contains("path_roots"));
     let result = admin.call("hermes", "toolkit_update", &args(json!({"name": "demo", "updates": {}}))).unwrap();
     assert_eq!(result, json!({"applied": false, "error": "No updates provided."}));
@@ -667,4 +678,152 @@ fn reload_does_not_swap_identities() {
     );
     assert_eq!(e.service.reload_config(&e.toolkits_path, &e.tools_path, &e.identities_path), None);
     assert_eq!(*e.identities.read(), before);
+}
+
+// -- path_roots via an update proposal (1.22.0) -------------------------------------
+
+/// `env()` plus an http toolkit "github" with one root, `<sandbox>/scratch`,
+/// and a from_file-style tool whose path must resolve under it.
+fn env_with_github(with_tool: bool) -> (AppEnv, String) {
+    let e = env();
+    let scratch = e.sandbox.join("scratch");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let scratch = scratch.to_str().unwrap().to_string();
+    let mut raw = e.load_yaml(&e.toolkits_path);
+    raw["toolkits"]["github"] = json!({
+        "executor": "http", "base_url": "http://127.0.0.1:9", "allowed_methods": ["POST"],
+        "allowed_path_prefixes": ["/repos/"], "allowed_cidrs": ["127.0.0.1/32"], "path_roots": [scratch],
+    });
+    write(std::path::Path::new(&e.toolkits_path), &gatekeeper::yaml::dump(&raw));
+    if with_tool {
+        write_tools(&e, github_tool(&scratch));
+    }
+    assert!(e.service.reload_config(&e.toolkits_path, &e.tools_path, &e.identities_path).is_none());
+    (e, scratch)
+}
+
+fn github_tool(scratch: &str) -> Value {
+    json!([{"id": "github.blob_from_file", "toolkit": "github", "enabled": true, "category": "write",
+            "title": "t", "description": "d", "method": "POST", "path": "/repos/x/git/blobs",
+            "max_file_bytes": 1024,
+            "parameters": {
+                "file": {"type": "string", "pattern": "^[a-z]+$", "required": true},
+                "path": {"type": "path", "derived": format!("{scratch}/{{file}}"), "must_resolve_under": scratch},
+            },
+            "body": {"content": {"from_file": "path", "encoding": "base64"}}}])
+}
+
+fn listed_roots(admin: &gatekeeper::admin_service::AdminService, name: &str) -> Value {
+    let listed = admin.call("hermes", "toolkit_list", &args(json!({}))).unwrap();
+    listed["toolkits"].as_array().unwrap().iter().find(|t| t["name"] == name).unwrap()["path_roots"].clone()
+}
+
+#[test]
+fn path_roots_update_is_pending_then_live_after_approval_without_a_file_edit() {
+    let (e, scratch) = env_with_github(true);
+    assert!(e.service.catalog().tools.contains_key("github.blob_from_file"));
+    let uploads = e.sandbox.join("uploads");
+    std::fs::create_dir_all(&uploads).unwrap();
+    let uploads = uploads.to_str().unwrap().to_string();
+    let admin = e.admin();
+    let before = toolkits_text(&e);
+
+    let result = admin
+        .call("hermes", "toolkit_update", &args(json!({"name": "github", "updates": {"path_roots": [scratch, uploads]}})))
+        .unwrap();
+    assert_eq!((result["applied"].clone(), result["pending"].clone()), (json!(false), json!(true)));
+    // Pending changes nothing: not the file, not the running Tier 1.
+    assert_eq!(toolkits_text(&e), before);
+    assert_eq!(listed_roots(&admin, "github"), json!([scratch]));
+
+    // The human's approval (what /api/v1/requests/toolkits/<id>/deploy
+    // calls) writes and reloads -- no hand edit, no SIGHUP.
+    let id = result["proposal_id"].as_str().unwrap();
+    assert_eq!(e.proposals.deploy(id, "root").unwrap().status, "deployed");
+    assert_eq!(listed_roots(&admin, "github"), json!([scratch, uploads]));
+    assert_eq!(e.load_yaml(&e.toolkits_path)["toolkits"]["github"]["path_roots"], json!([scratch, uploads]));
+    assert!(e.service.catalog().tools.contains_key("github.blob_from_file"));
+    let line = e.audit_lines().into_iter().find(|l| l["action"] == "toolkit_update_deploy").unwrap();
+    assert_eq!(line["before_fields"], json!({"path_roots": [scratch]}));
+    assert_eq!(line["after_fields"], json!({"path_roots": [scratch, uploads]}));
+}
+
+#[test]
+fn path_roots_entries_must_be_absolute_existing_directories_other_than_root() {
+    let (e, scratch) = env_with_github(false);
+    let file = e.sandbox.join("a-file");
+    write(&file, "x");
+    let missing = e.sandbox.join("nope");
+    for (roots, why) in [
+        (json!(["relative/dir"]), "'relative/dir' is not an absolute path."),
+        (json!([format!("{scratch}/../..")]), "contains '..'."),
+        (json!(["/"]), "'/' is the filesystem root, which would put every path in reach."),
+        (json!(["//./"]), "is the filesystem root"),
+        (json!([missing.to_str().unwrap()]), "does not exist in this container."),
+        (json!([file.to_str().unwrap()]), "is not a directory in this container."),
+        (json!([1]), "entry 1 is not a string."),
+        (json!("/srv"), "it must be a list of absolute directory paths."),
+    ] {
+        let err = propose(&e, "github", json!({"path_roots": roots}), "update").unwrap_err();
+        assert!(err.message.contains(why), "{roots}: {}", err.message);
+        assert!(err.message.starts_with("Cannot propose path_roots"), "{}", err.message);
+    }
+    assert!(e.proposals.list(None).unwrap().is_empty());
+}
+
+#[test]
+fn path_roots_that_strand_a_tool_are_refused_naming_it() {
+    let (e, scratch) = env_with_github(true);
+    let other = e.sandbox.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let other = other.to_str().unwrap().to_string();
+    let err = propose(&e, "github", json!({"path_roots": [other]}), "update").unwrap_err();
+    assert_eq!(
+        err.message,
+        format!(
+            "Cannot change path_roots of toolkit 'github' to ['{other}']: 1 tool(s) would lie outside them: \
+             'github.blob_from_file' (must_resolve_under '{scratch}'). Change or delete those tools first, or keep \
+             their roots in the list."
+        )
+    );
+    // Narrowing to an empty list strands it too.
+    assert!(propose(&e, "github", json!({"path_roots": []}), "update").unwrap_err().message.contains("blob_from_file"));
+    // A parent of its root keeps it.
+    let parent = e.sandbox.to_str().unwrap().to_string();
+    assert!(propose(&e, "github", json!({"path_roots": [parent]}), "update").is_ok());
+}
+
+#[test]
+fn deploy_rechecks_path_roots_against_the_disk_and_tools_as_they_are_now() {
+    let (e, scratch) = env_with_github(false);
+    let extra = e.sandbox.join("extra");
+    std::fs::create_dir_all(&extra).unwrap();
+    let extra_s = extra.to_str().unwrap().to_string();
+    // The directory vanishes while the proposal waits.
+    let item = propose(&e, "github", json!({"path_roots": [scratch.clone(), extra_s.clone()]}), "update").unwrap();
+    std::fs::remove_dir(&extra).unwrap();
+    let before = toolkits_text(&e);
+    let err = e.proposals.deploy(&item.id, "root").unwrap_err();
+    assert!(err.message.contains("does not exist in this container."), "{}", err.message);
+    assert_eq!(toolkits_text(&e), before);
+    assert_eq!(e.proposals.get(&item.id).unwrap().unwrap().status, "pending");
+
+    // A tool under the old root arrives while a narrowing waits.
+    std::fs::create_dir_all(&extra).unwrap();
+    let item = propose(&e, "github", json!({"path_roots": [extra_s]}), "update").unwrap();
+    write_tools(&e, github_tool(&scratch));
+    let err = e.proposals.deploy(&item.id, "root").unwrap_err();
+    assert!(err.message.contains("'github.blob_from_file'"), "{}", err.message);
+    assert_eq!(toolkits_text(&e), before);
+}
+
+#[test]
+fn path_roots_cannot_be_proposed_for_an_ssh_toolkit() {
+    let e = env();
+    let mut raw = e.load_yaml(&e.toolkits_path);
+    raw["toolkits"]["remote"] = json!({"executor": "ssh"});
+    write(std::path::Path::new(&e.toolkits_path), &gatekeeper::yaml::dump(&raw));
+    let sandbox = e.sandbox.to_str().unwrap().to_string();
+    let err = propose(&e, "remote", json!({"path_roots": [sandbox]}), "update").unwrap_err();
+    assert!(err.message.contains("reads them on the remote host"), "{}", err.message);
 }

@@ -827,6 +827,8 @@ export interface components {
             suspect_status: string | null;
             /** Used By */
             used_by: string[];
+            /** Warnings */
+            warnings: string[];
         };
         /** CredentialRotate */
         CredentialRotate: {

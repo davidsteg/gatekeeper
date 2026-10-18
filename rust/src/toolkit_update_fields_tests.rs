@@ -227,7 +227,7 @@ fn network_field_on_another_executor_says_it_does_not_connect() {
 }
 
 #[test]
-fn path_roots_and_protected_resources_stay_redeploy_only() {
+fn protected_resources_stays_redeploy_only_and_root_is_never_a_path_root() {
     let e = env();
     for field in ["path_roots", "protected_resources"] {
         let mut spec = Map::new();

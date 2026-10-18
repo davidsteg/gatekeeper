@@ -1,3 +1,21 @@
+## 1.22.0
+
+`path_roots` can be changed by a proposal a human approves, and a credential probe now tests the request the tools actually send.
+
+### Added
+
+- **`admin.toolkit_update` accepts `path_roots`.** A new `from_file` tool no longer needs a hand edit of `toolkits.yaml` and a reload: the agent proposes the toolkit's new list, and it goes live when a human approves the card at `/app/requests` (Toolkit tab), like `allowed_methods` and `allowed_path_prefixes` since 1.11.0. It never applies on its own. The list replaces the old one, so send every root to keep. Every entry must be an absolute path without `..`, must not be `/`, and must exist in the container as a directory, checked when the proposal is filed and again when it is approved. A proposal that would leave a tool on the toolkit with a `must_resolve_under` outside the new list is refused, and the error names those tools. An `ssh` toolkit's `path_roots` are on the remote host and still need a file edit. `protected_resources` still cannot be proposed.
+- **The Requests card shows the roots as a diff**: each root of the running toolkit and of the proposal on its own line, `+` for added and `−` for removed. Approving it says that tools on the toolkit can read, write or upload files under the added roots.
+- **Credential warnings.** `admin.cred_list` and `GET /api/v1/credentials` return `warnings` for each slot, shown on `/app/credentials`. An `api_key_header` slot on the `Authorization` header with no `header_format` gets one: it sends the bare secret without a scheme, which GitHub and most APIs refuse. `/app/credentials` also shows a slot's header format.
+
+### Fixed
+
+- **A credential probe could report `verified` for a credential every tool call failed with.** The probe always sent `Authorization: Bearer <value>`, whatever the slot said. An `api_key_header` slot on `Authorization` without `header_format` made the tools send the token with no `Bearer`, GitHub answered 401, and the probe still said `verified`. For the kinds an `http` tool sends (`api_key_header` with its `header_format`, `bearer`, `basic`, `url_query`), the probe now builds the header or query parameter with the same function as the tools, so such a slot probes as `auth_failed`. Other kinds keep the `Bearer` probe.
+
+### Upgrading
+
+- A slot whose probe said `verified` only because of the added `Bearer` shows `auth_failed` on its next probe. Fix it with `header_format: "Bearer {value}"` through `admin.cred_update` (approved at `/app/requests`), or delete it and create it as kind `bearer`.
+
 ## 1.21.1
 
 ### Fixed

@@ -24,14 +24,14 @@ use serde_json::{json, Map, Value};
 
 use crate::atomic::{atomic_write_cfg, dump, load_cached, revision, safe_load, writable};
 use crate::audit::AuditLog;
-use crate::catalog::now_iso;
+use crate::catalog::{current_version_spec, now_iso};
 use crate::errors::{ConfigError, ConfigResult};
 use crate::pyfmt::{repr_list, repr_str, repr_value, str_value};
 use crate::runas::parse_run_as;
 use crate::service::Service;
 use crate::tier1::{
-    ip_network, is_public_address, load_tier1, parse_network_allowlist, py_truthy, url_hostname,
-    NETWORK_EXECUTORS,
+    ip_network, is_public_address, load_tier1, parse_network_allowlist, pure_posix_within, py_truthy,
+    url_hostname, NETWORK_EXECUTORS,
 };
 
 /// What a toolkit proposal may be in.
@@ -43,8 +43,8 @@ pub const KINDS: [&str; 4] = ["create", "update", "delete", "bind"];
 /// The one and only field a `bind` proposal carries.
 pub const BIND_FIELD: &str = "credential";
 
-/// Fields `update`-kind proposals may change. `path_roots` and
-/// `protected_resources` stay deploy-time only (FR-4.11).
+/// Fields `update`-kind proposals may change. `protected_resources`
+/// stays deploy-time only (FR-4.11).
 ///
 /// `allowed_hosts` and `allowed_cidrs` are here as of 1.10.0, the first
 /// fields in this set that change *where* a toolkit may connect -- a
@@ -60,9 +60,17 @@ pub const BIND_FIELD: &str = "credential";
 /// and the two ceilings (`max_timeout_seconds`, `max_output_bytes`), on the
 /// same terms: always a human-approved card, the card shows the current
 /// value next to the proposed one, and `load_tier1` re-validates the whole
-/// merged file before anything is written. `path_roots` and
-/// `protected_resources` remain redeploy-only.
-pub const UPDATE_WRITABLE_FIELDS: [&str; 10] = [
+/// merged file before anything is written.
+///
+/// 1.22.0 adds `path_roots`, so a new `from_file` tool no longer needs a
+/// hand edit of toolkits.yaml. On top of the same human-approved card,
+/// every entry must be an absolute, `..`-free path other than `/` that
+/// exists in this container as a directory, and no tool on the toolkit may
+/// keep a `must_resolve_under` outside the new list
+/// ([`check_path_roots`], at submit and again at deploy). Not on an `ssh`
+/// toolkit, whose roots are on another host this container cannot check.
+/// `protected_resources` remains redeploy-only.
+pub const UPDATE_WRITABLE_FIELDS: [&str; 11] = [
     "executor",
     "binaries",
     "denied_args",
@@ -73,7 +81,12 @@ pub const UPDATE_WRITABLE_FIELDS: [&str; 10] = [
     "allowed_path_prefixes",
     "max_timeout_seconds",
     "max_output_bytes",
+    "path_roots",
 ];
+
+/// Executors whose `path_roots` are not paths in this container, so an
+/// update proposal cannot check them and may not change them.
+pub const REMOTE_PATH_EXECUTORS: [&str; 1] = ["ssh"];
 
 /// The update fields that change a toolkit's network reach -- valid only
 /// on an executor that connects to a URL (`tier1::NETWORK_EXECUTORS`).
@@ -144,9 +157,9 @@ pub fn name_collision_message(name: &str) -> String {
          would silently overwrite it. If a second, separate toolkit is \
          what you want, propose it under a different name. If you meant to \
          change the existing one: executor, binaries, denied_args, run_as, \
-         allowed_hosts, allowed_cidrs, allowed_methods, allowed_path_prefixes \
-         and the two limits go through admin.toolkit_update; path_roots and \
-         protected_resources have no proposal path -- edit \
+         allowed_hosts, allowed_cidrs, allowed_methods, allowed_path_prefixes, \
+         path_roots and the two limits go through admin.toolkit_update; \
+         protected_resources has no proposal path -- edit \
          toolkits.yaml and reload (SIGHUP or restart).",
         repr_str(name)
     )
@@ -179,6 +192,108 @@ fn tools_referencing_toolkit(tools_path: &str, toolkit_name: &str) -> ConfigResu
         })
         .map(|e| str_value(e.get("id").unwrap_or(&Value::Null)))
         .collect())
+}
+
+/// Every non-deleted tool on `toolkit_name` (by its current version) that
+/// a toolkit with `roots` as its `path_roots` would no longer load:
+/// a `must_resolve_under` outside every root, or a `directory` parameter
+/// with no root at all. Lexical, the same `pure_posix_within` the catalog's
+/// own Tier 1 check uses. Each as "'<id>' (must_resolve_under '<root>')".
+fn tools_outside_roots(tools_path: &str, toolkit_name: &str, roots: &[String]) -> ConfigResult<Vec<String>> {
+    if !std::path::Path::new(tools_path).exists() {
+        return Ok(Vec::new());
+    }
+    let raw = read_yaml_file(tools_path)?;
+    let Some(Value::Array(entries)) = raw.get("tools") else {
+        return Ok(Vec::new());
+    };
+    let mut blocked = Vec::new();
+    for entry in entries.iter().filter_map(Value::as_object) {
+        let Some((spec, _, _, deleted)) = current_version_spec(entry)? else { continue };
+        if deleted || entry.get("deleted").is_some_and(py_truthy) {
+            continue;
+        }
+        if spec.get("toolkit").and_then(Value::as_str) != Some(toolkit_name) {
+            continue;
+        }
+        let id = repr_str(&str_value(spec.get("id").unwrap_or(&Value::Null)));
+        let Some(Value::Object(parameters)) = spec.get("parameters") else { continue };
+        for (param, pspec) in parameters {
+            if let Some(root) = pspec.get("must_resolve_under").and_then(Value::as_str).filter(|r| !r.is_empty()) {
+                if !roots.iter().any(|allowed| pure_posix_within(root, allowed)) {
+                    blocked.push(format!("{id} (must_resolve_under {})", repr_str(root)));
+                }
+            } else if param == "directory" && roots.is_empty() {
+                blocked.push(format!("{id} (a 'directory' parameter, which needs a root)"));
+            }
+        }
+    }
+    Ok(blocked)
+}
+
+/// What a proposed `path_roots` must meet, beyond `load_tier1`'s shape
+/// check, at submit and again at deploy (FR-4.11's one runtime path):
+///
+/// 1. A list of strings, on a toolkit whose roots are paths in this
+///    container (not [`REMOTE_PATH_EXECUTORS`]).
+/// 2. Every entry absolute, without a `..` component, and not `/` itself.
+/// 3. Every entry exists here and is a directory -- checked now, so a typo
+///    is refused instead of loading as a root nothing can be under.
+/// 4. No tool on the toolkit is left with a `must_resolve_under` outside
+///    the new list ([`tools_outside_roots`]); the error names them, since
+///    the reload would otherwise quietly disable them.
+fn check_path_roots(name: &str, value: &Value, executor: Option<&str>, tools_path: &str) -> ConfigResult<Vec<String>> {
+    let where_ = format!("toolkit {}", repr_str(name));
+    if let Some(executor) = executor.filter(|e| REMOTE_PATH_EXECUTORS.contains(e)) {
+        return Err(proposal_refused(format!(
+            "Cannot propose path_roots for {where_}: its executor {} reads them on the remote host, \
+             which this container cannot check. Edit toolkits.yaml and reload (SIGHUP or restart).",
+            repr_str(executor)
+        )));
+    }
+    let Value::Array(items) = value else {
+        return Err(proposal_refused(format!(
+            "Cannot propose path_roots={} for {where_}: it must be a list of absolute directory paths.",
+            repr_value(value)
+        )));
+    };
+    let mut roots = Vec::new();
+    for item in items {
+        let Value::String(root) = item else {
+            return Err(proposal_refused(format!(
+                "Cannot propose path_roots for {where_}: entry {} is not a string.",
+                repr_value(item)
+            )));
+        };
+        let refuse = |why: &str| proposal_refused(format!("Cannot propose path_roots for {where_}: {} {why}", repr_str(root)));
+        if !root.starts_with('/') {
+            return Err(refuse("is not an absolute path."));
+        }
+        let parts: Vec<&str> = root.split('/').filter(|p| !p.is_empty() && *p != ".").collect();
+        if parts.contains(&"..") {
+            return Err(refuse("contains '..'."));
+        }
+        if parts.is_empty() {
+            return Err(refuse("is the filesystem root, which would put every path in reach."));
+        }
+        match std::fs::metadata(root) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => return Err(refuse("is not a directory in this container.")),
+            Err(_) => return Err(refuse("does not exist in this container.")),
+        }
+        roots.push(root.clone());
+    }
+    let blocked = tools_outside_roots(tools_path, name, &roots)?;
+    if !blocked.is_empty() {
+        return Err(proposal_refused(format!(
+            "Cannot change path_roots of {where_} to {}: {} tool(s) would lie outside them: {}. Change or \
+             delete those tools first, or keep their roots in the list.",
+            repr_list(&roots),
+            blocked.len(),
+            blocked.join(", ")
+        )));
+    }
+    Ok(roots)
 }
 
 #[cfg(test)]
@@ -523,9 +638,9 @@ impl ToolkitProposalStore {
             if !illegal.is_empty() {
                 return Err(proposal_refused(format!(
                     "Cannot propose changing {} -- only {} are writable via an \
-                     update proposal. path_roots and protected_resources \
-                     have no proposal path -- edit toolkits.yaml and reload \
-                     (SIGHUP or restart).",
+                     update proposal. protected_resources has no proposal \
+                     path -- edit toolkits.yaml and reload (SIGHUP or \
+                     restart).",
                     sorted_repr(illegal),
                     writable_fields_repr()
                 )));
@@ -592,6 +707,17 @@ impl ToolkitProposalStore {
                 &format!("toolkit {}", repr_str(name)),
                 &destination_urls(&body, &live),
             )?;
+        }
+        if kind == "update" {
+            if let Some(value) = spec.get("path_roots") {
+                let live = self.live_raw()?;
+                let existing = live.get("toolkits").and_then(|t| t.get(name));
+                let executor = spec
+                    .get("executor")
+                    .or_else(|| existing.and_then(|e| e.get("executor")))
+                    .and_then(Value::as_str);
+                check_path_roots(name, value, executor, &self.tools_path)?;
+            }
         }
         if kind == "delete" && !spec.is_empty() {
             return Err(proposal_refused(
@@ -878,6 +1004,11 @@ impl ToolkitProposalStore {
                         &format!("toolkit {}", repr_str(&item.name)),
                         &destination_urls(&body, &raw_value),
                     )?;
+                }
+                if let Some(value) = item.spec.get("path_roots") {
+                    // Again, against the disk and tools.yaml as they are now:
+                    // a directory may be gone, a tool added since submit.
+                    check_path_roots(&item.name, value, executor.as_str(), &self.tools_path)?;
                 }
                 // A null network field removes the key, so the remaining
                 // one alone decides -- load_tier1 then refuses the toolkit

@@ -438,7 +438,7 @@
  {
   "name": "admin.credential_bind",
   "title": "Propose binding a toolkit to a credential",
-  "description": "Proposes pointing an existing toolkit at an existing credential slot -- two names and nothing else. There is no 'value' property and anything value-shaped sent anyway (value, secret, token, password, api_key, ...) is explicitly refused rather than stored or ignored quietly: no operation on /admin/mcp ever carries secret material (FR-10.2/10.8). This is the half admin.cred_propose does not cover -- a credential nothing references is inert, and the binding itself is Tier 1 (FR-10.4), so it is always written to the toolkit-proposal queue and never applies on its own, not even when both names already exist. A human reviews it at /app/requests (Toolkit tab) and, if they approve, gatekeeper writes 'credential: <name>' under that toolkit in toolkits.yaml, re-validates it, and reloads it into the running process -- no redeploy needed, but also no way for this call to make it live by itself. Toolkit-level only: a destination's own credential override, path_roots, protected_resources and limits stay deploy-time only (FR-4.11) and are rejected here. Both names are checked against the running configuration (admin.toolkit_list, admin.cred_list), so an unknown one is refused immediately, by name.",
+  "description": "Proposes pointing an existing toolkit at an existing credential slot -- two names and nothing else. There is no 'value' property and anything value-shaped sent anyway (value, secret, token, password, api_key, ...) is explicitly refused rather than stored or ignored quietly: no operation on /admin/mcp ever carries secret material (FR-10.2/10.8). This is the half admin.cred_propose does not cover -- a credential nothing references is inert, and the binding itself is Tier 1 (FR-10.4), so it is always written to the toolkit-proposal queue and never applies on its own, not even when both names already exist. A human reviews it at /app/requests (Toolkit tab) and, if they approve, gatekeeper writes 'credential: <name>' under that toolkit in toolkits.yaml, re-validates it, and reloads it into the running process -- no redeploy needed, but also no way for this call to make it live by itself. Toolkit-level only: a destination's own credential override, protected_resources and limits are rejected here (path_roots goes through admin.toolkit_update). Both names are checked against the running configuration (admin.toolkit_list, admin.cred_list), so an unknown one is refused immediately, by name.",
   "inputSchema": {
    "type": "object",
    "properties": {
@@ -461,7 +461,7 @@
  {
   "name": "admin.toolkit_propose",
   "title": "Propose a new toolkit",
-  "description": "Proposes adding a brand-new toolkit to Tier 1. Always written to the toolkit-proposal queue -- never applies, not even for a read-only-looking toolkit -- since this changes what is possible at all (REQUIREMENTS.md §6), not just who can do what. A human reviews it at /app/requests (Toolkit tab) and, if they approve, gatekeeper validates, writes toolkits.yaml, and reloads it into the running process itself -- no redeploy needed, but also no way for this call to make it live on its own. Editing an existing toolkit is not supported here: a name that already exists is refused right away, with the way to change that toolkit instead (admin.toolkit_update, or toolkits.yaml and a reload for path_roots/protected_resources/limits).",
+  "description": "Proposes adding a brand-new toolkit to Tier 1. Always written to the toolkit-proposal queue -- never applies, not even for a read-only-looking toolkit -- since this changes what is possible at all (REQUIREMENTS.md §6), not just who can do what. A human reviews it at /app/requests (Toolkit tab) and, if they approve, gatekeeper validates, writes toolkits.yaml, and reloads it into the running process itself -- no redeploy needed, but also no way for this call to make it live on its own. Editing an existing toolkit is not supported here: a name that already exists is refused right away, with the way to change that toolkit instead (admin.toolkit_update, or toolkits.yaml and a reload for protected_resources).",
   "inputSchema": {
    "type": "object",
    "properties": {
@@ -486,8 +486,8 @@
  },
  {
   "name": "admin.toolkit_update",
-  "title": "Propose updating a toolkit's executor, binaries or network targets",
-  "description": "Proposes changing an existing toolkit's executor type, binaries, denied_args, run_as (the OS user a 'file' toolkit's operations run as), and -- on an http, opencode or kuma toolkit -- allowed_hosts (exact hostnames such as 'api.github.com'; no wildcards, no IP addresses) and allowed_cidrs, plus an http toolkit's allowed_methods and allowed_path_prefixes, and max_timeout_seconds/max_output_bytes. Only these fields can be proposed — path_roots and protected_resources remain deploy-time only (FR-4.11) and are rejected. A CIDR wider than /16 (IPv4) or /48 (IPv6) needs confirm_broad_cidrs: true, and a private range is refused on a toolkit whose target is a public address. A hostname toolkit never reaches a private, loopback, link-local or multicast address, whatever its allowed_cidrs say. Like admin.toolkit_propose, this changes Tier 1 -- what is possible at all, not just who can do what -- so it is always written to the toolkit-proposal queue and never applies on its own. A human reviews it at /app/requests (Toolkit tab) and, if they approve, gatekeeper validates, writes toolkits.yaml, and reloads it into the running process itself -- no redeploy needed, but also no way for this call to make it live by itself. Example: propose switching executor from 'local' to 'file' by passing updates={\"executor\": \"file\", \"binaries\": [], \"denied_args\": []}, or pointing an existing 'file' toolkit at another user with updates={\"run_as\": \"3001:3001\"}, or moving the 'github' toolkit from fixed addresses to its hostname with updates={\"allowed_hosts\": [\"api.github.com\"], \"allowed_cidrs\": null}.",
+  "title": "Propose updating a toolkit's executor, binaries, network targets or path roots",
+  "description": "Proposes changing an existing toolkit's executor type, binaries, denied_args, run_as (the OS user a 'file' toolkit's operations run as), and -- on an http, opencode or kuma toolkit -- allowed_hosts (exact hostnames such as 'api.github.com'; no wildcards, no IP addresses) and allowed_cidrs, plus an http toolkit's allowed_methods and allowed_path_prefixes, max_timeout_seconds/max_output_bytes, and path_roots (the directories a tool's derived paths, a 'file' toolkit's operations and an opencode 'directory' must lie under). Only these fields can be proposed — protected_resources remains deploy-time only (FR-4.11) and is rejected. Every path_roots entry must be an absolute path without '..', not '/', and an existing directory in this container; the proposal is refused, naming them, while any tool on the toolkit has a must_resolve_under outside the new list; an ssh toolkit's path_roots cannot be proposed. A CIDR wider than /16 (IPv4) or /48 (IPv6) needs confirm_broad_cidrs: true, and a private range is refused on a toolkit whose target is a public address. A hostname toolkit never reaches a private, loopback, link-local or multicast address, whatever its allowed_cidrs say. Like admin.toolkit_propose, this changes Tier 1 -- what is possible at all, not just who can do what -- so it is always written to the toolkit-proposal queue and never applies on its own. A human reviews it at /app/requests (Toolkit tab) and, if they approve, gatekeeper validates, writes toolkits.yaml, and reloads it into the running process itself -- no redeploy needed, but also no way for this call to make it live by itself. Example: propose switching executor from 'local' to 'file' by passing updates={\"executor\": \"file\", \"binaries\": [], \"denied_args\": []}, or pointing an existing 'file' toolkit at another user with updates={\"run_as\": \"3001:3001\"}, or moving the 'github' toolkit from fixed addresses to its hostname with updates={\"allowed_hosts\": [\"api.github.com\"], \"allowed_cidrs\": null}, or giving it a directory for from_file uploads with updates={\"path_roots\": [\"/mnt/raid/agent/hermes-dev/scratch\"]}. path_roots replaces the whole list: send every root to keep.",
   "inputSchema": {
    "type": "object",
    "properties": {
@@ -497,7 +497,7 @@
     },
     "updates": {
      "type": "object",
-     "description": "Fields to propose changing (executor, binaries, denied_args, run_as, allowed_hosts, allowed_cidrs only)",
+     "description": "Fields to propose changing (executor, binaries, denied_args, run_as, allowed_hosts, allowed_cidrs, allowed_methods, allowed_path_prefixes, max_timeout_seconds, max_output_bytes, path_roots only)",
      "properties": {
       "executor": {
        "type": "string"
@@ -562,6 +562,13 @@
       "max_output_bytes": {
        "type": "integer",
        "minimum": 1
+      },
+      "path_roots": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "The toolkit's whole new path_roots list (it replaces the old one): absolute directories that exist in this container, without '..' and not '/'. Refused while a tool on the toolkit has a must_resolve_under outside it. Not on an ssh toolkit."
       }
      },
      "additionalProperties": false

@@ -223,6 +223,7 @@ pub fn credential_summaries(credentials: &CredentialStore, tier1: &Tier1) -> Con
         .names(Some(&used_by))?
         .into_iter()
         .map(|meta| {
+            let warnings = crate::credentials::credential_warnings(&meta);
             json!({
                 "name": meta.name,
                 "kind": meta.kind,
@@ -237,6 +238,7 @@ pub fn credential_summaries(credentials: &CredentialStore, tier1: &Tier1) -> Con
                 "probe_checked_at": meta.probe_checked_at,
                 "suspect_status": meta.suspect_status,
                 "suspect_at": meta.suspect_at,
+                "warnings": warnings,
             })
         })
         .collect())
