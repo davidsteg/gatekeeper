@@ -10,6 +10,7 @@ gatekeeper has a logo, and the README has been rewritten around screenshots of t
 ### Fixed
 
 - **The Docs page renders the README cleanly.** Markdown images and lines made only of HTML tags are left out instead of being printed as raw text; any other HTML still shows as text.
+
 ## 1.20.0
 
 The audit log now says what each tool call actually ran. Until now a successful call's Detail column on `/app/audit` was empty, so a row read "docker.exec, ok" and nothing else.
