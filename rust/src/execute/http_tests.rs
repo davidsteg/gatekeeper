@@ -872,3 +872,209 @@ async fn timeout_covers_a_trickling_body() {
     assert_eq!(r.outcome, OUTCOME_FAILED, "{}", r.stdout);
     assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
 }
+
+// -- Body fields from a file (1.21.0) -----------------------------------------
+
+/// A toolkit whose `path_roots` is `<dir>/scratch`, and a blob tool that
+/// sends `scratch/<file>` as `content`. `file` takes almost anything, so
+/// the checks below are the executor's, not the pattern's.
+fn blob(dir: &std::path::Path, port: u16, max_file_bytes: i64) -> (Tier1, ToolDef, String) {
+    let root = dir.join("scratch");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.to_str().unwrap().to_string();
+    let tier1 = write_tier1(
+        dir,
+        "tk-blob.yaml",
+        &format!(
+            "toolkits:\n  gh:\n    executor: http\n    base_url: \"http://127.0.0.1:{port}\"\n    allowed_methods: [\"POST\"]\n    allowed_path_prefixes: [\"/repos/\"]\n    allowed_cidrs: [\"127.0.0.1/32\"]\n    path_roots: [\"{root}\"]\n"
+        ),
+    );
+    let spec = serde_json::json!({
+        "id": "gh.blob_create_from_file", "toolkit": "gh", "version": 1,
+        "title": "Blob", "description": "d", "category": "write_external", "idempotent": true,
+        "enabled": true, "method": "POST", "path": "/repos/x/git/blobs",
+        "body": {"content": {"from_file": "path", "encoding": "base64"}, "encoding": "base64"},
+        "max_file_bytes": max_file_bytes,
+        "parameters": {
+            "file": {"type": "string", "pattern": "^[^/][^\\x00]*$", "required": true},
+            "path": {"type": "path", "derived": format!("{root}/{{file}}"), "must_resolve_under": root},
+        },
+        "timeout_seconds": 5, "max_output_bytes": 65536,
+    });
+    let t = parse_tool_spec(&spec, &tier1).unwrap();
+    (tier1, t, root)
+}
+
+/// Validates `file` the way `Service::call` does, then runs the request.
+async fn blob_call(t: &ToolDef, tk: &Toolkit, file: &str) -> Result<ExecResult, Denied> {
+    let mut args = Map::new();
+    args.insert("file".into(), Value::String(file.into()));
+    let values = crate::validate::resolve_parameters(t, &args)?;
+    let req = build_http_request(t, &values, tk)?;
+    Ok(run(&req.method, &req.path, &req.query, req.body.as_ref(), None, tk, None, 5.0, 65536, true, None).await.unwrap())
+}
+
+fn sent_json(seen: &Seen) -> Value {
+    let (_, _, raw) = seen.lock().last().unwrap().clone();
+    serde_json::from_slice(&raw).unwrap()
+}
+
+#[tokio::test]
+async fn from_file_sends_the_content_base64_encoded() {
+    use base64::Engine as _;
+    let e = env();
+    let (port, seen) = http_server().await;
+    let (tier1, t, root) = blob(e.dir.path(), port, 1024);
+    let tk = tier1.toolkit("gh").unwrap();
+    let content = b"line one\nzweite Zeile \xc3\xa4\n\x00\xff binary too";
+    std::fs::write(format!("{root}/notes.txt"), content).unwrap();
+
+    let r = blob_call(&t, tk, "notes.txt").await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
+    let sent = sent_json(&seen);
+    assert_eq!(sent["encoding"], "base64");
+    assert_eq!(sent["content"], base64::engine::general_purpose::STANDARD.encode(content));
+    assert_eq!(r.body_files, vec![(format!("{root}/notes.txt"), content.len() as u64)]);
+}
+
+#[tokio::test]
+async fn from_file_request_as_built_names_the_file_never_its_content() {
+    // What `build_http_request` returns is what the audit log describes.
+    let e = env();
+    let (port, _) = http_server().await;
+    let (tier1, t, root) = blob(e.dir.path(), port, 1024);
+    let tk = tier1.toolkit("gh").unwrap();
+    std::fs::write(format!("{root}/notes.txt"), "TOP-SECRET-CONTENT").unwrap();
+    let mut args = Map::new();
+    args.insert("file".into(), "notes.txt".into());
+    let values = crate::validate::resolve_parameters(&t, &args).unwrap();
+    let req = build_http_request(&t, &values, tk).unwrap();
+    let body = req.body.unwrap();
+    assert_eq!(body["content"]["from_file"], format!("{root}/notes.txt"));
+    assert_eq!(body["content"]["max_file_bytes"], 1024);
+    assert!(!body.to_string().contains("TOP-SECRET"));
+    assert!(!body.to_string().contains(&base64_of("TOP-SECRET-CONTENT")));
+}
+
+fn base64_of(text: &str) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(text)
+}
+
+#[tokio::test]
+async fn from_file_refuses_a_symlink_that_points_out_of_the_root() {
+    let e = env();
+    let (port, seen) = http_server().await;
+    let (tier1, t, root) = blob(e.dir.path(), port, 1024);
+    let tk = tier1.toolkit("gh").unwrap();
+    let outside = e.dir.path().join("outside.txt");
+    std::fs::write(&outside, "secret").unwrap();
+    std::os::unix::fs::symlink(&outside, format!("{root}/escape.txt")).unwrap();
+    std::os::unix::fs::symlink(e.dir.path(), format!("{root}/updir")).unwrap();
+
+    for file in ["escape.txt", "updir/outside.txt"] {
+        let denial = blob_call(&t, tk, file).await.unwrap_err();
+        assert_eq!(denial.reason, DenialReason::PathEscape, "{file}");
+    }
+    assert!(seen.lock().is_empty());
+}
+
+#[test]
+fn read_body_file_rechecks_what_it_opened() {
+    // The path was checked when the call was validated; by the time the
+    // file is opened a component may have been swapped for a symlink.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("scratch");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.to_str().unwrap();
+    std::fs::write(dir.path().join("outside.txt"), "secret").unwrap();
+    std::fs::write(format!("{root}/inside.txt"), "fine").unwrap();
+    // Final component a symlink, even to a file inside the root: not followed.
+    std::os::unix::fs::symlink(format!("{root}/inside.txt"), format!("{root}/link.txt")).unwrap();
+    let denial = read_body_file(&format!("{root}/link.txt"), root, 1024).unwrap_err();
+    assert_eq!(denial.reason, DenialReason::ParamInvalid);
+    assert!(denial.detail.contains("symbolic link"), "{}", denial.detail);
+    // A directory component that is a symlink out of the root.
+    std::os::unix::fs::symlink(dir.path(), format!("{root}/sub")).unwrap();
+    let denial = read_body_file(&format!("{root}/sub/outside.txt"), root, 1024).unwrap_err();
+    assert_eq!(denial.reason, DenialReason::PathEscape);
+    assert!(!denial.detail.contains("secret"));
+    assert_eq!(read_body_file(&format!("{root}/inside.txt"), root, 1024).unwrap(), b"fine");
+}
+
+#[tokio::test]
+async fn from_file_size_limit_is_checked_before_reading() {
+    let e = env();
+    let (port, seen) = http_server().await;
+    let (tier1, t, root) = blob(e.dir.path(), port, 100);
+    let tk = tier1.toolkit("gh").unwrap();
+    std::fs::write(format!("{root}/exact.txt"), vec![b'a'; 100]).unwrap();
+    std::fs::write(format!("{root}/over.txt"), vec![b'a'; 101]).unwrap();
+    // 64 GiB, sparse: reading it would take minutes and the memory to
+    // hold it; refusing it from its size takes neither.
+    let huge = std::fs::File::create(format!("{root}/huge.bin")).unwrap();
+    huge.set_len(64 << 30).unwrap();
+
+    let r = blob_call(&t, tk, "exact.txt").await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
+    seen.lock().clear();
+    for (file, size) in [("over.txt", 101u64), ("huge.bin", 64 << 30)] {
+        let started = Instant::now();
+        let r = blob_call(&t, tk, file).await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2), "{file}");
+        assert_eq!(r.outcome, OUTCOME_FAILED);
+        assert_eq!(r.denial_reason.as_deref(), Some("param_invalid"));
+        assert_eq!(
+            r.denial_detail.unwrap(),
+            format!("Body file '{root}/{file}' is {size} bytes, over this tool's limit of 100. Nothing was read or sent.")
+        );
+    }
+    assert!(seen.lock().is_empty());
+}
+
+#[tokio::test]
+async fn from_file_refuses_denylisted_names() {
+    let e = env();
+    let (port, seen) = http_server().await;
+    let (tier1, t, root) = blob(e.dir.path(), port, 1024);
+    let tk = tier1.toolkit("gh").unwrap();
+    for name in ["config.yaml", "Config.YAML", ".env", ".env.local", "id.key", "server.PEM", "credentials", "credentials.json"] {
+        std::fs::write(format!("{root}/{name}"), "TOKEN=abc").unwrap();
+        let r = blob_call(&t, tk, name).await.unwrap();
+        assert_eq!(r.denial_reason.as_deref(), Some("param_invalid"), "{name}");
+        assert!(r.denial_detail.as_deref().unwrap().contains("never-send list"), "{name}");
+        assert!(!r.stderr.contains("TOKEN"), "{name}");
+    }
+    for name in ["config.yaml.txt", "my.env", "keys.txt", "notes-credentials.md"] {
+        std::fs::write(format!("{root}/{name}"), "ok").unwrap();
+        let r = blob_call(&t, tk, name).await.unwrap();
+        assert_eq!(r.outcome, OUTCOME_OK, "{name}: {}", r.stderr);
+    }
+    assert_eq!(seen.lock().len(), 4);
+}
+
+#[tokio::test]
+async fn from_file_reads_regular_files_only() {
+    let e = env();
+    let (port, seen) = http_server().await;
+    let (tier1, t, root) = blob(e.dir.path(), port, 1024);
+    let tk = tier1.toolkit("gh").unwrap();
+    std::fs::create_dir(format!("{root}/adir")).unwrap();
+    let fifo = std::ffi::CString::new(format!("{root}/fifo")).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    std::fs::write(e.dir.path().join("elsewhere.txt"), "secret").unwrap();
+    // A hard link inside the root resolves to the inside path.
+    std::fs::hard_link(e.dir.path().join("elsewhere.txt"), format!("{root}/linked.txt")).unwrap();
+
+    for (file, expect) in [
+        ("adir", "is not a regular file"),
+        ("fifo", "is not a regular file"),
+        ("linked.txt", "has 2 hard links"),
+        ("missing.txt", "cannot be opened"),
+    ] {
+        let r = tokio::time::timeout(Duration::from_secs(5), blob_call(&t, tk, file)).await.unwrap().unwrap();
+        assert_eq!(r.denial_reason.as_deref(), Some("param_invalid"), "{file}");
+        assert!(r.denial_detail.as_deref().unwrap().contains(expect), "{file}: {:?}", r.denial_detail);
+    }
+    assert!(seen.lock().is_empty());
+}

@@ -1059,6 +1059,9 @@ pub fn log_startup(service: &Service, identities: &SharedIdentities) -> Value {
     for violation in &catalog.disabled_by_tier1 {
         tracing::warn!("Definition disabled by Tier 1 violation: {}", violation);
     }
+    for warning in &catalog.unknown_fields {
+        tracing::warn!("Definition loaded, but a write would be refused: {}", warning);
+    }
     payload
 }
 

@@ -115,6 +115,9 @@ toolkits:
     allowed_hosts:
       - api.github.com
     credential: github
+    # Where a tool's body `from_file` may read (github.blob_create_from_file).
+    path_roots:
+      - /mnt/raid/agent/hermes-dev/scratch
     max_timeout_seconds: 20
     max_output_bytes: 131072
 

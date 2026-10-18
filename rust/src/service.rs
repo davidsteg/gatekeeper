@@ -846,6 +846,7 @@ impl Service {
             credential_names,
             client: client.map(str::to_string),
             command,
+            body_files: result.body_files.clone(),
         })?;
         Ok(result)
     }
