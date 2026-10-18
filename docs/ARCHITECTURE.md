@@ -303,7 +303,21 @@ value is `***` in the call record's `parameters` and `command` -- also
 when the call is denied, before or after authorization -- and is masked
 (raw and JSON-escaped) in stdout, stderr and the denial detail before the
 agent sees them, so an API error quoting its input does not hand it back.
-The published `inputSchema` marks it `writeOnly`.
+The published `inputSchema` marks it `writeOnly`. Since 1.25.0 a `file`
+write's `content` and a patch's `new_string` may be secret as well: the
+value goes into the file and nowhere else.
+
+1.25.0 adds three things for a caller that drives a host only through
+gatekeeper. A `docker` or `local` tool may carry a fixed `stdin` text (a
+script, SQL), written while the output is read so a full pipe cannot
+deadlock; it is never a template, and the record logs only its size. The
+`file` executor gains `delete`, which refuses a path root and any
+directory with a protected resource below it, and does not follow
+symlinks; and a `write` tool may fix the mode (`0600`, `0640`, `0644`),
+set before the content is written. A toolkit with `structured_content:
+true` adds MCP `structuredContent` (outcome, exit code, the masked stdout
+and stderr, truncated, external_untrusted) to each result, for a program
+that parses results rather than reading them.
 
 `ssh` toolkit boundaries: `ssh_host`, `ssh_port`, `ssh_user`,
 `ssh_known_hosts` (required — the exact `ssh-keyscan` output pinning the

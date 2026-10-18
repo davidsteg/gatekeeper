@@ -38087,7 +38087,7 @@
     "timeout_seconds": 5,
     "max_output_bytes": 1024
    },
-   "error": "tool 'files.x': field 'file_operation' must be one of read/write/patch/list",
+   "error": "tool 'files.x': field 'file_operation' must be one of read/write/patch/list/delete",
    "tier1_violation": false
   },
   {
@@ -38103,9 +38103,9 @@
     "required_scopes": [],
     "timeout_seconds": 5,
     "max_output_bytes": 1024,
-    "file_operation": "delete"
+    "file_operation": "chmod"
    },
-   "error": "tool 'files.x': field 'file_operation' must be one of read/write/patch/list",
+   "error": "tool 'files.x': field 'file_operation' must be one of read/write/patch/list/delete",
    "tier1_violation": false
   },
   {

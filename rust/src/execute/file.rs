@@ -2,7 +2,7 @@
 //! FR-4).
 //!
 //! Unlike the `local` executor (which runs external binaries via argv), the
-//! `file` executor performs read/write/patch/list operations directly in
+//! `file` executor performs read/write/patch/list/delete operations directly in
 //! this process -- no shell, no process spawn, no argv chaining. Every
 //! operation is constrained by `path_roots` and `protected_resources` in
 //! Tier 1, and the operation type is fixed per tool.
@@ -64,6 +64,9 @@ pub struct FileCall {
     /// Tier 1 (toolkit, or a narrowing per-tool override), never a
     /// parameter.
     pub run_as: Option<String>,
+    /// A `write` tool's fixed file mode (`mode: "0600"`, 1.25.0). `None`
+    /// keeps the umask's default for a new file and an existing file's mode.
+    pub mode: Option<u32>,
 }
 
 /// Python's `ValueError("lstat: embedded null character in path")`, which
@@ -148,6 +151,7 @@ pub fn validate_path(path: &str, path_roots: &[String], protected: &[String]) ->
 /// implementation of read, write, patch and list, not a privileged copy
 /// that could drift from the unprivileged one. `Err` is the text of an
 /// exception Python's caller turned into a failed result.
+#[allow(clippy::too_many_arguments)]
 pub fn perform(
     operation: &str,
     path: &str,
@@ -155,13 +159,17 @@ pub fn perform(
     old_string: Option<&str>,
     new_string: Option<&str>,
     max_output_bytes: i64,
+    mode: Option<u32>,
+    path_roots: &[String],
+    protected: &[String],
 ) -> Result<Op, String> {
     match operation {
         "read" => read(path, max_output_bytes),
         "write" => {
             let content = content.ok_or("'content' parameter is required for write")?;
-            Ok(write(path, content))
+            Ok(write(path, content, mode))
         }
+        "delete" => delete(path, path_roots, protected),
         "patch" => match (old_string, new_string) {
             (Some(old), Some(new)) => patch(path, old, new),
             _ => Err("'old_string' and 'new_string' are required for patch".to_string()),
@@ -195,6 +203,9 @@ pub async fn run(call: &FileCall) -> ExecResult {
         call.old_string.as_deref(),
         call.new_string.as_deref(),
         call.max_output_bytes,
+        call.mode,
+        &call.path_roots,
+        &call.protected,
     ) {
         Ok(op) => ExecResult::new(op.outcome, op.exit_code, op.stdout, op.stderr, op.truncated, elapsed_ms(started)),
         Err(exc) => ExecResult::new(OUTCOME_FAILED, Some(1), "", exc, false, elapsed_ms(started)),
@@ -306,6 +317,7 @@ async fn run_as_user(run_as: &str, call: &FileCall, path: &str, started: Instant
         "path_roots": call.path_roots,
         "protected": call.protected,
         "max_output_bytes": call.max_output_bytes,
+        "mode": call.mode,
     }));
 
     let done = |outcome: &str, exit_code: Option<i64>, out: String, err: String, trunc: bool| {
@@ -505,8 +517,10 @@ fn mkdir_parents(path: &Path) -> Result<(), (std::io::Error, String)> {
     }
 }
 
-/// Writes content to a file, creating parent directories.
-fn write(path: &str, content: &str) -> Op {
+/// Writes content to a file, creating parent directories. With `mode`, a
+/// new file is created with that mode (never wider first, so a secret is
+/// not briefly readable under the umask) and an existing one is set to it.
+fn write(path: &str, content: &str, mode: Option<u32>) -> Op {
     let parent = Path::new(path).parent().unwrap_or(Path::new("/"));
     if let Err((err, dir)) = mkdir_parents(parent) {
         if is_permission(&err) {
@@ -514,7 +528,11 @@ fn write(path: &str, content: &str) -> Op {
         }
         return failed(format!("Write error: {}", os_error(&err, &dir)));
     }
-    if let Err(err) = std::fs::write(path, content.as_bytes()) {
+    let written = match mode {
+        None => std::fs::write(path, content.as_bytes()),
+        Some(mode) => write_with_mode(path, content, mode),
+    };
+    if let Err(err) = written {
         if is_permission(&err) {
             return failed(format!("Permission denied: {path}"));
         }
@@ -522,6 +540,65 @@ fn write(path: &str, content: &str) -> Op {
     }
     // `len(content)` -- characters, not bytes.
     ok(format!("Written {} bytes to {path}", content.chars().count()), false)
+}
+
+fn write_with_mode(path: &str, content: &str, mode: u32) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(mode).open(path)?;
+    // An existing file keeps its mode on open: narrow it before the content lands.
+    file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    file.write_all(content.as_bytes())
+}
+
+/// Deletes a file, or a directory with everything under it (1.25.0).
+/// Never a path root itself; a symlink inside the tree is removed, not
+/// followed. Nothing there is success: deleting is idempotent.
+fn delete(path: &str, path_roots: &[String], protected: &[String]) -> Result<Op, String> {
+    for root in path_roots {
+        if realpath_checked(root)? == path {
+            return Ok(failed(format!("Refusing to delete the path root {path}")));
+        }
+    }
+    // `validate_path` checked the path's own segments; a directory must not
+    // take a protected resource below it down with it either.
+    if let Some(name) = protected_below(Path::new(path), protected) {
+        return Ok(failed(format!("Refusing to delete {path}: it contains protected resource {}", repr_str(&name))));
+    }
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if errno(&e) == Some(libc::ENOENT) => return Ok(ok(format!("Nothing to delete at {path}"), false)),
+        Err(e) if is_permission(&e) => return Ok(failed(format!("Permission denied: {path}"))),
+        Err(e) => return Err(os_error(&e, path)),
+    };
+    let removed = if meta.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
+    match removed {
+        Ok(()) => Ok(ok(format!("Deleted {path}"), false)),
+        Err(e) if is_permission(&e) => Ok(failed(format!("Permission denied: {path}"))),
+        Err(e) => Ok(failed(format!("Delete error: {}", os_error(&e, path)))),
+    }
+}
+
+/// The first protected name anywhere below `dir`, symlinks not followed
+/// (`remove_dir_all` does not follow them either). An unreadable entry
+/// counts as protected: what cannot be checked is not deleted.
+fn protected_below(dir: &Path, protected: &[String]) -> Option<String> {
+    let entries = match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.is_dir() => std::fs::read_dir(dir),
+        _ => return None,
+    };
+    let Ok(entries) = entries else { return Some(dir.display().to_string()) };
+    for entry in entries {
+        let Ok(entry) = entry else { return Some(dir.display().to_string()) };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if protected.contains(&name) {
+            return Some(name);
+        }
+        if let Some(found) = protected_below(&entry.path(), protected) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Python's `UnicodeDecodeError` text for strict UTF-8 decoding.
