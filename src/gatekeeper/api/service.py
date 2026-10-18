@@ -263,6 +263,41 @@ def _tool_call_stats(
     return stats
 
 
+def _per_tool_call_stats(
+    records: list[dict[str, Any]], tools_by_kit: dict[str, set[str]],
+) -> dict[str, dict[str, Any]]:
+    """Counts calls per tool ID, each tagged with its toolkit.
+
+    ``{tool: {toolkit, ok, denied, failed, total}}``, the Stats page's
+    "Top tools" card. A tool in no known toolkit is tagged ``_unknown``,
+    as in `_tool_call_stats`.
+    """
+    tool_to_kit: dict[str, str] = {}
+    for kit, tool_ids in tools_by_kit.items():
+        for tid in tool_ids:
+            tool_to_kit[tid] = kit
+    stats: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if record.get("kind") != "call":
+            continue
+        tool_id = record.get("tool") or ""
+        if not tool_id:
+            continue
+        bucket = stats.setdefault(
+            tool_id,
+            {"toolkit": tool_to_kit.get(tool_id, "_unknown"), "ok": 0, "denied": 0, "failed": 0, "total": 0},
+        )
+        outcome = record.get("outcome") or "unknown"
+        if outcome == "ok":
+            bucket["ok"] += 1
+        elif outcome == "denied":
+            bucket["denied"] += 1
+        elif outcome == "failed":
+            bucket["failed"] += 1
+        bucket["total"] += 1
+    return stats
+
+
 def _pair_call_stats(
     records: list[dict[str, Any]], tools_by_kit: dict[str, set[str]],
 ) -> dict[tuple[str, str], dict[str, int]]:
@@ -1144,8 +1179,8 @@ _STATS_MAX_RECORDS = 1_000_000
 
 def stats_view(service: Any, window: str) -> dict[str, Any]:
     """The Stats page as data: tiles, an activity series (hourly for 24 h,
-    daily otherwise), and per-toolkit, per-identity, latency and admin
-    tables. Best-effort over the tail of the current audit log."""
+    daily otherwise), and per-toolkit, per-identity, per-tool, latency and
+    admin tables. Best-effort over the tail of the current audit log."""
     spec = next((w for w in _STATS_WINDOWS if w[0] == window), _STATS_WINDOWS[0])
     key, label, span = spec
     # The window itself, not the newest N records: "Last 24 hours" counted
@@ -1164,6 +1199,7 @@ def stats_view(service: Any, window: str) -> dict[str, Any]:
     totals = _outcome_totals(records)
     idents = _call_stats(records)
     kits = _tool_call_stats(records, tools_by_kit)
+    per_tool = _per_tool_call_stats(records, tools_by_kit)
     admin = _admin_action_stats(records)
     durations = _duration_stats(records, tools_by_kit)
     if key == "24h":
@@ -1199,6 +1235,10 @@ def stats_view(service: Any, window: str) -> dict[str, Any]:
         "series": series,
         "toolkits": _rows(kits),
         "identities": _rows(idents),
+        "tools": [
+            {"name": name, "toolkit": v["toolkit"], **{k: v[k] for k in ("total", "ok", "denied", "failed")}}
+            for name, v in sorted(per_tool.items(), key=lambda kv: (-kv[1]["total"], kv[0]))
+        ],
         "admin": [{"action": a, "count": n} for a, n in admin.items()],
         "latency": [
             {"toolkit": kit, "avg_ms": int(v["avg"]), "p95_ms": int(v["p95"]), "count": int(v["count"])}

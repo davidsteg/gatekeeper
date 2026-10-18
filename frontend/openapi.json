@@ -1479,6 +1479,13 @@
             "title": "Toolkits",
             "type": "array"
           },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/StatsToolRow"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
           "totals": {
             "$ref": "#/components/schemas/StatsTotals"
           },
@@ -1511,6 +1518,7 @@
           "series",
           "toolkits",
           "identities",
+          "tools",
           "admin",
           "latency"
         ],
@@ -1571,6 +1579,44 @@
           "name"
         ],
         "title": "StatsRow",
+        "type": "object"
+      },
+      "StatsToolRow": {
+        "properties": {
+          "denied": {
+            "default": 0,
+            "title": "Denied",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "default": 0,
+            "title": "Ok",
+            "type": "integer"
+          },
+          "toolkit": {
+            "title": "Toolkit",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "toolkit"
+        ],
+        "title": "StatsToolRow",
         "type": "object"
       },
       "StatsTotals": {

@@ -486,6 +486,13 @@ class StatsRow(CallCounts):
     name: str
 
 
+class StatsToolRow(CallCounts):
+    #: Tool ID, as the audit log recorded it.
+    name: str
+    #: The tool's toolkit in the current catalog; `_unknown` if none.
+    toolkit: str
+
+
 class AdminCount(_Model):
     action: str
     count: int
@@ -511,6 +518,9 @@ class Stats(_Model):
     series: list[StatsPoint]
     toolkits: list[StatsRow]
     identities: list[StatsRow]
+    #: Every tool called in the window, most calls first; the console
+    #: filters it by toolkit.
+    tools: list[StatsToolRow]
     admin: list[AdminCount]
     latency: list[Latency]
 
