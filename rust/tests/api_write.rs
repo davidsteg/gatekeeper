@@ -371,6 +371,59 @@ async fn pending_items_carry_a_review() {
     assert_eq!(review("tool_delete")["tools"][0]["state"], "enabled");
 }
 
+/// A reviewer approves from the headline, so it names the fields a tool
+/// update changes, the scopes a grant adds, and where a credential probe
+/// sends the secret.
+#[tokio::test]
+async fn review_headlines_show_what_an_approval_changes() {
+    let env = make_env();
+    let store = &env.env.store;
+    let pending = &env.env.pending;
+    let prev_spec = Value::Object(store.service.catalog().raw_of("demo.show").unwrap().clone());
+    let mut spec = prev_spec.clone();
+    spec["argv"] = json!(["-c", "print(2)"]);
+    pending
+        .propose(
+            "tool_update",
+            "hermes",
+            app_env::obj(json!({"spec": spec, "replaces": "demo.show", "prev_spec": prev_spec})),
+            &store.tool_revision("demo.show"),
+        )
+        .unwrap();
+    pending
+        .propose(
+            "grant_set",
+            "hermes",
+            app_env::obj(json!({"identity_id": "bot", "tools": ["demo.show"], "prev_tools": ["demo.show"],
+                                "scopes": ["*"], "prev_scopes": ["stack:*"]})),
+            &store.identity_revision("bot"),
+        )
+        .unwrap();
+    pending
+        .propose(
+            "cred_propose",
+            "hermes",
+            app_env::obj(json!({"name": "nas", "kind": "bearer", "probe_url": "https://probe.example/x"})),
+            "",
+        )
+        .unwrap();
+    let mut c = env.client();
+    c.login("eye").await;
+    let items = c.get(&api("/requests/pending")).await.json();
+    let headline = |action: &str| {
+        items.as_array().unwrap().iter().find(|i| i["action"] == action).unwrap()["review"]["headline"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(headline("tool_update").ends_with(", changes argv"), "{}", headline("tool_update"));
+    assert_eq!(headline("grant_set"), "identity bot: +0 -0, 1 unchanged, scopes added: *, scopes removed: stack:*");
+    assert_eq!(
+        headline("cred_propose"),
+        "credential nas: kind bearer (no value: typed by a human on approval, then sent to https://probe.example/x to test it)"
+    );
+}
+
 #[tokio::test]
 async fn approve_and_reject_a_proposal() {
     let env = make_env();

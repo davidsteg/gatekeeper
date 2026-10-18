@@ -12,6 +12,20 @@ Three fixes to the console found in a review of `/app`: risky approvals ask firs
 
 - The version in the desktop sidebar was cut off at the sidebar's edge. It now sits under the signed-in identity.
 
+## 1.17.1
+
+Security fixes for the admin agent's path on `/admin/mcp`. They matter if an admin-role agent is ever prompt-injected or compromised: it could change what a granted tool runs without a human seeing it, and a human could approve a credential probe without seeing where the secret goes.
+
+### Fixed
+
+- **`admin.tool_enable` and `admin.tool_update` no longer apply a change just because it says `category: read`.** The caller writes that label, so an admin agent could rewrite a granted tool (a new argv, a `file` write, an `http` DELETE), call it `read`, and it applied with no review. Now a change applies unreviewed only when the tool is read-only by what it runs: a `file` read or list, an `http` GET or HEAD to the toolkit's own base URL, a `kuma` tool, or an `artifact` info, list or read, with no per-tool `run_as`. For an update, the tool as it is now must pass the same test, so a write tool cannot be relabelled into a read one unreviewed. Everything else, including every `local`, `docker` and `ssh` tool, goes to `/app/requests` for a human. An admin agent that used to enable its own `read` argv tools will now see them wait for approval.
+- **The review line for a credential proposal names the probe URL.** `admin.cred_propose` and `admin.cred_update` accept a `probe_url`, and right after approval gatekeeper sends the secret there to test it. The review line did not show it for a new credential, so one click could send a new secret to an address the agent picked. It now reads "then sent to <url> to test it", and a changed probe URL on an update says the stored secret is sent there.
+- **The review line for a tool update names the fields it changes,** such as `changes argv, binary`, instead of only its category. **A grant change names the scopes it adds and removes;** widening an agent's scopes to `*` used to read as "+0 -0". Both are snapshotted when the proposal is filed, so an archived request still shows what it changed.
+
+### Changed
+
+- `docs/DEPLOYMENT.md` no longer claims a per-tool `run_as` is Tier 1 and can only narrow a toolkit's authority. It lives in `tools.yaml` (Tier 2) and can widen it.
+
 ## 1.17.0
 
 The Python implementation is gone from the repository. The Rust crate in `rust/`, which the image has run since 1.13.0, is now the only one. Nothing changes for an operator: the image, its CLI, endpoints, environment variables, configuration files and their formats are the same as in the previous release.
