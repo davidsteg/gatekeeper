@@ -81,6 +81,22 @@ async fn handle(
             .body(Full::new(Bytes::from(enc.finish().unwrap())))
             .unwrap());
     }
+    if path.starts_with("/api/bomb") || path.starts_with("/api/double") {
+        // 64 MiB of zeros: about 64 KB of gzip.
+        let gzip = |data: &[u8]| {
+            let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+            enc.write_all(data).unwrap();
+            enc.finish().unwrap()
+        };
+        let once = gzip(&vec![0u8; 64 << 20]);
+        let (body, coding) = if path.starts_with("/api/double") { (gzip(&once), "gzip, gzip") } else { (once, "gzip") };
+        return Ok(hyper::Response::builder()
+            .status(200)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Encoding", coding)
+            .body(Full::new(Bytes::from(body)))
+            .unwrap());
+    }
     if path.starts_with("/api/big") {
         let items: Vec<Value> = (0..1000).map(Value::from).collect();
         return Ok(json_response(200, &Value::Array(items)));
@@ -801,4 +817,58 @@ fn py_json_errors_match_cpython() {
         };
         assert_eq!(&got, expected, "input {input:?}");
     }
+}
+
+#[tokio::test]
+async fn compressed_body_inflates_only_up_to_the_cap() {
+    let e = env();
+    let (port, _) = http_server().await;
+    let tier1 = demo_tier1(e.dir.path(), port, false);
+    let tk = tier1.toolkit("demo_http").unwrap();
+    let r = run("GET", "/api/bomb", &IndexMap::new(), None, None, tk, None, 30.0, 1000, true, None).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
+    assert!(r.truncated);
+    assert_eq!(r.stdout.len(), 1000);
+}
+
+#[tokio::test]
+async fn stacked_content_encodings_are_refused() {
+    let e = env();
+    let (port, _) = http_server().await;
+    let tier1 = demo_tier1(e.dir.path(), port, false);
+    let tk = tier1.toolkit("demo_http").unwrap();
+    let r = run("GET", "/api/double", &IndexMap::new(), None, None, tk, None, 30.0, 1000, true, None).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_FAILED);
+    assert!(r.stderr.contains("more than one Content-Encoding"), "{}", r.stderr);
+}
+
+#[tokio::test]
+async fn timeout_covers_a_trickling_body() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    // Headers at once, then one chunk a second: every read is well inside
+    // the per-read limit, the whole response is not inside the tool's.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else { return };
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf).await;
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n")
+            .await;
+        for _ in 0..30 {
+            if stream.write_all(b"1\r\nx\r\n").await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        let _ = stream.write_all(b"0\r\n\r\n").await;
+    });
+    let e = env();
+    let tier1 = demo_tier1(e.dir.path(), port, false);
+    let tk = tier1.toolkit("demo_http").unwrap();
+    let started = std::time::Instant::now();
+    let r = run("GET", "/api/trickle", &IndexMap::new(), None, None, tk, None, 2.0, 65536, true, None).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_FAILED, "{}", r.stdout);
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
 }

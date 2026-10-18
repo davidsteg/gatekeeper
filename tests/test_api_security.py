@@ -281,6 +281,17 @@ async def test_a_role_change_or_rename_ends_that_identitys_sessions(env, change)
         assert (await eye.get(f"{API}/session")).status_code == 401
 
 
+async def test_a_demoted_admin_loses_the_admin_session(env):
+    await _edit_eye(env, {"role": "admin"})
+    async with client(env["app"]) as eye:
+        await login(eye, "eye")
+        assert (await eye.get(f"{API}/session")).json()["role"] == "admin"
+        # Still a console role, so the edit itself keeps the session; the
+        # role it carries no longer matches, and that ends it.
+        await _edit_eye(env, {"role": "viewer"})
+        assert (await eye.get(f"{API}/session")).status_code == 401
+
+
 @pytest.mark.parametrize("action", ["rotate", "delete"])
 async def test_rotating_or_deleting_ends_that_identitys_sessions(env, action):
     async with client(env["app"]) as eye, client(env["app"]) as admin:

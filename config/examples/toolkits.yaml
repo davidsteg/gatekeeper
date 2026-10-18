@@ -267,10 +267,12 @@ toolkits:
       - drive share
       - drive delete
     credential: google
-    # drive.upload / drive.download paths are sandboxed here -- an agent
-    # can only move files between Drive and this directory, never
-    # exfiltrate arbitrary gatekeeper files to Drive. Lives under
-    # /etc/gatekeeper (the existing config mount, writable).
+    # The directory drive.upload / drive.download are meant to use. The
+    # executor does not enforce it by itself: a tool that moves files must
+    # take its local path as `type: path` with `must_resolve_under:` this
+    # directory (download's `--output` as well), or an agent can upload any
+    # file gatekeeper can read. Lives under /etc/gatekeeper (the existing
+    # config mount, writable).
     path_roots:
       - /etc/gatekeeper/google-transfer
     max_timeout_seconds: 60

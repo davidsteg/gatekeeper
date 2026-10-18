@@ -1,3 +1,23 @@
+## 1.14.2
+
+Security fixes from an audit of the Rust build. The first two were reachable from the network without a token; the rest need a token, a console session, or a file or repository an agent can write. None of them got anyone past authentication.
+
+### Fixed
+
+- **The console API no longer reads a request body of any size.** `/api/v1` is reachable before sign-in, and its body was read whole into memory: one 1.5 GB request took the process to 7 GB. Bodies over 4 MiB are now refused with 413 before any route runs, the same ceiling the MCP endpoints already had.
+- **A request with a bad token can no longer flood the audit log.** Each one wrote its full request path into the `auth_failure` record, twice, so a few thousand requests with 60 KB paths rotated all earlier history out of the log. The path is now cut at 256 characters. An agent could do the same through `tools/call` with a megabyte-long tool name, which also added a metrics series per name forever and could forge lines in `/metrics`; unknown names are now cut at 200 characters in the audit record and counted under one `<unknown>` series, and metric labels are escaped.
+- **A demoted admin's console session no longer keeps admin rights.** A session kept the role it signed in with until it expired, so an admin demoted to viewer (by an edit, an approved `admin.role_set` or a reload) could still write, including creating a new admin. Every request now checks the session's role against the identity as it is now, and ends the session if it changed or the identity is gone.
+
+- **`git` push: no file contents in errors, and only the configured repository.** A worker that can write the checkout could symlink `.git/objects/info/alternates` or `.git/packed-refs` to any file gatekeeper can read, such as `credentials.yaml` or the credential key file, and git quoted its lines in the error the tool returned. A `.git` file or symlink made the push take a branch from a different repository. Now a failure passes on only the lines git received from the remote or wrote about reaching it, and the checkout is checked before git runs: `.git` must be a real directory, the parts git reads must not be symlinks, and a worker-side `alternates` or `commondir` is refused. A linked worktree or submodule checkout is therefore refused too; mount the main checkout.
+- **`file` executor: a path can no longer escape its root through many symlink hops.** Path resolution stopped following links after 40 hops and treated the rest of the path as plain directories, so a path that went through a symlink pointing outside the root 40 times and then once more was accepted, and the file outside was read or written. More than 40 links in one path is now refused. `must_resolve_under` uses the same resolution and now refuses such a path too.
+- **Child processes no longer inherit the credential master key.** A `local` or `docker` tool without its own environment got gatekeeper's whole environment, including `GATEKEEPER_CREDENTIAL_KEY` and `GATEKEEPER_NOTIFY_SECRET`, so a binary that prints its environment returned the key. Both are now removed from every inherited environment.
+- **`drive download` without `--output` writes only into the working directory.** The file name came from Drive, where a name may contain `/`, so a shared file named `/etc/gatekeeper/toolkits.yaml` or `../x` was written to that path. Only the last component of the name is used now.
+- **`http` responses are bounded in memory and time.** A compressed body was fully inflated before the size cap applied, so under 1 KB of doubly gzipped data took over 500 MB of memory. Now it inflates only up to the cap, and a response with more than one `Content-Encoding` is refused. The tool's `timeout_seconds` now covers reading the body as well, so a target that trickles bytes can no longer hold a call, and its scope's lock, indefinitely.
+
+### Changed
+
+- The example `drive` toolkit's comment no longer claims `path_roots` sandboxes Drive transfers by itself. A tool that moves files has to take its local path as `type: path` with `must_resolve_under`.
+
 ## 1.14.1
 
 The image is built for `linux/amd64` only. There is no `arm64` image from this version on.

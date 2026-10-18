@@ -87,9 +87,22 @@ pub fn dirname(path: &str) -> String {
     }
 }
 
+/// The most symlinks [`realpath`] follows for one path, the kernel's own
+/// `MAXSYMLINKS`.
+const MAX_SYMLINK_HOPS: usize = 40;
+
 /// `os.path.realpath(path)` (non-strict): symlinks are resolved as far as
 /// the path exists; the missing remainder is appended lexically.
-pub fn realpath(path: &str) -> String {
+///
+/// PORT NOTE: more than [`MAX_SYMLINK_HOPS`] links in one path is an error
+/// here, where Python keeps resolving (or, on a true loop, returns the rest
+/// unresolved). An earlier version of this port stopped following links
+/// after the budget and treated every later one as a plain directory, so
+/// `<root>/esc/../..<root>` repeated 40 times and then `/esc/secret` came
+/// back as `<root>/esc/secret`: accepted by every root check, and opened
+/// by the kernel through `esc`, wherever that pointed. A caller checking
+/// containment must treat the error as "outside".
+pub fn realpath(path: &str) -> Result<String, String> {
     let abs = if path.starts_with('/') {
         path.to_string()
     } else {
@@ -115,10 +128,8 @@ pub fn realpath(path: &str) -> String {
         match std::fs::symlink_metadata(&candidate) {
             Ok(meta) if meta.file_type().is_symlink() => {
                 hops += 1;
-                if hops > 40 {
-                    // A loop: Python returns the path as-is from here on.
-                    resolved = candidate;
-                    continue;
+                if hops > MAX_SYMLINK_HOPS {
+                    return Err(format!("Too many levels of symbolic links: {path}"));
                 }
                 match std::fs::read_link(&candidate) {
                     Ok(target) => {
@@ -137,7 +148,7 @@ pub fn realpath(path: &str) -> String {
             _ => resolved = candidate,
         }
     }
-    resolved
+    Ok(resolved)
 }
 
 /// `os.path.commonpath` for absolute paths; `None` when they mix absolute
@@ -197,8 +208,30 @@ mod tests {
         let base = base.to_str().unwrap();
         std::fs::create_dir(format!("{base}/real")).unwrap();
         std::os::unix::fs::symlink(format!("{base}/real"), format!("{base}/link")).unwrap();
-        assert_eq!(realpath(&format!("{base}/link/new/file")), format!("{base}/real/new/file"));
-        assert_eq!(realpath(&format!("{base}/link/../x")), format!("{base}/x"));
+        assert_eq!(realpath(&format!("{base}/link/new/file")).unwrap(), format!("{base}/real/new/file"));
+        assert_eq!(realpath(&format!("{base}/link/../x")).unwrap(), format!("{base}/x"));
+    }
+
+    #[test]
+    fn realpath_refuses_to_stop_following_links() {
+        // `esc` leaves the root; burning the hop budget on it must not make
+        // the final `esc` read as a plain directory under the root.
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let base = base.to_str().unwrap();
+        std::fs::create_dir_all(format!("{base}/root")).unwrap();
+        std::fs::create_dir_all(format!("{base}/outside")).unwrap();
+        std::os::unix::fs::symlink(format!("{base}/outside"), format!("{base}/root/esc")).unwrap();
+        // From `outside` back up to `/`, then down into the root again.
+        let hop = format!("/esc{}{base}/root", "/..".repeat(base.matches('/').count() + 1));
+        let evil = format!("{base}/root{}/esc/secret", hop.repeat(MAX_SYMLINK_HOPS));
+        assert!(realpath(&evil).is_err(), "{:?}", realpath(&evil));
+        // Within the budget it still resolves through the link.
+        let fine = format!("{base}/root{}/esc/secret", hop.repeat(3));
+        assert_eq!(realpath(&fine).unwrap(), format!("{base}/outside/secret"));
+        // A loop is an error too, not a lexical pass.
+        std::os::unix::fs::symlink(format!("{base}/root/loop"), format!("{base}/root/loop")).unwrap();
+        assert!(realpath(&format!("{base}/root/loop/x")).is_err());
     }
 
     #[test]

@@ -43,6 +43,7 @@ and of the encoded header before the audit redactor sees it.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 import os
 import re
@@ -70,6 +71,21 @@ _MAX_EXCLUDED_HEADS = 256
 
 #: How much of git's own stderr a failure carries.
 _MAX_ERROR_CHARS = 2000
+
+#: The only lines of git's stderr a failure passes on to the caller: what
+#: the remote said (`remote: ...`) and git's own words about reaching it.
+#: Everything else stays out, because git quotes local files in its errors
+#: -- an `objects/info/alternates` or `packed-refs` the worker pointed at
+#: `/etc/gatekeeper/credentials.yaml` comes back one line per error, and
+#: the caller is the worker.
+_PASSED_STDERR_PREFIXES = (
+    "remote: ",
+    "fatal: unable to access ",
+    "fatal: Authentication failed",
+    "fatal: could not read Username",
+    "error: failed to push some refs",
+    "error: RPC failed",
+)
 
 #: One path component of a branch under the prefix: no leading '.' or
 #: '-', none of git's ref metacharacters. Stricter than
@@ -140,17 +156,48 @@ def _auth_header(credential: ResolvedCredential) -> tuple[str, list[str]]:
     return f"Authorization: Basic {encoded}", secrets
 
 
-def _object_dir(path: str) -> str | None:
-    """The worker repository's object store, for use as an alternate.
+def _passed_stderr(stderr: str) -> str:
+    """`stderr` with only the `_PASSED_STDERR_PREFIXES` lines left."""
+    return "\n".join(line for line in stderr.splitlines()
+                     if line.startswith(_PASSED_STDERR_PREFIXES))
 
-    A checkout (`<path>/.git/objects`) or a bare repository
-    (`<path>/objects`). A `.git` *file* (a linked worktree, a submodule)
-    gets none: the fetch below still works, it just copies the objects.
+
+def _checked_object_dir(repo: GitRepo) -> str:
+    """Checks the worker repository's layout before anything reads it, and
+    returns its object store (for use as an alternate).
+
+    The worker writes this directory, and git follows what it finds there:
+    a `.git` *file* (`gitdir: /some/other/repo/.git`) or a symlinked `.git`
+    makes the fetch read a different repository, and a worker-side
+    `objects/info/alternates` makes every git step here open whatever paths
+    it lists. So `.git` must be a real directory (or the path itself a bare
+    repository), the parts git reads must not be symlinks, and the worker's
+    object store must not borrow from anywhere else. A linked worktree or a
+    submodule checkout, whose `.git` is a file, is refused: push from the
+    main checkout.
     """
-    for candidate in (os.path.join(path, ".git", "objects"), os.path.join(path, "objects")):
-        if os.path.isdir(candidate):
-            return candidate
-    return None
+    def refuse(what: str) -> Denied:
+        return Denied(DenialReason.EXECUTOR_UNAVAILABLE,
+                      f"Repository {repo.name!r} cannot be pushed from: {what}.")
+
+    dotgit = os.path.join(repo.path, ".git")
+    if os.path.lexists(dotgit):
+        if os.path.islink(dotgit) or not os.path.isdir(dotgit):
+            raise refuse("its .git is not a directory (a symlink, or a worktree or submodule file)")
+        gitdir = dotgit
+    else:
+        gitdir = repo.path
+    for part in ("objects", "refs", "HEAD", "packed-refs", "config", "commondir",
+                 "objects/info", "objects/pack"):
+        if os.path.islink(os.path.join(gitdir, part)):
+            raise refuse(f"{part} is a symlink")
+    for part in ("commondir", "objects/info/alternates", "objects/info/http-alternates"):
+        if os.path.lexists(os.path.join(gitdir, part)):
+            raise refuse(f"it has {part}")
+    objects = os.path.join(gitdir, "objects")
+    if os.path.islink(objects) or not os.path.isdir(objects):
+        raise refuse("it is not a git repository")
+    return objects
 
 
 def _config_env(entries: list[tuple[str, str]]) -> dict[str, str]:
@@ -243,8 +290,11 @@ async def run(
     except _Failed as failure:
         timed_out = failure.result is not None and failure.result.exit_code is None
         message = str(failure)
-        if failure.result is not None and failure.result.stderr.strip():
-            message += "\n" + failure.result.stderr.strip()[-_MAX_ERROR_CHARS:]
+        # Only the lines git got from the remote or wrote about reaching
+        # it; see _PASSED_STDERR_PREFIXES.
+        passed = _passed_stderr(failure.result.stderr) if failure.result is not None else ""
+        if passed.strip():
+            message += "\n" + passed.strip()[-_MAX_ERROR_CHARS:]
         return Result(
             outcome=failure.result.outcome if timed_out and failure.result else OUTCOME_FAILED,
             exit_code=failure.result.exit_code if failure.result else None,
@@ -325,16 +375,24 @@ async def _push(
             env={**base_env, **_config_env(config)},
         )
         if result.outcome != OUTCOME_OK:
+            # Only the steps that carry the token talk to the remote. A
+            # local step's stderr is about local files, so none of it is
+            # kept -- not even as `remote: ` lines, which is how
+            # upload-pack's own errors from the worker's side arrive --
+            # except the one line the fetch's caller looks for.
+            if not any(key.endswith(".extraHeader") for key, _ in config):
+                result = dataclasses.replace(result, stderr="\n".join(
+                    line for line in result.stderr.splitlines()
+                    if line.startswith("fatal: couldn't find remote ref ")))
             raise _Failed(f"git {what} failed.", result)
         return result
 
     gd = f"--git-dir={bare}"
+    objects = _checked_object_dir(repo)
     await _git(["init", "--bare", "--quiet", "--template=", bare], hardening, what="init")
-    objects = _object_dir(repo.path)
-    if objects is not None:
-        os.makedirs(os.path.join(bare, "objects", "info"), exist_ok=True)
-        with open(os.path.join(bare, "objects", "info", "alternates"), "w", encoding="utf-8") as fh:
-            fh.write(os.path.abspath(objects) + "\n")
+    os.makedirs(os.path.join(bare, "objects", "info"), exist_ok=True)
+    with open(os.path.join(bare, "objects", "info", "alternates"), "w", encoding="utf-8") as fh:
+        fh.write(os.path.abspath(objects) + "\n")
 
     try:
         await _git(

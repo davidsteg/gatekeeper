@@ -476,3 +476,59 @@ async def test_service_call_is_audited_without_the_token(tmp_path, worker, remot
     calls = [r for r in calls if r.get("kind") == "call"]
     assert [r["tool"] for r in calls][-2:] == ["gkrepo.push", "gkrepo.push"]
     assert TOKEN not in log and ENCODED not in log
+
+
+async def test_worker_layout_tricks_are_refused_and_never_echo_files(tmp_path, worker, remote,
+                                                                     credentials):
+    """A worker that can write the checkout plants these to make git quote a
+    file in its errors, or read a different repository altogether."""
+    secret = tmp_path / "credential-key"
+    secret.write_text("FERNETKEY_abcdefghijklmnop=\nsecond-line-secret\n")
+    toolkit = _toolkit(tmp_path, worker, remote)
+    _git("branch", "feat/x", cwd=worker)
+    prefix = "Repository 'proj' cannot be pushed from: "
+
+    alternates = worker / ".git" / "objects" / "info" / "alternates"
+    alternates.symlink_to(secret)
+    result = await _push(toolkit, credentials, "feat/x")
+    assert result.outcome == OUTCOME_FAILED
+    assert result.stderr == prefix + "it has objects/info/alternates."
+    alternates.unlink()
+
+    packed = worker / ".git" / "packed-refs"
+    packed.symlink_to(secret)
+    result = await _push(toolkit, credentials, "feat/x")
+    assert result.stderr == prefix + "packed-refs is a symlink."
+    packed.unlink()
+
+    other = tmp_path / "other"
+    other.mkdir()
+    _git("init", "--quiet", "-b", "main", cwd=other)
+    _commit(other, "secret.txt")
+    _git("branch", "feat/steal", cwd=other)
+    os.rename(worker / ".git", tmp_path / "orig.git")
+    (worker / ".git").write_text(f"gitdir: {other / '.git'}\n")
+    result = await _push(toolkit, credentials, "feat/steal")
+    assert result.stderr.startswith(prefix + "its .git is not a directory")
+    (worker / ".git").unlink()
+    (worker / ".git").symlink_to(other / ".git")
+    result = await _push(toolkit, credentials, "feat/steal")
+    assert result.stderr.startswith(prefix + "its .git is not a directory")
+    (worker / ".git").unlink()
+    os.rename(tmp_path / "orig.git", worker / ".git")
+
+    (worker / ".git" / "refs" / "heads" / "feat" / "x").write_text("1" * 40 + "\n")
+    result = await _push(toolkit, credentials, "feat/x")
+    assert result.outcome == OUTCOME_FAILED
+    assert result.stderr == "git reading the branch from the repository failed."
+    assert remote.requests == []
+
+
+def test_only_remote_lines_of_stderr_pass():
+    stderr = ("error: object directory /x/FERNETKEY does not exist; check .git/objects/info/alternates\n"
+              "remote: Permission to o/r.git denied.\n"
+              "fatal: unexpected line in ./packed-refs: SECRET\n"
+              "fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403")
+    assert execute_git._passed_stderr(stderr) == (
+        "remote: Permission to o/r.git denied.\n"
+        "fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403")

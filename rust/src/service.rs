@@ -89,6 +89,17 @@ impl std::fmt::Display for CallError {
 impl std::error::Error for CallError {}
 
 /// Constructor arguments (Python's keyword arguments).
+/// The longest unknown tool name kept as sent (audit record, denial).
+const MAX_UNKNOWN_TOOL_CHARS: usize = 200;
+
+/// The metrics series every unknown tool name is counted under.
+pub const UNKNOWN_TOOL_METRIC: &str = "<unknown>";
+
+/// A Prometheus label value, escaped (`\\`, `\"`, `\n`).
+fn label(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+}
+
 pub struct ServiceOptions {
     pub tier1: Tier1,
     pub catalog: Catalog,
@@ -470,6 +481,17 @@ impl Service {
         let tier1 = self.tier1();
         let catalog = self.catalog();
 
+        // An unknown name is whatever the caller sent, and it goes into the
+        // audit log and the denial: cut to a length no tool ID comes near,
+        // so a megabyte-long name cannot rotate the audit history away.
+        let clipped: String;
+        let tool_id = if catalog.get(tool_id).is_some() || tool_id.chars().count() <= MAX_UNKNOWN_TOOL_CHARS {
+            tool_id
+        } else {
+            clipped = format!("{}...", tool_id.chars().take(MAX_UNKNOWN_TOOL_CHARS).collect::<String>());
+            &clipped
+        };
+
         let mut tool: Option<ToolDef> = None;
         let mut scopes: Vec<String> = Vec::new();
         let mut values = validate::Values::new();
@@ -554,7 +576,10 @@ impl Service {
         let (mut toolkit, request) = match prepared {
             Ok(p) => p,
             Err(denial) => {
-                self.count(tool_id, &identity.id, "denied");
+                // One series for every name that is not a tool: each
+                // distinct name would otherwise be a counter kept forever.
+                let metric_id = if catalog.get(tool_id).is_some() { tool_id } else { UNKNOWN_TOOL_METRIC };
+                self.count(metric_id, &identity.id, "denied");
                 self.audit_call(CallRecord {
                     identity: identity.id.clone(),
                     tool_id: tool_id.to_string(),
@@ -881,6 +906,7 @@ impl Service {
             "# TYPE gatekeeper_tool_calls_total counter".to_string(),
         ];
         for ((tool_id, identity_id, outcome), count) in self.metrics.lock().iter() {
+            let (tool_id, identity_id, outcome) = (label(tool_id), label(identity_id), label(outcome));
             lines.push(format!(
                 "gatekeeper_tool_calls_total{{tool=\"{tool_id}\",identity=\"{identity_id}\",outcome=\"{outcome}\"}} {count}"
             ));

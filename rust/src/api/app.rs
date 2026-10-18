@@ -401,7 +401,14 @@ fn decode_path(raw: &str) -> String {
     percent_encoding::percent_decode_str(raw).decode_utf8_lossy().into_owned()
 }
 
-async fn into_api_request(request: Request) -> ApiRequest {
+/// The largest request body the console reads, the same ceiling as the
+/// MCP mounts. PORT NOTE: Python read any size; `/api/v1` is reachable
+/// without a session (login is under it), so an unbounded read let anyone
+/// on the network fill the container's memory with one request.
+pub const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+/// `None` when the body is larger than [`MAX_BODY_BYTES`].
+async fn into_api_request(request: Request) -> Option<ApiRequest> {
     let (parts, body) = request.into_parts();
     let client_info = parts.extensions.get::<RequestClient>().cloned();
     let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_string());
@@ -418,8 +425,19 @@ async fn into_api_request(request: Request) -> ApiRequest {
         .map(str::to_string)
         .or_else(|| parts.uri.authority().map(|a| a.to_string()))
         .unwrap_or_else(|| "localhost".to_string());
-    let body = axum::body::to_bytes(body, usize::MAX).await.unwrap_or_default();
-    ApiRequest {
+    let too_large = parts
+        .headers
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .is_some_and(|n| n > MAX_BODY_BYTES as u64);
+    if too_large {
+        return None;
+    }
+    // A body past the limit (or one that broke off) is answered 413; it
+    // never reached a route either way.
+    let body = axum::body::to_bytes(body, MAX_BODY_BYTES).await.ok()?;
+    Some(ApiRequest {
         method: parts.method.as_str().to_string(),
         path: decode_path(parts.uri.path()),
         query: parts.uri.query().unwrap_or("").to_string(),
@@ -428,7 +446,7 @@ async fn into_api_request(request: Request) -> ApiRequest {
         client,
         scheme,
         host,
-    }
+    })
 }
 
 fn redirect_307(request: &ApiRequest, path: &str) -> Reply {
@@ -442,7 +460,10 @@ fn redirect_307(request: &ApiRequest, path: &str) -> Reply {
 
 /// `/api/v1` and below.
 pub async fn api_entry(State(console): State<Arc<Console>>, request: Request) -> Response {
-    let request = into_api_request(request).await;
+    let Some(request) = into_api_request(request).await else {
+        let reply = Reply::json(413, json!({"error": "Request body too large."}));
+        return to_http(reply, true);
+    };
     let sub = request.path.strip_prefix(API_PREFIX).unwrap_or("").to_string();
     if sub.is_empty() {
         // The outer router's redirect_slashes: `/api/v1` -> `/api/v1/`.
