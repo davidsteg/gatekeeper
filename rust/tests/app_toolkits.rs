@@ -754,13 +754,20 @@ fn path_roots_entries_must_be_absolute_existing_directories_other_than_root() {
     let file = e.sandbox.join("a-file");
     write(&file, "x");
     let missing = e.sandbox.join("nope");
+    let dangling = e.sandbox.join("dangling");
+    std::os::unix::fs::symlink(&missing, &dangling).unwrap();
+    let to_file = e.sandbox.join("to-file");
+    std::os::unix::fs::symlink(&file, &to_file).unwrap();
     for (roots, why) in [
         (json!(["relative/dir"]), "'relative/dir' is not an absolute path."),
         (json!([format!("{scratch}/../..")]), "contains '..'."),
         (json!(["/"]), "'/' is the filesystem root, which would put every path in reach."),
         (json!(["//./"]), "is the filesystem root"),
-        (json!([missing.to_str().unwrap()]), "does not exist in this container."),
-        (json!([file.to_str().unwrap()]), "is not a directory in this container."),
+        (json!([missing.to_str().unwrap()]), "does not exist (ENOENT); checked as the gatekeeper process (uid="),
+        (json!([format!("{}/below", file.to_str().unwrap())]), "a component above it is not a directory (ENOTDIR)"),
+        (json!([file.to_str().unwrap()]), "is not a directory; checked as the gatekeeper process"),
+        (json!([dangling.to_str().unwrap()]), "is a symlink whose target does not exist (ENOENT)"),
+        (json!([to_file.to_str().unwrap()]), "is a symlink to something that is not a directory"),
         (json!([1]), "entry 1 is not a string."),
         (json!("/srv"), "it must be a list of absolute directory paths."),
     ] {
@@ -804,7 +811,7 @@ fn deploy_rechecks_path_roots_against_the_disk_and_tools_as_they_are_now() {
     std::fs::remove_dir(&extra).unwrap();
     let before = toolkits_text(&e);
     let err = e.proposals.deploy(&item.id, "root").unwrap_err();
-    assert!(err.message.contains("does not exist in this container."), "{}", err.message);
+    assert!(err.message.contains("does not exist (ENOENT)"), "{}", err.message);
     assert_eq!(toolkits_text(&e), before);
     assert_eq!(e.proposals.get(&item.id).unwrap().unwrap().status, "pending");
 
@@ -815,6 +822,103 @@ fn deploy_rechecks_path_roots_against_the_disk_and_tools_as_they_are_now() {
     let err = e.proposals.deploy(&item.id, "root").unwrap_err();
     assert!(err.message.contains("'github.blob_from_file'"), "{}", err.message);
     assert_eq!(toolkits_text(&e), before);
+}
+
+#[test]
+fn a_symlink_to_a_directory_is_a_valid_path_root() {
+    let (e, scratch) = env_with_github(false);
+    let link = e.sandbox.join("scratch-link");
+    std::os::unix::fs::symlink(&scratch, &link).unwrap();
+    assert!(propose(&e, "github", json!({"path_roots": [link.to_str().unwrap()]}), "update").is_ok());
+}
+
+#[test]
+fn an_unreachable_path_root_is_named_as_permission_denied() {
+    if gatekeeper::runas::bypasses_file_permissions() != Some(false) {
+        eprintln!("skipped: this process is above file permissions");
+        return;
+    }
+    let (e, _) = env_with_github(false);
+    let closed = e.sandbox.join("closed");
+    std::fs::create_dir_all(closed.join("inside")).unwrap();
+    std::fs::set_permissions(&closed, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+    let inside = closed.join("inside");
+    let err = propose(&e, "github", json!({"path_roots": [inside.to_str().unwrap()]}), "update").unwrap_err();
+    std::fs::set_permissions(&closed, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    assert!(err.message.contains("cannot be reached: permission denied on it or a directory above it (EACCES)"), "{}", err.message);
+    assert!(e.proposals.list(None).unwrap().is_empty());
+}
+
+fn ids() -> String {
+    let (uid, gid) = (gatekeeper::runas::getresuid().1, gatekeeper::runas::getresgid().1);
+    format!("{uid}:{gid}")
+}
+
+/// A file toolkit's roots are checked as its run_as user, in the same
+/// helper its operations run in.
+#[test]
+fn a_run_as_file_toolkit_checks_path_roots_as_its_run_as_user() {
+    gatekeeper::privdrop::set_self_exe(env!("CARGO_BIN_EXE_gatekeeper"));
+    let me = ids();
+    let e = env_with_file_toolkit(json!({"run_as": me}));
+    let sandbox = e.sandbox.to_str().unwrap().to_string();
+    let scratch = e.sandbox.join("scratch");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let item = propose(&e, "files", json!({"path_roots": [sandbox, scratch.to_str().unwrap()]}), "update").unwrap();
+    let missing = e.sandbox.join("nope");
+    let err = propose(&e, "files", json!({"path_roots": [missing.to_str().unwrap()]}), "update").unwrap_err();
+    assert!(
+        err.message.ends_with(&format!(
+            "'{}' does not exist (ENOENT); checked as run_as '{me}', the user this toolkit's file operations run as.",
+            missing.to_str().unwrap()
+        )),
+        "{}",
+        err.message
+    );
+    // Deploy checks again, with the same identity.
+    std::fs::remove_dir(&scratch).unwrap();
+    let err = e.proposals.deploy(&item.id, "root").unwrap_err();
+    assert!(err.message.contains(&format!("(ENOENT); checked as run_as '{me}'")), "{}", err.message);
+    // A run_as proposed together with the roots is the one checked.
+    let err = propose(&e, "files", json!({"path_roots": [missing.to_str().unwrap()], "run_as": null}), "update")
+        .unwrap_err();
+    assert!(err.message.contains("checked as the gatekeeper process"), "{}", err.message);
+}
+
+/// Root here: a directory only root may enter is fine for run_as root and
+/// refused, as EACCES, for run_as nobody -- whatever the server could see.
+#[test]
+fn run_as_decides_who_may_reach_a_path_root() {
+    if gatekeeper::runas::getresuid().1 != 0 {
+        eprintln!("skipped: needs root to become another user");
+        return;
+    }
+    gatekeeper::privdrop::set_self_exe(env!("CARGO_BIN_EXE_gatekeeper"));
+    let e = env_with_file_toolkit(json!({"run_as": "0:0"}));
+    let closed = e.sandbox.join("closed");
+    std::fs::create_dir_all(closed.join("scratch")).unwrap();
+    std::fs::set_permissions(&closed, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let scratch = closed.join("scratch").to_str().unwrap().to_string();
+    let sandbox = e.sandbox.to_str().unwrap().to_string();
+    assert!(propose(&e, "files", json!({"path_roots": [sandbox.clone(), scratch.clone()]}), "update").is_ok());
+    let err = propose(&e, "files", json!({"path_roots": [sandbox, scratch], "run_as": "65534:65534"}), "update")
+        .unwrap_err();
+    assert!(err.message.contains("(EACCES); checked as run_as '65534:65534'"), "{}", err.message);
+}
+
+/// A run_as the helper cannot become is named as such, not as a missing
+/// directory.
+#[test]
+fn a_run_as_the_helper_cannot_become_is_reported_as_that() {
+    if gatekeeper::runas::can_change_user() {
+        eprintln!("skipped: this process may become any user");
+        return;
+    }
+    gatekeeper::privdrop::set_self_exe(env!("CARGO_BIN_EXE_gatekeeper"));
+    let e = env_with_file_toolkit(json!({"run_as": "3001:3001"}));
+    let sandbox = e.sandbox.to_str().unwrap().to_string();
+    let err = propose(&e, "files", json!({"path_roots": [sandbox.clone()]}), "update").unwrap_err();
+    assert!(err.message.contains(&format!("'{sandbox}' could not be checked as run_as '3001:3001': ")), "{}", err.message);
 }
 
 #[test]

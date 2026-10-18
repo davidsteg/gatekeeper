@@ -25,7 +25,10 @@ narrowly-scoped change (`executor`/`binaries`/`denied_args`/`run_as`, an
 `path_roots` since 1.22.0; never `protected_resources`) to an *existing* one,
 A `path_roots` proposal is checked at submit and again at deploy: every
 entry absolute, without `..`, not `/`, and an existing directory in the
-container; no tool on the toolkit may be left with a `must_resolve_under`
+container, checked as whoever will read under it (a `file` toolkit's
+`run_as` user, in the same helper its operations run in, else the
+gatekeeper process; since 1.22.1), with the reason named (ENOENT, EACCES,
+not a directory, a dangling symlink); no tool on the toolkit may be left with a `must_resolve_under`
 outside the new list (the refusal names them); not on an `ssh` toolkit,
 whose roots are on the remote host. The Requests card shows the roots as a
 `+`/`−` diff against the running toolkit.

@@ -376,6 +376,27 @@ fn toolkit_delete_always_pending() {
     assert!(e.pending.list(None).unwrap().is_empty());
 }
 
+#[test]
+fn toolkit_update_and_delete_refuse_an_unknown_toolkit_immediately() {
+    let e = env();
+    let admin = e.admin();
+    let sandbox = e.sandbox.to_str().unwrap().to_string();
+    for (tool, a) in [
+        ("toolkit_update", json!({"name": "__nonexistent__", "updates": {"path_roots": [sandbox]}})),
+        ("toolkit_delete", json!({"name": "__nonexistent__"})),
+    ] {
+        let err = call(&admin, tool, a).unwrap_err();
+        assert!(is_admin_err(&err), "{tool}");
+        assert_eq!(
+            err.message,
+            "No toolkit named '__nonexistent__' in the running configuration (known toolkits: ['demo']). Check \
+             admin.toolkit_list.",
+            "{tool}"
+        );
+    }
+    assert!(e.proposals.list(None).unwrap().is_empty());
+}
+
 // -- cred_propose -------------------------------------------------------------------
 
 #[test]
