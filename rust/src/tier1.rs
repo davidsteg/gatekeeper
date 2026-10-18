@@ -236,6 +236,12 @@ pub struct Toolkit {
     /// Name of a credential in the credential store, never a value. The
     /// *binding* is Tier 1 (FR-10.4).
     pub credential: Option<String>,
+    /// Mask secret-shaped values (`PASSWORD=...`, `"token": "..."`, URL
+    /// passwords, PEM keys) in this toolkit's tool output
+    /// ([`crate::secretmask`]). Defaults to on for the executors that read
+    /// host files and commands (`docker`, `local`, `ssh`, `file`), off for
+    /// the rest; an explicit `true`/`false` wins (1.18.0).
+    pub redact_secrets: bool,
 
     // -- `http` executor only (FR-8.5 to FR-8.15) --
     /// Scheme and host live exclusively here (FR-8.5). May contain a single
@@ -341,6 +347,7 @@ impl Default for Toolkit {
             max_timeout_seconds: DEFAULT_MAX_TIMEOUT_SECONDS,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             credential: None,
+            redact_secrets: false,
             base_url: None,
             allowed_methods: Vec::new(),
             allowed_path_prefixes: Vec::new(),
@@ -1498,6 +1505,11 @@ pub fn parse_tier1(raw: &Value, path: &str) -> ConfigResult<Tier1> {
     })
 }
 
+/// Executors whose output is host files and command output, where whole
+/// config files (and the secrets in them) turn up. `redact_secrets`
+/// defaults to on for these.
+const REDACTING_EXECUTORS: [&str; 4] = ["docker", "local", "ssh", "file"];
+
 /// One `toolkits:` entry -- the body of the Python loop in `load_tier1`.
 fn parse_toolkit(
     name: &str,
@@ -1537,12 +1549,21 @@ fn parse_toolkit(
         }
     };
 
+    let redact_secrets = match spec.get("redact_secrets") {
+        None | Some(Value::Null) => REDACTING_EXECUTORS.contains(&executor),
+        Some(Value::Bool(b)) => *b,
+        Some(_) => {
+            return Err(ConfigError::new(format!("{where_}: 'redact_secrets' must be true or false")))
+        }
+    };
+
     let mut tk = Toolkit {
         name: name.to_string(),
         executor: executor.to_string(),
         max_timeout_seconds: max_timeout,
         max_output_bytes: max_output,
         credential,
+        redact_secrets,
         ..Toolkit::default()
     };
 
