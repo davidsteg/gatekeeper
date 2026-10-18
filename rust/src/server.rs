@@ -397,6 +397,9 @@ pub struct AuthState {
     pub ui_enabled: bool,
 }
 
+/// The longest request path an `auth_failure` record keeps as sent.
+const MAX_LOGGED_PATH_CHARS: usize = 256;
+
 /// `AuthMiddleware`: check the bearer token, otherwise 401 (FR-2.3).
 ///
 /// Reads exclusively the `Authorization` header and never a cookie. That is
@@ -435,7 +438,14 @@ pub async fn auth_middleware(State(state): State<AuthState>, mut request: Reques
     let mut caller = Map::new();
     caller.insert("client".into(), Value::String(client.clone()));
     caller.insert("method".into(), Value::String(method.clone()));
-    caller.insert("path".into(), Value::String(path.clone()));
+    // Capped like the user agent: the path is the caller's text, and an
+    // uncapped 60 KB one per request rotated the audit history away.
+    let logged_path = if path.chars().count() > MAX_LOGGED_PATH_CHARS {
+        format!("{}...", path.chars().take(MAX_LOGGED_PATH_CHARS).collect::<String>())
+    } else {
+        path.clone()
+    };
+    caller.insert("path".into(), Value::String(logged_path.clone()));
     if let Some(agent) = header_latin1(request.headers(), "user-agent").filter(|a| !a.is_empty()) {
         // Names the client program; capped so a hostile header cannot bloat
         // the log.
@@ -472,7 +482,7 @@ pub async fn auth_middleware(State(state): State<AuthState>, mut request: Reques
             }
         }
         caller.extend(mcp_hint(&hint_body(request).await));
-        let detail = format!("{method} {path} from {client}");
+        let detail = format!("{method} {logged_path} from {client}");
         if state.audit.auth_failure(DenialReason::UnknownToken.as_str(), &detail, caller).is_err() {
             return internal_error();
         }

@@ -23,7 +23,7 @@ const FORMAT: Record<string, string> = {
 };
 
 /** The detail column. A failed sign-in spells out where it came from:
- *  address, token fingerprint and client program, and since 1.15.0 what
+ *  address, token fingerprint and client program, and since 1.16.0 what
  *  else the request said about its sender. Records written before 1.5.0
  *  have none of these and fall back to their own `detail`. */
 function detailOf(r: Record<string, unknown>): string {

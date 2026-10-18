@@ -80,8 +80,17 @@ def current_session(request: Request, context: ApiContext = Depends(ctx)) -> Ses
             detail=f"{request.method} {request.url.path}",
         )
         raise ApiError(401, "Bearer tokens are not accepted here; sign in to the console.")
-    session = context.sessions.resolve(request.cookies.get(SESSION_COOKIE))
+    sid = request.cookies.get(SESSION_COOKIE)
+    session = context.sessions.resolve(sid)
     if session is None:
+        raise ApiError(401, "Not signed in.")
+    # A session carries the role it signed in with, so it is checked
+    # against the identity as it is now: demoted (an edit, an approved
+    # `admin.role_set`, a reload of identities.yaml) or removed, it ends
+    # here instead of keeping the old role until it expires.
+    current = context.identities.identities.get(session.identity)
+    if current is None or current.role != session.role:
+        context.sessions.destroy(sid)
         raise ApiError(401, "Not signed in.")
     return session
 

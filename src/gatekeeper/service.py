@@ -64,6 +64,18 @@ class ToolView:
     idempotent: bool
 
 
+#: The longest unknown tool name kept as sent (audit record, denial).
+_MAX_UNKNOWN_TOOL_CHARS = 200
+
+#: The metrics series every unknown tool name is counted under.
+UNKNOWN_TOOL_METRIC = "<unknown>"
+
+
+def _label(value: str) -> str:
+    """A Prometheus label value, escaped."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
 class Service:
     def __init__(
         self,
@@ -493,6 +505,11 @@ class Service:
     ) -> execute.Result:
         """`client` is the caller's network address, recorded in the audit
         log next to the identity; None when the caller is not over HTTP."""
+        # An unknown name is whatever the caller sent, and it goes into the
+        # audit log and the denial: cut to a length no tool ID comes near,
+        # so a megabyte-long name cannot rotate the audit history away.
+        if tool_id not in self.catalog.tools and len(tool_id) > _MAX_UNKNOWN_TOOL_CHARS:
+            tool_id = tool_id[:_MAX_UNKNOWN_TOOL_CHARS] + "..."
         tool: ToolDef | None = None
         scopes: list[str] = []
         values: dict[str, str] = {}
@@ -602,7 +619,10 @@ class Service:
             elif toolkit.executor == "file":
                 pass  # parameters resolved directly into the call below
         except Denied as denial:
-            self.metrics[(tool_id, identity.id, "denied")] += 1
+            # One series for every name that is not a tool: each distinct
+            # name would otherwise be a counter kept forever.
+            metric_id = tool_id if tool_id in self.catalog.tools else UNKNOWN_TOOL_METRIC
+            self.metrics[(metric_id, identity.id, "denied")] += 1
             self.audit.call(
                 identity=identity.id,
                 tool_id=tool_id,
@@ -929,8 +949,8 @@ class Service:
         ]
         for (tool_id, identity_id, outcome), count in sorted(self.metrics.items()):
             lines.append(
-                f'gatekeeper_tool_calls_total{{tool="{tool_id}",'
-                f'identity="{identity_id}",outcome="{outcome}"}} {count}'
+                f'gatekeeper_tool_calls_total{{tool="{_label(tool_id)}",'
+                f'identity="{_label(identity_id)}",outcome="{_label(outcome)}"}} {count}'
             )
         lines.append("# HELP gatekeeper_executor_ready Executor reachable (1/0)")
         lines.append("# TYPE gatekeeper_executor_ready gauge")

@@ -24,6 +24,11 @@ OUTCOME_OK = "ok"
 OUTCOME_FAILED = "failed"
 OUTCOME_UNKNOWN = "unknown"
 
+#: gatekeeper's own secrets, never passed on to a child that otherwise
+#: inherits gatekeeper's environment (credentials.KEY_ENV, spelled out to
+#: keep this module free of the credential store's imports).
+SECRET_ENV = ("GATEKEEPER_CREDENTIAL_KEY", "GATEKEEPER_NOTIFY_SECRET")
+
 
 @dataclasses.dataclass(slots=True)
 class Result:
@@ -153,6 +158,12 @@ async def run(
     # must not inherit them; where there are none to inherit -- every
     # deployment but one -- this is exactly the spawn it has always been,
     # with no extra process in the way. See `_unpriv`.
+    if env is None:
+        # Inheriting gatekeeper's environment must not hand a child the
+        # credential master key: a binary that prints its environment, or
+        # `docker run -e`, would return it.
+        env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV}
+
     wrapped = bool(_ambient_capabilities())
     spawn_argv = [sys.executable, "-m", "gatekeeper._unpriv", *argv] if wrapped else argv
 

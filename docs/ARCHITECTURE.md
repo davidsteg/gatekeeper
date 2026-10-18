@@ -202,7 +202,16 @@ absolute). A call names a repo key and a branch. `execute_git.check_values`
 constant) and a listed repo. The push never runs in the worker's checkout,
 whose `.git/config` and hooks the worker controls (a `pre-push` hook, an
 `url.<x>.insteadOf` or a `credential.helper` there would run code or move
-the token elsewhere). Each call instead `git init --bare --template=` a
+the token elsewhere). The worker also controls the checkout's *layout*, and
+git follows that: a `.git` file or symlink reads another repository, and a
+symlinked `objects/info/alternates` or `packed-refs` makes git quote the
+file it points at in its errors. So before anything runs, `.git` must be a
+real directory (or the path a bare repository), `objects`, `refs`, `HEAD`,
+`packed-refs`, `config`, `objects/info` and `objects/pack` must not be
+symlinks, and there must be no `commondir` or worker-side alternates (1.14.2);
+and a failure passes on only the stderr lines git got from the remote
+(`remote: ...`) or wrote about reaching it, never what a local step said.
+Each call then `git init --bare --template=` a
 tempdir, points `objects/info/alternates` at the checkout's object store,
 fetches `refs/heads/<branch>` from the checkout's path (only `upload-pack`
 touches it), `ls-remote`s the remote for the old SHA, lists the new commits
@@ -1029,7 +1038,7 @@ it with the `token_lookup` values in an older `identities.yaml` says whose
 token it was. Compute it for a candidate token with
 `printf %s "$TOKEN" | sha256sum | cut -c1-12`.
 
-Since 1.15.0 the record also carries, each only when it applies:
+Since 1.16.0 the record also carries, each only when it applies:
 `forwarded_for` (the `X-Forwarded-For`, else `X-Real-IP`, header as sent,
 unverified, capped at 160), `mcp_session: true` (an `Mcp-Session-Id` was
 sent; its value is not logged), and for a refused token `presented_format`

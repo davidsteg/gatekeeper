@@ -72,6 +72,14 @@ HINT_BODY_MAX = 8192
 HINT_BODY_TIMEOUT_SECONDS = 0.5
 
 
+#: The longest request path an `auth_failure` record keeps as sent.
+_MAX_LOGGED_PATH_CHARS = 256
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
 class AuthMiddleware:
     """Check bearer token, otherwise 401 (FR-2.3).
 
@@ -138,7 +146,9 @@ class AuthMiddleware:
         caller: dict[str, Any] = {
             "client": peer[0] if peer else "unknown",
             "method": scope.get("method", "?"),
-            "path": path,
+            # Capped like the user agent: the path is the caller's text, and
+            # an uncapped 60 KB one per request rotated the audit history away.
+            "path": _clip(path, _MAX_LOGGED_PATH_CHARS),
         }
         agent = _header(scope, "user-agent")
         if agent:
@@ -173,7 +183,7 @@ class AuthMiddleware:
             caller.update(mcp_hint(await _hint_body(scope, receive)))
             self.audit.auth_failure(
                 reason=DenialReason.UNKNOWN_TOKEN.value,
-                detail=f"{scope.get('method', '?')} {path} from {caller['client']}",
+                detail=f"{scope.get('method', '?')} {caller['path']} from {caller['client']}",
                 **caller,
             )
             response = JSONResponse(
