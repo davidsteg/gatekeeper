@@ -127,7 +127,9 @@ Every call, granted or denied, plus sign-ins and admin changes. The agent gets
 an opaque answer; the log keeps the real reason (`not_granted`,
 `scope_mismatch`, `protected_resource`, …), the client address, the duration
 and which credential a call used, so you know what to rotate after a leak.
-Filter by identity, tool and outcome. On disk it is JSON Lines in `audit.dir`,
+Each call also records what it actually ran (the argv, the HTTP request line
+and body, the RPC method), with secrets masked and long values cut, and the
+Detail column shows it. Filter by identity, tool and outcome. On disk it is JSON Lines in `audit.dir`,
 ready for any log shipper.
 
 ### Tools: templates, not commands

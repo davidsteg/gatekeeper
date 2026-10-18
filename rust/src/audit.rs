@@ -102,6 +102,43 @@ pub struct CallRecord {
     pub detail: Option<String>,
     pub credential_names: Vec<String>,
     pub client: Option<String>,
+    /// What the executor was actually handed -- the argv, the HTTP request
+    /// line, the RPC method -- as one line (1.20.0). `None` when the call
+    /// was denied before a request existed.
+    pub command: Option<String>,
+}
+
+/// A logged parameter value is cut after this many characters, so a
+/// file's content or a blob does not flood the log (1.20.0).
+pub const MAX_PARAMETER_CHARS: usize = 1000;
+/// Same for the recorded `command`.
+pub const MAX_COMMAND_CHARS: usize = 2000;
+
+/// `text`, cut after `max` characters with a note of how much was dropped.
+pub fn clip(text: &str, max: usize) -> String {
+    let total = text.chars().count();
+    if total <= max {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max).collect();
+    format!("{kept}… [+{} chars]", total - max)
+}
+
+/// A string as a call record logs it: secret-shaped values masked
+/// ([`crate::secretmask`], a `cmd` parameter of `export TOKEN=...` is not
+/// caught by its key name), then clipped to `max` characters.
+fn loggable(text: &str, max: usize) -> String {
+    clip(&crate::secretmask::mask_secrets(text), max)
+}
+
+/// Every string in `value` masked and clipped, as [`loggable`].
+fn clip_strings(value: Value, max: usize) -> Value {
+    match value {
+        Value::String(s) => Value::String(loggable(&s, max)),
+        Value::Array(items) => Value::Array(items.into_iter().map(|i| clip_strings(i, max)).collect()),
+        Value::Object(map) => Value::Object(map.into_iter().map(|(k, v)| (k, clip_strings(v, max))).collect()),
+        other => other,
+    }
 }
 
 /// Writes structured records, rotates by size.
@@ -230,7 +267,13 @@ impl AuditLog {
         event.insert("identity".into(), record.identity.into());
         event.insert("tool".into(), record.tool_id.into());
         event.insert("tool_version".into(), record.tool_version.into());
-        event.insert("parameters".into(), record.parameters);
+        // Scrubbed and masked before clipping: a secret cut in half by the
+        // clip would no longer match, and half of it would land.
+        let parameters = clip_strings(scrub(record.parameters, &self.redact), MAX_PARAMETER_CHARS);
+        event.insert("parameters".into(), parameters);
+        if let Some(command) = record.command {
+            event.insert("command".into(), loggable(&self.redact.redact(&command), MAX_COMMAND_CHARS).into());
+        }
         event.insert("scopes".into(), record.scopes.into());
         event.insert("outcome".into(), record.outcome.into());
         event.insert("exit_code".into(), record.exit_code.into());
@@ -358,6 +401,32 @@ mod tests {
         assert_eq!(first["credentials"], json!([]));
         let second: Value = serde_json::from_str(&all[1]).unwrap();
         assert_eq!(second["client"], "10.0.0.1");
+    }
+
+    #[test]
+    fn call_records_command_and_clips_after_masking() {
+        let dir = tempfile::tempdir().unwrap();
+        let redactor = Arc::new(Redactor::with_secrets(vec!["topsecret".into()]));
+        let log = AuditLog::with_options(dir.path().to_str().unwrap(), DEFAULT_MAX_BYTES, 10, Some(redactor)).unwrap();
+        // The secret straddles the clip point: masked first, it never lands
+        // half-visible.
+        let edge = format!("{}topsecret", "a".repeat(MAX_PARAMETER_CHARS - 4));
+        log.call(CallRecord {
+            parameters: json!({"content": edge, "nested": {"list": ["b".repeat(MAX_PARAMETER_CHARS + 1)]}}),
+            command: Some(format!("cmd {}", "c".repeat(MAX_COMMAND_CHARS))),
+            ..Default::default()
+        })
+        .unwrap();
+        let record: Value = serde_json::from_str(&lines(&log)[0]).unwrap();
+        let content = record["parameters"]["content"].as_str().unwrap();
+        assert!(!content.contains("tops"), "{content}");
+        assert!(content.ends_with("a***"), "{content}");
+        assert!(record["parameters"]["nested"]["list"][0].as_str().unwrap().ends_with("… [+1 chars]"));
+        assert!(record["command"].as_str().unwrap().ends_with("… [+4 chars]"));
+        let keys: Vec<&String> = record.as_object().unwrap().keys().collect();
+        assert_eq!(keys[5..7], ["parameters", "command"]);
+        assert_eq!(clip("äöü", 2), "äö… [+1 chars]");
+        assert_eq!(clip("abc", 3), "abc");
     }
 
     #[test]

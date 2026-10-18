@@ -22,12 +22,28 @@ const FORMAT: Record<string, string> = {
   foreign: "not a gatekeeper token",
 };
 
-/** The detail column. A failed sign-in spells out where it came from:
- *  address, token fingerprint and client program, and since 1.16.0 what
- *  else the request said about its sender. Records written before 1.5.0
- *  have none of these and fall back to their own `detail`. */
+/** What a call ran: the `command` the executor was handed (since 1.20.0),
+ *  or, for older records and calls denied before there was one, the
+ *  parameters as `name=value`. Both are redacted and clipped server-side. */
+function ranOf(r: Record<string, unknown>): string {
+  if (r.command) return s(r.command);
+  const params = r.parameters;
+  if (!params || typeof params !== "object" || Array.isArray(params)) return "";
+  return Object.entries(params).map(([k, v]) => `${k}=${s(v)}`).join(" ");
+}
+
+/** The detail column shows this much; the full text is the cell's tooltip. */
+const DETAIL_CHARS = 300;
+const shorten = (text: string) => (text.length > DETAIL_CHARS ? `${text.slice(0, DETAIL_CHARS)}…` : text);
+
+/** The detail column. A call shows why it was denied, then what it ran.
+ *  A failed sign-in spells out where it came from: address, token
+ *  fingerprint and client program, and since 1.16.0 what else the request
+ *  said about its sender. Records written before 1.5.0 have none of these
+ *  and fall back to their own `detail`. */
 function detailOf(r: Record<string, unknown>): string {
   const primary = s(r.denial_reason ?? r.reason ?? r.target);
+  if (r.kind === "call") return [primary, s(r.detail), ranOf(r)].filter(Boolean).join(" · ");
   if (r.kind !== "auth_failure") return primary || s(r.detail);
   if (!r.client) return [primary, s(r.detail)].filter(Boolean).join(" · ");
   return [
@@ -125,7 +141,11 @@ export function Audit() {
                       {whatOf(r) ? <span className="text-muted-foreground"> → </span> : null}
                       {whatOf(r)}
                     </div>
-                    {detail && <div className="font-mono text-xs wrap-anywhere text-muted-foreground">{detail}</div>}
+                    {detail && (
+                      <div className="font-mono text-xs wrap-anywhere text-muted-foreground" title={detail}>
+                        {shorten(detail)}
+                      </div>
+                    )}
                   </li>
                 );
               })}
@@ -148,8 +168,11 @@ export function Audit() {
                     <td className="px-3 py-1.5">
                       {r.outcome ? <Badge tone={TONE[s(r.outcome)] ?? "neutral"}>{s(r.outcome)}</Badge> : null}
                     </td>
-                    <td className="min-w-48 px-3 py-1.5 font-mono text-xs wrap-anywhere text-muted-foreground">
-                      {detailOf(r)}
+                    <td
+                      className="min-w-48 px-3 py-1.5 font-mono text-xs wrap-anywhere text-muted-foreground"
+                      title={detailOf(r) || undefined}
+                    >
+                      {shorten(detailOf(r))}
                     </td>
                   </tr>
                 ))}
