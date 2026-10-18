@@ -1,3 +1,17 @@
+## 1.18.0
+
+Three fixes to the console found in a review of `/app`: risky approvals ask first, a batch decides only what was on screen, and the version no longer runs out of the sidebar.
+
+### Changed
+
+- **Some change proposals now need a second click to approve.** On the Requests page, Approve opens an "Approve anyway" step that says why, for a grant change that takes existing grants away (a `grant_set` replaces the identity's whole list, so "add one tool" can strip all the others), one that grants a tool the catalog does not have, any role change, and a tool deletion. Routine changes still approve in one click.
+- **Approve all leaves those risky changes out**, as it already left out credential proposals. Each is approved on its own.
+- **Approve all and Reject all send the list as it stood when the question opened.** A proposal that arrived over the live connection while the question was open used to join the batch; it now stays pending.
+
+### Fixed
+
+- The version in the desktop sidebar was cut off at the sidebar's edge. It now sits under the signed-in identity.
+
 ## 1.17.0
 
 The Python implementation is gone from the repository. The Rust crate in `rust/`, which the image has run since 1.13.0, is now the only one. Nothing changes for an operator: the image, its CLI, endpoints, environment variables, configuration files and their formats are the same as in the previous release.
