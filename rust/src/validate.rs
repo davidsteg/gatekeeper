@@ -470,10 +470,49 @@ pub fn build_http_request(tool: &ToolDef, values: &Values, toolkit: &Toolkit) ->
     }
 
     let body = match &tool.body_template {
-        Some(t) => Some(resolve_body_template(t, values)?),
+        Some(t) => Some(resolve_body_file_fields(resolve_body_template(t, values)?, tool, values)?),
         None => None,
     };
     Ok(HttpRequest { method, path, query, body })
+}
+
+/// The body's `{from_file: <param>, encoding}` fields, pointed at the file
+/// (1.21.0): each becomes `{from_file: <resolved path>, encoding,
+/// must_resolve_under, max_file_bytes}`, which `execute::http` replaces by
+/// the file's content just before sending. Never the content itself: this
+/// body is what the audit log may describe.
+fn resolve_body_file_fields(body: Value, tool: &ToolDef, values: &Values) -> Result<Value, Denied> {
+    match body {
+        Value::Object(m) if m.contains_key("from_file") => {
+            let name = m["from_file"].as_str().unwrap_or_default().to_string();
+            let (Some(param), Some(path)) = (tool.parameters.get(&name), values.get(&name)) else {
+                return Err(denied(
+                    DenialReason::ParamMissing,
+                    format!("Body file needs parameter {}.", repr_str(&name)),
+                ));
+            };
+            let mut marker = Map::new();
+            marker.insert("from_file".into(), Value::String(path.clone()));
+            marker.insert("encoding".into(), m.get("encoding").cloned().unwrap_or(Value::Null));
+            marker.insert(
+                "must_resolve_under".into(),
+                Value::String(param.must_resolve_under.clone().unwrap_or_default()),
+            );
+            marker.insert("max_file_bytes".into(), tool.max_file_bytes.map(Value::from).unwrap_or(Value::Null));
+            Ok(Value::Object(marker))
+        }
+        Value::Object(m) => {
+            let mut out = Map::new();
+            for (k, v) in m {
+                out.insert(k, resolve_body_file_fields(v, tool, values)?);
+            }
+            Ok(Value::Object(out))
+        }
+        Value::Array(a) => {
+            a.into_iter().map(|v| resolve_body_file_fields(v, tool, values)).collect::<Result<Vec<_>, _>>().map(Value::Array)
+        }
+        other => Ok(other),
+    }
 }
 
 /// Builds `(method, params)` for the truenas executor and re-checks the

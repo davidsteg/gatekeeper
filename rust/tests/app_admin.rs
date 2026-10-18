@@ -93,6 +93,61 @@ fn tool_create_rejects_tier1_violation_and_validate_agrees() {
 }
 
 #[test]
+fn tool_validate_create_and_update_refuse_unknown_fields() {
+    let e = env();
+    let admin = e.admin();
+    let mut bogus = sh_tool("demo.bogus", "read", false);
+    bogus["zzz_bogus_key"] = json!(true);
+    let payload = call(&admin, "tool_validate", json!({"spec": bogus.clone()})).unwrap();
+    assert_eq!(payload["ok"], false);
+    assert_eq!(
+        payload["error"],
+        "tool 'demo.bogus': unknown fields ['zzz_bogus_key'] -- nothing reads them for a tool on the \
+         'local' executor, so the tool would not do what they say. Remove or correct them."
+    );
+    assert!(call(&admin, "tool_create", json!({"spec": bogus.clone()})).is_err());
+    assert!(!e.store.service.catalog().tools.contains_key("demo.bogus"));
+
+    // A misspelt parameter field, and a field of another executor.
+    let mut typo = sh_tool("demo.typo", "read", false);
+    typo["parameters"] = json!({"n": {"type": "integer", "minimun": 1}});
+    let err = call(&admin, "tool_validate", json!({"spec": typo})).unwrap()["error"].clone();
+    assert!(err.as_str().unwrap().contains("['parameters.n.minimun']"), "{err}");
+    let mut foreign = sh_tool("demo.foreign", "read", false);
+    foreign["method"] = json!("GET");
+    let err = call(&admin, "tool_validate", json!({"spec": foreign})).unwrap()["error"].clone();
+    assert!(err.as_str().unwrap().contains("['method']"), "{err}");
+
+    // `executor` is fine when it names the toolkit's own.
+    let mut labelled = sh_tool("demo.labelled", "read", false);
+    labelled["executor"] = json!("local");
+    assert_eq!(call(&admin, "tool_validate", json!({"spec": labelled.clone()})).unwrap()["ok"], true);
+    labelled["executor"] = json!("http");
+    let err = call(&admin, "tool_validate", json!({"spec": labelled})).unwrap()["error"].clone();
+    assert!(err.as_str().unwrap().contains("executor='http' does not match toolkit 'demo'"), "{err}");
+
+    // tool_update goes through the same check.
+    call(&admin, "tool_create", json!({"spec": sh_tool("demo.later", "read", false)})).unwrap();
+    let mut changed = sh_tool("demo.later", "read", false);
+    changed["zzz_bogus_key"] = json!(1);
+    assert!(call(&admin, "tool_update", json!({"id": "demo.later", "spec": changed})).is_err());
+}
+
+#[test]
+fn unknown_fields_only_warn_at_startup() {
+    // A stored tool that already carries one keeps loading.
+    let e = env();
+    let mut legacy = sh_tool("demo.legacy", "read", true);
+    legacy["zzz_bogus_key"] = json!(true);
+    let path = e.tmp.join("legacy-tools.yaml");
+    std::fs::write(&path, gatekeeper::yaml::dump(&json!({"tools": [legacy]}))).unwrap();
+    let catalog = load_catalog(path.to_str().unwrap(), &e.store.service.tier1(), true).unwrap();
+    assert!(catalog.tools.contains_key("demo.legacy"));
+    assert_eq!(catalog.unknown_fields.len(), 1);
+    assert!(catalog.unknown_fields[0].contains("['zzz_bogus_key']"));
+}
+
+#[test]
 fn tool_create_always_disabled_even_if_spec_says_enabled() {
     let e = env();
     let admin = e.admin();

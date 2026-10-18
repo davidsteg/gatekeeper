@@ -1,3 +1,22 @@
+## 1.21.0
+
+An `http` tool can send a file's content in its body, and a tool definition with a field nothing reads is refused instead of passing as valid.
+
+### Added
+
+- **Body fields from a file.** A body field written `{from_file: <param>, encoding: base64}` is replaced by that file's content, base64-encoded, just before the request goes out. `<param>` must be a derived `type: path` parameter, whose `must_resolve_under` lies within the toolkit's `path_roots`; the tool must declare `max_file_bytes` (at most 10 MiB) and cannot be category `read`. At call time the file must be a regular file with a single hard link, still under its root once opened (a symlink leading out is refused, and a final symlink is never followed), no larger than `max_file_bytes` (checked before a byte is read), and not named `config.yaml`, `.env`, `.env.*`, `*.key`, `*.pem` or `credentials*` (any case). A refusal is a denial before a connection exists, so nothing is sent.
+- **The audit log records which files a call sent:** a `files` list of `{"path", "bytes"}` in the call record. The content is never recorded; the record's `command` shows the body with the path in place of the content.
+- **Example tool `github.blob_create_from_file`** in `config/examples/tools.yaml`: uploads a file from `/mnt/raid/agent/hermes-dev/scratch/` as a Git blob, up to 1 MiB. The example `github` toolkit gains `path_roots: [/mnt/raid/agent/hermes-dev/scratch]` for it.
+
+### Changed
+
+- **`admin.tool_validate`, `admin.tool_create`, `admin.tool_update` and the console refuse unknown fields** in a tool definition, in its parameters and in its `google_args`/`microsoft_args` entries: `zzz_bogus_key: true` used to be accepted and ignored, and a misspelt `minimun` silently left a parameter unbounded. The error names every such field. `executor:` stays allowed, but must name the toolkit's own executor.
+- **At startup and reload an unknown field is only a warning** ("Definition loaded, but a write would be refused"), so a tool already stored with one keeps working until it is next edited.
+
+### Upgrading
+
+- To use a `from_file` tool, the toolkit it runs on needs the directory in its `path_roots`. That is a Tier 1 change to `toolkits.yaml` and a redeploy; `admin.toolkit_update` cannot change `path_roots`.
+
 ## 1.20.1
 
 gatekeeper has a logo, and the README has been rewritten around screenshots of the current console.

@@ -112,6 +112,111 @@ async fn audit_command_masks_secret_named_parameters() {
     assert!(!line.to_string().contains("s3cr3t-value"));
 }
 
+/// A loopback HTTP target that answers 201 to everything and keeps the
+/// request bodies it was sent.
+async fn blob_target() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = bodies.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else { return };
+            let mut raw = Vec::new();
+            let mut buf = [0u8; 8192];
+            // Headers, then exactly Content-Length bytes of body.
+            loop {
+                let n = stream.read(&mut buf).await.unwrap();
+                raw.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&raw).to_string();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let len = text[..end]
+                        .lines()
+                        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap()))
+                        .unwrap_or(0);
+                    if raw.len() >= end + 4 + len {
+                        seen.lock().unwrap().push(text[end + 4..].to_string());
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            let reply = r#"{"sha":"abc123"}"#;
+            let response = format!(
+                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+    (port, bodies)
+}
+
+#[tokio::test]
+async fn body_file_content_never_reaches_the_audit_log() {
+    let (port, bodies) = blob_target().await;
+    let dir = tempfile::tempdir().unwrap();
+    let sb = sandbox(dir.path());
+    let scratch = dir.path().join("scratch");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let root = scratch.to_str().unwrap().to_string();
+    let content = "UNIQUE-FILE-CONTENT-4711 ".repeat(40);
+    std::fs::write(scratch.join("notes.txt"), &content).unwrap();
+    std::fs::write(scratch.join("big.txt"), "x".repeat(5000)).unwrap();
+    let encoded = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(&content)
+    };
+
+    let mut doc = demo_tier1_doc(dir.path(), &sb);
+    doc["toolkits"]["gh"] = json!({
+        "executor": "http", "base_url": format!("http://127.0.0.1:{port}"),
+        "allowed_methods": ["POST"], "allowed_path_prefixes": ["/repos/"],
+        "allowed_cidrs": ["127.0.0.1/32"], "path_roots": [root],
+    });
+    let mut specs = sh_specs(&sb);
+    specs.push(json!({
+        "id": "gh.blob", "toolkit": "gh", "version": 1, "title": "Blob", "description": "d",
+        "category": "write_external", "idempotent": true, "enabled": true,
+        "method": "POST", "path": "/repos/x/git/blobs",
+        "body": {"content": {"from_file": "path", "encoding": "base64"}, "encoding": "base64"},
+        "max_file_bytes": 4096,
+        "parameters": {
+            "file": {"type": "string", "pattern": "^[a-z]+\\.txt$", "required": true},
+            "path": {"type": "path", "derived": format!("{root}/{{file}}"), "must_resolve_under": root},
+        },
+        "required_scopes": [], "timeout_seconds": 5, "max_output_bytes": 4096,
+    }));
+    let e = builder().tier1(doc).tools(specs).build();
+    let who = agent("full", &["gh.blob"], &[]);
+
+    let result = call(&e, &who, "gh.blob", json!({"file": "notes.txt"})).await.unwrap();
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    let sent: Value = serde_json::from_str(&bodies.lock().unwrap()[0]).unwrap();
+    assert_eq!(sent["content"], encoded.as_str());
+    let line = last_audit(&e);
+    assert_eq!(line["outcome"], "ok");
+    assert_eq!(line["parameters"]["path"], format!("{root}/notes.txt"));
+    assert_eq!(line["files"], json!([{"path": format!("{root}/notes.txt"), "bytes": content.len()}]));
+    assert!(line["command"].as_str().unwrap().contains(&format!("{root}/notes.txt")), "{}", line["command"]);
+
+    // Over the limit: refused, nothing sent, the audit names path and size.
+    let r = call(&e, &who, "gh.blob", json!({"file": "big.txt"})).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_FAILED);
+    let line = last_audit(&e);
+    assert_eq!(line["denial_reason"], "param_invalid");
+    assert!(line["detail"].as_str().unwrap().contains("is 5000 bytes"), "{}", line["detail"]);
+    assert_eq!(bodies.lock().unwrap().len(), 1);
+
+    let log = std::fs::read_to_string(e.audit.path()).unwrap();
+    assert!(!log.contains("UNIQUE-FILE-CONTENT"));
+    assert!(!log.contains(&encoded[..40]));
+    assert!(!log.contains("xxxxxxxxxx"));
+}
+
 #[tokio::test]
 async fn narrow_identity_within_scope_and_sibling_prefix_rejected() {
     let e = AppEnv::new();

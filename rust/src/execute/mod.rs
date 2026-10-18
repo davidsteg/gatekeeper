@@ -52,6 +52,9 @@ pub struct ExecResult {
     /// names only.
     pub denial_reason: Option<String>,
     pub denial_detail: Option<String>,
+    /// The files an `http` body read (1.21.0): path and size, for the
+    /// audit record. Never their content.
+    pub body_files: Vec<(String, u64)>,
 }
 
 impl ExecResult {
@@ -73,6 +76,7 @@ impl ExecResult {
             external_untrusted: false,
             denial_reason: None,
             denial_detail: None,
+            body_files: Vec::new(),
         }
     }
 
@@ -88,6 +92,11 @@ impl ExecResult {
 
     pub fn untrusted(mut self, external_untrusted: bool) -> Self {
         self.external_untrusted = external_untrusted;
+        self
+    }
+
+    pub fn read_files(mut self, body_files: Vec<(String, u64)>) -> Self {
+        self.body_files = body_files;
         self
     }
 }
