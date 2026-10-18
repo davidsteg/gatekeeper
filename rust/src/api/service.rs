@@ -905,16 +905,27 @@ pub fn pending_review(item: &PendingAction, store: Option<&ConfigStore>) -> Valu
                 Some(v) => str_value(v),
                 None => pstr(spec, "id", ""),
             };
-            format!(
+            let mut text = format!(
                 "tool {target}: category {}, enabled={}",
                 pstr(spec, "category", ""),
                 spec.get("enabled").map(str_value).unwrap_or_else(|| "False".into())
-            )
+            );
+            if let Some(prev_spec) = payload.get("prev_spec").and_then(Value::as_object) {
+                let keys: BTreeSet<&String> = spec.keys().chain(prev_spec.keys()).collect();
+                let changed: Vec<&str> =
+                    keys.into_iter().filter(|k| spec.get(*k) != prev_spec.get(*k)).map(String::as_str).collect();
+                if changed.is_empty() {
+                    text.push_str(", no field changes");
+                } else {
+                    text.push_str(&format!(", changes {}", changed.join(", ")));
+                }
+            }
+            text
         }
         "grant_set" => {
             let identity_id = pstr(payload, "identity_id", "");
             let proposed_ids = id_list(or_value(payload, "tools"));
-            match payload.get("prev_tools").filter(|v| !v.is_null()) {
+            let mut text = match payload.get("prev_tools").filter(|v| !v.is_null()) {
                 None => {
                     let mut sorted = proposed_ids.clone();
                     sorted.sort();
@@ -948,7 +959,20 @@ pub fn pending_review(item: &PendingAction, store: Option<&ConfigStore>) -> Valu
                     );
                     format!("identity {identity_id}: +{} -{}, {unchanged} unchanged", added.len(), removed.len())
                 }
+            };
+            if let Some(prev_scopes) = payload.get("prev_scopes").and_then(Value::as_array) {
+                let previous: BTreeSet<String> = prev_scopes.iter().map(str_value).collect();
+                let proposed: BTreeSet<String> = id_list(or_value(payload, "scopes")).into_iter().collect();
+                let added: Vec<&str> = proposed.difference(&previous).map(String::as_str).collect();
+                let removed: Vec<&str> = previous.difference(&proposed).map(String::as_str).collect();
+                if !added.is_empty() {
+                    text.push_str(&format!(", scopes added: {}", added.join(", ")));
+                }
+                if !removed.is_empty() {
+                    text.push_str(&format!(", scopes removed: {}", removed.join(", ")));
+                }
             }
+            text
         }
         "cred_propose" => {
             let mut text = format!("credential {}: kind {}", pstr(payload, "name", ""), pstr(payload, "kind", ""));
@@ -958,7 +982,15 @@ pub fn pending_review(item: &PendingAction, store: Option<&ConfigStore>) -> Valu
             if let Some(format_) = or_value(payload, "header_format") {
                 text.push_str(&format!(", value format {}", str_value(format_)));
             }
-            text.push_str(" (no value: typed by a human on approval)");
+            // The probe sends the secret to this URL right after approval,
+            // so the reviewer has to see where.
+            match or_value(payload, "probe_url") {
+                Some(url) => text.push_str(&format!(
+                    " (no value: typed by a human on approval, then sent to {} to test it)",
+                    str_value(url)
+                )),
+                None => text.push_str(" (no value: typed by a human on approval)"),
+            }
             text
         }
         "cred_update" => {
@@ -976,7 +1008,12 @@ pub fn pending_review(item: &PendingAction, store: Option<&ConfigStore>) -> Valu
                 }
             }
             let joined = if changes.is_empty() { "no change".to_string() } else { changes.join(", ") };
-            format!("credential {}: {joined} (stored value kept)", pstr(payload, "name", ""))
+            let mut text = format!("credential {}: {joined} (stored value kept)", pstr(payload, "name", ""));
+            let new_probe = or_value(payload, "probe_url");
+            if let Some(url) = new_probe.filter(|url| prev.get("probe_url") != Some(*url)) {
+                text.push_str(&format!(", and the stored secret is sent to {} on approval", str_value(url)));
+            }
+            text
         }
         "role_set" => {
             let identity_id = pstr(payload, "identity_id", "");
