@@ -90,7 +90,7 @@ const TOOLS_JSON: &str = r####"
  {
   "name": "admin.tool_update",
   "title": "Update a tool definition",
-  "description": "Appends a new version to an existing tool definition (never overwrites -- old versions remain fetchable via admin.tool_get). Applies immediately if the resulting category is 'read'; otherwise it is written to the pending queue for a human to approve at /app/requests (Change tab).",
+  "description": "Appends a new version to an existing tool definition (never overwrites -- old versions remain fetchable via admin.tool_get). Applies immediately only if both the current and the new definition are category 'read' and read-only by what they run: a file read or list, an http GET or HEAD to the toolkit's own base URL, a kuma tool, or an artifact info, list or read, with no per-tool run_as. Anything else, including every local, docker or ssh tool, is written to the pending queue for a human to approve at /app/requests (Change tab).",
   "inputSchema": {
    "type": "object",
    "properties": {
@@ -112,7 +112,7 @@ const TOOLS_JSON: &str = r####"
  {
   "name": "admin.tool_enable",
   "title": "Enable a tool",
-  "description": "Enables a tool. Applies immediately if its category is 'read'; otherwise it is written to the pending queue for a human to approve at /app/requests (Change tab).",
+  "description": "Enables a tool. Applies immediately only if its category is 'read' and it is read-only by what it runs (the same rule as admin.tool_update); otherwise, including every local, docker or ssh tool, it is written to the pending queue for a human to approve at /app/requests (Change tab).",
   "inputSchema": {
    "type": "object",
    "properties": {

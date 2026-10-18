@@ -641,9 +641,11 @@ rust/
                        to AdminService, sharing no catalog/tool registry
                        with the agent-facing one (FR-2.8/2.9)
     admin_service.rs   Dispatch for every admin.* action: read-only /
-                       always-auto-apply / always-pending / category-
-                       conditional (tool_enable, tool_update). approve/
-                       reject are not reachable from /admin/mcp
+                       always-auto-apply / always-pending / conditional
+                       (tool_enable, tool_update: only a tool labelled
+                       read *and* read-only by what it runs, see
+                       applies_unreviewed). approve/reject are not
+                       reachable from /admin/mcp
     pending.rs         The pending-actions queue (pending.yaml) an
                        admin-role agent's higher-risk admin.* calls land in
                        (admin.cred_update too, gated per slot by
