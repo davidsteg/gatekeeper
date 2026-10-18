@@ -267,6 +267,10 @@ pub struct Toolkit {
     // -- `truenas` executor only (FR-8.3a-f) --
     /// JSON-RPC 2.0 endpoint, e.g. `wss://truenas.lan/api/current`.
     pub ws_url: Option<String>,
+    /// SHA-256 (lowercase hex) of the server certificates a `truenas`
+    /// toolkit accepts instead of a CA chain (1.24.0); empty uses the
+    /// system roots.
+    pub tls_pin_sha256: Vec<String>,
     pub allowed_rpc_methods: Vec<String>,
 
     // -- Multi-destination (FR-8.3g-j) --
@@ -354,6 +358,7 @@ impl Default for Toolkit {
             allowed_cidrs: Vec::new(),
             allowed_hosts: Vec::new(),
             ws_url: None,
+            tls_pin_sha256: Vec::new(),
             allowed_rpc_methods: Vec::new(),
             destinations: Vec::new(),
             docker_host: None,
@@ -1702,6 +1707,29 @@ fn parse_toolkit(
             tk.ws_url = Some(validate_ws_url(&req_str("ws_url")?, where_, "ws_url")?);
             tk.allowed_rpc_methods = req_list("allowed_rpc_methods")?;
             nonempty(&tk.allowed_rpc_methods, "allowed_rpc_methods")?;
+            if spec.get("tls_pin_sha256").is_some_and(|v| !v.is_null()) {
+                let pins: Vec<String> =
+                    req_list("tls_pin_sha256")?.iter().map(|p| p.trim().to_lowercase().replace(':', "")).collect();
+                nonempty(&pins, "tls_pin_sha256")?;
+                if let Some(bad) = pins.iter().find(|p| p.len() != 64 || !p.chars().all(|c| c.is_ascii_hexdigit())) {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: 'tls_pin_sha256' entry {} is not a SHA-256 in hex (64 characters)",
+                        repr_str(bad)
+                    )));
+                }
+                if !tk.ws_url.as_deref().unwrap_or_default().starts_with("wss://") {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: 'tls_pin_sha256' needs a wss:// ws_url -- there is no certificate to pin on ws://"
+                    )));
+                }
+                if spec.get("destinations").is_some_and(py_truthy) {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: 'tls_pin_sha256' cannot be combined with destinations -- \
+                         pin one NAS per toolkit"
+                    )));
+                }
+                tk.tls_pin_sha256 = pins;
+            }
         }
         "google" => {
             let script = req_str("google_script")?;

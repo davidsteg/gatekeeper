@@ -281,6 +281,18 @@ sent as written, and a leaf that is exactly `{param}` of an `integer` or
 text (`quota: "{quota}"` becomes `quota: 1073741824`). Every placeholder in
 a nested value must name a declared parameter, as in any template.
 
+A tool with `job: true` (1.24.0) calls a method that starts a middleware
+job, such as `pool.dataset.unlock`. The answer is a job id, so the executor
+polls `core.get_jobs` for that id on the same connection until the job has
+ended or the tool's timeout runs out. It returns the job's `result`, or its
+state and `error`, and never its `arguments`. The toolkit must allow
+`core.get_jobs`. A toolkit may also pin the server certificate
+(`tls_pin_sha256`, a list of SHA-256 fingerprints of the DER): the
+connection then trusts exactly those certificates, not the system roots
+and not the host name. This is meant for a NAS reached by IP with its own
+self-signed certificate. A pin needs `wss://` and one target, so no
+destinations.
+
 A parameter marked `secret: true` (1.23.0) carries a secret the *caller*
 brings, such as a dataset passphrase that must not be stored on the NAS or
 in gatekeeper. It must be a string with a `pattern`, cannot be derived,

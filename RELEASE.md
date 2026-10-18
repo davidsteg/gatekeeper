@@ -1,3 +1,16 @@
+## 1.24.0
+
+TrueNAS jobs are waited for, and a `truenas` toolkit can pin the NAS's own certificate.
+
+### Added
+
+- **`job: true` on a `truenas` tool.** Middleware methods such as `pool.dataset.unlock` answer with a job id rather than a result. A job tool waits for the job within the tool's timeout, polling `core.get_jobs` by that id, and returns the job's `result` on `SUCCESS`, or an error carrying the state (`FAILED`, `ABORTED`) and the job's error. Only the job's state, result and error are read, never its arguments. A job that has not ended when the timeout runs out is `unknown` for a non-idempotent tool, as for any timeout. The toolkit's `allowed_rpc_methods` must list `core.get_jobs`, or the tool does not load.
+- **`tls_pin_sha256` on a `truenas` toolkit.** A list of SHA-256 fingerprints (hex, colons allowed) of the server certificates the toolkit accepts. They are used instead of the system roots and the host name, so a NAS reached by IP with its own self-signed certificate can be trusted without trusting anything else. The handshake signature is still verified with the pinned certificate's key. It needs a `wss://` `ws_url` and cannot be combined with destinations. Get a fingerprint with `openssl x509 -in nas.crt -outform der | sha256sum`.
+
+### Upgrading
+
+- Nothing to change. Toolkits without `tls_pin_sha256` use the system roots as before, and tools without `job` return the method's answer as before.
+
 ## 1.23.0
 
 Secret parameters and nested TrueNAS params, so a caller can create and unlock passphrase-encrypted datasets through gatekeeper without the passphrase being stored or logged anywhere.
