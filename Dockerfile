@@ -22,7 +22,7 @@ RUN npm run build
 # regexes) is compiled from the crate's bundled source and linked
 # statically; everything else is pure Rust (rustls, not OpenSSL), so the
 # binary needs nothing at runtime but glibc.
-FROM --platform=$BUILDPLATFORM rust:1.97.0-slim-bookworm AS build
+FROM --platform=$BUILDPLATFORM rust:1.97.0-slim-bookworm AS chef
 
 ARG TARGETARCH
 RUN case "${TARGETARCH}" in \
@@ -35,18 +35,34 @@ RUN case "${TARGETARCH}" in \
     esac \
  && rustup target add "$(cat /target)"
 
+# cargo-chef splits the build in two layers: the dependencies, keyed on
+# Cargo.toml and Cargo.lock only, and gatekeeper itself. A change under
+# rust/src then recompiles one crate instead of all of them -- the image
+# job's cache (type=gha) keeps the dependency layer between runs. The
+# recipe masks the crate's own version, so a release bump does not
+# invalidate it either. --locked: cargo-chef's own dependencies are the
+# ones its release was tested with.
+RUN cargo install cargo-chef --locked --version 0.1.78
+
 ENV PCRE2_SYS_STATIC=1 \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
     CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 
-WORKDIR /build
+WORKDIR /build/rust
+
+FROM chef AS planner
+COPY rust ./
+RUN cargo chef prepare --recipe-path /recipe.json
+
+FROM chef AS build
+COPY --from=planner /recipe.json /recipe.json
+RUN cargo chef cook --release --locked --target "$(cat /target)" --recipe-path /recipe.json
 # build.rs reads the release version from pyproject.toml, one level up;
 # the console's API schema is embedded from frontend/openapi.json.
-COPY pyproject.toml ./
-COPY frontend/openapi.json ./frontend/openapi.json
-COPY rust ./rust
-RUN cd rust \
- && cargo build --release --locked --target "$(cat /target)" \
+COPY pyproject.toml /build/
+COPY frontend/openapi.json /build/frontend/openapi.json
+COPY rust ./
+RUN cargo build --release --locked --target "$(cat /target)" \
  && install -m 0755 "target/$(cat /target)/release/gatekeeper" /usr/local/bin/gatekeeper
 
 # --- Vendored script runtime ----------------------------------------------
