@@ -439,7 +439,7 @@ function ToolkitTab({ items }: { items: Proposal[] }) {
   return (
     <>
       <Notice>
-        Adding a toolkit, changing an existing one's executor, binaries, denied_args, run_as, network targets, methods, path prefixes or limits, or binding one
+        Adding a toolkit, changing an existing one's executor, binaries, denied_args, run_as, network targets, methods, path prefixes, path roots or limits, or binding one
         to a credential normally needs a redeploy: Tier 1 is immutable at runtime. A proposal here is the one way
         around that, and only a human can make it take effect.
       </Notice>
@@ -470,6 +470,22 @@ function currentValues(item: Proposal): string {
     return `${field}: ${value === null || value === undefined ? "(none)" : String(value)}`;
   });
   return lines.join("\n");
+}
+
+/** The proposed path_roots against today's, one root per line: "+" added,
+ *  "−" removed, two spaces kept. Empty when the proposal does not touch
+ *  path_roots or the toolkit is gone. Only meaningful while pending: once
+ *  deployed, "today's" is the proposed list. */
+export function pathRootsDiff(item: Proposal): string {
+  const proposed = item.spec.path_roots;
+  if (item.kind !== "update" || !Array.isArray(proposed) || !item.current) return "";
+  const before = item.current.path_roots;
+  const after = proposed.map(String);
+  const lines = [
+    ...before.map((r) => `${after.includes(r) ? " " : "−"} ${r}`),
+    ...after.filter((r) => !before.includes(r)).map((r) => `+ ${r}`),
+  ];
+  return lines.length ? lines.join("\n") : "(no roots before or after)";
 }
 
 const KIND_TONE: Record<string, Tone> = { delete: "deny", bind: "accent", update: "accent", create: "accent" };
@@ -509,8 +525,11 @@ function deployWarning(item: Proposal): { text: string; ack: string; label: stri
     const reach = network.length
       ? ` This proposal changes where the toolkit may connect (${network.join(", ")}): the targets below become reachable as soon as you deploy. A hostname never reaches a private or loopback address.`
       : "";
+    const roots = Array.isArray(item.spec.path_roots)
+      ? ` This proposal changes path_roots: tools on this toolkit may read, write or upload files under every root marked + as soon as you deploy.`
+      : "";
     return {
-      text: `${head}Deploying merges the fields below into toolkit ${item.name} and reloads it at once; path_roots and protected_resources cannot change this way.${runAs}${reach}${broad(item)}`,
+      text: `${head}Deploying merges the fields below into toolkit ${item.name} and reloads it at once; protected_resources cannot change this way.${runAs}${reach}${roots}${broad(item)}`,
       ack: "I understand this immediately changes what this toolkit can reach.",
       label: "Approve and deploy update",
     };
@@ -565,6 +584,9 @@ function ProposalCard({ item, canDecide }: { item: Proposal; canDecide: boolean 
         )}
         {item.confirm_broad_cidrs && (
           <Notice tone="bad">Contains an allowed_cidrs entry wider than /16 (IPv4) or /48 (IPv6), confirmed by the proposer.</Notice>
+        )}
+        {item.status === "pending" && pathRootsDiff(item) && (
+          <Row label="Path roots"><CodeBlock text={pathRootsDiff(item)} /></Row>
         )}
         {item.kind === "update" && currentValues(item) && (
           <Row label="Currently"><CodeBlock text={currentValues(item)} /></Row>

@@ -84,7 +84,9 @@ export function Credentials() {
                 }
               />
               <CardBody className="space-y-2 text-sm">
+                {c.warnings.map((w) => <Notice key={w} tone="bad">{w}</Notice>)}
                 {c.header && <Row label="Header / parameter"><code>{c.header}</code></Row>}
+                {c.header_format && <Row label="Header format"><code>{c.header_format}</code></Row>}
                 <Row label="Used by"><Pills values={c.used_by} empty="no toolkit" /></Row>
                 <Row label="Created">{formatTime(c.created_at, true)}</Row>
                 {c.rotated_at && <Row label="Rotated">{formatTime(c.rotated_at, true)}</Row>}

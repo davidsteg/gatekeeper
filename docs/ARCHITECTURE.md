@@ -21,8 +21,14 @@ draft a brand-new Tier 1 toolkit, `admin.toolkit_update` can propose a
 narrowly-scoped change (`executor`/`binaries`/`denied_args`/`run_as`, an
 `http`/`opencode` toolkit's `allowed_hosts`/`allowed_cidrs` since 1.10.0 (`kuma` too since 1.12.0), an
 `http` toolkit's `allowed_methods`/`allowed_path_prefixes` and the
-`max_timeout_seconds`/`max_output_bytes` ceilings since 1.11.0; never
-`path_roots`/`protected_resources`) to an *existing* one,
+`max_timeout_seconds`/`max_output_bytes` ceilings since 1.11.0, and
+`path_roots` since 1.22.0; never `protected_resources`) to an *existing* one,
+A `path_roots` proposal is checked at submit and again at deploy: every
+entry absolute, without `..`, not `/`, and an existing directory in the
+container; no tool on the toolkit may be left with a `must_resolve_under`
+outside the new list (the refusal names them); not on an `ssh` toolkit,
+whose roots are on the remote host. The Requests card shows the roots as a
+`+`/`−` diff against the running toolkit.
 `admin.toolkit_delete` can propose removing an *existing* one (refused at
 deploy time if any non-deleted tool still references it), and
 `admin.credential_bind` can propose pointing an *existing* toolkit at an
@@ -153,7 +159,8 @@ replaces it by that file's content, base64-encoded, just before sending
 `<param>` must be a declared `type: path` parameter (derived, with
 `must_resolve_under`), that root must lie within the toolkit's `path_roots`
 (Tier 1 decides which part of the gatekeeper host's disk an http tool may
-send, FR-4.10), the tool must declare `max_file_bytes` (1 to 10 MiB), and
+send, FR-4.10; since 1.22.0 a root can be added by an
+`admin.toolkit_update` proposal a human approves, see below), the tool must declare `max_file_bytes` (1 to 10 MiB), and
 its category cannot be `read`. At call time the path was resolved and
 checked against its root with the other parameters; the executor then opens
 it without following a final symlink and without blocking, and checks the
@@ -363,6 +370,17 @@ first use), and `ssh_private_key` (PEM private key text for the `ssh`
 executor — the matching public key must already be in the remote host's
 `authorized_keys`; gatekeeper is a credential *consumer*, it never pushes
 one).
+
+Probe: a slot with a `probe_url` is tested right after it is created or
+rotated with one `GET`. For the kinds an `http` tool sends
+(`api_key_header` with its `header_format`, `bearer`, `basic`,
+`url_query`), the probe carries the credential through the executor's own
+`credential_headers`/`credential_query`, so `verified` means the tools'
+request would authenticate too (1.22.0; before, it always sent `Bearer`
+and could pass while every call got a 401). Other kinds keep the `Bearer`
+GET. `cred_list` and `/app/credentials` carry `warnings`: today one, for an
+`api_key_header` slot on `Authorization` with no `header_format`, which
+sends the bare secret without a scheme.
 
 Master key: `GATEKEEPER_CREDENTIAL_KEY` (or `GATEKEEPER_CREDENTIAL_KEY_FILE`
 pointing at a mounted secret) — generate one with `gatekeeper credential-key`.
