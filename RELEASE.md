@@ -11,6 +11,30 @@ gatekeeper has a logo, and the README has been rewritten around screenshots of t
 
 - **The Docs page renders the README cleanly.** Markdown images and lines made only of HTML tags are left out instead of being printed as raw text; any other HTML still shows as text.
 
+## 1.19.0
+
+Three fixes to the console found in a review of `/app`: risky approvals ask first, a batch decides only what was on screen, and the version no longer runs out of the sidebar.
+
+### Changed
+
+- **Some change proposals now need a second click to approve.** On the Requests page, Approve opens an "Approve anyway" step that says why, for a grant change that takes existing grants away (a `grant_set` replaces the identity's whole list, so "add one tool" can strip all the others), one that grants a tool the catalog does not have, any role change, and a tool deletion. Routine changes still approve in one click.
+- **Approve all leaves those risky changes out**, as it already left out credential proposals. Each is approved on its own.
+- **Approve all and Reject all send the list as it stood when the question opened.** A proposal that arrived over the live connection while the question was open used to join the batch; it now stays pending.
+
+### Fixed
+
+- The version in the desktop sidebar was cut off at the sidebar's edge. It now sits under the signed-in identity.
+
+## 1.18.1
+
+Releases come out faster. Nothing in the image changes.
+
+### Changed
+
+- **The image is built alongside the tests, and pushed only after all of them pass.** It used to be built only after every test job had finished. Now the `image` job builds it at the same time without pushing, and a new `publish` job waits for every test job, rebuilds it entirely from that build's cache and pushes it. Nothing reaches Docker Hub before the tests are green, as before.
+- **The release decision runs first, in its own `version` job.** A missing version bump or `RELEASE.md` section now fails a run within seconds instead of after the test suite.
+- **Rust dependencies are cached in the Docker build** (cargo-chef). A change to gatekeeper's own code no longer recompiles every dependency, which roughly halves the Rust stage of the image build. A version bump does not invalidate the cache.
+- **The Rust suite as root runs in its own job**, next to the normal Rust suite instead of after it.
 ## 1.18.0
 
 Tools that print config files no longer hand out the secrets in them. On `docker`, `local`, `ssh` and `file` toolkits, values that look like secrets come back as `[redacted]`.

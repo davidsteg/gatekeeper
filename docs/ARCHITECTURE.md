@@ -967,7 +967,10 @@ regardless. Since phase 3b (0.56.0) the Requests page decides proposals
 too: two tabs (Change, Toolkit) polled every 15 s with an open count in
 the sidebar, approve and reject per card, an inline value form for a
 credential proposal, an "Approve all" and a "Reject all" that list what
-they will decide, and
+they will decide and send exactly that list, frozen when the question
+opened (1.19.0), a second "Approve anyway" step for a change that takes
+grants away, grants a tool the catalog lacks, changes a role or deletes a
+tool (never batched either), and
 a toolkit deploy that spells out what changes and needs a ticked
 acknowledgement. Everything an agent wrote is rendered as text.
 

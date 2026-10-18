@@ -45,10 +45,13 @@ stale.
    remote URL, never in a file: `git remote set-url origin
    "https://<PAT>@github.com/davidsteg/gatekeeper.git"`.
 6. **Verify** — check the run, don't assume: `gh run list --limit 3` /
-   `gh run watch <id> --exit-status`. The GitHub Action runs tests first
-   (this is where the `RELEASE.md` check lives — see "Known pitfalls"),
-   then, if the version is new, builds the image, pushes to Docker Hub,
-   tags `vX.Y.Z`, and cuts a GitHub Release from the `RELEASE.md` section.
+   `gh run watch <id> --exit-status`. The GitHub Action first decides the
+   release in the `version` job (this is where the `RELEASE.md` check
+   lives — see "Known pitfalls"), then runs the tests and builds the image
+   side by side; only when all of them pass does `publish` push the image
+   (from the build cache) to Docker Hub, and, if the version is new,
+   `release` tags `vX.Y.Z` and cuts a GitHub Release from the `RELEASE.md`
+   section.
 
 ### Versioning
 
@@ -92,15 +95,16 @@ into its fixture by hand, in the same commit.
 
 - **RELEASE.md is checked by CI before anything builds.** A version bump in
   `rust/Cargo.toml` with no matching `## <version>` section in `RELEASE.md`
-  fails the `tests` job immediately with *"RELEASE.md has no '## X.Y.Z'
-  section."* — no image gets built or pushed. Add both files in the same
-  commit, always.
+  fails the `version` job within seconds with *"RELEASE.md has no
+  '## X.Y.Z' section."* — no image gets pushed (`image` builds alongside the
+  tests, but only `publish` pushes, after every other job is green). Add
+  both files in the same commit, always.
 - **A push to `main` without a version bump now fails CI (since 0.46.9).**
   It used to pass: an already-tagged version meant "build a dev image
   only", the version step exited early, and both the `RELEASE.md` check and
   the whole `release` job were skipped — a green run that published
   nothing, which is how three UI commits sat unreleased on `main` behind
-  0.46.8. On a push to `main` the `tests` job now errors if `v<version>` is
+  0.46.8. On a push to `main` the `version` job now errors if `v<version>` is
   already tagged, or if the version is unchanged from the previous `main`
   tip. Other branches, pull requests and `workflow_dispatch` are
   unaffected, so a feature branch still builds its dev image. Practical

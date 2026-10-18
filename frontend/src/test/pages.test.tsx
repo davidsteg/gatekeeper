@@ -25,7 +25,7 @@ function serve(handler: Handler) {
   }));
 }
 
-function renderAt(path: string): void {
+function renderAt(path: string): QueryClient {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrap = (children: ReactNode) => (
     <QueryClientProvider client={client}>
@@ -35,6 +35,7 @@ function renderAt(path: string): void {
     </QueryClientProvider>
   );
   render(wrap(<App />));
+  return client;
 }
 
 beforeEach(() => resetClientState());
@@ -130,6 +131,8 @@ describe("role display", () => {
     });
     renderAt("/account");
     expect(await screen.findByText("read-only")).toBeInTheDocument();
+    // The version sits under the identity, not squeezed into the header.
+    expect(screen.getByText("0.52.0")).toBeInTheDocument();
     expect(await screen.findByText(/deployment is read-only/)).toBeInTheDocument();
   });
 });
@@ -297,6 +300,14 @@ const PENDING = {
     tools: [{ id: "demo.ghost", marker: "+", state: "missing", title: "", category: "" }],
   },
 };
+// A routine change: approving it needs no second look.
+const ENABLE = {
+  ...PENDING, action: "tool_enable", payload: { id: "demo.show" },
+  review: {
+    headline: "enable tool demo.show", unchanged: 0, stale: null,
+    tools: [{ id: "demo.show", marker: "", state: "disabled", title: "Show", category: "read" }],
+  },
+};
 const PROPOSAL = {
   id: "t1", name: "zfs", spec: { executor: "local" }, actor: "hermes", kind: "create", status: "pending",
   created_at: "2026-10-10T10:00:00+0000", decided_by: null, decided_at: null, reason: null, current: null,
@@ -324,7 +335,11 @@ describe("requests", () => {
     expect(await screen.findByText(/<img src=x>/)).toBeInTheDocument();
     expect(screen.getByText("no such tool in the catalog")).toBeInTheDocument();
     const user = userEvent.setup();
+    // Granting a tool the catalog lacks is not a one-click approve.
     await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(screen.getByText(/1 tool that is not in the catalog/)).toBeInTheDocument();
+    expect(approved).toBeUndefined();
+    await user.click(screen.getByRole("button", { name: "Approve anyway" }));
     await waitFor(() => expect(approved).toBeDefined());
     expect((approved?.headers as Record<string, string>)["X-CSRF-Token"]).toBe("tok");
     expect(await screen.findByText("Nothing pending.")).toBeInTheDocument();
@@ -336,7 +351,7 @@ describe("requests", () => {
     let approved = false;
     serve((url) => {
       if (url.endsWith("/session")) return json(200, ADMIN);
-      if (url.endsWith("/requests/pending?status=pending")) return json(200, approved ? [] : [PENDING]);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, approved ? [] : [ENABLE]);
       if (url.includes("/requests/decided")) return json(200, { entries: [], next_cursor: null, total: 0 });
       if (url.endsWith("/requests/toolkits")) return json(200, []);
       if (url.endsWith("/requests/pending/p1/approve")) {
@@ -383,6 +398,73 @@ describe("requests", () => {
     await user.click(screen.getByRole("button", { name: "Reject all 2" }));
     await waitFor(() => expect(sent).toEqual({ ids: ["p1", "p2"], reason: "not now" }));
     expect(await screen.findByText(/No proposals yet\./)).toBeInTheDocument();
+  });
+
+  it("asks before approving a grant change that takes grants away, or a role change", async () => {
+    const STRIP = {
+      ...PENDING, payload: { identity_id: "bot" },
+      review: {
+        headline: "identity bot: +1 -2, 0 unchanged", unchanged: 0, stale: null,
+        tools: [
+          { id: "demo.a", marker: "+", state: "enabled", title: "A", category: "read" },
+          { id: "demo.b", marker: "-", state: "enabled", title: "B", category: "read" },
+          { id: "demo.c", marker: "-", state: "enabled", title: "C", category: "read" },
+        ],
+      },
+    };
+    const ROLE = {
+      ...PENDING, id: "p2", action: "role_set", payload: { identity_id: "bot", role: "admin" },
+      review: { headline: "identity bot: role agent -> admin", unchanged: 0, stale: null, tools: [] },
+    };
+    let approvals = 0;
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, [STRIP, ROLE]);
+      if (url.includes("/requests/decided")) return json(200, { entries: [], next_cursor: null, total: 0 });
+      if (url.endsWith("/requests/toolkits")) return json(200, []);
+      if (url.includes("/approve")) approvals += 1;
+      return json(200, {});
+    });
+    renderAt("/requests");
+    const user = userEvent.setup();
+    // Neither may ride along in a batch approve.
+    expect(await screen.findByRole("button", { name: /Reject all \(2\)/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Approve all/ })).not.toBeInTheDocument();
+    // Newest first: the role change, then the grant change.
+    const approveButtons = () => screen.getAllByRole("button", { name: "Approve" });
+    await user.click(approveButtons()[1]!);
+    expect(screen.getByText(/takes away 2 existing grants from bot/)).toBeInTheDocument();
+    await user.click(approveButtons()[0]!);
+    expect(screen.getByText(/makes bot an admin/)).toBeInTheDocument();
+    expect(approvals).toBe(0);
+  });
+
+  it("approves exactly the proposals listed when the question opened", async () => {
+    const second = { ...ENABLE, id: "p2" };
+    const late = { ...ENABLE, id: "p3" };
+    let listed = [ENABLE, second];
+    let sent: unknown;
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/requests/pending?status=pending")) return json(200, listed);
+      if (url.includes("/requests/decided")) return json(200, { entries: [], next_cursor: null, total: 0 });
+      if (url.endsWith("/requests/toolkits")) return json(200, []);
+      if (url.endsWith("/requests/pending/approve-all")) {
+        sent = JSON.parse(String(init.body));
+        return json(200, { applied: 2, refused: [] });
+      }
+      return json(200, {});
+    });
+    const client = renderAt("/requests");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /Approve all \(2\)/ }));
+    // A third proposal arrives while the question is open.
+    listed = [ENABLE, second, late];
+    await client.invalidateQueries({ queryKey: ["requests"] });
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(3));
+    expect(screen.getByText("Approve all 2 pending proposals?")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Approve all 2" }));
+    await waitFor(() => expect(sent).toEqual({ ids: ["p1", "p2"] }));
   });
 
   it("loads the archive a page at a time from /requests/decided", async () => {
