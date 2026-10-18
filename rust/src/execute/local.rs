@@ -16,6 +16,11 @@ use super::{elapsed_ms, ExecResult, OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN}
 use crate::errors::{DenialReason, Denied};
 use crate::privdrop::{EXIT_NOT_EXECUTABLE, EXIT_NOT_FOUND, MARKER, UNPRIV_ENTRY};
 
+/// gatekeeper's own secrets, never passed on to a child that otherwise
+/// inherits gatekeeper's environment. (The key *file* variable is only a
+/// path; the file itself is what has to stay unreadable.)
+pub const SECRET_ENV: &[&str] = &[crate::credentials::KEY_ENV, "GATEKEEPER_NOTIFY_SECRET"];
+
 /// Reads up to `limit` bytes and reports whether truncation occurred.
 async fn read_capped<R: AsyncRead + Unpin>(stream: Option<&mut R>, limit: usize) -> (Vec<u8>, bool) {
     let Some(stream) = stream else {
@@ -176,8 +181,18 @@ pub async fn run_with_ambient(
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
-    if let Some(vars) = env {
-        command.env_clear().envs(vars);
+    match env {
+        Some(vars) => {
+            command.env_clear().envs(vars);
+        }
+        None => {
+            // Inheriting gatekeeper's environment must not hand a child
+            // the credential master key: a binary that prints its
+            // environment, or `docker run -e`, would return it.
+            for name in SECRET_ENV {
+                command.env_remove(name);
+            }
+        }
     }
     new_session(&mut command);
 
@@ -358,6 +373,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.stdout, "/\n42\nunset\n");
+    }
+
+    #[tokio::test]
+    async fn an_inherited_environment_leaves_gatekeepers_secrets_out() {
+        // Only this test sets the variable; the key itself is set and unset
+        // by the credential tests, which run alongside.
+        std::env::set_var("GATEKEEPER_NOTIFY_SECRET", "s3cret-for-the-env-test");
+        let r = run(&argv(&["/bin/sh", "-c", "echo ${GATEKEEPER_NOTIFY_SECRET:-gone}; echo ${PATH:+path}"]), 10, 4096, true, None, None)
+            .await
+            .unwrap();
+        std::env::remove_var("GATEKEEPER_NOTIFY_SECRET");
+        assert_eq!(r.stdout, "gone\npath\n");
+        assert!(SECRET_ENV.contains(&crate::credentials::KEY_ENV));
     }
 
     #[test]

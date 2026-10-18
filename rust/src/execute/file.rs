@@ -74,7 +74,7 @@ fn realpath_checked(path: &str) -> Result<String, String> {
     if path.contains('\0') {
         return Err(EMBEDDED_NUL.to_string());
     }
-    Ok(pathutil::realpath(path))
+    pathutil::realpath(path)
 }
 
 /// `Path(p).parts` for an absolute, normalized path: the root, then each
@@ -720,7 +720,7 @@ mod tests {
         assert!(r.stderr.to_lowercase().contains("outside allowed roots"));
         assert_eq!(
             r.stderr,
-            format!("Path '{evil}' (resolved to {}) is outside allowed roots: ['{root}']", pathutil::realpath(&evil))
+            format!("Path '{evil}' (resolved to {}) is outside allowed roots: ['{root}']", pathutil::realpath(&evil).unwrap())
         );
     }
 
