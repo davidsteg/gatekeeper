@@ -857,7 +857,16 @@ pub fn decided_pending_page(
 
 /// One tool a proposal names, resolved against the live catalog.
 fn review_tool(store: Option<&ConfigStore>, tool_id: &str, marker: &str) -> Value {
-    let flat = store.and_then(|s| s.service.catalog().flat_spec_of(tool_id));
+    let flat = store.and_then(|s| {
+        let catalog = s.service.catalog();
+        catalog.flat_spec_of(tool_id).or_else(|| {
+            // A destination tool (`<id>@<destination>`, FR-8.3h) has no
+            // entry of its own in tools.yaml: it is its base entry,
+            // expanded once per destination of the toolkit.
+            let (base, _) = tool_id.rsplit_once('@')?;
+            catalog.tools.contains_key(tool_id).then(|| catalog.flat_spec_of(base)).flatten()
+        })
+    });
     let Some(flat) = flat else {
         return json!({"id": tool_id, "marker": marker, "state": "missing", "title": "", "category": ""});
     };

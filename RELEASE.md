@@ -1,3 +1,9 @@
+## 1.21.1
+
+### Fixed
+
+- **A grant on a destination tool no longer reads as a missing tool on the Requests page.** A proposed grant naming a tool such as `docker.compose_up@nas1` showed it as "missing: no such tool in the catalog", because the review looked it up as its own `tools.yaml` entry and a destination tool is its base entry expanded per destination. Since 1.19.0 that also put such a grant behind the "Approve anyway" step meant for grants of tools that do not exist. The review now finds the base entry and shows the tool's real state, title and category.
+
 ## 1.21.0
 
 An `http` tool can send a file's content in its body, and a tool definition with a field nothing reads is refused instead of passing as valid.
