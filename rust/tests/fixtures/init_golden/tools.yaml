@@ -1,0 +1,6 @@
+# Catalog (REQUIREMENTS.md §7). Created empty - this is by design.
+#
+# Tools are created in the console at /app; it writes this file.
+# Examples to learn from are in config/examples/tools.yaml.
+
+tools: []

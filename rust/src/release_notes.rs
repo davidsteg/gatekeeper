@@ -62,7 +62,7 @@ fn walk_up(start: &Path) -> Option<String> {
 /// 1. `GATEKEEPER_RELEASE_NOTES` -- what the container image sets.
 /// 2. Walking up (at most six levels) from the running executable's
 ///    directory, then from this crate's source directory -- a dev checkout
-///    has the real `RELEASE.md` next to `pyproject.toml`.
+///    has the real `RELEASE.md` at the repository root, next to `rust/`.
 /// 3. `/usr/share/gatekeeper/RELEASE.md`, where the image bakes it in.
 ///
 /// Returns `None` if none exists -- callers say so plainly (`/release`
@@ -426,13 +426,10 @@ mod tests {
     }
 
     #[test]
-    fn real_release_md_parses_and_includes_the_pyproject_version() {
+    fn real_release_md_parses_and_includes_the_crate_version() {
         let sections = load();
         assert!(!sections.is_empty());
-        let pyproject = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../pyproject.toml")).unwrap();
-        let line = pyproject.lines().find(|l| l.starts_with("version = ")).unwrap();
-        let version = line.trim_start_matches("version = ").trim_matches('"');
-        assert!(versions(&sections).contains(&version));
+        assert!(versions(&sections).contains(&crate::VERSION));
     }
 
     #[test]

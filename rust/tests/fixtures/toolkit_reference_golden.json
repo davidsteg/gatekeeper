@@ -1,0 +1,74 @@
+[
+ [
+  "local",
+  "Local binaries (local)",
+  "Programs inside the gatekeeper container, run without a shell. A binary is checked for shape at startup, not for existence: name only what the image actually has. Host state such as zfs or ps does not belong here (FR-8.4).",
+  "  diag:\n    executor: local\n    binaries: [\"/usr/bin/uptime\", \"/usr/bin/free\", \"/usr/bin/df\"]\n    denied_args: []\n    path_roots: []\n    protected_resources: []\n    max_timeout_seconds: 10\n    max_output_bytes: 16384\n"
+ ],
+ [
+  "docker",
+  "Docker (docker)",
+  "Uses the mounted Docker socket. For a remote daemon over TLS, declare a destination with docker_host, docker_tls: true and a docker_tls credential (FR-8.3g).",
+  "  docker:\n    executor: docker\n    binaries: [\"/usr/bin/docker\"]\n    denied_args:\n      - rm\n      - kill\n      - exec\n      - build\n      - push\n      - login\n      - system\n      - prune\n      - cp\n      - --privileged\n      - --force\n      - -v\n      - --volumes\n      - --rmi\n    path_roots:\n      - \"/mnt/CHANGEME\"   # where your compose.yaml files live\n    protected_resources:\n      - \"gatekeeper\"      # stacks that must never be touched\n    max_timeout_seconds: 300\n    max_output_bytes: 262144\n"
+ ],
+ [
+  "http",
+  "HTTP API (http)",
+  "One service's REST API. Scheme and host live only here; tools add a method and a path under allowed_path_prefixes. Keep allowed_cidrs to the /32 of that one host (FR-8.15), and send the credential as a header, never a query parameter (FR-8.14).",
+  "  myservice:\n    executor: http\n    base_url: \"http://CHANGEME:8080\"\n    allowed_methods: [\"GET\", \"POST\"]\n    allowed_path_prefixes:\n      - \"/api/\"   # CHANGEME -- as narrow as the tools need\n    allowed_cidrs:\n      - \"203.0.113.1/32\"  # CHANGEME -- e.g. 192.168.1.42/32, this one host\n    credential: myservice   # kind api_key_header or bearer, created in /app/credentials\n    follow_redirects: false\n    max_timeout_seconds: 20\n    max_output_bytes: 131072\n"
+ ],
+ [
+  "ssh",
+  "Remote host over SSH (ssh)",
+  "The same binary and argv model as local, run on another host. Use a dedicated ed25519 key and an unprivileged user; ssh_known_hosts pins the host key.",
+  "  linux:\n    executor: ssh\n    ssh_host: \"CHANGEME\"          # e.g. 192.168.1.50\n    ssh_port: 22\n    ssh_user: \"CHANGEME\"          # a dedicated, unprivileged user -- not root\n    ssh_known_hosts: \"CHANGEME\"   # output of: ssh-keyscan -t ed25519 <host>\n    binaries: [\"/usr/bin/uptime\", \"/usr/bin/free\", \"/usr/bin/df\"]\n    denied_args: []\n    path_roots: []\n    credential: linux\n    max_timeout_seconds: 15\n    max_output_bytes: 16384\n"
+ ],
+ [
+  "truenas",
+  "TrueNAS (truenas)",
+  "JSON-RPC 2.0 over WebSocket. The whitelist is method names: a method that is not listed cannot be called by any tool.",
+  "  truenas:\n    executor: truenas\n    ws_url: \"wss://CHANGEME/api/current\"\n    allowed_rpc_methods:\n      - pool.query\n      - pool.dataset.query\n      - zfs.snapshot.query\n    credential: truenas\n    max_timeout_seconds: 30\n    max_output_bytes: 65536\n"
+ ],
+ [
+  "file",
+  "Files (file)",
+  "Read, write, patch and list inside path_roots, with no binary and no argv. path_roots is the whole restriction, so keep it narrow.",
+  "  files:\n    executor: file\n    binaries: []\n    path_roots:\n      - \"/mnt/CHANGEME\"\n    protected_resources: []\n    max_timeout_seconds: 15\n    max_output_bytes: 262144\n"
+ ],
+ [
+  "google",
+  "Google Workspace (google)",
+  "OAuth2: create a credential named google (kind oauth2) in /app/credentials with client_id and client_secret, then Connect Google. Action IDs are the CLI's own spelling, hyphen included (drive create-folder). One toolkit per Google service.",
+  "  gmail:\n    executor: google\n    google_script: \"/opt/gatekeeper/google/google_api.py\"\n    allowed_google_actions:\n      - gmail search\n      - gmail get\n    required_scopes:\n      - gmail.readonly\n    credential: google\n    max_timeout_seconds: 30\n    max_output_bytes: 131072\n"
+ ],
+ [
+  "microsoft",
+  "Microsoft 365 / Outlook (microsoft)",
+  "OAuth2 against Microsoft Graph: create a credential named microsoft (kind oauth2) with the app registration's client_id and client_secret, then Connect Microsoft. Keep offline_access, or the credential stops working after an hour.",
+  "  outlook:\n    executor: microsoft\n    microsoft_script: \"/opt/gatekeeper/microsoft/microsoft_api.py\"\n    allowed_microsoft_actions:\n      - mail list\n      - mail get\n    required_scopes:\n      - Mail.Read\n      - User.Read\n      - offline_access\n    credential: microsoft\n    max_timeout_seconds: 30\n    max_output_bytes: 131072\n"
+ ],
+ [
+  "opencode",
+  "opencode server (opencode)",
+  "A headless opencode coding agent. 'run' lets another agent edit files under path_roots: list only ask/check/health for a read-only toolkit. No auth by default; set OPENCODE_SERVER_PASSWORD and a basic credential if it is reachable beyond gatekeeper.",
+  "  opencode:\n    executor: opencode\n    base_url: \"http://CHANGEME:4096\"\n    allowed_cidrs:\n      - \"203.0.113.1/32\"  # CHANGEME -- e.g. 192.168.1.42/32, this one host\n    allowed_opencode_operations:\n      - ask\n      - check\n      - health\n    path_roots:\n      - \"/mnt/CHANGEME\"   # the project roots opencode may be pointed at\n    max_timeout_seconds: 900\n    max_output_bytes: 131072\n"
+ ],
+ [
+  "git",
+  "Push feat/* branches (git)",
+  "Pushes one feat/* branch of a listed repository to that repository's remote, fast-forward only: no force, no delete, no main. Create a credential named github (kind bearer, a token that may push to the remote) and mount the repository into the container, read-only is enough.",
+  "  gkrepo:\n    executor: git\n    repos:\n      CHANGEME:\n        path: \"/repos/CHANGEME\"   # the checkout, as mounted into this container\n        remote: \"https://github.com/CHANGEME/CHANGEME.git\"\n    allowed_git_operations:\n      - push\n    credential: github\n    max_timeout_seconds: 120\n    max_output_bytes: 16384\n"
+ ],
+ [
+  "kuma",
+  "Uptime Kuma monitors (kuma)",
+  "Lists, adds, pauses and resumes HTTP monitors over Kuma's Socket.IO API. Create a credential named kuma (kind basic, value username:password) for a Kuma account without 2FA. Pause/resume only touch monitors gatekeeper created; there is no delete or edit.",
+  "  kuma:\n    executor: kuma\n    base_url: \"http://CHANGEME:3001\"\n    allowed_cidrs:\n      - \"203.0.113.1/32\"  # CHANGEME -- e.g. 192.168.1.42/32, this one host\n    allowed_kuma_operations:\n      - monitor_list\n      - monitor_add_http\n      - monitor_pause\n      - monitor_resume\n    credential: kuma\n    max_timeout_seconds: 30\n    max_output_bytes: 131072\n"
+ ],
+ [
+  "agent",
+  "Agent mailbox (agent)",
+  "Messages between gatekeeper identities, delivered on the recipient's next read. mailbox_path must be on a writable, persistent volume. Stored in plaintext: coordination only, never secrets.",
+  "  agent:\n    executor: agent\n    mailbox_path: \"/etc/gatekeeper/messages.yaml\"\n    allowed_agent_operations:\n      - send_message\n      - read_messages\n    max_message_bytes: 4096\n    max_mailbox_messages: 200\n    max_timeout_seconds: 10\n    max_output_bytes: 65536\n"
+ ]
+]

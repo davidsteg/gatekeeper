@@ -1,0 +1,18 @@
+# Identities and permissions (REQUIREMENTS.md §4 and §9).
+#
+# Contains only hashes. The console creates further identities.
+#
+# Two separate credentials: 'token_hash' belongs to the API (/mcp),
+# 'password_hash' for signing in to the console (/app). Losing one
+# does not mean losing both.
+
+identities:
+  - id: admin
+    role: admin
+    token_hash: <hash>
+    token_lookup: <hash>
+    password_hash: <hash>
+    # An administrator needs no tool rights: the console
+    # calls nothing.
+    tools: []
+    scopes: []

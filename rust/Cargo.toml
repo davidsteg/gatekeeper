@@ -1,8 +1,8 @@
 [package]
 name = "gatekeeper"
-version = "0.0.0"
-# The release version is pyproject.toml's; build.rs exports it as
-# GATEKEEPER_VERSION. This one is never published or reported.
+# The release version: what the binary, `/mcp`'s serverInfo and the image
+# tag report. Every change on main bumps it (RELEASE.md); CI reads it here.
+version = "1.17.0"
 edition = "2021"
 rust-version = "1.85"
 description = "MCP server for controlled host operations"

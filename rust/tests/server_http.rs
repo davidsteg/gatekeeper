@@ -112,8 +112,8 @@ async fn the_server_identifies_itself() {
     // test_version.py: the real version, never a placeholder.
     assert_ne!(gatekeeper::VERSION, "0.1.0");
     assert_ne!(gatekeeper::VERSION, "0.0.0+unknown");
-    let pyproject = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../pyproject.toml")).unwrap();
-    assert!(pyproject.contains(&format!("\nversion = \"{}\"\n", gatekeeper::VERSION)));
+    let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
+    assert!(manifest.contains(&format!("\nversion = \"{}\"\n", gatekeeper::VERSION)));
 }
 
 #[tokio::test]

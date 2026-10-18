@@ -444,34 +444,13 @@ async fn a_pending_change_goes_to_the_queue_not_live() {
     assert!(!a.env.service.catalog().tools["demo.writeit"].enabled);
 }
 
-/// The Rust list against the Python module it was generated from.
+/// The Rust list against the Python module it was generated from
+/// (`admin_server._TOOLS`, dumped into `fixtures/admin_tools_golden.json`
+/// when the Python implementation was removed, 1.17.0).
 #[test]
 fn the_admin_tool_list_matches_the_python_module() {
-    let python = std::path::PathBuf::from(
-        std::env::var("GATEKEEPER_INTEROP_PYTHON").unwrap_or_else(|_| "/tmp/claude-0/venv/bin/python".into()),
-    );
-    if !python.exists() {
-        eprintln!("skipping: no Python reference interpreter at {}", python.display());
-        return;
-    }
-    let src = repo_src();
-    let output = std::process::Command::new(&python)
-        .arg("-I")
-        .arg("-c")
-        .arg(
-            "import json, sys; sys.path.insert(0, sys.argv[1]); from gatekeeper import admin_server as a; \
-             print(json.dumps([t.model_dump(by_alias=True, exclude_none=True, mode='json') for t in a._TOOLS]))",
-        )
-        .arg(&src)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let python_tools: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let python_tools: Value = serde_json::from_str(include_str!("fixtures/admin_tools_golden.json")).unwrap();
     let rust_tools = Value::Array(gatekeeper::admin_server::admin_tools().to_vec());
     // Same content, same key order.
     assert_eq!(serde_json::to_string(&python_tools).unwrap(), serde_json::to_string(&rust_tools).unwrap());
-}
-
-fn repo_src() -> String {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("src").to_str().unwrap().to_string()
 }

@@ -322,7 +322,7 @@ async fn documents_are_a_fixed_list() {
     assert_eq!(slugs, HashSet::from(["readme", "requirements", "agents", "release"]));
     let readme = c.get(&api("/documents/readme")).await.json();
     assert!(readme["text"].as_str().unwrap().contains("gatekeeper"));
-    for slug in ["../pyproject.toml", "README.md", "%2e%2e%2fpyproject.toml"] {
+    for slug in ["../Dockerfile", "README.md", "%2e%2e%2fDockerfile"] {
         assert_eq!(c.get(&api(&format!("/documents/{slug}"))).await.status, 404, "{slug}");
     }
 }

@@ -2,8 +2,8 @@
 
     python client_test.py http://127.0.0.1:PORT
 
-Run against `mcp_echo` (rust/examples/mcp_echo.rs) by `rust/tests/mcp_interop.rs`,
-and usable against `ref_server.py` to check the script itself. Both eras: a
+Run against `mcp_echo` (rust/examples/mcp_echo.rs) by `rust/tests/mcp_interop.rs`.
+Needs only the MCP SDK (`pip install mcp==2.2.0`). Both eras: a
 handshake-era session (`mode="legacy"`, notified on its standalone GET stream)
 and a 2026-07-28 client (`mode="auto"`, notified on a `subscriptions/listen`
 stream). Prints one `ok ...` line per check; any failure raises.

@@ -1,3 +1,20 @@
+## 1.17.0
+
+The Python implementation is gone from the repository. The Rust crate in `rust/`, which the image has run since 1.13.0, is now the only one. Nothing changes for an operator: the image, its CLI, endpoints, environment variables, configuration files and their formats are the same as in the previous release.
+
+### Removed
+
+- **The Python package `src/gatekeeper/`, its test suite and `pyproject.toml`.** None of it was in the image since 1.13.0; it was kept only as the reference the Rust tests compared against.
+- The CI jobs that ran the Python suite (`tests (root)`, and the Python half of `tests`).
+
+### Changed
+
+- **The vendored Google and Microsoft CLI scripts moved to `scripts/google/` and `scripts/microsoft/`.** They are still Python and still installed at `/opt/gatekeeper/google/google_api.py` and `/opt/gatekeeper/microsoft/microsoft_api.py` in the image, so a toolkit's `google_script` or `microsoft_script` needs no change. Their script environment is the same.
+- **The release version lives in `rust/Cargo.toml`.** CI reads it there for the tag, the image tags and the `RELEASE.md` check. The binary, `/mcp`'s `serverInfo` and the release artifacts' manifest report it as before.
+- **`frontend/openapi.json` is the committed API schema**, edited together with the Rust API instead of generated from the Python package. The console's TypeScript types are still generated from it, and the Rust tests check that the routes match it.
+- What the Python implementation produced and the Rust tests compared against live (error messages, the examples as loaded, `init` output, the admin tool list, the MCP wire transcript, token hashes, a credential store and audit lines it wrote) is kept as frozen fixtures in `rust/tests/fixtures/`. The interop tests that drive the server with the official Python MCP SDK client still run in CI, with only `mcp` installed.
+- Development is `cargo build` and `cargo test` in `rust/`; the remaining `pytest` suite covers the vendored scripts and the Dockerfile checks. See AGENTS.md.
+
 ## 1.16.0
 
 A refused `/mcp` request now says more about who sent it. Behind a Docker port mapping every caller shows up as the bridge gateway, so the address alone rarely names the machine or the program with the stale token.

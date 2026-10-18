@@ -1,0 +1,42 @@
+# Tier 1 - deploy-time, immutable at runtime (REQUIREMENTS.md §6).
+#
+# Created empty by 'gatekeeper init'. As long as no toolkit is defined here,
+# gatekeeper cannot execute anything - no administrator can change this,
+# because the console creates tools but never a toolkit
+# (FR-4.11). Extending means: edit this file and redeploy.
+#
+# A toolkit looks like this. The values are examples and must match
+# the host - a complete set is in config/examples/toolkits.yaml:
+#
+# toolkits:
+#   diag:
+#     executor: local          # local | docker
+#     binaries:                # absolute paths, exact allowlist (FR-4.1)
+#       - /usr/bin/uptime
+#     denied_args: []          # blocked subcommands and flags (FR-4.2)
+#     path_roots: []           # roots for derived paths (FR-4.3)
+#     protected_resources: []  # reachable by no tool (FR-4.12)
+#     max_timeout_seconds: 10
+#     max_output_bytes: 16384
+
+toolkits: {}
+
+# FR-6.8
+rate_limits:
+  read:
+    count: 120
+    window_seconds: 60
+  write:
+    count: 20
+    window_seconds: 60
+  write_external:
+    count: 5
+    window_seconds: 60
+
+max_concurrent: 4
+
+# FR-9.4/9.5 - append-only with rotation. Without rotation, the log fills the dataset.
+audit:
+  dir: /audit
+  max_bytes: 33554432
+  keep_files: 10

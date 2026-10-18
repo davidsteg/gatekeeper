@@ -1,10 +1,10 @@
-//! Every file in `config/examples/` loads in Rust exactly as it does in
+//! Every file in `config/examples/` loads in Rust exactly as it did in
 //! Python.
 //!
-//! `tests/fixtures/examples_golden.json` is what the Python loaders make
-//! of the examples, written by `tests/fixtures/dump_examples.py` (run it
-//! with the repo root as argument and redirect stdout into the JSON file
-//! whenever the examples change): every toolkit field,
+//! `tests/fixtures/examples_golden.json` is what the Python loaders made
+//! of the examples, generated from the Python implementation and frozen
+//! since it was removed (1.17.0) -- a change to an example is edited into
+//! this file by hand, in the same commit: every toolkit field,
 //! every parsed tool field, the MCP `inputSchema`, the agent description,
 //! the disabled/rejected lists, `flat_spec_of` and `grantable_ids`.
 

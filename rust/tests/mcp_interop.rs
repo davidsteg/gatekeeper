@@ -7,37 +7,26 @@
 //!   mount (`tests/interop/client_test.py`).
 //! * `the_wire_matches_the_python_sdk`: one raw-HTTP probe
 //!   (`tests/interop/probe.py`, every error path of both eras and both
-//!   mounts) against the SDK configured like gatekeeper
-//!   (`tests/interop/ref_server.py`) and against the Rust echo server; the
-//!   two transcripts must be identical.
+//!   mounts) against the Rust echo server; the transcript must be
+//!   identical to the one the same probe recorded against the Python SDK
+//!   server configured like gatekeeper was
+//!   (`tests/fixtures/mcp_wire_python_transcript.txt`, frozen when the
+//!   Python implementation was removed, 1.17.0).
 //!
-//! Both skip (pass with a note) when the Python reference venv is missing.
-//! Override its interpreter with `GATEKEEPER_INTEROP_PYTHON`; set
+//! Both need an interpreter with the MCP SDK and skip (pass with a note)
+//! without one -- see `common::mcp_python`. Set
 //! `GATEKEEPER_INTEROP_DUMP=<dir>` to keep both transcripts
 //! (`python.txt`, `rust.txt`) for diffing.
 
 #[path = "../examples/mcp_echo.rs"]
 mod echo;
+mod common;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-
-fn python() -> Option<PathBuf> {
-    let path = std::env::var_os("GATEKEEPER_INTEROP_PYTHON")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp/claude-0/venv/bin/python"));
-    if path.exists() {
-        Some(path)
-    } else {
-        eprintln!("skipping: no Python reference interpreter at {}", path.display());
-        None
-    }
-}
 
 fn interop_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("interop")
@@ -71,7 +60,7 @@ async fn run_script(python: &Path, script: &str, base: &str) -> (bool, String, S
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_python_sdk_client_works_against_the_rust_server() {
-    let Some(python) = python() else { return };
+    let Some(python) = common::mcp_python() else { return };
     let base = serve_rust().await;
     let (ok, stdout, stderr) = run_script(&python, "client_test.py", &base).await;
     assert!(ok, "client_test.py failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
@@ -88,33 +77,11 @@ async fn the_python_sdk_client_works_against_the_rust_server() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_wire_matches_the_python_sdk() {
-    let Some(python) = python() else { return };
+    let Some(python) = common::mcp_python() else { return };
 
-    // The reference: the Python SDK, wired the way gatekeeper wires it.
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("src");
-    let mut reference = Command::new(&python)
-        .arg(interop_dir().join("ref_server.py"))
-        .env("PYTHONPATH", &src)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("ref_server.py starts");
-    let mut lines = BufReader::new(reference.stdout.take().unwrap()).lines();
-    let port = tokio::time::timeout(Duration::from_secs(60), async {
-        while let Some(line) = lines.next_line().await.unwrap() {
-            if let Some(p) = line.strip_prefix("PORT ") {
-                return p.trim().to_string();
-            }
-        }
-        panic!("ref_server.py exited without a port");
-    })
-    .await
-    .expect("ref_server.py did not start");
-
-    let (py_ok, py_out, py_err) = run_script(&python, "probe.py", &format!("http://127.0.0.1:{port}")).await;
-    let _ = reference.kill().await;
-    assert!(py_ok, "probe.py failed against the reference\n{py_err}");
+    // The reference: the probe against the Python SDK, wired the way the
+    // Python gatekeeper wired it -- recorded once, frozen.
+    let py_out = include_str!("fixtures/mcp_wire_python_transcript.txt");
 
     let base = serve_rust().await;
     let (rs_ok, rs_out, rs_err) = run_script(&python, "probe.py", &base).await;
@@ -124,12 +91,12 @@ async fn the_wire_matches_the_python_sdk() {
     if let Some(dir) = std::env::var_os("GATEKEEPER_INTEROP_DUMP") {
         let dir = PathBuf::from(dir);
         std::fs::create_dir_all(&dir).expect("dump dir");
-        std::fs::write(dir.join("python.txt"), &py_out).expect("write python.txt");
+        std::fs::write(dir.join("python.txt"), py_out).expect("write python.txt");
         std::fs::write(dir.join("rust.txt"), &rs_out).expect("write rust.txt");
     }
 
     assert!(py_out.lines().count() > 600, "suspiciously short transcript:\n{py_out}");
-    if py_out != rs_out {
+    if py_out != rs_out.as_str() {
         let py: Vec<&str> = py_out.lines().collect();
         let rs: Vec<&str> = rs_out.lines().collect();
         let first = py.iter().zip(&rs).position(|(a, b)| a != b).unwrap_or(py.len().min(rs.len()));

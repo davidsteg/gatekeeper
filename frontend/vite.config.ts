@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
-// The SPA is served by gatekeeper itself at /app (src/gatekeeper/api/web.py),
+// The SPA is served by gatekeeper itself at /app (rust/src/api/web.rs),
 // under `script-src 'self'` with Trusted Types enforced: no inline script,
 // no CDN, no eval. `npm run dev` proxies /api to a local gatekeeper (see
 // AGENTS.md, "Frontend dev loop").

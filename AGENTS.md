@@ -16,19 +16,22 @@ not, see [docs/ROADMAP.md](docs/ROADMAP.md).
 | | |
 |---|---|
 | **Repo** | `davidsteg/gatekeeper` |
-| **Language** | Rust (`rust/`, what the image runs); Python 3.12+ (`src/gatekeeper/`, the reference it is tested against) |
-| **Runtime deps** | `mcp`, `pyyaml`, `uvicorn`, `httpx`, `websockets`, `cryptography`, `asyncssh`, `fastapi`, `pydantic` — see `pyproject.toml` |
-| **Tests** | `python -m pytest -q`, plus `npm test`, `tsc` and lint in `frontend/`, plus `cargo test` in `rust/` — all must pass before push |
+| **Language** | Rust (`rust/`, the one implementation; the image runs it). Python 3.12+ only for the vendored CLI scripts the `google`/`microsoft` executors run (`scripts/`) |
+| **Dependencies** | `rust/Cargo.toml`, locked in `rust/Cargo.lock`; the scripts' venv is installed by the Dockerfile (`constraints.txt`) |
+| **Tests** | `cargo test` in `rust/`, plus `npm test`, `tsc` and lint in `frontend/`, plus `python -m pytest -q` for `scripts/` — all must pass before push |
 
-Check the current version in `pyproject.toml`, not here — it changes every
-release and a hardcoded number in this file would just go stale.
+Check the current version in `rust/Cargo.toml` (`version`), not here — it
+changes every release and a hardcoded number in this file would just go
+stale.
 
 ## Release workflow (mandatory)
 
 **Every change on `main` is a release.** No batch releases — see
 [RELEASE.md](RELEASE.md) for the full rule and rationale.
 
-1. **Version bump** — `pyproject.toml`, in the same commit as the change.
+1. **Version bump** — `version` in `rust/Cargo.toml`, in the same commit as
+   the change, and `rust/Cargo.lock` with it (any `cargo build` updates its
+   `gatekeeper` entry; CI builds `--locked` and fails on a stale lock).
 2. **`RELEASE.md`** — add a section `## <version>` (no `v` prefix), above
    the previous entry. **CI enforces this and fails the build if it's
    missing** — see "Known pitfalls" below; this is not optional housekeeping.
@@ -57,26 +60,38 @@ release and a hardcoded number in this file would just go stale.
 ## Testing
 
 ```bash
-python -m pytest -q
+cd rust
+RUSTFLAGS="-D warnings" cargo build --locked --all-targets
+cargo test --locked
+cd .. && python -m pytest -q      # scripts/ and the Dockerfile checks
 ```
 
-All green before every push — no exceptions. If a test file references a
-loopback HTTP/WebSocket/SSH server (`test_execute_http.py`,
-`test_execute_truenas.py`, `test_execute_ssh.py`), that's a real local
-listener the test starts itself — the ssh one via
-`asyncssh.create_server()` with an ephemeral host key — not a mock; no
-network access outside localhost is needed.
+All green before every push — no exceptions. If a test references a
+loopback HTTP/WebSocket/SSH server (the `http`, `truenas`, `ssh`, `kuma`
+executor tests), that's a real local listener the test starts itself —
+not a mock; no network access outside localhost is needed. The privilege
+tests skip themselves unless run as root; CI runs the suite a second time
+under `sudo` for them.
+
+A few tests drive the server with the official Python MCP SDK as the
+client (`rust/tests/interop/*.py`). They need an interpreter with
+`mcp==2.2.0`: `GATEKEEPER_INTEROP_PYTHON=/path/to/python` (CI sets it, and
+then a missing SDK is a failure), otherwise `python3` on `PATH` is tried
+and the tests skip with a note when it cannot import `mcp`. The Python
+pytest suite needs the scripts' own dependencies:
+`pip install -c constraints.txt "google-api-python-client>=2.100" "google-auth-oauthlib>=1.0" pytest`.
+
+The Python implementation the crate was ported from is gone (1.17.0).
+What it produced is kept as frozen fixtures in `rust/tests/fixtures/`
+(error messages, the examples as loaded, `init` output, the admin tool
+list, the MCP wire transcript, files it wrote). They are expectations, not
+generated files: a deliberate change to one of those outputs is edited
+into its fixture by hand, in the same commit.
 
 ## Known pitfalls
 
-- **The image runs `rust/`; `src/gatekeeper/` is its reference (1.13.0).**
-  A behavior change goes into both (see `rust/PORTING.md`), or the `rust`
-  CI job's golden fixtures and parity tests fail -- and a change made only
-  in Python never reaches a deployment. The Rust version comes from `pyproject.toml` via
-  `rust/build.rs`; there is no second version string to bump.
-
 - **RELEASE.md is checked by CI before anything builds.** A version bump in
-  `pyproject.toml` with no matching `## <version>` section in `RELEASE.md`
+  `rust/Cargo.toml` with no matching `## <version>` section in `RELEASE.md`
   fails the `tests` job immediately with *"RELEASE.md has no '## X.Y.Z'
   section."* — no image gets built or pushed. Add both files in the same
   commit, always.
@@ -91,27 +106,18 @@ network access outside localhost is needed.
   unaffected, so a feature branch still builds its dev image. Practical
   consequence: never push to `main` without the bump + notes — the fix is
   not "re-run CI", it is a new commit.
-- **Windows dev environment: `gatekeeper serve` crashes on Windows.**
-  `cmd_serve` registers a `SIGHUP` handler unconditionally
-  (`signal.signal(signal.SIGHUP, ...)`), and `SIGHUP` doesn't exist on
-  Windows. Don't try to smoke-test the CLI's `serve` command directly on a
-  Windows box — build the ASGI app yourself (`server.build_app(...)`) in a
-  throwaway script and run it with `uvicorn.run(...)`, bypassing
-  `cmd_serve`. See `docs/DEPLOYMENT.md` for the pattern.
-- **New dependency, new install.** After pulling a change that touches
-  `pyproject.toml`'s `dependencies`, re-run `pip install -e ".[dev]"` (or
-  the `uv` equivalent) before running tests — a stale venv will import-error
-  on `httpx`/`websockets`/`cryptography`/`asyncssh` instead of giving a
-  useful test failure.
+- **Linux only.** The crate uses Unix privilege dropping, `SIGHUP` reload
+  and `/proc`; it does not build for Windows. Develop in WSL or a Linux
+  container.
 - **Credential-store tests/scripts need a master key.** Anything that
-  touches `credentials.py` beyond an empty store (creating, rotating,
+  touches `credentials.rs` beyond an empty store (creating, rotating,
   resolving a credential) needs `GATEKEEPER_CREDENTIAL_KEY` set — generate
-  one with `gatekeeper credential-key`. Tests set this via `monkeypatch`
-  per-test; a manual smoke-test script needs to set the env var itself.
+  one with `gatekeeper credential-key`. A manual smoke test needs to set the
+  env var itself.
 - **A toolkit's `credential:` and the credential store are separate tiers,
   and can disagree.** The binding is Tier 1 (`toolkits.yaml`), the value is
   Tier 2 (`credentials.yaml`) — so a toolkit can name a credential that does
-  not exist. `Tier1.credential_references()` is the single walk over toolkits
+  not exist. `Tier1::credential_references()` is the single walk over toolkits
   *and* destinations that both the startup check and the console's "Used by"
   row use; do not hand-roll a second one, it will forget the
   destination-level `credential:` override (FR-8.3g). A dangling reference is
@@ -124,7 +130,7 @@ network access outside localhost is needed.
   share *verbatim* (`mail list`, `drive create-folder`); the **CLI argv**
   is what the bundled script's argparse accepts. Nothing derives one from
   another, and a tool ID is never matched against a whitelist.
-  `execute_microsoft.MICROSOFT_ACTION_ALIASES` bridges the four
+  `execute::microsoft::MICROSOFT_ACTION_ALIASES` bridges the four
   tool-shaped Outlook action names (`list_messages` → `list`); `google`
   has no such table, so a `google_action` must be the CLI's own spelling,
   hyphen included (`drive create-folder`). Release notes name the dotted
@@ -134,8 +140,8 @@ network access outside localhost is needed.
   host state is not a binary problem.** Tier 1 checks that a binary path is
   absolute and traversal-free, then loads; it is parsed before anything
   runs, so a toolkit naming a binary the image lacks starts clean and fails
-  on first call. `Tier1.missing_local_binaries()` is the startup warning and
-  `service._probe_one`'s readiness check sharing one `is_runnable()`; keep
+  on first call. `Tier1::missing_local_binaries()` is the startup warning and
+  `Service::probe_one`'s readiness check sharing one `tier1::is_runnable()`; keep
   it `local`-only, since an `ssh` toolkit's binaries are on another
   filesystem entirely. Before "just apt-install it" in the Dockerfile, check
   FR-8.4: `zfs`/`zpool`/`ps aux`/`top` do not return host values from inside
@@ -143,18 +149,20 @@ network access outside localhost is needed.
   Dockerfile carries the long form of why ZFS in particular is not
   installable out of this problem.
 - **`/ui` is gone, except for what must not move (1.0.0).** The console is
-  `/app` over `/api/v1`. `ui.py` is now only redirects (`GET /ui/<x>` →
+  `/app` over `/api/v1`. `/ui` is now only redirects (`GET /ui/<x>` →
   `/app/<x>`, anything else 410) and the OAuth callbacks at
   `/ui/oauth/{google,microsoft}/callback`, which stay because they are the
   redirect URIs operators registered with Google and Microsoft. Do not add
   a page or a write under `/ui`; do not "tidy" the callback paths to
   `/app` or `/api`. Console security tests live in
-  `tests/test_api_security.py`, not in a `test_ui*.py`.
-- **API output goes through the Pydantic models in `api/models.py`.** A new
-  field is invisible until a model names it, which is the point. Read
-  logic lives in `api/service.py`, writes in `api/writes.py`. After
-  changing a route or model, regenerate the client types (see the frontend
-  loop below), or CI and `tests/test_api_web.py` fail.
+  `rust/tests/api_security.rs`.
+- **API output is built field by field.** Response models are assembled in
+  `rust/src/api/service.rs` (reads) and `rust/src/api/app.rs` (routes and
+  writes), request models are validated in `api/models.rs`; a new field is
+  invisible until one of them names it, which is the point. The schema
+  the console is typed against, `frontend/openapi.json`, is a committed
+  file edited by hand with the API (see the frontend loop below);
+  `rust/tests/api_web.rs` pins that the routes and the schema agree.
 - **No `v` prefix in `RELEASE.md`** — section headers are `## 0.4.0`, not
   `## v0.4.0`.
 - **`latest` tag moves** — pin a fixed version + digest for production
@@ -176,19 +184,24 @@ npm test && npx tsc --noEmit && npm run lint && npm run build
 ```
 
 `npm run dev` needs a gatekeeper on `127.0.0.1:8080` (override with
-`GATEKEEPER_DEV_BACKEND`). Start it with `gatekeeper serve --ui`, or on
-Windows build it yourself (`server.build_app(...)` + `uvicorn.run(...)`,
-see the SIGHUP pitfall above). Open `http://localhost:5173/app/`. A built
-console (`npm run build`) is also served by that gatekeeper itself at
-`/app`, because `api/web.py` falls back to `frontend/dist` in a checkout.
+`GATEKEEPER_DEV_BACKEND`). Start it with
+`cargo run --manifest-path rust/Cargo.toml -- serve --ui`. Open
+`http://localhost:5173/app/`. A built console (`npm run build`) is also
+served by that gatekeeper itself at `/app`, because `api/web.rs` falls back
+to `frontend/dist` in the checkout it was built from.
 
-**After any API change, regenerate the client types**, or both CI and
-`tests/test_api_web.py` fail:
+**After any API change, update the schema and regenerate the client
+types.** `frontend/openapi.json` is the source of truth (the binary embeds
+it and serves it at `/api/v1/openapi.json`); edit it in the same commit as
+the route or model, then:
 
 ```bash
-python -m gatekeeper.api > frontend/openapi.json
 (cd frontend && npm run gen:api)
 ```
+
+CI's `npm run check:api` fails if `src/api/schema.d.ts` does not match the
+schema, and `rust/tests/api_web.rs` fails if the routes and the schema
+disagree.
 
 Console code must not use `dangerouslySetInnerHTML`, `innerHTML` or `eval`.
 eslint refuses them, and the `/app` CSP enforces Trusted Types, so they

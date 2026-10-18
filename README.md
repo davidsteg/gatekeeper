@@ -52,9 +52,9 @@ No shell injection. No command confusion. No hidden side effects.
 ## Quick start
 
 ```bash
-# Development
-python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest -q
+# Development (Linux; Rust toolchain from rustup)
+cd rust && cargo build && cargo test && cd ..
+alias gatekeeper="$PWD/rust/target/debug/gatekeeper"
 
 # Validate config without starting
 gatekeeper --toolkits config/toolkits.yaml --tools config/tools.yaml \
@@ -368,7 +368,7 @@ every routine change.
   required, like every non-health route): `?version=`, `?search=`,
   `?limit=`, `?format=markdown`, `?full=1`.
 
-See [`admin_service.py`](src/gatekeeper/admin_service.py) for the exact
+See [`admin_service.rs`](rust/src/admin_service.rs) for the exact
 per-action rules and [REQUIREMENTS.md §3](REQUIREMENTS.md) (FR-2.8–FR-3.7)
 for the full spec.
 
@@ -427,9 +427,11 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for:
 - Functional and non-functional requirements
 - Specification of each guarantee
 
-The image runs the Rust implementation in [rust/](rust/) (`cd rust && cargo
-test`); the Python package in `src/gatekeeper/` is kept as its reference.
-See "Rust implementation" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+gatekeeper is the Rust crate in [rust/](rust/) (`cd rust && cargo test`).
+The only Python left is the vendored Google and Microsoft CLI scripts in
+[scripts/](scripts/), which the image runs as subprocesses
+(`python -m pytest -q` tests them). See "Rust implementation" in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 See [AGENTS.md](AGENTS.md) if you're an AI agent working in this repo — release
 workflow, testing, and known pitfalls.
