@@ -10,8 +10,9 @@
 //! decides, per action, whether a change applies immediately or is written
 //! to the pending queue: read-only queries execute directly;
 //! `proposal_withdraw`, `tool_create` (forced inert), `tool_disable` and
-//! `cred_delete` auto-apply; `tool_enable`/`tool_update` auto-apply for a
-//! `read` tool and are queued otherwise; `tool_delete`, `grant_set`,
+//! `cred_delete` auto-apply; `tool_enable`/`tool_update` auto-apply only for
+//! a tool [`applies_unreviewed`] (labelled `read` *and* read-only by what it
+//! runs) and are queued otherwise; `tool_delete`, `grant_set`,
 //! `role_set`, `cred_propose` and `cred_update` are always queued;
 //! `toolkit_*` and `credential_bind` go to the toolkit-proposal queue.
 //!
@@ -27,7 +28,7 @@ use std::sync::Arc;
 use serde_json::{json, Map, Value};
 
 use crate::api::service::{credential_summaries, read_audit, toolkit_summaries, AuditFilter};
-use crate::catalog::{normalize_tool_entry, parse_tool_spec};
+use crate::catalog::{normalize_tool_entry, parse_tool_spec, ToolDef};
 use crate::credentials::{check_header_format, is_header_name, value_shape, CredentialMeta, CredentialStore, HEADER_KINDS};
 use crate::credentials::KINDS as CREDENTIAL_KINDS;
 use crate::errors::{ConfigError, ConfigResult};
@@ -36,7 +37,7 @@ use crate::pending::{PendingAction, PendingStore};
 use crate::pyfmt::{repr_list, repr_sorted, repr_str, repr_value, str_value};
 use crate::release_notes;
 use crate::store::{write_refused, ConfigStore};
-use crate::tier1::{py_int, py_truthy};
+use crate::tier1::{py_int, py_truthy, Tier1};
 use crate::toolkit_proposals::{ToolkitProposalStore, BIND_FIELD, KINDS, STATUSES};
 
 /// Same cause as the console popup's fallback, phrased for a caller with
@@ -167,6 +168,34 @@ fn pending_reply(item: &PendingAction) -> Value {
 
 fn opt_value(v: &Option<String>) -> Value {
     v.as_ref().map(|s| Value::String(s.clone())).unwrap_or(Value::Null)
+}
+
+/// Whether `admin.tool_enable`/`tool_update` may apply `tool` without a
+/// human. The `read` label alone is not enough -- the agent writes it -- so
+/// the tool must also be read-only by what it runs: a `file` read or list,
+/// an `http` GET or HEAD to the toolkit's own base URL (a per-tool
+/// `base_url` would point the toolkit's credential somewhere else), a
+/// `kuma` tool (its catalog check already refuses `read` on a write), or an
+/// `artifact` info, list or read. Never with a per-tool `run_as`. Every
+/// other executor runs something its definition cannot vouch for, so it
+/// waits for a human at `/app/requests`.
+pub fn applies_unreviewed(tool: &ToolDef, tier1: &Tier1) -> bool {
+    if tool.category != "read" || tool.run_as.is_some() {
+        return false;
+    }
+    let Ok(toolkit) = tier1.toolkit(&tool.toolkit) else {
+        return false;
+    };
+    match toolkit.executor.as_str() {
+        "file" => matches!(tool.file_operation.as_deref(), Some("read" | "list")),
+        "http" => {
+            tool.base_url.is_none()
+                && matches!(tool.http_method.as_deref().map(str::to_ascii_uppercase).as_deref(), Some("GET" | "HEAD"))
+        }
+        "kuma" => true,
+        "artifact" => matches!(tool.artifact_operation.as_deref(), Some("info" | "list" | "read")),
+        _ => false,
+    }
 }
 
 pub struct AdminService {
@@ -461,10 +490,12 @@ impl AdminService {
 
     pub fn tool_enable(&self, actor: &str, args: &Args) -> ConfigResult<Value> {
         let tool_id = require_str(args, "id")?;
-        let Some(flat) = self.store.service.catalog().flat_spec_of(tool_id) else {
+        let catalog = self.store.service.catalog();
+        if catalog.flat_spec_of(tool_id).is_none() {
             return Err(admin_error(format!("No tool with ID {}.", repr_str(tool_id))));
-        };
-        if flat.get("category").and_then(Value::as_str) == Some("read") {
+        }
+        let unreviewed = catalog.tools.get(tool_id).is_some_and(|t| applies_unreviewed(t, &self.store.service.tier1()));
+        if unreviewed {
             self.store.set_tool_enabled(tool_id, true, actor, &self.store.tools_revision())?;
             return Ok(json!({"applied": true, "id": tool_id}));
         }
@@ -483,14 +514,22 @@ impl AdminService {
         }
         // Validate up front: a definition that would fail should not
         // consume a pending-queue slot.
-        let tool = parse_tool_spec(&Value::Object(spec.clone()), &self.store.service.tier1())?;
-        if tool.category == "read" {
+        let tier1 = self.store.service.tier1();
+        let tool = parse_tool_spec(&Value::Object(spec.clone()), &tier1)?;
+        // Both sides: a write tool relabelled as a read one is still a
+        // change to what a granted agent can already run.
+        let current = self.store.service.catalog().tools.get(tool_id).map(|t| applies_unreviewed(t, &tier1));
+        if applies_unreviewed(&tool, &tier1) && current.unwrap_or(false) {
             let new_id = self.store.save_tool(&spec, actor, &self.store.tools_revision(), Some(tool_id))?;
             return Ok(json!({"applied": true, "id": new_id}));
         }
         let mut payload = Map::new();
         payload.insert("spec".into(), Value::Object(spec));
         payload.insert("replaces".into(), json!(tool_id));
+        // Snapshotted so the reviewer sees which fields change, even once
+        // the item is archived.
+        let prev_spec = self.store.service.catalog().raw_of(tool_id).cloned().map(Value::Object).unwrap_or(Value::Null);
+        payload.insert("prev_spec".into(), prev_spec);
         let item = self.pending.propose("tool_update", actor, payload, &self.store.tool_revision(tool_id))?;
         Ok(pending_reply(&item))
     }
@@ -545,6 +584,7 @@ impl AdminService {
         payload.insert("scopes".into(), json!(scopes));
         // Snapshotted so an archived proposal still shows its diff.
         payload.insert("prev_tools".into(), json!(existing.tools));
+        payload.insert("prev_scopes".into(), json!(existing.scopes));
         let item = self.pending.propose("grant_set", actor, payload, &self.store.identity_revision(identity_id))?;
         Ok(pending_reply(&item))
     }

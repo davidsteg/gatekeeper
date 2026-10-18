@@ -104,7 +104,8 @@ flowchart TD
     B -->|read-only| C1["answered immediately"]
     B -->|always-auto-apply| C2["applied immediately via store.py\n(admin_change, audit)"]
     B -->|always-pending| C3["queued to pending.yaml"]
-    B -->|category-conditional\n(tool_enable, tool_update)| C3
+    B -->|"tool_enable, tool_update\n(read-only by what it runs)"| C2
+    B -->|"tool_enable, tool_update\n(unless read-only by what it runs)"| C3
     B -->|admin.cred_propose\n(name/kind/header, no value)| C3
     B -->|admin.toolkit_propose| C4["queued to toolkit_proposals.yaml\n(never pending.yaml)"]
 

@@ -943,8 +943,12 @@ Three things worth being deliberate about before doing this:
   common case: a toolkit with `run_as: root` for write tools, and a read
   tool on the same toolkit that sets `run_as: ""` to run as the container
   user instead. `None` (or unset) inherits the toolkit's value; an empty
-  string explicitly clears it. The field is `tools.yaml` (Tier 1), not
-  agent-supplied — it narrows the toolkit's authority, never widens it.
+  string explicitly clears it. The field lives in `tools.yaml`, which is
+  Tier 2: an admin agent can propose it, and it can widen the toolkit's
+  authority as well as narrow it (`run_as: "0:0"` on a toolkit that runs as
+  3001). Since 1.17.1 a tool that sets its own `run_as`, even `""`, never
+  applies from `/admin/mcp` without a human approving it at `/app/requests`,
+  so read that field before approving.
 
 If the container is not privileged enough to assume that user, calls on that
 toolkit **fail** with a message saying so — they never quietly run as the

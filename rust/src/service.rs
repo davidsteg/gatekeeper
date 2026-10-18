@@ -704,7 +704,28 @@ impl Service {
                         idempotent: tool.idempotent,
                         run_as: effective_run_as,
                     };
-                    execute::file::run(&call).await
+                    // A masked read written back would replace the real
+                    // secret with the mask: refuse it before it touches disk.
+                    let writes_mask = toolkit.redact_secrets
+                        && [&call.content, &call.new_string]
+                            .into_iter()
+                            .flatten()
+                            .any(|text| crate::secretmask::carries_mask(text));
+                    if writes_mask {
+                        let denial = Denied::new(
+                            DenialReason::ParamInvalid,
+                            format!(
+                                "The text to write contains {}, which gatekeeper put in place of a \
+                                 secret when the file was read. Writing it would replace the real \
+                                 value. Change only the lines you mean to change (old_string/new_string), \
+                                 leaving the masked lines out.",
+                                repr_str(crate::secretmask::MASK)
+                            ),
+                        );
+                        ExecResult::denied(&denial, 0)
+                    } else {
+                        execute::file::run(&call).await
+                    }
                 }
                 Request::Kuma(operation) => {
                     execute::kuma::run(
@@ -793,6 +814,18 @@ impl Service {
                 }
             }
         };
+
+        // Output masking (FR-10.6), for every executor: the secrets
+        // gatekeeper holds, then -- where the toolkit asks for it -- anything
+        // secret-shaped, such as the tokens in a config file a tool prints.
+        let mut result = result;
+        for text in [&mut result.stdout, &mut result.stderr] {
+            let mut masked = redact(text);
+            if toolkit.redact_secrets {
+                masked = crate::secretmask::mask_secrets(&masked);
+            }
+            *text = masked;
+        }
 
         self.count(tool_id, &identity.id, &result.outcome);
         let parameters: Map<String, Value> =

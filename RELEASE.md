@@ -1,4 +1,4 @@
-## 1.17.1
+## 1.18.1
 
 Releases come out faster. Nothing in the image changes.
 
@@ -8,6 +8,34 @@ Releases come out faster. Nothing in the image changes.
 - **The release decision runs first, in its own `version` job.** A missing version bump or `RELEASE.md` section now fails a run within seconds instead of after the test suite.
 - **Rust dependencies are cached in the Docker build** (cargo-chef). A change to gatekeeper's own code no longer recompiles every dependency, which roughly halves the Rust stage of the image build. A version bump does not invalidate the cache.
 - **The Rust suite as root runs in its own job**, next to the normal Rust suite instead of after it.
+## 1.18.0
+
+Tools that print config files no longer hand out the secrets in them. On `docker`, `local`, `ssh` and `file` toolkits, values that look like secrets come back as `[redacted]`.
+
+### Added
+
+- **Secret-shaped values are masked in tool output.** A `cat .env`, `docker compose config` or `file` read of a config returns `DB_PASSWORD=[redacted]`, `"token": "[redacted]"`, `postgres://app:[redacted]@db` and private-key blocks with the key replaced. Keys are matched by the same rule as the audit log's secret fields (`token`, `password`, `secret`, `apikey`, `authorization`) plus `passwd`, `private_key`, `access_key` and `cookie`, so a harmless `max_tokens: 4096` is masked too.
+- **New Tier 1 toolkit field `redact_secrets`.** On by default for `docker`, `local`, `ssh` and `file`, off for the other executors. Set `redact_secrets: false` on a toolkit whose agent must see files exactly as they are, such as one that edits source code; set `true` to mask any other toolkit's output.
+- **A masked read cannot be written back.** On a redacting `file` toolkit, a `write` or `edit` whose text contains `[redacted]` is refused with `param_invalid`, because it would replace the real secret on disk with the mask. Edit the lines you mean to change instead.
+
+### Fixed
+
+- **Known credential values are now masked in `local`, `docker` and `file` output too.** Secrets from the credential store were scrubbed only from the executors that were handed the redactor (`http`, `ssh`, `truenas` and the rest); a `local` or `file` tool that printed one returned it as is.
+
+## 1.17.1
+
+Security fixes for the admin agent's path on `/admin/mcp`. They matter if an admin-role agent is ever prompt-injected or compromised: it could change what a granted tool runs without a human seeing it, and a human could approve a credential probe without seeing where the secret goes.
+
+### Fixed
+
+- **`admin.tool_enable` and `admin.tool_update` no longer apply a change just because it says `category: read`.** The caller writes that label, so an admin agent could rewrite a granted tool (a new argv, a `file` write, an `http` DELETE), call it `read`, and it applied with no review. Now a change applies unreviewed only when the tool is read-only by what it runs: a `file` read or list, an `http` GET or HEAD to the toolkit's own base URL, a `kuma` tool, or an `artifact` info, list or read, with no per-tool `run_as`. For an update, the tool as it is now must pass the same test, so a write tool cannot be relabelled into a read one unreviewed. Everything else, including every `local`, `docker` and `ssh` tool, goes to `/app/requests` for a human. An admin agent that used to enable its own `read` argv tools will now see them wait for approval.
+- **The review line for a credential proposal names the probe URL.** `admin.cred_propose` and `admin.cred_update` accept a `probe_url`, and right after approval gatekeeper sends the secret there to test it. The review line did not show it for a new credential, so one click could send a new secret to an address the agent picked. It now reads "then sent to <url> to test it", and a changed probe URL on an update says the stored secret is sent there.
+- **The review line for a tool update names the fields it changes,** such as `changes argv, binary`, instead of only its category. **A grant change names the scopes it adds and removes;** widening an agent's scopes to `*` used to read as "+0 -0". Both are snapshotted when the proposal is filed, so an archived request still shows what it changed.
+
+### Changed
+
+- `docs/DEPLOYMENT.md` no longer claims a per-tool `run_as` is Tier 1 and can only narrow a toolkit's authority. It lives in `tools.yaml` (Tier 2) and can widen it.
+
 ## 1.17.0
 
 The Python implementation is gone from the repository. The Rust crate in `rust/`, which the image has run since 1.13.0, is now the only one. Nothing changes for an operator: the image, its CLI, endpoints, environment variables, configuration files and their formats are the same as in the previous release.

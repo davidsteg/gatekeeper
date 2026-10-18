@@ -101,14 +101,77 @@ fn tool_create_always_disabled_even_if_spec_says_enabled() {
     assert!(!e.service.catalog().tools["demo.newread"].enabled);
 }
 
+/// A `files` toolkit next to `demo`: `files.read` is read-only by what it
+/// runs, `files.write` writes whatever its label says.
+fn files_env() -> AppEnv {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_str().unwrap().to_string();
+    let _ = dir.keep();
+    let mut tier1 = demo_tier1_doc(std::path::Path::new(&root), std::path::Path::new(&root));
+    tier1["toolkits"]["files"] = json!({"executor": "file", "path_roots": [root]});
+    let mut tools = vec![];
+    for op in ["read", "write"] {
+        tools.push(file_tool(op, "read", false));
+    }
+    builder().tier1(tier1).tools(tools).build()
+}
+
+fn file_tool(op: &str, category: &str, enabled: bool) -> Value {
+    let mut params = json!({"path": {"type": "string", "required": true, "pattern": "^/.*"}});
+    if op == "write" {
+        params["content"] = json!({"type": "string", "required": true, "pattern": "[\\s\\S]*",
+                                   "allow_control_characters": true});
+    }
+    json!({"id": format!("files.{op}"), "toolkit": "files", "title": "n", "description": "d",
+           "category": category, "file_operation": op, "enabled": enabled, "parameters": params})
+}
+
 #[test]
-fn tool_enable_read_category_auto_applies_no_pending() {
+fn tool_enable_auto_applies_only_what_is_read_only_by_what_it_runs() {
+    let e = files_env();
+    let admin = e.admin();
+    let payload = call(&admin, "tool_enable", json!({"id": "files.read"})).unwrap();
+    assert_eq!(payload["applied"], true);
+    assert!(e.service.catalog().tools["files.read"].enabled);
+    assert!(e.pending.list(None).unwrap().is_empty());
+
+    // Labelled read by whoever wrote it, but a write: a human decides.
+    let payload = call(&admin, "tool_enable", json!({"id": "files.write"})).unwrap();
+    assert_eq!(payload["pending"], true);
+    assert!(!e.service.catalog().tools["files.write"].enabled);
+}
+
+#[test]
+fn tool_enable_of_an_argv_tool_waits_even_when_labelled_read() {
     let e = env();
     e.store.set_tool_enabled("demo.show", false, "root", &e.store.tools_revision()).unwrap();
     let payload = call(&e.admin(), "tool_enable", json!({"id": "demo.show"})).unwrap();
+    assert_eq!(payload["pending"], true);
+    assert!(!e.service.catalog().tools["demo.show"].enabled);
+}
+
+#[test]
+fn tool_update_cannot_relabel_a_granted_tool_into_applying_unreviewed() {
+    let e = env();
+    let admin = e.admin();
+    // demo.show is granted to bot; new argv, still "read".
+    let mut spec = sh_tool("demo.show", "read", true);
+    spec["argv"] = json!(["-c", "echo PWNED"]);
+    let payload = call(&admin, "tool_update", json!({"id": "demo.show", "spec": spec})).unwrap();
+    assert_eq!(payload["pending"], true);
+
+    let e = files_env();
+    let admin = e.admin();
+    // A write turned into a read is still a change a human approves ...
+    let mut spec = file_tool("read", "read", false);
+    spec["id"] = json!("files.write");
+    let payload = call(&admin, "tool_update", json!({"id": "files.write", "spec": spec})).unwrap();
+    assert_eq!(payload["pending"], true);
+    // ... and a read-only tool updated to another read-only one applies.
+    let mut spec = file_tool("read", "read", false);
+    spec["description"] = json!("changed");
+    let payload = call(&admin, "tool_update", json!({"id": "files.read", "spec": spec})).unwrap();
     assert_eq!(payload["applied"], true);
-    assert!(e.service.catalog().tools["demo.show"].enabled);
-    assert!(e.pending.list(None).unwrap().is_empty());
 }
 
 #[test]
