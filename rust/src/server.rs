@@ -138,6 +138,21 @@ fn py_space(c: char) -> bool {
 ///
 /// `external_untrusted` is deliberately not consulted: Python's `_render`
 /// does not either -- the executors that set it frame their own output.
+
+/// The `structuredContent` of a toolkit with `structured_content: true`
+/// (1.25.0): the same, already masked, fields the text renders, for a
+/// program that parses results instead of reading them.
+fn structured(result: &ExecResult) -> Value {
+    json!({
+        "outcome": result.outcome,
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "truncated": result.truncated,
+        "external_untrusted": result.external_untrusted,
+    })
+}
+
 pub fn render(result: &ExecResult) -> String {
     let mut parts: Vec<String> = Vec::new();
     if result.outcome == OUTCOME_UNKNOWN {
@@ -225,7 +240,13 @@ impl McpHandler for AgentMcp {
         let identity = identity_from(ctx).map_err(|d| McpError::internal(d.to_string()))?;
         let client = client_of(ctx);
         match self.service.call(&identity, name, &args, client.as_deref()).await {
-            Ok(result) => Ok(CallToolResult::text(render(&result), result.outcome != OUTCOME_OK)),
+            Ok(result) => {
+                let mut out = CallToolResult::text(render(&result), result.outcome != OUTCOME_OK);
+                if result.structured {
+                    out.structured_content = Some(structured(&result));
+                }
+                Ok(out)
+            }
             Err(CallError::Denied(denial)) => Ok(CallToolResult::text(denial.agent_message(), true)),
             // What escaped Python's `on_call_tool` as an exception.
             Err(other) => Err(McpError::internal(other.to_string())),
@@ -1071,6 +1092,17 @@ mod tests {
 
     fn result(outcome: &str, exit: Option<i64>, out: &str, err: &str, truncated: bool) -> ExecResult {
         ExecResult::new(outcome, exit, out, err, truncated, 1)
+    }
+
+    #[test]
+    fn structured_carries_the_rendered_fields() {
+        let mut r = result("failed", Some(2), "out", "err", true);
+        r.external_untrusted = true;
+        assert_eq!(
+            structured(&r),
+            json!({"outcome": "failed", "exit_code": 2, "stdout": "out", "stderr": "err",
+                   "truncated": true, "external_untrusted": true})
+        );
     }
 
     #[test]

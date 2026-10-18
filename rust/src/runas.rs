@@ -718,6 +718,7 @@ pub fn child_main() -> i32 {
         let old_string = opt_str(&request, "old_string");
         let new_string = opt_str(&request, "new_string");
         let max_output_bytes = py_int(require(&request, "max_output_bytes")?)?;
+        let mode = request.get("mode").and_then(Value::as_u64).map(|m| m as u32);
         crate::execute::file::perform(
             &operation,
             &path,
@@ -725,6 +726,9 @@ pub fn child_main() -> i32 {
             old_string.as_deref(),
             new_string.as_deref(),
             max_output_bytes,
+            mode,
+            &str_list(&request, "path_roots"),
+            &str_list(&request, "protected"),
         )
     })();
     let mut op = match outcome {

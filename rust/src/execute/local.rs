@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::process::{ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
 use super::{elapsed_ms, ExecResult, OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN};
@@ -143,6 +143,19 @@ pub async fn run(
     run_with_ambient(argv, timeout_seconds, max_output_bytes, idempotent, cwd, env, ambient_capabilities()).await
 }
 
+/// [`run`] with a fixed text written to the child's stdin (1.25.0): the
+/// tool definition's `stdin`, never an agent value. `None` is [`run`].
+pub async fn run_with_input(
+    argv: &[String],
+    timeout_seconds: i64,
+    max_output_bytes: i64,
+    idempotent: bool,
+    env: Option<&HashMap<String, String>>,
+    stdin: Option<&str>,
+) -> Result<ExecResult, Denied> {
+    run_full(argv, timeout_seconds, max_output_bytes, idempotent, None, env, ambient_capabilities(), stdin).await
+}
+
 /// [`run`] with the ambient capability mask given rather than read -- the
 /// seam the tests use where Python monkeypatched `_ambient_capabilities`.
 #[doc(hidden)]
@@ -154,6 +167,20 @@ pub async fn run_with_ambient(
     cwd: Option<&str>,
     env: Option<&HashMap<String, String>>,
     ambient: u64,
+) -> Result<ExecResult, Denied> {
+    run_full(argv, timeout_seconds, max_output_bytes, idempotent, cwd, env, ambient, None).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_full(
+    argv: &[String],
+    timeout_seconds: i64,
+    max_output_bytes: i64,
+    idempotent: bool,
+    cwd: Option<&str>,
+    env: Option<&HashMap<String, String>>,
+    ambient: u64,
+    input: Option<&str>,
 ) -> Result<ExecResult, Denied> {
     let started = Instant::now();
     let name = argv.first().cloned().unwrap_or_default();
@@ -175,7 +202,7 @@ pub async fn run_with_ambient(
     let mut command = Command::new(program);
     command
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(dir) = cwd {
@@ -216,8 +243,21 @@ pub async fn run_with_ambient(
     let limit = max_output_bytes.max(0) as usize;
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
+    let mut child_stdin = child.stdin.take();
+    // Written alongside the reads, so a child that answers before it has
+    // read all its input cannot deadlock on a full pipe. Dropping the
+    // handle closes stdin; a child that exits early (EPIPE) is not an error.
+    let feed = async {
+        if let (Some(pipe), Some(text)) = (child_stdin.as_mut(), input) {
+            let _ = pipe.write_all(text.as_bytes()).await;
+            let _ = pipe.shutdown().await;
+        }
+        drop(child_stdin.take());
+    };
     let gathered = tokio::time::timeout(timeout_duration(timeout_seconds), async {
-        tokio::join!(read_capped(stdout.as_mut(), limit), read_capped(stderr.as_mut(), limit))
+        let (_, out, err) =
+            tokio::join!(feed, read_capped(stdout.as_mut(), limit), read_capped(stderr.as_mut(), limit));
+        (out, err)
     })
     .await;
 

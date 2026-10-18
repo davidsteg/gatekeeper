@@ -1,3 +1,19 @@
+## 1.25.0
+
+Tool features for a container that drives the host only through gatekeeper: a fixed stdin, deleting a file tree, a fixed file mode, a secret file content, and results a program can parse.
+
+### Added
+
+- **`stdin:` on a `docker` or `local` tool.** A fixed text, up to 64 KiB, written to the process's stdin, such as a migration script or SQL piped into `docker exec -i`. It is part of the definition and nothing is substituted into it, so an agent cannot put anything there. The audit record's `command` ends with `< [stdin: N bytes]`. `stdin` on any other executor does not load.
+- **`file_operation: delete`.** Removes a file, or a directory with everything in it, under the toolkit's `path_roots`. Symlinks inside the tree are removed, not followed. It refuses to delete a path root itself, and a directory that holds a `protected_resources` entry anywhere below it. Deleting a path that does not exist is `ok` ("Nothing to delete"), so a retry is safe. A delete tool cannot be `category: read`.
+- **`mode:` on a file `write` tool.** `"0600"`, `"0640"` or `"0644"`, as a quoted string. A new file is created with that mode and an existing one is set to it before the content is written, so the content is never readable under a wider mode.
+- **`secret: true` on a file write's `content` or a patch's `new_string`.** For a key or certificate a caller brings: it is `***` in the audit record, as for `truenas` secrets since 1.23.0. Any other file parameter, and every `docker`/`local`/`ssh` parameter, still refuses `secret`.
+- **`structured_content: true` on a toolkit.** Each result then also carries MCP `structuredContent` with `outcome`, `exit_code`, `stdout`, `stderr`, `truncated` and `external_untrusted`, already masked like the text. Off by default; the text rendering is the same either way.
+
+### Upgrading
+
+- Nothing to change. Existing tools behave as before.
+
 ## 1.24.0
 
 TrueNAS jobs are waited for, and a `truenas` toolkit can pin the NAS's own certificate.

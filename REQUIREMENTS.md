@@ -283,6 +283,7 @@ A toolkit is otherwise bound to exactly one target: `docker` to one socket/host,
 - **FR-8.3c** The whitelist acts here on **method names** instead of on binaries or path prefixes: the toolkit declares allowed JSON-RPC methods (`pool.dataset.create`, `pool.dataset.query`, `pool.query`). Everything else does not exist — in particular not `pool.dataset.delete`.
 - **FR-8.3d** Parameters are passed as JSON-RPC params, not interpolated as strings. The injection question therefore does not arise structurally; the validation from §7 still applies (dataset names, prefix restriction to `<pool>/raid/*`).
 - **FR-8.3d1** (1.23.0) A `params` value may be a nested object or array whose leaf strings are templates. A leaf that is exactly one placeholder of an `integer` or `boolean` parameter is sent as that JSON type.
+- **FR-8.2a** (1.25.0) A `docker` or `local` tool may carry a fixed `stdin` text, never a template: no agent value reaches the process that way. The call record logs only its size.
 - **FR-8.3d2** (1.24.0) A tool marked `job: true` waits for the middleware job its method starts (`core.get_jobs`, which the toolkit must allow) and returns the job's result or error, never its arguments. A toolkit may pin server certificates by SHA-256 (`tls_pin_sha256`) instead of trusting the system roots.
 - **FR-8.3e** Authentication via TrueNAS API key from the credential store (§11). TrueNAS 26 additionally offers SCRAM-SHA-512 mutual auth for API keys — preferred when available.
 - **FR-8.3f** This eliminates the original reason for `ssh`. The `ssh` executor remains relevant only for host diagnostics without API equivalent (`ps aux`, `top`) and is optional in v1.
@@ -316,7 +317,8 @@ The same control concept as for process execution, translated to HTTP. What the 
 
 Giving an agent file access through `local` would mean allowlisting `cat`, `tee`, `sed` and then arguing about their flags — a binary whose argument surface is a small programming language is exactly what FR-4.1/4.2 cannot bound. The `file` executor exists so the boundary can be stated in terms of the operation instead of the program.
 
-- **FR-8.16** A tool on a `file` toolkit declares one fixed `file_operation` — `read`, `write`, `patch` or `list` — and nothing else. There is no binary, no argv, and therefore no argument allowlist to get wrong: the operation is chosen at definition time, not by a parameter. The operation runs in-process, in Python, with no shell and no subprocess.
+- **FR-8.16** A tool on a `file` toolkit declares one fixed `file_operation` — `read`, `write`, `patch`, `list` or `delete` (1.25.0) — and nothing else. There is no binary, no argv, and therefore no argument allowlist to get wrong: the operation is chosen at definition time, not by a parameter. The operation runs in-process, in Python, with no shell and no subprocess.
+- **FR-8.16a** (1.25.0) A `delete` never removes a path root itself, nor a directory with a protected resource anywhere below it, and does not follow symlinks. A `write` tool may fix the file's mode to `0600`, `0640` or `0644`; the mode is set before the content is written. A write's `content` and a patch's `new_string` may be `secret: true`.
 - **FR-8.17** Every path is resolved with `realpath` and checked against the toolkit's `path_roots` and `protected_resources` before anything is opened (FR-4.3, FR-4.12). This is the whole target restriction — the `file` counterpart of `allowed_path_prefixes` for `http`.
 
 #### Running as a Different User (`run_as`)

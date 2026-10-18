@@ -242,6 +242,10 @@ pub struct Toolkit {
     /// host files and commands (`docker`, `local`, `ssh`, `file`), off for
     /// the rest; an explicit `true`/`false` wins (1.18.0).
     pub redact_secrets: bool,
+    /// Also return each result as MCP `structuredContent` (outcome, exit
+    /// code, stdout, stderr, truncated) for a program caller (1.25.0).
+    /// Off by default: the text rendering stays the same either way.
+    pub structured_content: bool,
 
     // -- `http` executor only (FR-8.5 to FR-8.15) --
     /// Scheme and host live exclusively here (FR-8.5). May contain a single
@@ -352,6 +356,7 @@ impl Default for Toolkit {
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             credential: None,
             redact_secrets: false,
+            structured_content: false,
             base_url: None,
             allowed_methods: Vec::new(),
             allowed_path_prefixes: Vec::new(),
@@ -1562,6 +1567,12 @@ fn parse_toolkit(
         }
     };
 
+    let structured_content = match spec.get("structured_content") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(ConfigError::new(format!("{where_}: 'structured_content' must be true or false"))),
+    };
+
     let mut tk = Toolkit {
         name: name.to_string(),
         executor: executor.to_string(),
@@ -1569,6 +1580,7 @@ fn parse_toolkit(
         max_output_bytes: max_output,
         credential,
         redact_secrets,
+        structured_content,
         ..Toolkit::default()
     };
 

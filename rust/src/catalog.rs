@@ -264,6 +264,10 @@ pub struct ToolDef {
     // -- `docker`/`local`/`ssh` --
     pub binary: Option<String>,
     pub argv: Vec<String>,
+    /// Fixed text sent to the process on stdin (`docker`/`local`, 1.25.0):
+    /// a script or SQL the definition carries, never an agent value, so
+    /// nothing is substituted into it.
+    pub stdin: Option<String>,
 
     // -- `http` (FR-8.5 to FR-8.7) --
     pub http_method: Option<String>,
@@ -293,6 +297,8 @@ pub struct ToolDef {
 
     // -- `file` --
     pub file_operation: Option<String>,
+    /// A `write` tool's fixed file mode (1.25.0).
+    pub file_mode: Option<u32>,
 
     // -- `google` --
     pub google_action: Option<String>,
@@ -1160,10 +1166,11 @@ const COMMON_TOOL_FIELDS: &[&str] = &[
 /// The fields only a tool on one executor reads.
 fn executor_tool_fields(executor: &str) -> &'static [&'static str] {
     match executor {
-        "docker" | "local" | "ssh" => &["argv", "binary"],
+        "docker" | "local" => &["argv", "binary", "stdin"],
+        "ssh" => &["argv", "binary"],
         "http" => &["base_url", "body", "max_file_bytes", "method", "path", "query"],
         "truenas" => &["job", "method", "params"],
-        "file" => &["file_operation", "operation", "run_as"],
+        "file" => &["file_operation", "mode", "operation", "run_as"],
         "google" => &["google_action", "google_args"],
         "microsoft" => &["microsoft_action", "microsoft_args"],
         "opencode" => &["opencode_operation", "operation"],
@@ -1174,6 +1181,13 @@ fn executor_tool_fields(executor: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
+
+/// The longest fixed `stdin` text a tool may carry (1.25.0).
+pub const MAX_STDIN_BYTES: usize = 65536;
+
+/// The file modes a `write` tool may fix (1.25.0): owner-only, group-read,
+/// world-read. Nothing executable, nothing world-writable.
+pub const FILE_MODES: &[&str] = &["0600", "0640", "0644"];
 
 /// The fields a parameter spec may carry.
 const PARAMETER_FIELDS: &[&str] = &[
@@ -1336,6 +1350,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         max_output_bytes: 65536,
         binary: None,
         argv: Vec::new(),
+        stdin: None,
         http_method: None,
         path_template: None,
         query_template: IndexMap::new(),
@@ -1347,6 +1362,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         rpc_job: false,
         params_template: None,
         file_operation: None,
+        file_mode: None,
         google_action: None,
         google_args: None,
         microsoft_action: None,
@@ -1373,6 +1389,15 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         }
     };
 
+    // Refused rather than ignored: a definition that means to feed a
+    // process must not quietly run it with nothing on stdin.
+    if spec.get("stdin").is_some_and(|v| !v.is_null()) && !["docker", "local"].contains(&toolkit.executor.as_str()) {
+        return Err(ConfigError::new(format!(
+            "{where_}: 'stdin' is only supported on docker and local tools, not {}",
+            repr_str(&toolkit.executor)
+        )));
+    }
+
     match toolkit.executor.as_str() {
         "docker" | "local" | "ssh" => {
             let Some(Value::String(binary)) = spec.get("binary") else {
@@ -1386,6 +1411,16 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
                 }
                 Some(_) => return Err(ConfigError::new(format!("{where_}: 'argv' must be a list of strings"))),
             };
+            match spec.get("stdin") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(text)) if text.len() <= MAX_STDIN_BYTES => tool.stdin = Some(text.clone()),
+                Some(Value::String(_)) => {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: 'stdin' is longer than {MAX_STDIN_BYTES} bytes"
+                    )))
+                }
+                Some(_) => return Err(ConfigError::new(format!("{where_}: 'stdin' must be a string"))),
+            }
             all_templates.extend(argv.iter().cloned());
             tool.argv = argv;
         }
@@ -1479,13 +1514,29 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         "file" => {
             let op = either("file_operation", "operation");
             let op = match op {
-                Some(Value::String(s)) if ["read", "write", "patch", "list"].contains(&s.as_str()) => s,
+                Some(Value::String(s)) if ["read", "write", "patch", "list", "delete"].contains(&s.as_str()) => s,
                 _ => {
                     return Err(ConfigError::new(format!(
-                        "{where_}: field 'file_operation' must be one of read/write/patch/list"
+                        "{where_}: field 'file_operation' must be one of read/write/patch/list/delete"
                     )))
                 }
             };
+            if op == "delete" && tool.category == "read" {
+                return Err(ConfigError::new(format!("{where_}: a delete tool's category cannot be 'read'")));
+            }
+            match spec.get("mode") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(m)) if op == "write" && FILE_MODES.contains(&m.as_str()) => {
+                    tool.file_mode = Some(u32::from_str_radix(m, 8).expect("allowlisted octal"));
+                }
+                Some(other) => {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: 'mode' {} is not allowed -- only a write tool takes one, as a quoted string of {}",
+                        repr_value(other),
+                        repr_list(FILE_MODES)
+                    )))
+                }
+            }
             tool.file_operation = Some(op);
             // Per-tool `run_as` override. An empty string is distinct from
             // unset: it means "run as the container user".
@@ -1600,9 +1651,15 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
     // their values on a command line, in a URL or in a file.
     let secrets: Vec<&String> = parameters.values().filter(|p| p.secret).map(|p| &p.name).collect();
     if !secrets.is_empty() {
-        if toolkit.executor != "truenas" {
+        // A file write's content and a patch's replacement text are sent
+        // to the file, nowhere else (1.25.0).
+        let file_text = toolkit.executor == "file"
+            && matches!(tool.file_operation.as_deref(), Some("write") | Some("patch"))
+            && secrets.iter().all(|s| s.as_str() == "content" || s.as_str() == "new_string");
+        if toolkit.executor != "truenas" && !file_text {
             return Err(ConfigError::new(format!(
-                "{where_}: secret parameters are only supported on truenas tools, not {}",
+                "{where_}: secret parameters are only supported on truenas tools and on a file write's \
+                 'content' or a patch's 'new_string', not {}",
                 repr_str(&toolkit.executor)
             )));
         }

@@ -543,6 +543,7 @@ impl Service {
                 "docker" | "local" | "ssh" => Request::Argv {
                     argv: validate::build_argv(&t, &values, &toolkit)?,
                     env: self.environment(&toolkit)?,
+                    stdin: t.stdin.clone(),
                 },
                 "http" => Request::Http(validate::build_http_request(&t, &values, &toolkit)?),
                 "truenas" => {
@@ -628,7 +629,7 @@ impl Service {
         let result = {
             let _guard = lock.lock().await;
             match request {
-                Request::Argv { argv, env } => {
+                Request::Argv { argv, env, stdin } => {
                     if toolkit.executor == "ssh" {
                         execute::ssh::run(
                             &argv,
@@ -644,13 +645,13 @@ impl Service {
                     } else {
                         // A denial from the executor itself (binary missing)
                         // propagates unaudited, as Python's did.
-                        execute::local::run(
+                        execute::local::run_with_input(
                             &argv,
                             timeout_seconds,
                             max_output_bytes,
                             tool.idempotent,
-                            None,
                             env.as_ref(),
+                            stdin.as_deref(),
                         )
                         .await?
                     }
@@ -723,6 +724,7 @@ impl Service {
                         max_output_bytes,
                         idempotent: tool.idempotent,
                         run_as: effective_run_as,
+                        mode: tool.file_mode,
                     };
                     // A masked read written back would replace the real
                     // secret with the mask: refuse it before it touches disk.
@@ -878,6 +880,7 @@ impl Service {
             command,
             body_files: result.body_files.clone(),
         })?;
+        result.structured = toolkit.structured_content;
         Ok(result)
     }
 
@@ -1081,7 +1084,12 @@ fn describe_request(request: &Request, values: &validate::Values, secret_names: 
             .collect()
     };
     let line = match request {
-        Request::Argv { argv, .. } => quoted(argv),
+        Request::Argv { argv, stdin, .. } => match stdin {
+            // The text is the tool definition's, not the caller's: its
+            // size is enough to tell the calls apart.
+            Some(text) => format!("{} < [stdin: {} bytes]", quoted(argv), text.len()),
+            None => quoted(argv),
+        },
         Request::Http(req) => {
             let mut line = format!("{} {}", req.method, req.path);
             if !req.query.is_empty() {
@@ -1121,7 +1129,7 @@ fn describe_request(request: &Request, values: &validate::Values, secret_names: 
 
 /// The executor-specific request built inside the denial-audited block.
 enum Request {
-    Argv { argv: Vec<String>, env: Option<HashMap<String, String>> },
+    Argv { argv: Vec<String>, env: Option<HashMap<String, String>>, stdin: Option<String> },
     Http(validate::HttpRequest),
     Rpc { method: String, params: indexmap::IndexMap<String, Value> },
     Google { action: String, args: Vec<String>, env: HashMap<String, String> },

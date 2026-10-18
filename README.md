@@ -65,7 +65,7 @@ flowchart LR
 | `http` | any REST API (Sonarr, Home Assistant, GitHub, …) | `opencode` | a headless opencode coding agent |
 | `ssh` | a Linux host, with mandatory host-key pinning | `kuma` | Uptime Kuma monitors |
 | `truenas` | the TrueNAS JSON-RPC API | `git` | a `feat/*` push to GitHub |
-| `file` | read, write, patch and list files under fixed roots | `agent` | a mailbox between identities |
+| `file` | read, write, patch, list and delete files under fixed roots | `agent` | a mailbox between identities |
 
 Outbound targets are checked against SSRF rules, host and CIDR allowlists, and
 method and path-prefix allowlists. **Toolkits → Reference YAML** in the console

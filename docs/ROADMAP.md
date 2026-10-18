@@ -160,10 +160,12 @@ item.
   and `pool.dataset.unlock`'s `datasets: [{name, passphrase}]` can be
   written now.
 - **Secret parameters on other executors.** `secret: true` (1.23.0) is
-  accepted only on `truenas` tools, where the value travels in the RPC
-  body. On `docker`/`local`/`ssh` it would have to reach the process on
-  stdin, never in argv; on `http` it would need the same care in the body
-  and never in the path or query. Not built until a tool needs it.
+  accepted on `truenas` tools, where the value travels in the RPC body,
+  and since 1.25.0 on a `file` write's content. On `docker`/`local`/`ssh`
+  it would have to reach the process on stdin, never in argv (1.25.0's
+  `stdin` is fixed text, not a template); on `http` it would need the same
+  care in the body and never in the path or query. Not built until a tool
+  needs it.
 - **OAuth2 — done for Google Workspace (0.38.0).** The `google` executor
   runs `google_api.py` as a local subprocess, materializes an `oauth2`
   credential bundle (client_id/client_secret/refresh_token, plus the

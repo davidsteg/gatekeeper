@@ -55,6 +55,9 @@ pub struct ExecResult {
     /// The files an `http` body read (1.21.0): path and size, for the
     /// audit record. Never their content.
     pub body_files: Vec<(String, u64)>,
+    /// Set from the toolkit's `structured_content` (1.25.0): the MCP
+    /// result also carries the outcome as `structuredContent`.
+    pub structured: bool,
 }
 
 impl ExecResult {
@@ -77,6 +80,7 @@ impl ExecResult {
             denial_reason: None,
             denial_detail: None,
             body_files: Vec::new(),
+            structured: false,
         }
     }
 
