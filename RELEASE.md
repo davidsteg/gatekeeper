@@ -1,3 +1,9 @@
+## 1.20.1
+
+### Fixed
+
+- **A grant on a destination tool no longer reads as a missing tool on the Requests page.** A proposed grant naming a tool such as `docker.compose_up@nas1` showed it as "missing: no such tool in the catalog", because the review looked it up as its own `tools.yaml` entry and a destination tool is its base entry expanded per destination. Since 1.19.0 that also put such a grant behind the "Approve anyway" step meant for grants of tools that do not exist. The review now finds the base entry and shows the tool's real state, title and category.
+
 ## 1.20.0
 
 The audit log now says what each tool call actually ran. Until now a successful call's Detail column on `/app/audit` was empty, so a row read "docker.exec, ok" and nothing else.

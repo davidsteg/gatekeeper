@@ -441,6 +441,37 @@ fn bare_tool_ids_expand_to_destination_ids() {
 }
 
 #[test]
+fn review_finds_destination_tools_in_the_catalog() {
+    // `dock.ps@nas1` has no entry of its own in tools.yaml; a grant naming
+    // it must not read as a tool the catalog lacks.
+    let e = builder()
+        .tier1(json!({
+            "toolkits": {"dock": {"executor": "docker", "binaries": ["/usr/bin/docker"],
+                                  "destinations": ["nas1"]}},
+            "destinations": {"nas1": {"docker_host": "tcp://10.0.0.1:2375"}},
+        }))
+        .tools(vec![json!({
+            "id": "dock.ps", "toolkit": "dock", "binary": "/usr/bin/docker", "title": "ps",
+            "description": "ps", "category": "read", "idempotent": true, "enabled": true,
+            "argv": ["ps"], "parameters": {}, "required_scopes": [],
+            "timeout_seconds": 5, "max_output_bytes": 1024,
+        })])
+        .build();
+    let item = e
+        .pending
+        .propose("grant_set", "hermes", obj(json!({"identity_id": "x", "tools": ["dock.ps@nas1", "dock.ps@nas9"]})), "")
+        .unwrap();
+    let review = gatekeeper::api::service::pending_review(&item, Some(&e.store));
+    let states: Vec<(&str, &str)> = review["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| (t["id"].as_str().unwrap(), t["state"].as_str().unwrap()))
+        .collect();
+    assert_eq!(states, [("dock.ps@nas1", "enabled"), ("dock.ps@nas9", "missing")]);
+}
+
+#[test]
 fn set_password_in_file_messages() {
     let e = AppEnv::new();
     let p = e.identities_path.clone();
