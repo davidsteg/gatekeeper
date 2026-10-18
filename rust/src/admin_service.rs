@@ -633,14 +633,33 @@ impl AdminService {
         if updates.is_empty() {
             return Ok(json!({"applied": false, "error": "No updates provided."}));
         }
+        self.require_running_toolkit(name)?;
         let confirm = args.get("confirm_broad_cidrs") == Some(&Value::Bool(true));
         let item = self.toolkit_proposals.propose_with(name, updates, actor, "update", confirm)?;
         Ok(json!({"applied": false, "pending": true, "proposal_id": item.id}))
     }
 
+    /// Refuses a toolkit name the running Tier 1 -- the same source
+    /// `toolkit_list` reports -- does not have, so a typo is an error now
+    /// instead of a proposal a human can only reject.
+    fn require_running_toolkit(&self, name: &str) -> ConfigResult<()> {
+        let tier1 = self.store.service.tier1();
+        if tier1.toolkits.contains_key(name) {
+            return Ok(());
+        }
+        let known: Vec<&String> = tier1.toolkits.keys().collect();
+        Err(admin_error(format!(
+            "No toolkit named {} in the running configuration (known toolkits: {}). Check \
+             admin.toolkit_list.",
+            repr_str(name),
+            repr_sorted(known)
+        )))
+    }
+
     /// Proposes removing an existing toolkit from Tier 1.
     pub fn toolkit_delete(&self, actor: &str, args: &Args) -> ConfigResult<Value> {
         let name = require_str(args, "name")?;
+        self.require_running_toolkit(name)?;
         let item = self.toolkit_proposals.propose(name, Map::new(), actor, "delete")?;
         Ok(json!({"applied": false, "pending": true, "proposal_id": item.id}))
     }
@@ -680,17 +699,7 @@ impl AdminService {
         let toolkit = require_str(args, "toolkit")?;
         let credential = require_str(args, "credential")?;
 
-        // The running Tier 1 -- the same source `toolkit_list` reports.
-        let tier1 = self.store.service.tier1();
-        if !tier1.toolkits.contains_key(toolkit) {
-            let known: Vec<&String> = tier1.toolkits.keys().collect();
-            return Err(admin_error(format!(
-                "No toolkit named {} in the running configuration (known toolkits: {}). Check \
-                 admin.toolkit_list.",
-                repr_str(toolkit),
-                repr_sorted(known)
-            )));
-        }
+        self.require_running_toolkit(toolkit)?;
         let Some(credentials) = self.credentials.as_deref() else {
             return Err(admin_error(
                 "No credential store is configured on this deployment -- \

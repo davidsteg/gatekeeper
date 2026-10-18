@@ -210,6 +210,87 @@ pub async fn probe(toolkit: &Toolkit) -> bool {
     !toolkit.path_roots.is_empty()
 }
 
+/// How long the `run_as` helper may take to stat one proposed root before
+/// [`check_root_dir_as`] gives up on it (a hung mount, say).
+const ROOT_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whether `root` can serve as a path root for whoever runs this: `Ok` for
+/// a directory, a symlink to one included (`validate_path` resolves roots
+/// on every call). `Err` is the reason, completing "'<root>' ...", with the
+/// errno named, since "missing", "not allowed to look" and "not a
+/// directory" need three different fixes.
+pub fn check_root_dir(root: &str) -> Result<(), String> {
+    fn why(err: &std::io::Error) -> String {
+        match err.raw_os_error() {
+            Some(libc::ENOENT) => "does not exist (ENOENT)".to_string(),
+            Some(libc::EACCES) => {
+                "cannot be reached: permission denied on it or a directory above it (EACCES)".to_string()
+            }
+            Some(libc::ENOTDIR) => "does not exist: a component above it is not a directory (ENOTDIR)".to_string(),
+            Some(libc::ELOOP) => "cannot be resolved: too many levels of symlinks (ELOOP)".to_string(),
+            _ => format!("cannot be checked: {err}"),
+        }
+    }
+    let meta = std::fs::symlink_metadata(root).map_err(|e| why(&e))?;
+    if meta.file_type().is_symlink() {
+        return match std::fs::metadata(root) {
+            Ok(target) if target.is_dir() => Ok(()),
+            Ok(_) => Err("is a symlink to something that is not a directory".to_string()),
+            Err(e) => Err(format!("is a symlink whose target {}", why(&e))),
+        };
+    }
+    if meta.is_dir() {
+        Ok(())
+    } else {
+        Err("is not a directory".to_string())
+    }
+}
+
+/// [`check_root_dir`] as `run_as`, in the same helper the toolkit's file
+/// operations run in -- the server's own user may be unable to stat a root
+/// its `run_as` user works in every day. The outer `Err` is the helper
+/// itself failing (cannot start, cannot become `run_as`); the inner one is
+/// the check's answer.
+pub fn check_root_dir_as(run_as: &str, root: &str) -> Result<Result<(), String>, String> {
+    use std::io::{Read, Write};
+    let exe = crate::privdrop::self_exe().map_err(|exc| format!("cannot start the run_as helper: {exc}"))?;
+    let mut child = std::process::Command::new(&exe)
+        .arg(crate::privdrop::RUNAS_ENTRY)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|exc| format!("cannot start the run_as helper: {}", os_error(&exc, &exe.to_string_lossy())))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        // Dropped right after, which is the helper's end of input.
+        let _ = stdin.write_all(crate::pyjson::dumps(&json!({"run_as": run_as, "check_root": root})).as_bytes());
+    }
+    let deadline = Instant::now() + ROOT_CHECK_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("the run_as helper did not answer within {}s", ROOT_CHECK_TIMEOUT.as_secs()));
+            }
+            Err(exc) => return Err(format!("the run_as helper could not be waited for: {exc}")),
+        }
+    }
+    let mut out = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut out);
+    }
+    let reply: Value = serde_json::from_str(&out).map_err(|_| "the run_as helper gave no answer".to_string())?;
+    let stderr = reply["stderr"].as_str().unwrap_or_default().to_string();
+    match (reply["outcome"].as_str(), reply["checked"].as_bool()) {
+        (Some(OUTCOME_OK), _) => Ok(Ok(())),
+        (_, Some(true)) => Ok(Err(stderr)),
+        _ => Err(stderr),
+    }
+}
+
 /// Runs one operation in a child process that first becomes `run_as`.
 ///
 /// argv is fixed -- this binary and the hidden `__runas` argument, nothing

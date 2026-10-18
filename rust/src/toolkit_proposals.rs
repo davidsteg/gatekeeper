@@ -26,6 +26,7 @@ use crate::atomic::{atomic_write_cfg, dump, load_cached, revision, safe_load, wr
 use crate::audit::AuditLog;
 use crate::catalog::{current_version_spec, now_iso};
 use crate::errors::{ConfigError, ConfigResult};
+use crate::execute;
 use crate::pyfmt::{repr_list, repr_str, repr_value, str_value};
 use crate::runas::parse_run_as;
 use crate::service::Service;
@@ -238,11 +239,20 @@ fn tools_outside_roots(tools_path: &str, toolkit_name: &str, roots: &[String]) -
 ///    container (not [`REMOTE_PATH_EXECUTORS`]).
 /// 2. Every entry absolute, without a `..` component, and not `/` itself.
 /// 3. Every entry exists here and is a directory -- checked now, so a typo
-///    is refused instead of loading as a root nothing can be under.
+///    is refused instead of loading as a root nothing can be under. Checked
+///    as whoever will read under it: a `file` toolkit's `run_as` user, in
+///    the same helper its operations run in, else this process. The error
+///    names the errno and that identity ([`execute::file::check_root_dir`]).
 /// 4. No tool on the toolkit is left with a `must_resolve_under` outside
 ///    the new list ([`tools_outside_roots`]); the error names them, since
 ///    the reload would otherwise quietly disable them.
-fn check_path_roots(name: &str, value: &Value, executor: Option<&str>, tools_path: &str) -> ConfigResult<Vec<String>> {
+fn check_path_roots(
+    name: &str,
+    value: &Value,
+    executor: Option<&str>,
+    run_as: Option<&str>,
+    tools_path: &str,
+) -> ConfigResult<Vec<String>> {
     let where_ = format!("toolkit {}", repr_str(name));
     if let Some(executor) = executor.filter(|e| REMOTE_PATH_EXECUTORS.contains(e)) {
         return Err(proposal_refused(format!(
@@ -276,10 +286,26 @@ fn check_path_roots(name: &str, value: &Value, executor: Option<&str>, tools_pat
         if parts.is_empty() {
             return Err(refuse("is the filesystem root, which would put every path in reach."));
         }
-        match std::fs::metadata(root) {
-            Ok(m) if m.is_dir() => {}
-            Ok(_) => return Err(refuse("is not a directory in this container.")),
-            Err(_) => return Err(refuse("does not exist in this container.")),
+        // run_as applies to a file toolkit only; anything else reads in-process.
+        let checked = match run_as.filter(|_| executor == Some("file")) {
+            Some(user) => match execute::file::check_root_dir_as(user, root) {
+                Ok(answer) => answer.map_err(|why| {
+                    format!("{why}; checked as run_as {}, the user this toolkit's file operations run as.", repr_str(user))
+                }),
+                Err(helper) => Err(format!("could not be checked as run_as {}: {helper}.", repr_str(user))),
+            },
+            None => execute::file::check_root_dir(root).map_err(|why| {
+                let (uid, gid) = (crate::runas::getresuid().1, crate::runas::getresgid().1);
+                let hint = if executor == Some("file") && why.contains("EACCES") {
+                    " A directory only another user may enter needs run_as on the toolkit."
+                } else {
+                    ""
+                };
+                format!("{why}; checked as the gatekeeper process (uid={uid} gid={gid}), which this toolkit reads with.{hint}")
+            }),
+        };
+        if let Err(why) = checked {
+            return Err(refuse(&why));
         }
         roots.push(root.clone());
     }
@@ -712,11 +738,11 @@ impl ToolkitProposalStore {
             if let Some(value) = spec.get("path_roots") {
                 let live = self.live_raw()?;
                 let existing = live.get("toolkits").and_then(|t| t.get(name));
-                let executor = spec
-                    .get("executor")
-                    .or_else(|| existing.and_then(|e| e.get("executor")))
-                    .and_then(Value::as_str);
-                check_path_roots(name, value, executor, &self.tools_path)?;
+                let field = |key: &str| {
+                    if spec.contains_key(key) { spec.get(key) } else { existing.and_then(|e| e.get(key)) }
+                        .and_then(Value::as_str)
+                };
+                check_path_roots(name, value, field("executor"), field("run_as"), &self.tools_path)?;
             }
         }
         if kind == "delete" && !spec.is_empty() {
@@ -1008,7 +1034,8 @@ impl ToolkitProposalStore {
                 if let Some(value) = item.spec.get("path_roots") {
                     // Again, against the disk and tools.yaml as they are now:
                     // a directory may be gone, a tool added since submit.
-                    check_path_roots(&item.name, value, executor.as_str(), &self.tools_path)?;
+                    let run_as = body.get("run_as").and_then(Value::as_str);
+                    check_path_roots(&item.name, value, executor.as_str(), run_as, &self.tools_path)?;
                 }
                 // A null network field removes the key, so the remaining
                 // one alone decides -- load_tier1 then refuses the toolkit

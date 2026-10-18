@@ -1,3 +1,12 @@
+## 1.22.1
+
+Two fixes to 1.22.0's `path_roots` proposals.
+
+### Fixed
+
+- **A `path_roots` proposal could call an existing directory missing.** The existence check ran as the gatekeeper process, so on a `file` toolkit with `run_as`, a directory the process user may not enter (`/mnt/raid/agent/hermes-dev/scratch` under a closed `hermes-dev`) was refused as "does not exist in this container", although the toolkit's file operations write there. The check now runs as the identity that will read under the root: a `file` toolkit's `run_as` user, in the same helper its operations run in (the `run_as` proposed with the roots, if any), otherwise the gatekeeper process. The error names the reason and that identity: `does not exist (ENOENT)`, `cannot be reached: permission denied ... (EACCES)`, `is not a directory`, `is a symlink whose target does not exist`, or `could not be checked as run_as '...'` when the helper cannot become that user. A symlink to a directory is accepted, as before.
+- **`admin.toolkit_update` and `admin.toolkit_delete` with an unknown toolkit name filed a proposal** that a human could only reject. Both now refuse it immediately with "No toolkit named '...' in the running configuration", listing the known toolkits, like `admin.credential_bind`. Approving still re-checks the name.
+
 ## 1.22.0
 
 `path_roots` can be changed by a proposal a human approves, and a credential probe now tests the request the tools actually send.

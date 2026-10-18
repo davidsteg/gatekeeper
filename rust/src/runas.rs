@@ -696,6 +696,17 @@ pub fn child_main() -> i32 {
     };
 
     // Every line below runs as the dropped-to user.
+
+    // A proposed path root, stat-ed as the user its operations will run as
+    // (`execute::file::check_root_dir_as`). Nothing is opened or changed.
+    if let Some(root) = request.get("check_root") {
+        let reply = match crate::execute::file::check_root_dir(&str_value(root)) {
+            Ok(()) => json!({"outcome": crate::execute::OUTCOME_OK, "stderr": ""}),
+            Err(why) => json!({"outcome": "failed", "checked": true, "stderr": why}),
+        };
+        emit(&reply);
+        return 0;
+    }
     let outcome = (|| -> Result<crate::execute::file::Op, String> {
         let path = crate::execute::file::validate_path(
             &str_value(require(&request, "path")?),
