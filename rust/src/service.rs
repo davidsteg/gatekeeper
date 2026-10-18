@@ -1014,7 +1014,7 @@ impl Service {
     }
 }
 
-/// The audit log's `command` (1.19.0): what the executor is handed, as
+/// The audit log's `command` (1.20.0): what the executor is handed, as
 /// one line. Never the environment, which is where credentials travel.
 /// The value of a parameter whose name marks it secret (`token`,
 /// `api_key`, ...) is masked wherever it lands, as it is in the logged

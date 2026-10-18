@@ -22,7 +22,7 @@ const FORMAT: Record<string, string> = {
   foreign: "not a gatekeeper token",
 };
 
-/** What a call ran: the `command` the executor was handed (since 1.19.0),
+/** What a call ran: the `command` the executor was handed (since 1.20.0),
  *  or, for older records and calls denied before there was one, the
  *  parameters as `name=value`. Both are redacted and clipped server-side. */
 function ranOf(r: Record<string, unknown>): string {

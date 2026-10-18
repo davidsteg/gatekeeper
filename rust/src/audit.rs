@@ -103,13 +103,13 @@ pub struct CallRecord {
     pub credential_names: Vec<String>,
     pub client: Option<String>,
     /// What the executor was actually handed -- the argv, the HTTP request
-    /// line, the RPC method -- as one line (1.19.0). `None` when the call
+    /// line, the RPC method -- as one line (1.20.0). `None` when the call
     /// was denied before a request existed.
     pub command: Option<String>,
 }
 
 /// A logged parameter value is cut after this many characters, so a
-/// file's content or a blob does not flood the log (1.19.0).
+/// file's content or a blob does not flood the log (1.20.0).
 pub const MAX_PARAMETER_CHARS: usize = 1000;
 /// Same for the recorded `command`.
 pub const MAX_COMMAND_CHARS: usize = 2000;

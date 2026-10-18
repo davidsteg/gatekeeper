@@ -964,7 +964,10 @@ regardless. Since phase 3b (0.56.0) the Requests page decides proposals
 too: two tabs (Change, Toolkit) polled every 15 s with an open count in
 the sidebar, approve and reject per card, an inline value form for a
 credential proposal, an "Approve all" and a "Reject all" that list what
-they will decide, and
+they will decide and send exactly that list, frozen when the question
+opened (1.19.0), a second "Approve anyway" step for a change that takes
+grants away, grants a tool the catalog lacks, changes a role or deletes a
+tool (never batched either), and
 a toolkit deploy that spells out what changes and needs a ticked
 acknowledgement. Everything an agent wrote is rendered as text.
 
@@ -1019,7 +1022,7 @@ A `call` record carries `client`, the address the call came over (the
 forwarded one behind a trusted proxy), next to `identity`. Records written
 before 1.7.0 have none.
 
-Since 1.19.0 a `call` record also carries `command`, right after
+Since 1.20.0 a `call` record also carries `command`, right after
 `parameters`: what the executor was handed, as one line. For `local`,
 `docker` and `ssh` that is the argv, shell-quoted (`/usr/bin/docker exec web
 ls /srv`); for `http` the method, path, query and JSON body (`POST

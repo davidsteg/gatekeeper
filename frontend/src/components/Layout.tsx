@@ -110,15 +110,19 @@ function Shell() {
         <div className="flex items-center gap-2 px-4 py-4">
           <ScrollText className="size-5 text-primary" aria-hidden />
           <span className="font-semibold">gatekeeper</span>
-          <span className="ml-auto flex items-center gap-2">
-            <LiveIndicator />
-            <Badge className="font-mono">{session?.version}</Badge>
-          </span>
+          <span className="ml-auto"><LiveIndicator /></span>
         </div>
         <nav aria-label="Main" className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2">
           <NavItems open={open} />
         </nav>
-        <div className="border-t border-border px-4 py-3"><WhoAmI /></div>
+        <div className="border-t border-border px-4 py-3">
+          <WhoAmI />
+          {/* Down here, not next to the name: the header has no room for it
+              beside the live indicator in a 14rem sidebar. */}
+          <div className="mt-2 text-xs text-muted-foreground">
+            Version <span className="font-mono">{session?.version}</span>
+          </div>
+        </div>
       </aside>
 
       {/* Phone: a slim top bar, tabs at the bottom, everything else under More. */}
