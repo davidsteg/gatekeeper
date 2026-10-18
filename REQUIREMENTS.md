@@ -67,6 +67,7 @@ Layers 2, 3, 5, 6, 7, 8 are the foundation and live in code. Layer 4 is runtime 
 
 - **FR-2.8** The admin token is **not** an agent token with additional permissions, but a separate role on a separate endpoint (`/admin/mcp`).
 - **FR-2.9** Admin tools **never** appear in `tools/list` of the agent endpoint, not even for the admin token. A compromised agent path cannot reach catalog management.
+- **FR-2.9a** (1.26.0) A headless instance (`serve --headless`) serves neither the console nor `/admin/mcp` and refuses to start when asked for either; its configuration changes only through its files.
 - **FR-2.10** The admin endpoint can optionally be additionally restricted at the network level (bind address / source IP).
 
 ---

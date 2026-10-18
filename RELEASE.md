@@ -1,3 +1,17 @@
+## 1.26.0
+
+A headless mode for an instance whose configuration only its deployment may change, and a way to store a credential without the console.
+
+### Added
+
+- **`serve --headless`** (or `GATEKEEPER_HEADLESS=1`). No console at `/app` and no admin MCP endpoint at `/admin/mcp`, so no agent can propose a tool, a grant or a toolkit change, and nothing at runtime writes `tools.yaml`, `identities.yaml` or `toolkits.yaml`. Without `--ui` neither was served before either; headless makes it a guarantee: `--ui`, `--ui-read-only`, `GATEKEEPER_UI` or `GATEKEEPER_UI_READ_ONLY` next to it stops the start with exit code 2 instead of being resolved either way. It also implies `--strict` (a tool its Tier 1 refuses stops the start instead of being disabled) and `--no-bootstrap` (a missing configuration is an error, never a freshly generated one). The configuration still reloads from its files on SIGHUP, so mount them read-only.
+- **`gatekeeper credential-set --name N --kind K [--header H] [--header-format F]`.** Stores a credential read from stdin, encrypted with the master key, for an instance without the console. It creates the slot, or replaces the value of an existing slot of the same kind (no overlap). The value is never an argument, so it stays out of the shell history and the process list, and the audit record names the slot and kind only. One trailing newline is dropped.
+- **SIGHUP also picks up credentials written by another process**, so output masking includes a value `credential-set` stored next to a running server.
+
+### Upgrading
+
+- Nothing to change. Without `--headless` a server starts exactly as before.
+
 ## 1.25.0
 
 Tool features for a container that drives the host only through gatekeeper: a fixed stdin, deleting a file tree, a fixed file mode, a secret file content, and results a program can parse.

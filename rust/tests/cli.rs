@@ -348,6 +348,164 @@ fn a_python_sdk_agent_session_against_the_real_serve_binary() {
     assert!(audit.contains("\"demo.echo\""), "{audit}");
 }
 
+// -- Headless (1.26.0) -------------------------------------------------------------------
+
+fn http(port: u16, request: &str) -> String {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    response
+}
+
+#[test]
+fn headless_refuses_every_console_switch() {
+    let tmp = tempfile::tempdir().unwrap();
+    echo_deployment(tmp.path());
+    let cases: [(&[&str], &[(&str, &str)], &str); 4] = [
+        (&["--headless", "--ui"], &[], "--ui"),
+        (&["--headless", "--ui-read-only"], &[], "--ui-read-only"),
+        (&["--headless"], &[("GATEKEEPER_UI", "1")], "GATEKEEPER_UI"),
+        (&[], &[("GATEKEEPER_HEADLESS", "true"), ("GATEKEEPER_UI_READ_ONLY", "yes")], "GATEKEEPER_UI_READ_ONLY"),
+    ];
+    for (args, env, named) in cases {
+        let mut cmd = gatekeeper();
+        cmd.arg("serve").args(["--port", &free_port().to_string()]).args(args);
+        cmd.env("GATEKEEPER_CONFIG_DIR", tmp.path());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let (code, _, stderr) = run(&mut cmd);
+        assert_eq!(code, 2, "{args:?} {env:?}: {stderr}");
+        assert!(stderr.contains("headless") && stderr.contains(named), "{stderr}");
+    }
+}
+
+#[test]
+fn headless_never_bootstraps_and_loads_strictly() {
+    // An empty directory: a normal start would write a fresh configuration.
+    let empty = tempfile::tempdir().unwrap();
+    let mut cmd = gatekeeper();
+    cmd.args(["serve", "--headless", "--port", &free_port().to_string()]).env("GATEKEEPER_CONFIG_DIR", empty.path());
+    let (code, _, stderr) = run(&mut cmd);
+    assert_ne!(code, 0, "{stderr}");
+    assert_eq!(std::fs::read_dir(empty.path()).unwrap().count(), 0, "headless wrote a configuration");
+
+    // A tool its Tier 1 refuses aborts the start instead of being disabled.
+    let tmp = tempfile::tempdir().unwrap();
+    echo_deployment(tmp.path());
+    let tools = tmp.path().join("tools.yaml");
+    let text = std::fs::read_to_string(&tools).unwrap().replace("timeout_seconds: 10", "timeout_seconds: 99");
+    std::fs::write(&tools, text).unwrap();
+    let mut cmd = gatekeeper();
+    cmd.args(["serve", "--headless", "--port", &free_port().to_string()]).env("GATEKEEPER_CONFIG_DIR", tmp.path());
+    let (code, _, stderr) = run(&mut cmd);
+    assert_ne!(code, 0, "{stderr}");
+    assert!(stderr.contains("timeout_seconds"), "{stderr}");
+}
+
+#[test]
+fn headless_serves_mcp_but_neither_console_nor_admin_mcp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let token = echo_deployment(tmp.path());
+    // An admin with a password: everything --ui would need is there.
+    let admin = generate_token();
+    let path = tmp.path().join("identities.yaml");
+    let mut ids = load(&path);
+    ids["identities"].as_array_mut().unwrap().push(json!({
+        "id": "root", "role": "admin", "token_hash": hash_token(&admin), "token_lookup": hash_token_lookup(&admin),
+        "password_hash": hash_token("a-long-console-password"), "tools": [], "scopes": [],
+    }));
+    std::fs::write(&path, gatekeeper::yaml::dump(&ids)).unwrap();
+
+    let port = free_port();
+    let _server = Server(
+        gatekeeper()
+            .args(["serve", "--host", "127.0.0.1", "--port", &port.to_string(), "--headless"])
+            .env("GATEKEEPER_CONFIG_DIR", tmp.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_until_live(port);
+
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#;
+    let post = |path: &str, bearer: &str| {
+        http(
+            port,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {bearer}\r\n\
+                 Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let agent = post("/mcp", &token);
+    assert!(agent.starts_with("HTTP/1.1 200"), "{agent}");
+    let admin_mcp = post("/admin/mcp", &admin);
+    assert!(admin_mcp.starts_with("HTTP/1.1 404"), "{admin_mcp}");
+    for page in ["/app", "/app/requests", "/api/v1/session"] {
+        let r = http(port, &format!("GET {page} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"));
+        assert!(!r.starts_with("HTTP/1.1 2"), "{page}: {r}");
+    }
+}
+
+fn credential_set(dir: &Path, key: &str, args: &[&str], stdin: &str) -> (i32, String, String) {
+    use std::io::Write;
+    let mut child = gatekeeper()
+        .arg("credential-set")
+        .args(args)
+        .env("GATEKEEPER_CONFIG_DIR", dir)
+        .env("GATEKEEPER_CREDENTIAL_KEY", key)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    let Output { status, stdout, stderr } = child.wait_with_output().unwrap();
+    (status.code().unwrap_or(-1), String::from_utf8_lossy(&stdout).into_owned(), String::from_utf8_lossy(&stderr).into_owned())
+}
+
+#[test]
+fn credential_set_stores_from_stdin_and_never_writes_the_value_in_clear() {
+    let tmp = tempfile::tempdir().unwrap();
+    echo_deployment(tmp.path());
+    let key = gatekeeper::credentials::generate_master_key();
+    let nas = ["--name", "nas", "--kind", "ws_api_key"];
+    let (code, out, err) = credential_set(tmp.path(), &key, &nas, "1-first-api-key-value\n");
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("created"), "{out}");
+    let (code, out, err) = credential_set(tmp.path(), &key, &nas, "1-second-api-key-value\n");
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("replaced"), "{out}");
+
+    let audit = std::fs::read_to_string(tmp.path().join("logs/audit.jsonl")).unwrap();
+    let file = std::fs::read_to_string(tmp.path().join("credentials.yaml")).unwrap();
+    for text in [&audit, &file] {
+        assert!(!text.contains("api-key-value"), "{text}");
+    }
+    assert!(audit.contains("credential_create") && audit.contains("\"nas\""), "{audit}");
+
+    // The slot decrypts to the second value, without the newline.
+    std::env::set_var("GATEKEEPER_CREDENTIAL_KEY", &key);
+    let audit_log = std::sync::Arc::new(gatekeeper::audit::AuditLog::new(tmp.path().join("x").to_str().unwrap()).unwrap());
+    let store = gatekeeper::credentials::CredentialStore::new(tmp.path().join("credentials.yaml").to_str().unwrap(), audit_log);
+    assert_eq!(store.resolve("nas").unwrap().unwrap().value, "1-second-api-key-value");
+    std::env::remove_var("GATEKEEPER_CREDENTIAL_KEY");
+
+    // Another kind under the same name, and an empty stdin, are refused.
+    let (code, _, err) = credential_set(tmp.path(), &key, &["--name", "nas", "--kind", "bearer"], "x");
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("exists with kind"), "{err}");
+    let (code, _, err) = credential_set(tmp.path(), &key, &["--name", "other", "--kind", "bearer"], "\n");
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("no value on stdin"), "{err}");
+}
+
 // -- helpers ------------------------------------------------------------------------------
 
 fn free_port() -> u16 {
