@@ -442,6 +442,10 @@ const STATS = {
   series: [{ start: "2026-10-10T00:00:00+00:00", ok: 3, not_ok: 1 }],
   toolkits: [{ name: "demo", ok: 3, denied: 1, failed: 0, total: 4 }],
   identities: [{ name: "bot", ok: 3, denied: 1, failed: 0, total: 4 }],
+  tools: [
+    { name: "demo.show", toolkit: "demo", ok: 2, denied: 1, failed: 0, total: 3 },
+    { name: "files.read", toolkit: "files", ok: 1, denied: 0, failed: 0, total: 1 },
+  ],
   admin: [{ action: "tool saved", count: 2 }],
   latency: [{ toolkit: "demo", avg_ms: 12, p95_ms: 40, count: 3 }],
 };
@@ -459,6 +463,21 @@ describe("stats and docs", () => {
     expect(asked[0]).toContain("window=7d");
     expect(screen.getByRole("link", { name: "bot" })).toHaveAttribute("href", "/audit?identity=bot");
     expect(screen.getByText("tool saved")).toBeInTheDocument();
+  });
+
+  it("lists the top tools of the toolkit picked from the dropdown", async () => {
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.includes("/stats")) return json(200, { ...STATS, toolkits: [...STATS.toolkits, { name: "files", ok: 1, denied: 0, failed: 0, total: 1 }] });
+      return json(200, []);
+    });
+    renderAt("/stats");
+    const picker = await screen.findByRole("combobox", { name: "Toolkit" });
+    expect(screen.getByRole("link", { name: "demo.show" })).toHaveAttribute("href", "/audit?tool=demo.show");
+    expect(screen.getByRole("link", { name: "files.read" })).toBeInTheDocument();
+    await userEvent.setup().selectOptions(picker, "files");
+    expect(screen.queryByRole("link", { name: "demo.show" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "files.read" })).toBeInTheDocument();
   });
 
   it("renders a bundled document as elements", async () => {
@@ -591,12 +610,35 @@ describe("ui review fixes", () => {
       return undefined;
     });
     renderAt("/audit");
-    expect(await screen.findByText("unknown_token · from 10.10.110.102 · token a1b2c3d4e5f6 · python-httpx/0.28")).toBeInTheDocument();
+    expect(await screen.findByText("unknown_token · from 10.10.110.102 · fingerprint a1b2c3d4e5f6 · python-httpx/0.28")).toBeInTheDocument();
     // Who and What are filled in, not blank.
     expect(screen.getByText("10.10.110.102")).toBeInTheDocument();
     expect(screen.getByText("POST /mcp")).toBeInTheDocument();
     const { describeEvent } = await import("@/pages/events");
     expect(describeEvent(failure).text).toBe("Sign-in failed (unknown_token) from 10.10.110.102");
+  });
+
+  it("spells out what else a refused /mcp request said about its sender", async () => {
+    const failure = {
+      ts: "2026-10-17T22:13:00Z", kind: "auth_failure", reason: "unknown_token",
+      detail: "POST /mcp from 172.16.29.1", client: "172.16.29.1", method: "POST", path: "/mcp",
+      user_agent: "python-httpx2/2.12.0", forwarded_for: "10.0.0.7", mcp_session: true,
+      fingerprint: "b07645ad6ddf", presented_format: "foreign", presented_length: 11,
+      lookup_identity: "hermes", mcp_method: "initialize", mcp_client: "hermes 0.9.1",
+    };
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.includes("/audit")) return json(200, { entries: [failure], next_cursor: null, window_truncated: false });
+      return undefined;
+    });
+    renderAt("/audit");
+    expect(
+      await screen.findByText(
+        "unknown_token · from 172.16.29.1 · forwarded for 10.0.0.7 (unverified) · fingerprint b07645ad6ddf · " +
+          "not a gatekeeper token · matches hermes's token_lookup, not its token_hash · " +
+          "client hermes 0.9.1 (unverified) · python-httpx2/2.12.0 · stale session",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("shows the address next to the identity on every audited call", async () => {

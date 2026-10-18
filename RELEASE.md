@@ -1,4 +1,4 @@
-## 1.14.3
+## 1.17.1
 
 Releases come out faster. Nothing in the image changes.
 
@@ -8,6 +8,45 @@ Releases come out faster. Nothing in the image changes.
 - **The release decision runs first, in its own `version` job.** A missing version bump or `RELEASE.md` section now fails a run within seconds instead of after the test suite.
 - **Rust dependencies are cached in the Docker build** (cargo-chef). A change to gatekeeper's own code no longer recompiles every dependency, which roughly halves the Rust stage of the image build. A version bump does not invalidate the cache.
 - **The Rust suite as root runs in its own job**, next to the normal Rust suite instead of after it.
+## 1.17.0
+
+The Python implementation is gone from the repository. The Rust crate in `rust/`, which the image has run since 1.13.0, is now the only one. Nothing changes for an operator: the image, its CLI, endpoints, environment variables, configuration files and their formats are the same as in the previous release.
+
+### Removed
+
+- **The Python package `src/gatekeeper/`, its test suite and `pyproject.toml`.** None of it was in the image since 1.13.0; it was kept only as the reference the Rust tests compared against.
+- The CI jobs that ran the Python suite (`tests (root)`, and the Python half of `tests`).
+
+### Changed
+
+- **The vendored Google and Microsoft CLI scripts moved to `scripts/google/` and `scripts/microsoft/`.** They are still Python and still installed at `/opt/gatekeeper/google/google_api.py` and `/opt/gatekeeper/microsoft/microsoft_api.py` in the image, so a toolkit's `google_script` or `microsoft_script` needs no change. Their script environment is the same.
+- **The release version lives in `rust/Cargo.toml`.** CI reads it there for the tag, the image tags and the `RELEASE.md` check. The binary, `/mcp`'s `serverInfo` and the release artifacts' manifest report it as before.
+- **`frontend/openapi.json` is the committed API schema**, edited together with the Rust API instead of generated from the Python package. The console's TypeScript types are still generated from it, and the Rust tests check that the routes match it.
+- What the Python implementation produced and the Rust tests compared against live (error messages, the examples as loaded, `init` output, the admin tool list, the MCP wire transcript, token hashes, a credential store and audit lines it wrote) is kept as frozen fixtures in `rust/tests/fixtures/`. The interop tests that drive the server with the official Python MCP SDK client still run in CI, with only `mcp` installed.
+- Development is `cargo build` and `cargo test` in `rust/`; the remaining `pytest` suite covers the vendored scripts and the Dockerfile checks. See AGENTS.md.
+
+## 1.16.0
+
+A refused `/mcp` request now says more about who sent it. Behind a Docker port mapping every caller shows up as the bridge gateway, so the address alone rarely names the machine or the program with the stale token.
+
+### Added
+
+- **New fields on an `auth_failure` record**, each only when it applies:
+  - `forwarded_for`: the `X-Forwarded-For` (or `X-Real-IP`) header as sent, unverified and capped at 160 characters. It names the machine behind a proxy that is not in `--trusted-proxies`.
+  - `mcp_session: true` when the request carried an `Mcp-Session-Id`, usually a client that was connected before a restart and kept going. The session ID itself is not logged.
+  - `presented_format` and `presented_length`: whether the bearer value has the shape `gatekeeper token` generates (`gatekeeper`), has `gk_` in it but not that shape (`gk_malformed`: truncated, quoted, joined), or is some other credential (`foreign`), and its length. Never the value.
+  - `lookup_identity`: the identity whose `token_lookup` matches the presented token although its `token_hash` does not. That means the entry in `identities.yaml` is inconsistent (one of the two edited by hand), not that a stranger's token was sent.
+  - `mcp_method`, and `mcp_client` on an `initialize`: the JSON-RPC method and the client's own `clientInfo` name and version, read from the refused POST body. Only on `/mcp` and `/admin/mcp`, and only a body with a `Content-Length` of at most 8 KiB, read for at most 500 ms, so the 401 never waits long.
+- The audit page in the console shows these in the detail column, and marks `forwarded_for` and `mcp_client` as unverified, and calls the 12 hex digits a `fingerprint`, not a `token`: they are the start of the SHA-256 of the presented token, not its first characters.
+
+## 1.15.0
+
+The Stats page has a "Top tools" card: the ten most-called tools in the chosen window, for all toolkits or for one picked from a dropdown.
+
+### Added
+
+- **Top tools on `/app/stats`.** Each row shows a tool's calls split into ok, denied and failed, and links to the audit log filtered to that tool. The toolkit dropdown lists every toolkit with calls in the window and is kept in the URL (`?toolkit=`), so a reload or a shared link keeps it.
+- **`GET /api/v1/stats` returns `tools`**: every tool called in the window, most calls first, as `name`, `toolkit` and the usual `ok`/`denied`/`failed`/`total` counts. A tool the current catalog no longer has is tagged `_unknown`, as in the per-toolkit table.
 
 ## 1.14.2
 

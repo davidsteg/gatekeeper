@@ -332,3 +332,102 @@ fn shipped_catalog_census() {
     }
     assert!(count > 0, "census found no mapped args");
 }
+
+/// The argv every shipped google/microsoft tool builds with only its
+/// required (and derived) parameters supplied -- the shape an omitted
+/// optional flag leaves behind -- is the argv the Python implementation
+/// built, frozen in `fixtures/shipped_cli_argv_golden.json` (1.17.0).
+/// `tests/test_cli_grammar.py` runs exactly those argvs against the two
+/// real CLI grammars (`scripts/google`, `scripts/microsoft`), so together
+/// they pin that what Rust builds is what the scripts accept. A change to a
+/// shipped tool's CLI mapping is edited into the fixture by hand.
+#[test]
+fn the_minimal_argv_of_every_shipped_cli_tool_is_the_frozen_one() {
+    let golden: Value = serde_json::from_str(include_str!("fixtures/shipped_cli_argv_golden.json")).unwrap();
+    let mut paths: Vec<_> = std::fs::read_dir(examples_dir())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_str().unwrap();
+            name.contains("tools") && name.ends_with(".yaml")
+        })
+        .collect();
+    paths.sort();
+    let mut specs: Vec<(String, Value)> = Vec::new();
+    for path in &paths {
+        let doc = gatekeeper::yaml::load(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let source = path.file_name().unwrap().to_str().unwrap().to_string();
+        for spec in doc["tools"].as_array().cloned().unwrap_or_default() {
+            specs.push((source.clone(), spec));
+        }
+    }
+    const FIELDS: [(&str, &str); 2] = [("google_action", "google"), ("microsoft_action", "microsoft")];
+    // One toolkit per shipped toolkit name, whitelisting exactly the
+    // actions its tools name, with the path roots their derived paths need.
+    let mut toolkits = serde_json::Map::new();
+    for (_, spec) in &specs {
+        for (action_field, executor) in FIELDS {
+            let Some(action) = spec.get(action_field) else { continue };
+            let allowed = format!("allowed_{executor}_actions");
+            let entry = toolkits.entry(spec["toolkit"].as_str().unwrap().to_string()).or_insert_with(|| {
+                json!({
+                    "executor": executor, format!("{executor}_script"): PYTHON, allowed.clone(): [],
+                    "credential": executor, "max_timeout_seconds": 60, "max_output_bytes": 131072,
+                })
+            });
+            if !entry[&allowed].as_array().unwrap().contains(action) {
+                entry[&allowed].as_array_mut().unwrap().push(action.clone());
+            }
+            for param in spec.get("parameters").and_then(Value::as_object).into_iter().flat_map(|m| m.values()) {
+                if let Some(root) = param.get("must_resolve_under") {
+                    let roots = entry.as_object_mut().unwrap().entry("path_roots").or_insert(json!([]));
+                    if !roots.as_array().unwrap().contains(root) {
+                        roots.as_array_mut().unwrap().push(root.clone());
+                    }
+                }
+            }
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let t = tier1_from(
+        dir.path(),
+        &json!({"toolkits": toolkits, "audit": {"dir": dir.path().join("logs").to_str().unwrap()}}),
+    )
+    .unwrap();
+
+    let mut built = Vec::new();
+    for (source, spec) in &specs {
+        for (action_field, executor) in FIELDS {
+            let Some(action) = spec.get(action_field).and_then(Value::as_str) else { continue };
+            let toolkit = t.toolkit(spec["toolkit"].as_str().unwrap()).unwrap();
+            let tool = parse_tool_spec(spec, &t).unwrap();
+            let mut values = Values::new();
+            for (name, param) in spec.get("parameters").and_then(Value::as_object).into_iter().flatten() {
+                if param.get("required") != Some(&json!(true)) && param.get("derived").is_none_or(Value::is_null) {
+                    continue;
+                }
+                let sample = match param.get("type").and_then(Value::as_str) {
+                    Some("integer") => "1".to_string(),
+                    Some("boolean") => "true".to_string(),
+                    Some("enum") => param["values"].get(0).map(|v| v.as_str().unwrap().to_string()).unwrap_or("x".into()),
+                    _ => "x".to_string(),
+                };
+                values.insert(name.clone(), sample);
+            }
+            let mut argv = if executor == "google" {
+                gatekeeper::execute::google::action_argv(toolkit, action)
+            } else {
+                gatekeeper::execute::microsoft::action_argv(toolkit, action)
+            };
+            argv.extend(if executor == "google" {
+                build_google_call(&tool, &values, toolkit).unwrap()
+            } else {
+                build_microsoft_call(&tool, &values, toolkit).unwrap()
+            });
+            built.push(json!({"source": source, "id": spec["id"], "executor": executor, "argv": argv}));
+            break;
+        }
+    }
+    assert!(!built.is_empty(), "no shipped google/microsoft tool was checked");
+    assert_eq!(Value::Array(built), golden);
+}

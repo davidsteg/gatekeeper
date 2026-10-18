@@ -616,7 +616,8 @@ pub fn cmd_password(files: &FileArgs, identity: &str, password: Option<&str>) ->
     0
 }
 
-/// `python -m gatekeeper.api`: prints the console's OpenAPI schema.
+/// `gatekeeper openapi` (Python's `python -m gatekeeper.api`): prints the
+/// console's OpenAPI schema, the committed `frontend/openapi.json`.
 pub fn cmd_openapi() -> i32 {
     use std::io::Write as _;
     let mut out = std::io::stdout().lock();
@@ -1306,7 +1307,7 @@ pub fn command() -> Result<Command, String> {
         .subcommand(Command::new("credential-key").about("Generate the credential store's master key"))
         .subcommand(token)
         .subcommand(password)
-        // `python -m gatekeeper.artifacts` and `python -m gatekeeper.api`:
+        // Python's `python -m gatekeeper.artifacts` and `-m gatekeeper.api`:
         // build-time tools, not part of the operator's CLI.
         .subcommand(
             Command::new("build-artifacts")

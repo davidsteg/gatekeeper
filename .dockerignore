@@ -8,5 +8,4 @@ compose.yaml
 config/identities.yaml
 frontend/node_modules/
 frontend/dist/
-src/gatekeeper/_web/
 rust/target/

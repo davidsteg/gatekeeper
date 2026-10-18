@@ -733,7 +733,7 @@ impl ArtifactStore {
     }
 }
 
-// -- CLI (`python -m gatekeeper.artifacts`) ----------------------------------
+// -- CLI (`gatekeeper build-artifacts`) --------------------------------------
 
 const CLI_OPTIONS: [&str; 5] = ["--help", "--root", "--out", "--commit", "--release"];
 
@@ -759,7 +759,8 @@ fn resolve_option(given: &str) -> Result<&'static str, String> {
     }
 }
 
-/// The build CLI (`python -m gatekeeper.artifacts`): `--root` (default
+/// The build CLI (`gatekeeper build-artifacts`, the Dockerfile's
+/// `artifacts` stage; Python's `python -m gatekeeper.artifacts`): `--root` (default
 /// `.`), `--out`, `--commit` and `--release` (required). `prog` is the
 /// program name in usage text. Returns the exit code.
 // PORT NOTE: a small argparse subset (exact or prefix options, `--opt=v`),
@@ -1160,16 +1161,12 @@ mod tests {
         assert!(Path::new(&format!("{out}/manifest.json")).is_file());
     }
 
-    /// Byte-identical to Python for the same tree, when the reference venv
-    /// is present (it is in the porting environment; skipped elsewhere).
+    /// Byte-identical to Python for the same tree: the SHA-256 of what the
+    /// Python implementation's `_deterministic_tar` produced for exactly
+    /// this tree, frozen when it was removed (1.17.0).
     #[test]
     fn tar_gz_is_byte_identical_to_python() {
-        let python = std::env::var("GATEKEEPER_INTEROP_PYTHON")
-            .unwrap_or_else(|_| "/tmp/claude-0/venv/bin/python".into());
-        let python = python.as_str();
-        if !Path::new(python).exists() {
-            return;
-        }
+        use sha2::Digest as _;
         let tmp = tempfile::tempdir().unwrap();
         let root = repo(tmp.path());
         let kit = format!("{root}/kit");
@@ -1185,13 +1182,12 @@ mod tests {
         std::fs::create_dir_all(format!("{kit}/.pytest_cache")).unwrap();
         std::fs::write(format!("{kit}/.pytest_cache/x"), "x").unwrap();
         let ours = deterministic_tar(&root, "kit", ADAPTER).unwrap();
-        let script = format!(
-            "import sys; from gatekeeper.artifacts import _deterministic_tar as t; \
-             sys.stdout.buffer.write(t({root:?}, 'kit', {ADAPTER:?}))"
+        let sha = |b: &[u8]| hex::encode(sha2::Sha256::digest(b));
+        assert_eq!(
+            sha(&gunzip(&ours)),
+            "2496d43df3e5173aa4092a3096653a78fc8c2772316cf028794cf0533540f879",
+            "uncompressed tar differs"
         );
-        let output = std::process::Command::new(python).args(["-c", &script]).output().unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        assert_eq!(gunzip(&ours), gunzip(&output.stdout), "uncompressed tar differs");
-        assert_eq!(ours, output.stdout, "gzip bytes differ");
+        assert_eq!(sha(&ours), "f84445acc14e308204bf1ae7af1325706802688f0c0185784e7e8ca1d5795236", "gzip bytes differ");
     }
 }

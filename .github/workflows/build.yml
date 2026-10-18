@@ -1,7 +1,7 @@
 name: build
 
 # Jede Aenderung ist ein Release. Ausgeloest wird es nicht von einem
-# handgesetzten Tag, sondern von der Version in pyproject.toml: steht dort eine
+# handgesetzten Tag, sondern von der Version in rust/Cargo.toml: steht dort eine
 # Fassung, zu der es noch kein Tag gibt, wird sie veroeffentlicht. Ein Release
 # entsteht damit im selben Commit wie die Aenderung -- und wer die Version
 # vergisst, merkt es daran, dass nichts erscheint.
@@ -29,9 +29,9 @@ env:
 jobs:
   version:
     name: version
-    # Die Release-Entscheidung, vor allem anderen und in Sekunden: fehlt der
-    # Bump oder die RELEASE.md-Notiz, ist der Lauf sofort rot, statt erst nach
-    # der Testsuite.
+    # Die Release-Entscheidung (Version, Tag, RELEASE.md), vor allem anderen
+    # und in Sekunden: fehlt der Bump oder die RELEASE.md-Notiz, ist der Lauf
+    # sofort rot, statt erst nach den Tests.
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -56,7 +56,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           version=$(python -c "import tomllib,pathlib; \
-            print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+            print(tomllib.loads(pathlib.Path('rust/Cargo.toml').read_text())['package']['version'])")
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # '1.2' zeigt auf die neueste 1.2.x -- wer die Reihe pinnen will,
           # bekommt Fehlerbehebungen, aber keine neuen Funktionen.
@@ -64,7 +64,7 @@ jobs:
           echo "Package version: $version"
 
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match pyproject.toml ($version)." \
+            echo "::error::Tag $GITHUB_REF_NAME does not match rust/Cargo.toml ($version)." \
                  "An image would report a version it does not have."
             exit 1
           fi
@@ -86,7 +86,7 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ] \
              && [ "$GITHUB_REF_NAME" = main ]; then
             if [ "$released" = true ]; then
-              echo "::error::pyproject.toml is still at $version, and v$version is already released." \
+              echo "::error::rust/Cargo.toml is still at $version, and v$version is already released." \
                    "Every change on main is a release: bump the version in the same commit as the change" \
                    "and add a '## <version>' section to RELEASE.md."
               exit 1
@@ -95,11 +95,13 @@ jobs:
             # fehlt (ein abgebrochener Lauf): die Version muss sich gegenueber
             # dem vorherigen main-Stand bewegt haben.
             if [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-              previous=$(git show "$BEFORE:pyproject.toml" 2>/dev/null | python -c \
-                "import sys,tomllib; print(tomllib.loads(sys.stdin.read())['project']['version'])" \
+              # Ein Vorgaenger von vor 1.17.0 hat dort noch 0.0.0 (die Version
+              # stand noch beim Python-Paket) -- das ist nie gleich und genuegt.
+              previous=$(git show "$BEFORE:rust/Cargo.toml" 2>/dev/null | python -c \
+                "import sys,tomllib; print(tomllib.loads(sys.stdin.read())['package']['version'])" \
                 2>/dev/null || true)
               if [ -n "$previous" ] && [ "$previous" = "$version" ]; then
-                echo "::error::pyproject.toml is unchanged at $version since the previous main commit" \
+                echo "::error::rust/Cargo.toml is unchanged at $version since the previous main commit" \
                      "($BEFORE). Every change on main is a release: bump the version in the same commit" \
                      "as the change and add a '## <version>' section to RELEASE.md."
                 exit 1
@@ -131,6 +133,8 @@ jobs:
 
   test:
     name: tests
+    # Die Tests des Python-Rests: der mitgelieferten CLI-Skripte (scripts/)
+    # und der Dockerfile-Pruefungen. gatekeeper selbst testet der rust-Job.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -139,120 +143,35 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          # The pip cache keys on the one pin file there is.
+          cache-dependency-path: constraints.txt
 
-      - name: Install
-        run: pip install -e ".[dev]" -c constraints.txt
+      - name: Install the script runtime
+        # Exactly what the image's script venv holds (Dockerfile, `scripts`
+        # stage), plus the test and lint tools.
+        run: |
+          pip install -c constraints.txt \
+            "google-api-python-client>=2.100" "google-auth-oauthlib>=1.0" \
+            pytest pyyaml ruff pip-audit
 
       - name: Audit dependencies (pip-audit)
         run: pip-audit
 
       - name: Lint (ruff)
-        # Scoped to src/ only: tests/ carries a handful of pre-existing,
-        # deliberate idioms (assert False, broad pytest.raises(Exception))
-        # that are a style call, not a bug -- gating on them here would
-        # force a rewrite of test files as a side effect of adding a
-        # linter, which is its own considered change. E501/UP042 are
-        # excluded per pyproject.toml's own comments.
-        run: ruff check src/
-
-      - name: Type check (mypy)
-        # Informational, not gating: the first run against this codebase
-        # surfaces ~30 pre-existing findings (mostly the MCP SDK's
-        # pydantic camelCase aliases, e.g. inputSchema vs input_schema,
-        # that mypy doesn't resolve without its pydantic plugin) that are
-        # a considered backlog, not something to fix blind under a lint
-        # gate. Kept running so the signal is visible without blocking
-        # the build on it.
-        run: mypy src/gatekeeper || true
+        # The vendored scripts and their tests; google_api.py is excluded
+        # by ruff.toml (a vendored skill script with its own style).
+        run: ruff check scripts tests
 
       - name: Test suite
-        # Unter Linux laufen auch die Faelle, die unter Windows uebersprungen
-        # werden -- allen voran der Symlink-Ausbruch aus dem Negativkorpus.
-        run: pytest -q
-
-      - name: Validate the empty state
-        # Der Weg, den jede Erstinstallation nimmt. Er muss zu einer Lage
-        # fuehren, die laedt -- ohne dass irgendetwas vorkonfiguriert waere.
-        run: |
-          gatekeeper init --config-dir /tmp/blank | tee /tmp/init.log
-          grep -q 'toolkits: {}' /tmp/blank/toolkits.yaml
-          grep -q 'tools: \[\]' /tmp/blank/tools.yaml
-          gatekeeper \
-            --toolkits /tmp/blank/toolkits.yaml \
-            --tools /tmp/blank/tools.yaml \
-            --identities /tmp/blank/identities.yaml \
-            check | tee /tmp/check.log
-          grep -q '0 toolkits, 0 tools, 1 identities' /tmp/check.log
-
-      - name: Validate the examples
-        # Die Beispiele sind das, wovon jemand abschreibt. Ein Tippfehler darin
-        # faellt sonst erst auf einem fremden Host auf.
-        run: |
-          hash=$(gatekeeper token | grep -oE 'scrypt\$[^[:space:]]+')
-          printf 'identities:\n  - id: ci\n    role: admin\n    token_hash: "%s"\n    tools: []\n    scopes: []\n' \
-            "$hash" > /tmp/identities.yaml
-          gatekeeper \
-            --toolkits config/examples/toolkits.yaml \
-            --tools config/examples/tools.yaml \
-            --identities /tmp/identities.yaml \
-            check
-
-  test-privileged:
-    name: tests (root)
-    # Tests, die eine Privilegiengrenze zusichern, überspringen sich selbst,
-    # wenn der Prozess nicht root ist -- auf dem normalen Runner also immer.
-    # Damit lief ausgerechnet das in keinem Lauf mit: dass der Drop wirklich
-    # Autorität abgibt, dass root danach nicht zurückzuholen ist, dass keine
-    # Capability übrig bleibt, dass ein 'local'-Binary keine ambient Caps
-    # erbt. Ein Container-Job läuft als root und schließt diese Lücke.
-    #
-    # `options` gibt dem Container die Capabilities, die die GATEKEEPER_KEEP_CAPS
-    # Tests brauchen: DAC_OVERRIDE und DAC_READ_SEARCH müssen im Bounding Set
-    # sein, damit `capset` sie in den permitted/inheritable/ambient Set legen
-    # kann. Ohne sie schlägt der Drop mit EPERM fehl -- exakt der Mechanik, die
-    # der Bug reproduziert, nur hier im Test-Container statt im deployten
-    # Gatekeeper.
-    runs-on: ubuntu-latest
-    container:
-      image: python:3.12-slim
-      options: --cap-add CAP_DAC_OVERRIDE --cap-add CAP_DAC_READ_SEARCH --cap-add CAP_SETUID --cap-add CAP_SETGID
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install
-        run: pip install -e ".[dev]" -c constraints.txt
-
-      - name: Verify the job is actually privileged
-        # Ohne diese Pruefung wuerde ein Runner ohne die Capabilities die
-        # Tests stillschweigend wieder ueberspringen -- gruen, aber ohne
-        # irgendetwas zugesichert zu haben.
-        run: |
-          python - <<'PY'
-          import os, sys
-          caps = next(int(l.split(":")[1], 16) for l in open("/proc/self/status")
-                      if l.startswith("CapEff:"))
-          setid = (1 << 7) | (1 << 6)   # CAP_SETUID | CAP_SETGID
-          print(f"uid={os.geteuid()} CapEff={caps:016x}")
-          if os.geteuid() != 0 or (caps & setid) != setid:
-              sys.exit("::error::this job must run as root with CAP_SETUID/CAP_SETGID")
-          PY
-
-      - name: Test suite, as root
-        # Die ganze Suite, nicht die eine Datei mit den Privilegien-Tests.
-        # Eine Dateiliste an dieser Stelle ist genau die Wartung, die beim
-        # naechsten needs_root-Test in einer neuen Datei vergessen wird --
-        # zwischen 0.30.0 und 0.30.1 ist das prompt passiert, tests/
-        # test_unpriv.py lief hier nicht mit. So gibt es nichts zu vergessen,
-        # und der Job kostet nur Laufzeit, die parallel zum normalen liegt.
-        run: pytest -q
+        run: python -m pytest -q
 
   frontend:
     name: frontend
     # The React console (frontend/, served at /app). It is the one part of
     # gatekeeper that runs in a browser, so its dependency tree gets the same
-    # gate as the Python one: installed from the lockfile with no install
+    # gate as everything else: installed from the lockfile with no install
     # scripts, type-checked, linted, tested, audited -- and its generated API
-    # types must match the server's schema, or client and server disagree.
+    # types must match the committed schema, or client and server disagree.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -266,11 +185,6 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
       - name: Install
         run: npm ci --ignore-scripts
 
@@ -278,12 +192,11 @@ jobs:
         run: npm audit --audit-level=high
 
       - name: Generated API types are current
-        # Regenerate the schema from the server, then the types from the
-        # schema; either changing means a commit forgot `npm run gen:api`.
-        run: |
-          pip install -e "..[dev]" -c ../constraints.txt
-          python -m gatekeeper.api > openapi.json
-          npm run check:api
+        # openapi.json is the committed schema, edited together with the
+        # Rust API (whose tests pin that routes and responses match it);
+        # the types are generated from it, so a change here means a commit
+        # forgot `npm run gen:api`.
+        run: npm run check:api
 
       - name: Type check (tsc)
         run: npx tsc --noEmit
@@ -299,12 +212,12 @@ jobs:
 
   rust:
     name: rust
-    # The Rust implementation (rust/). This job proves it builds without
+    # gatekeeper itself (rust/, what the image runs): builds without
     # warnings and passes its own suite as the runner user; `rust (root)`
-    # runs the same suite as root, in parallel. Several of its tests
-    # drive the Python package (the MCP SDK client against the Rust server,
-    # scrypt/Fernet/audit-line interop), so the Python side is installed
-    # too and the interop tests are told where it is instead of skipping.
+    # runs the same suite as root, next to it. A few tests drive the server with the official Python MCP
+    # SDK as the client, so that SDK -- and nothing else -- is installed and
+    # the tests are told where it is: with GATEKEEPER_INTEROP_PYTHON set, an
+    # interpreter without it fails them instead of skipping.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -316,10 +229,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          # The pip cache keys on the one pin file there is.
+          cache-dependency-path: constraints.txt
 
-      - name: Install the Python reference
+      - name: Install the MCP SDK (interop client)
         working-directory: .
-        run: pip install -e ".[dev]" -c constraints.txt
+        run: pip install -c constraints.txt mcp
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -339,12 +254,42 @@ jobs:
           export GATEKEEPER_INTEROP_PYTHON="$(command -v python)"
           cargo test --locked
 
+      - name: Validate the empty state
+        # Der Weg, den jede Erstinstallation nimmt. Er muss zu einer Lage
+        # fuehren, die laedt -- ohne dass irgendetwas vorkonfiguriert waere.
+        run: |
+          gk=target/debug/gatekeeper
+          $gk init --config-dir /tmp/blank | tee /tmp/init.log
+          grep -q 'toolkits: {}' /tmp/blank/toolkits.yaml
+          grep -q 'tools: \[\]' /tmp/blank/tools.yaml
+          $gk \
+            --toolkits /tmp/blank/toolkits.yaml \
+            --tools /tmp/blank/tools.yaml \
+            --identities /tmp/blank/identities.yaml \
+            check | tee /tmp/check.log
+          grep -q '0 toolkits, 0 tools, 1 identities' /tmp/check.log
+
+      - name: Validate the examples
+        # Die Beispiele sind das, wovon jemand abschreibt. Ein Tippfehler darin
+        # faellt sonst erst auf einem fremden Host auf.
+        working-directory: .
+        run: |
+          gk=rust/target/debug/gatekeeper
+          hash=$($gk token | grep -oE 'scrypt\$[^[:space:]]+')
+          printf 'identities:\n  - id: ci\n    role: admin\n    token_hash: "%s"\n    tools: []\n    scopes: []\n' \
+            "$hash" > /tmp/identities.yaml
+          $gk \
+            --toolkits config/examples/toolkits.yaml \
+            --tools config/examples/tools.yaml \
+            --identities /tmp/identities.yaml \
+            check
+
   rust-root:
     name: rust (root)
-    # The Rust suite as root, for the reason the `tests (root)` job exists:
-    # the privilege-drop and run_as tests skip themselves when not root, so
-    # without this run nothing asserts that the Rust drop really gives up
-    # authority. Its own job, so it runs next to `rust` instead of after it.
+    # The Rust suite as root: the privilege-drop and run_as tests skip
+    # themselves when not root, so without this run nothing asserts that the
+    # drop really gives up authority. Its own job, so it runs next to `rust`
+    # instead of after it.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -356,10 +301,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          # The pip cache keys on the one pin file there is.
+          cache-dependency-path: constraints.txt
 
-      - name: Install the Python reference
+      - name: Install the MCP SDK (interop client)
         working-directory: .
-        run: pip install -e ".[dev]" -c constraints.txt
+        run: pip install -c constraints.txt mcp
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -374,8 +321,8 @@ jobs:
 
       - name: Test suite, as root
         # sudo on the runner has the SETUID/SETGID and DAC capabilities
-        # these tests need; the check first makes sure of that, so a runner
-        # without them fails instead of skipping silently. The tests run the binary as dropped users
+        # these tests need; the check first makes sure of that, so a runner without them fails instead
+        # of skipping silently. The tests run the binary as dropped users
         # (568, nobody), so the checkout's path must be traversable by them;
         # the runner's home is 0750. The tree is handed back afterwards so
         # the cache step can read it.
@@ -426,7 +373,7 @@ jobs:
     # Bei Pull Requests wird nur gebaut, nicht veroeffentlicht: ein Fork
     # duerfte sonst ueber einen PR ein Image unter unserem Namen schieben.
     if: github.event_name != 'pull_request'
-    needs: [version, test, test-privileged, frontend, rust, rust-root, image]
+    needs: [version, test, frontend, rust, rust-root, image]
     runs-on: ubuntu-latest
     permissions:
       contents: read

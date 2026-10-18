@@ -168,10 +168,35 @@ async fn stats_rates_and_tables_with_seeded_data() {
     assert_eq!(body["admin"], json!([{"action": "created tool", "count": 1}]));
     assert_eq!(body["toolkits"], json!([{"name": "demo", "total": 5, "ok": 3, "denied": 1, "failed": 1}]));
     assert_eq!(body["identities"][0], json!({"name": "bot", "total": 5, "ok": 3, "denied": 1, "failed": 1}));
+    assert_eq!(body["tools"], json!([{"name": "demo.show", "toolkit": "demo", "total": 5, "ok": 3, "denied": 1, "failed": 1}]));
     let latency = body["latency"].as_array().unwrap();
     let count = |kit: &str| latency.iter().find(|r| r["toolkit"] == kit).unwrap()["count"].clone();
     assert_eq!(count("demo"), 5);
     assert_eq!(count("_overall"), 5);
+}
+
+#[tokio::test]
+async fn stats_top_tools_carry_their_toolkit() {
+    // Port of test_api_extras.py::test_stats_top_tools_carry_their_toolkit.
+    let env = make_env();
+    for outcome in ["ok", "ok", "failed"] {
+        env.env.audit.write(json!({"kind": "call", "identity": "bot", "tool": "demo.show", "outcome": outcome})).unwrap();
+    }
+    env.env.audit.write(json!({"kind": "call", "identity": "bot", "tool": "gone.tool", "outcome": "denied"})).unwrap();
+    env.env
+        .audit
+        .write(json!({"kind": "admin_change", "actor": "root", "action": "tool_create", "target": "demo.show"}))
+        .unwrap();
+    let mut c = env.client();
+    c.login("eye").await;
+    let body = c.get(&api("/stats")).await.json();
+    assert_eq!(
+        body["tools"],
+        json!([
+            {"name": "demo.show", "toolkit": "demo", "total": 3, "ok": 2, "denied": 0, "failed": 1},
+            {"name": "gone.tool", "toolkit": "_unknown", "total": 1, "ok": 0, "denied": 1, "failed": 0},
+        ])
+    );
 }
 
 #[tokio::test]
@@ -297,7 +322,7 @@ async fn documents_are_a_fixed_list() {
     assert_eq!(slugs, HashSet::from(["readme", "requirements", "agents", "release"]));
     let readme = c.get(&api("/documents/readme")).await.json();
     assert!(readme["text"].as_str().unwrap().contains("gatekeeper"));
-    for slug in ["../pyproject.toml", "README.md", "%2e%2e%2fpyproject.toml"] {
+    for slug in ["../Dockerfile", "README.md", "%2e%2e%2fDockerfile"] {
         assert_eq!(c.get(&api(&format!("/documents/{slug}"))).await.status, 404, "{slug}");
     }
 }

@@ -1,7 +1,7 @@
 //! The `microsoft` executor -- the Outlook/Graph counterpart of `google`
 //! (port of `execute_microsoft.py`).
 //!
-//! The vendored `_microsoft_api/microsoft_api.py` (stays Python) wraps
+//! The vendored `scripts/microsoft/microsoft_api.py` (stays Python) wraps
 //! Microsoft Graph's mail endpoints, authenticates with an OAuth2 token
 //! file (`$HOME/.hermes/microsoft_token.json`, materialized 0600 by the
 //! service and handed over via `HOME`, never argv -- FR-10.2) and emits
@@ -28,7 +28,7 @@ use crate::tier1::Toolkit;
 /// (`MICROSOFT_FALLBACK_SCRIPT`'s role): `GATEKEEPER_MICROSOFT_SCRIPT`,
 /// else the image / checkout copy (see [`vendored_script`]).
 pub fn microsoft_fallback_script() -> String {
-    vendored_script("GATEKEEPER_MICROSOFT_SCRIPT", "_microsoft_api", "microsoft_api.py")
+    vendored_script("GATEKEEPER_MICROSOFT_SCRIPT", "microsoft", "microsoft_api.py")
 }
 
 /// The services microsoft_api.py dispatches on.

@@ -1,0 +1,128 @@
+[
+ {
+  "source": "tools.yaml",
+  "id": "gmail.search",
+  "executor": "google",
+  "argv": [
+   "gmail",
+   "search",
+   "x"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "gmail.get",
+  "executor": "google",
+  "argv": [
+   "gmail",
+   "get",
+   "x"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "gmail.send",
+  "executor": "google",
+  "argv": [
+   "gmail",
+   "send",
+   "--to",
+   "x",
+   "--subject",
+   "x",
+   "--body",
+   "x"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "outlook.list_messages",
+  "executor": "microsoft",
+  "argv": [
+   "mail",
+   "list"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "outlook.get_message",
+  "executor": "microsoft",
+  "argv": [
+   "mail",
+   "get",
+   "x"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "outlook.list_folders",
+  "executor": "microsoft",
+  "argv": [
+   "mail",
+   "folders"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "outlook.send_mail",
+  "executor": "microsoft",
+  "argv": [
+   "mail",
+   "send",
+   "--to",
+   "x",
+   "--subject",
+   "x",
+   "--body",
+   "x"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "calendar.list",
+  "executor": "google",
+  "argv": [
+   "calendar",
+   "list",
+   "--start",
+   "x",
+   "--end",
+   "x"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "calendar.create",
+  "executor": "google",
+  "argv": [
+   "calendar",
+   "create",
+   "--summary",
+   "x",
+   "--start",
+   "x",
+   "--end",
+   "x"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "drive.search",
+  "executor": "google",
+  "argv": [
+   "drive",
+   "search",
+   "x"
+  ]
+ },
+ {
+  "source": "tools.yaml",
+  "id": "drive.upload",
+  "executor": "google",
+  "argv": [
+   "drive",
+   "upload",
+   "x"
+  ]
+ }
+]

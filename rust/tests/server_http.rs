@@ -112,8 +112,8 @@ async fn the_server_identifies_itself() {
     // test_version.py: the real version, never a placeholder.
     assert_ne!(gatekeeper::VERSION, "0.1.0");
     assert_ne!(gatekeeper::VERSION, "0.0.0+unknown");
-    let pyproject = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../pyproject.toml")).unwrap();
-    assert!(pyproject.contains(&format!("\nversion = \"{}\"\n", gatekeeper::VERSION)));
+    let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
+    assert!(manifest.contains(&format!("\nversion = \"{}\"\n", gatekeeper::VERSION)));
 }
 
 #[tokio::test]
@@ -416,15 +416,67 @@ async fn an_mcp_auth_failure_names_the_caller_but_never_the_token() {
     assert_eq!(unknown["detail"], "POST /mcp from 127.0.0.1");
     assert_eq!((unknown["method"].as_str(), unknown["path"].as_str()), (Some("POST"), Some("/mcp")));
     assert_eq!(unknown["user_agent"], "stale-agent/1.0");
+    assert_eq!((&unknown["presented_format"], &unknown["presented_length"]), (&json!("gatekeeper"), &json!(46)));
+    assert_eq!(unknown["mcp_method"], "tools/list");
     assert!(unknown.get("identity").is_none());
     // Field order of Python's `auth_failure(reason=..., detail=..., **caller)`.
     let keys: Vec<&String> = unknown.as_object().unwrap().keys().collect();
-    assert_eq!(keys, ["ts", "kind", "reason", "detail", "client", "method", "path", "user_agent", "fingerprint"]);
+    assert_eq!(
+        keys,
+        [
+            "ts", "kind", "reason", "detail", "client", "method", "path", "user_agent", "fingerprint",
+            "presented_format", "presented_length", "mcp_method"
+        ]
+    );
     assert_eq!(wrong_role["identity"], "root");
     assert_eq!(wrong_role["client"], "127.0.0.1");
     assert_eq!(wrong_role["detail"], "role 'admin' on /mcp ('root') from 127.0.0.1");
     assert!(missing.get("fingerprint").is_none() && missing["client"] == "127.0.0.1");
     assert!(!env.audit_text().contains(&stale));
+}
+
+#[tokio::test]
+async fn an_mcp_auth_failure_says_what_the_client_is() {
+    let (env, _) = standard_env();
+    let base = serve(full_app(&env)).await;
+    let initialize = json!({
+        "jsonrpc": "2.0", "id": 0, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "hermes", "version": "0.9.1"}},
+    });
+    let headers = [("x-forwarded-for", "10.0.0.7"), ("mcp-session-id", "s3cr3t-session")];
+    assert_eq!(post_json(&base, "/mcp", Some("sk-not-ours"), initialize, &headers).await.status(), 401);
+    let garbage = http()
+        .post(format!("{base}/mcp"))
+        .bearer_auth("sk-not-ours")
+        .body("[".repeat(60000))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(garbage.status(), 401);
+    assert_eq!(get(&base, "/mcp", Some("gk_short")).await.status(), 401);
+    // Only an MCP mount's body is read.
+    let initialize = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize"});
+    assert_eq!(post_json(&base, "/metrics", Some("sk-not-ours"), initialize, &headers).await.status(), 401);
+    let failures = audit_of(&env, "auth_failure");
+    let [first, garbage, short, metrics] = &failures[failures.len() - 4..] else { panic!() };
+    assert!(metrics.get("mcp_method").is_none());
+    assert_eq!(first["forwarded_for"], "10.0.0.7");
+    assert_eq!(first["mcp_session"], true);
+    assert_eq!((&first["presented_format"], &first["presented_length"]), (&json!("foreign"), &json!(11)));
+    assert_eq!((&first["mcp_method"], &first["mcp_client"]), (&json!("initialize"), &json!("hermes 0.9.1")));
+    let keys: Vec<&String> = first.as_object().unwrap().keys().collect();
+    assert_eq!(
+        keys,
+        [
+            "ts", "kind", "reason", "detail", "client", "method", "path", "forwarded_for", "mcp_session",
+            "fingerprint", "presented_format", "presented_length", "mcp_method", "mcp_client"
+        ]
+    );
+    assert!(garbage.get("mcp_method").is_none() && garbage.get("mcp_client").is_none());
+    assert!(short["presented_format"] == "gk_malformed" && short.get("mcp_method").is_none());
+    let text = env.audit_text();
+    assert!(!text.contains("sk-not-ours") && !text.contains("s3cr3t-session"));
 }
 
 #[tokio::test]

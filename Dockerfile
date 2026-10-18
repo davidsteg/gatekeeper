@@ -57,9 +57,8 @@ RUN cargo chef prepare --recipe-path /recipe.json
 FROM chef AS build
 COPY --from=planner /recipe.json /recipe.json
 RUN cargo chef cook --release --locked --target "$(cat /target)" --recipe-path /recipe.json
-# build.rs reads the release version from pyproject.toml, one level up;
-# the console's API schema is embedded from frontend/openapi.json.
-COPY pyproject.toml /build/
+# The release version is rust/Cargo.toml's; the console's API schema is
+# embedded from frontend/openapi.json, one level up.
 COPY frontend/openapi.json /build/frontend/openapi.json
 COPY rust ./
 RUN cargo build --release --locked --target "$(cat /target)" \
@@ -94,11 +93,11 @@ FROM python:3.12-slim AS artifacts
 
 ARG GATEKEEPER_COMMIT=unknown
 WORKDIR /build
-COPY pyproject.toml ./
+COPY rust/Cargo.toml /tmp/Cargo.toml
 COPY --from=build /usr/local/bin/gatekeeper /usr/local/bin/gatekeeper
 RUN gatekeeper build-artifacts --root . --out /opt/artifacts \
       --commit "$GATEKEEPER_COMMIT" \
-      --release "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+      --release "$(python -c 'import tomllib; print(tomllib.load(open("/tmp/Cargo.toml", "rb"))["package"]["version"])')"
 
 # --- Docker CLI + Compose plugin ------------------------------------------
 # Only the client, no daemon. gatekeeper talks to the host's Docker daemon
@@ -188,7 +187,7 @@ ARG GATEKEEPER_COMMIT=unknown
 # RELEASE.md is not compiled into the binary -- the console's Release notes page (/app/release-notes,
 # via /api/v1/release-notes) reads it from
 # this fixed path in production. GATEKEEPER_RELEASE_NOTES can override it;
-# a binary run from a checkout finds the file next to pyproject.toml instead
+# a binary run from a checkout finds the file at the repository root instead
 # and never needs this at all (see release_notes::notes_path()).
 COPY RELEASE.md /usr/share/gatekeeper/RELEASE.md
 
@@ -204,7 +203,7 @@ COPY RELEASE.md /opt/gatekeeper-docs/RELEASE.md
 # both must live in the same directory. The OAuth token is materialized
 # to $HOME/.hermes/google_token.json per call by the service -- no secret
 # is baked into the image, only the script.
-COPY src/gatekeeper/_google_api/ /opt/gatekeeper/google/
+COPY scripts/google/ /opt/gatekeeper/google/
 
 # The same for the `microsoft` executor: microsoft_api.py is baked in at
 # /opt/gatekeeper/microsoft/microsoft_api.py, which is what a toolkit's
@@ -212,7 +211,7 @@ COPY src/gatekeeper/_google_api/ /opt/gatekeeper/google/
 # library, so it runs under any interpreter in the image, and the OAuth
 # token is materialized to $HOME/.hermes/microsoft_token.json per call
 # by the service -- no secret is baked into the image, only the script.
-COPY src/gatekeeper/_microsoft_api/ /opt/gatekeeper/microsoft/
+COPY scripts/microsoft/ /opt/gatekeeper/microsoft/
 
 # Verify at build time that 'docker compose' actually resolves. Without this
 # check, a missing plugin would only surface on the first agent call.

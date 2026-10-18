@@ -33,7 +33,7 @@ either way it only ever lands in this separate Tier 2 file -- never
 and only a human clicking "Approve & Deploy" at `/app/requests` (Toolkit
 tab) writes it into `toolkits.yaml` and reloads it into the running
 process (`Service.reload_config`, no restart). See
-[`toolkit_proposals.py`](../src/gatekeeper/toolkit_proposals.py).
+[`toolkit_proposals.rs`](../rust/src/toolkit_proposals.rs).
 A `"create"` for a name already in `toolkits.yaml` (or already pending as
 a create) is refused when proposed, and again at deploy for a name a
 redeploy added in between. The agent side can read the queue
@@ -41,10 +41,10 @@ redeploy added in between. The agent side can read the queue
 (`admin.proposal_withdraw`, status `withdrawn`); deploying and rejecting
 stay with the console.
 
-**Key invariant:** `store.py` (`ConfigStore`, Tier 2 writes) has no function
+**Key invariant:** `store.rs` (`ConfigStore`, Tier 2 writes) has no function
 that writes `toolkits.yaml`. The console can create tools, identities, and
 credentials through it — never a toolkit. The one exception lives entirely
-outside `store.py`: `toolkit_proposals.py`'s `ToolkitProposalStore.deploy`,
+outside `store.rs`: `toolkit_proposals.rs`'s `ToolkitProposalStore.deploy`,
 reachable only from a human clicking "Approve & Deploy" at `/app/requests`,
 never automatically and never from `/admin/mcp` (see below).
 
@@ -72,13 +72,13 @@ a separate `Server` instance with a hand-written, fixed `admin.*` tool list
 that shares no catalog/tool registry with `/mcp`. `AuthMiddleware` role-gates
 each mount -- an `admin`-role token is rejected outright on `/mcp`, and every
 other role is rejected outright on `/admin/mcp`, so a token never opens the
-"wrong" endpoint even in principle. See [`admin_service.py`](../src/gatekeeper/admin_service.py)
+"wrong" endpoint even in principle. See [`admin_service.rs`](../rust/src/admin_service.rs)
 for which `admin.*` actions apply immediately versus land in the
 `pending.yaml` queue for a human to approve at `/app/requests` (Change tab)
 -- `approve`/`reject` are not reachable from `/admin/mcp` at all, so an
 agent cannot approve its own proposal. `admin.cred_propose` also lands in
 `pending.yaml`, but its own approval never goes through `apply_pending`/its
-`_APPLIERS` table (those are `store.py`-shaped): the dedicated
+`_APPLIERS` table (those are `store.rs`-shaped): the dedicated
 `POST /api/v1/requests/pending/<id>/credential` route calls
 `PendingStore.approve()` directly,
 with the human-typed secret value as its `apply` callback's only extra
@@ -109,10 +109,10 @@ Every toolkit picks exactly one executor; a tool never chooses its own
 | `git` | Pushing a `feat/*` branch of a listed repository to its remote | local `git` subprocess in a throwaway bare repository; token as an env-config header; one operation, `push` |
 | `agent` | Other gatekeeper identities | in-process mailbox (`messages.yaml`); no shell, no credential. Network only if the operator sets `GATEKEEPER_NOTIFY_URL` (best-effort delivery webhook, never agent-controllable) |
 
-`http` toolkit boundaries (`tier1.py`'s `Toolkit`): `base_url`,
+`http` toolkit boundaries (`tier1.rs`'s `Toolkit`): `base_url`,
 `allowed_methods`, `allowed_path_prefixes`, `allowed_cidrs` and/or
 `allowed_hosts`, `credential`, `follow_redirects` (always `false` — not a
-configurable knob, FR-8.8). `execute_http.py` resolves the target host once,
+configurable knob, FR-8.8). `execute/http.rs` resolves the target host once,
 checks it and every resolved address, and connects to the checked address as
 an IP literal (`Host` header and TLS SNI keep the name) — so there is no
 second lookup and no DNS-rebinding gap between the check and the connect.
@@ -153,7 +153,7 @@ session, an async dispatch and a poll loop. As `http` tools those would be
 three or four agent round trips per task, with the session id and every
 raw intermediate response travelling through the agent's context. So the
 whitelist acts on *operation names* the way `truenas`'s acts on RPC method
-names, the request paths live in `execute_opencode.py`'s one `_EP` table
+names, the request paths live in `execute/opencode.rs`'s one `_EP` table
 and nowhere else, and no parameter on any operation carries a URL, a host
 or a path. The two agent-supplied values that leave the parameter
 allowlist behind are checked before execution and again in the executor:
@@ -172,7 +172,7 @@ address with the name kept for `Host` and SNI, never through a proxy),
 `credential` (required, kind `basic`, `username:password` of a Kuma account
 without 2FA) and `allowed_kuma_operations`, a subset of `monitor_list`,
 `monitor_add_http`, `monitor_pause`, `monitor_resume`. Kuma creates and pauses
-monitors only over Socket.IO, so `execute_kuma.py` carries a minimal Engine.IO
+monitors only over Socket.IO, so `execute/kuma.rs` carries a minimal Engine.IO
 v4/Socket.IO client on `websockets` and does one fixed exchange per operation:
 log in with Kuma's `login` event, then read the pushed `monitorList`, or send
 one `add` (type `http`, method GET, no notifications, no headers, body or auth;
@@ -185,7 +185,7 @@ monitor is never touched. `monitor_list` returns id, name, type, URL (without
 userinfo, query or fragment), active, interval and `managed`; Kuma's own
 monitor objects carry passwords and headers, and none of those fields is
 copied. The value floor (`execute_kuma.check_values`) runs in
-`validate.build_kuma_call` and again in the executor, and `catalog.py` refuses
+`validate.build_kuma_call` and again in the executor, and `catalog.rs` refuses
 a tool whose schema is wider (an `interval` beyond 30–3600, a status outside
 the set) or that declares a write operation as category `read`, which would
 skip approval. A timeout after `add`/`pauseMonitor`/`resumeMonitor` went out
@@ -232,7 +232,7 @@ idempotent (`gkrepo.push` is: pushing the same commit again is a no-op).
 `truenas` toolkit boundaries: `ws_url`, `allowed_rpc_methods`, `credential`.
 The whitelist acts on JSON-RPC method *names* — a method not listed
 structurally does not exist for any tool, there is no separate "permission"
-to deny it (`execute_truenas.py`).
+to deny it (`execute/truenas.rs`).
 
 `ssh` toolkit boundaries: `ssh_host`, `ssh_port`, `ssh_user`,
 `ssh_known_hosts` (required — the exact `ssh-keyscan` output pinning the
@@ -240,11 +240,11 @@ host key, since an SSH connection with host-key checking disabled is
 trivially MITM-able), plus the same `binaries`/`denied_args`/`path_roots`
 allowlist `docker`/`local` already use. A tool on an `ssh` toolkit is
 shaped identically to one on `docker`/`local` (binary + argv) — the only
-difference is that `execute_ssh.py` runs the resolved argv on the remote
+difference is that `execute/ssh.rs` runs the resolved argv on the remote
 host over an SSH exec channel instead of a local subprocess. That channel
 is unavoidably shell-interpreted on the server side (RFC 4254's exec
 request is a single command string, and essentially every sshd hands it to
-the login shell) — `execute_ssh.py` mitigates this the same way a
+the login shell) — `execute/ssh.rs` mitigates this the same way a
 parameter's regex allowlist does elsewhere, but as defense in depth on top
 of it: every argv element is `shlex.quote`d before being joined into that
 string. No general "Linux CLI"/arbitrary-command tool exists or is
@@ -263,7 +263,7 @@ to.
 
 ### Agent-to-agent messaging (the mailbox)
 
-`messages.py` + `execute_agent.py`. Two operations: `agent.send_message`
+`messages.rs` + `execute/agent.rs`. Two operations: `agent.send_message`
 leaves a message in another gatekeeper identity's mailbox,
 `agent.read_messages` returns the ones addressed to the caller and marks
 them read.
@@ -277,7 +277,7 @@ FR-1.4, and it is also what makes it useless as a transport for a message.
 So delivery is "on the recipient's next `read_messages` call", never
 "immediately". Reliable and restart-safe, with no client-side change.
 
-Two values are deliberately **not** parameters, and `catalog.py` refuses a
+Two values are deliberately **not** parameters, and `catalog.rs` refuses a
 tool definition that declares them:
 
 * the **sender** -- `service.call` passes the authenticated identity, so
@@ -318,7 +318,7 @@ behaves exactly as before this existed (FR-8.3j).
 
 ## Credential store
 
-`credentials.py` — named, encrypted-at-rest secrets a toolkit (or one of its
+`credentials.rs` — named, encrypted-at-rest secrets a toolkit (or one of its
 destinations, overriding the toolkit's own) references by name via a
 `credential:` field. **Write-only**: create, rotate, delete — no operation,
 for no role, ever returns a value (FR-10.2). The *binding* of toolkit/
@@ -329,7 +329,7 @@ in-flight calls with the old value don't break). Kinds: `api_key_header`,
 documented exception besides `url_path` — a query-string param, for a
 service with no header-auth option at all, e.g. SABnzbd's classic API),
 `docker_tls` (a JSON `{cert, key, ca}` bundle for a TLS-secured remote
-Docker destination, materialized to a private temp dir by `service.py` on
+Docker destination, materialized to a private temp dir by `service.rs` on
 first use), and `ssh_private_key` (PEM private key text for the `ssh`
 executor — the matching public key must already be in the remote host's
 `authorized_keys`; gatekeeper is a credential *consumer*, it never pushes
@@ -346,14 +346,14 @@ created or rotated.
 ## Reaching other services
 
 A toolkit for an outside service is pasted into `toolkits.yaml` by a human
-(FR-4.11). `toolkit_reference.py` holds one copy-pasteable starting block
+(FR-4.11). `toolkit_reference.rs` holds one copy-pasteable starting block
 per executor (`local`, `docker`, `http`, `ssh`, `truenas`, `file`,
 `google`, `microsoft`, `opencode`, `kuma`, `git`, `agent`) with the safe defaults in
 place: a header credential, a `CHANGEME` host and an `allowed_cidrs` of
 203.0.113.1/32 (RFC 5737 TEST-NET-3), so an unedited block parses and
 fails closed. `/app/toolkits/reference` shows them; tools are then
 written in the tool editor or created by an admin agent over
-`/admin/mcp`. `tests/test_toolkit_reference.py` loads every block as
+`/admin/mcp`. `rust/src/toolkit_reference.rs`'s tests load every block as
 Tier 1.
 
 Until 1.4.0 an `integrations.py` library carried 25 service-specific
@@ -366,7 +366,7 @@ No OAuth2 in the `http` executor — it supports static credentials only
 (bearer, API-key header, basic). Services that require an authorization-code
 flow use the `google` executor instead (added 0.38.0), which runs
 `google_api.py` as a local subprocess and materializes an `oauth2`
-credential bundle to a per-call tempfile — see `execute_google.py`.
+credential bundle to a per-call tempfile — see `execute/google.rs`.
 The script itself is baked into the image at
 `/opt/gatekeeper/google/google_api.py` (since 0.40.1); a toolkit whose
 `google_script` names a path that no longer exists — the host path
@@ -417,7 +417,7 @@ identity platform rather than let it fail as an unexplained 401.
 refresh token; it imports nothing outside the standard library, because
 it runs as a subprocess and may not share gatekeeper's environment.
 Every gate in the two route handlers is shared with the Google pair
-(`api/extras.py`'s `oauth_authorize` and `oauth.build_callback_routes`,
+(`api/extras.rs`'s `oauth_authorize` and `oauth.build_callback_routes`,
 parameterized by `oauth.OAuthProviderSpec`), including the state binding — a state minted by
 one provider's flow is not redeemable at the other's callback. Two
 things are Microsoft's own: the flow carries PKCE (S256), so an
@@ -435,9 +435,9 @@ and `microsoft`), and they are not interchangeable:
 
 | | Outlook example | Google example | Who owns it |
 |---|---|---|---|
-| **Tool ID** | `outlook.list_messages` | `drive.create_folder` | tools.yaml / the console; dotted, lowercase + underscore (catalog.py's `id` rule). What an agent calls over `/mcp`. |
+| **Tool ID** | `outlook.list_messages` | `drive.create_folder` | tools.yaml / the console; dotted, lowercase + underscore (catalog.rs's `id` rule). What an agent calls over `/mcp`. |
 | **Action ID** | `mail list` | `drive create-folder` | `microsoft_action` / `google_action` on the tool, and the toolkit's `allowed_microsoft_actions` / `allowed_google_actions`. Tier 1 matches the two as an **exact string** — no normalization, at catalog load and again in the executor. |
-| **CLI argv** | `mail list --folder inbox --max 10` | `drive create-folder <name> --parent <id>` | the bundled CLI's argparse grammar: `microsoft_api.py` (`mail` + `list`/`get`/`folders`/`send`), `google_api.py` (`gmail`/`calendar`/`drive`/`contacts`/`sheets`/`docs`, each with its own actions). Built by `execute_microsoft._build_argv` / `execute_google._build_argv`. |
+| **CLI argv** | `mail list --folder inbox --max 10` | `drive create-folder <name> --parent <id>` | the bundled CLI's argparse grammar: `microsoft_api.py` (`mail` + `list`/`get`/`folders`/`send`), `google_api.py` (`gmail`/`calendar`/`drive`/`contacts`/`sheets`/`docs`, each with its own actions). Built by `execute::microsoft::build_argv` / `execute::google::build_argv`. |
 
 The tool ID is never compared against a whitelist, and nothing derives one
 name from another: `drive.create_folder` and `drive create-folder` differ
@@ -527,13 +527,14 @@ is absent or not `type: boolean`, and one whose flag is not a single
 option token (`SWITCH_RE`: no whitespace, no `=`, no `{placeholder}`).
 `config/examples/tools.yaml`'s `drive.search` carries the worked example.
 
-tests/test_cli_arg_contract.py pins all of this: the argv for both
-providers, the rejected declarations, a census holding every shipped
-boolean to a `switch:`, and the two CLIs' own argparse grammars — run
-in-process with the action handler replaced, so `--raw-query` is checked
-to actually arrive as `raw_query is True`, and `--raw-query true` to
-actually exit 2. The same file runs every shipped google and microsoft
-tool's *minimal* argv — required parameters only, every optional one
+`rust/tests/cli_arg_contract.rs` pins the argv for both providers, the
+rejected declarations, a census holding every shipped boolean to a
+`switch:`, and the *minimal* argv every shipped google and microsoft tool
+builds (frozen in `rust/tests/fixtures/shipped_cli_argv_golden.json`).
+`tests/test_cli_grammar.py` checks those against the two CLIs' own
+argparse grammars — run in-process with the action handler replaced, so
+`--raw-query` is checked to actually arrive as `raw_query is True`, and
+`--raw-query true` to actually exit 2 — and runs each minimal argv — required parameters only, every optional one
 omitted — through the real CLI as a subprocess, with `HERMES_HOME`
 pointed at an empty directory: each call dies at authentication, after
 argparse has accepted the argv and before any request leaves the
@@ -551,7 +552,7 @@ tool result. A leftover `recovery:` block in toolkits.yaml is refused at
 load when it enables anything and warned about when it is inert, so it never
 looks effective (`tier1._check_removed_recovery`).
 
-## Release-bound artifacts (`artifacts.py`, `artifact` executor)
+## Release-bound artifacts (`artifacts.rs`, `artifact` executor)
 
 Files Gatekeeper serves to agents, each bound to exactly one commit. Which
 repository paths are artifacts is fixed in `artifacts.SOURCES` (a single file
@@ -561,7 +562,7 @@ carries a commit-bound manifest with no artifacts until a source is added
 (and COPY'd in the Dockerfile).
 
 **Git is the only source.** Nothing is uploaded. The image build runs
-`python -m gatekeeper.artifacts`, which packages those fixed repository paths
+`gatekeeper build-artifacts`, which packages those fixed repository paths
 into `/opt/gatekeeper/artifacts/`, together with a `manifest.json` (schema,
 release, commit, and per file its sha256, size and source path). The commit
 comes from CI (`GATEKEEPER_COMMIT`); a local build says `unknown`. The tar.gz
@@ -592,7 +593,7 @@ sha256 over exactly the bytes it hands on.
 
 Anything else, including an unknown id or a missing scope, is one
 indistinguishable answer (FR-7.7). The tools have no path, URL or target
-parameter; `catalog.py` refuses a tool that declares one.
+parameter; `catalog.rs` refuses a tool that declares one.
 
 **Transfer.** `artifact.transfer` writes to
 `<handover_dir>/<id>/<version>/<file>`. `handover_dir` is Tier 1; the rest of
@@ -609,162 +610,131 @@ Files belong to the Gatekeeper process user; `run_as` is not supported on
 
 ## Project structure
 
+gatekeeper is one Rust crate. It was ported from a Python package (removed
+in 1.17.0) and its module names follow the Python modules they replaced,
+so a module named elsewhere in this document is under `rust/src/` (an
+executor under `rust/src/execute/`, the console API under `rust/src/api/`;
+see "Rust implementation" below).
+
 ```
-src/gatekeeper/
-  __init__.py       __version__, derived from pyproject.toml at import
-                      time -- never a second hardcoded string to drift
-  __main__.py        Entry point: CLI (serve/check/init/token/password/
-                      credential-key), bootstrap, SIGHUP handler
-  release_notes.py    Where RELEASE.md is and how it splits into versions
+rust/
+  Cargo.toml           The release version (`version`), dependencies
+  src/
+    main.rs, cli.rs    Entry point: CLI (serve/check/init/token/password/
+                       credential-key, plus the hidden build-time
+                       build-artifacts and openapi), bootstrap, SIGHUP
+                       handler
+    lib.rs             VERSION (Cargo.toml's), module list
+    release_notes.rs   Where RELEASE.md is and how it splits into versions
                        -- one copy, read by /api/v1/release-notes (the
                        console's Release notes page), /release and
                        admin.release_notes alike
-  server.py           MCP protocol, ASGI middleware, health/metrics/release
-                       routes;
-                       composes /mcp and /admin/mcp into one Starlette app
-                       with a combined lifespan (two independent
-                       StreamableHTTPSessionManagers, one per Server).
-                       /mcp retains sessions, /admin/mcp is stateless --
-                       see "Telling connected agents the catalog changed"
-  notifications.py     CatalogNotifier: fans notifications/tools/
-                       list_changed out to every connected agent, on both
-                       protocol eras. Owned by Service, so the writes that
-                       change a catalog announce it without knowing about
-                       the ASGI layer
-  _authctx.py          Shared "identity out of the MCP request context"
-                       helper -- used by server.py and admin_server.py so
-                       neither imports the other
-  admin_server.py      The `admin.*` MCP surface -- a second, fixed-tool-list
-                       Server wired to AdminService, sharing no catalog/tool
-                       registry with the agent-facing one (FR-2.8/2.9)
-  admin_service.py     Dispatch for every admin.* action: read-only /
+    server.rs          The HTTP app: middleware, health/metrics/release
+                       routes; composes /mcp and /admin/mcp. /mcp retains
+                       sessions, /admin/mcp is stateless -- see "Telling
+                       connected agents the catalog changed"
+    mcp/               MCP's streamable HTTP transport (both protocol
+                       eras, JSON-RPC envelope, SSE) and the catalog
+                       notifier that fans notifications/tools/
+                       list_changed out to every connected agent
+    admin_server.rs    The `admin.*` MCP surface -- a fixed tool list wired
+                       to AdminService, sharing no catalog/tool registry
+                       with the agent-facing one (FR-2.8/2.9)
+    admin_service.rs   Dispatch for every admin.* action: read-only /
                        always-auto-apply / always-pending / category-
-                       conditional (tool_enable, tool_update). approve/reject
-                       are not methods here and not reachable from
-                       /admin/mcp -- see pending.py
-  pending.py            The pending-actions queue (pending.yaml) an
+                       conditional (tool_enable, tool_update). approve/
+                       reject are not reachable from /admin/mcp
+    pending.rs         The pending-actions queue (pending.yaml) an
                        admin-role agent's higher-risk admin.* calls land in
-                       (admin.cred_update too: kind/header/name of a slot,
-                       value kept, gated per slot by
-                       CredentialStore.record_revision); approved only via
+                       (admin.cred_update too, gated per slot by
+                       CredentialStore::record_revision); approved only via
                        /api/v1 (/app/requests, Change tab; human session +
                        admin + CSRF)
-  toolkit_proposals.py  ToolkitProposalStore (toolkit_proposals.yaml) --
-                       admin.toolkit_propose (new toolkit, kind="create"),
-                       admin.toolkit_update (executor/binaries/
-                       denied_args/run_as/allowed_hosts/allowed_cidrs/
-                       allowed_methods/allowed_path_prefixes/limits
-                       change to an existing one,
-                       kind="update"), admin.toolkit_delete (remove an
-                       existing one, kind="delete") and
-                       admin.credential_bind (point an existing toolkit at
-                       an existing credential name, kind="bind") all land
-                       here, never pending.yaml.
-                       deploy() merges/removes + validates via load_tier1()
-                       before writing toolkits.yaml, then calls
-                       Service.reload_config() in-process (no restart).
-                       Only reachable from /api/v1 (/app/requests,
-                       Toolkit tab; human session + admin + CSRF)
-  service.py          Call pipeline: auth -> authorize -> registry ->
+    toolkit_proposals.rs  ToolkitProposalStore (toolkit_proposals.yaml) --
+                       admin.toolkit_propose / toolkit_update /
+                       toolkit_delete / credential_bind land here, never
+                       pending.yaml. deploy() validates via load_tier1()
+                       before writing toolkits.yaml, then reloads the
+                       running config in-process (no restart). Only
+                       reachable from /api/v1 (/app/requests, Toolkit tab)
+    service.rs         Call pipeline: auth -> authorize -> registry ->
                        validate -> build request -> execute -> audit;
-                       dispatches to execute.py / execute_http.py /
-                       execute_truenas.py / execute_ssh.py by toolkit.executor
-  tier1.py            Immutable deploy-time boundaries from toolkits.yaml
-  catalog.py          Tool definitions, validation against Tier 1;
+                       dispatches to execute::* by toolkit.executor
+    tier1.rs           Immutable deploy-time boundaries from toolkits.yaml
+    catalog.rs         Tool definitions, validation against Tier 1;
                        append-only version history per tool id (nested
                        `versions:`/`current_version`, FR-3.3) -- a legacy
                        flat tools.yaml entry loads as an implicit version 1
-  validate.py         Parameter validation, argv/HTTP-request/RPC-call
+    validate.rs        Parameter validation, argv/HTTP-request/RPC-call
                        construction (no shell, structured args/requests)
-  execute.py           Process execution (docker/local): timeouts, output
+    execute/
+      local.rs         Process execution (docker/local): timeouts, output
                        caps, resource locks
-  execute_http.py      The `http` executor: SSRF-safe target resolution,
-                       no-redirect-follow, credential-as-header injection
-                       (optionally wrapped by an api_key_header
-                       slot's header_format, e.g. MediaBrowser Token="{value}")
-  execute_microsoft.py The `microsoft` executor: the `google` one with
-                       Microsoft Graph behind it -- runs
-                       `_microsoft_api/microsoft_api.py` (stdlib only,
-                       baked into the image at
-                       /opt/gatekeeper/microsoft/) and parses its JSON,
-                       whitelisted by action string. Shares
-                       execute_google's subprocess runner and
-                       execute_http's JSON cap
-  execute_opencode.py  The `opencode` executor: one operation = one fixed
-                       multi-request workflow against a headless opencode
-                       server; reuses execute_http's SSRF/credential/JSON-cap
-                       helpers, request paths fixed in its own `_EP` table
-  execute_agent.py     The `agent` executor: two in-process mailbox
-                        operations (send_message/read_messages), no shell
-                        -- the sender is the authenticated identity,
-                        never a parameter. Optional deploy-time delivery
-                        webhook (`_notify_delivery`) when
-                        GATEKEEPER_NOTIFY_URL is set; best-effort, never
-                        agent-controllable, never fails a delivery
-  messages.py          The mailbox file (messages.yaml) behind it, written
-                       with `_atomic.py`'s primitives like pending.yaml
-  execute_truenas.py   The `truenas` executor: JSON-RPC 2.0 over WebSocket
-  execute_ssh.py        The `ssh` executor: binary+argv over an SSH exec
-                       channel, mandatory host-key pinning
-  credentials.py       The write-only, encrypted credential store
-  toolkit_reference.py One copy-pasteable toolkit block per executor,
+      http.rs          SSRF-safe target resolution, no-redirect-follow,
+                       credential-as-header injection
+      google.rs        Runs the vendored google_api.py (scripts/google,
+                       /opt/gatekeeper/google/ in the image) and parses its
+                       JSON, whitelisted by action string; the subprocess
+                       runner both vendored CLIs share
+      microsoft.rs     The same for Microsoft Graph and microsoft_api.py
+                       (scripts/microsoft, stdlib only)
+      opencode.rs      One operation = one fixed multi-request workflow
+                       against a headless opencode server
+      agent.rs         Mailbox send_message/read_messages; the sender is
+                       the authenticated identity, never a parameter;
+                       optional GATEKEEPER_NOTIFY_URL delivery webhook
+      truenas.rs       JSON-RPC 2.0 over WebSocket
+      ssh.rs           binary+argv over an SSH exec channel, mandatory
+                       host-key pinning
+      file.rs, artifact.rs, kuma.rs, git.rs
+                       The `file`, `artifact`, `kuma` (Uptime Kuma over a
+                       minimal Socket.IO client) and `git` (fast-forward
+                       push of one feat/* branch) executors
+    messages.rs        The mailbox file (messages.yaml)
+    credentials.rs     The write-only, encrypted credential store
+    toolkit_reference.rs  One copy-pasteable toolkit block per executor,
                        shown at /app/toolkits/reference
-  identity.py          scrypt token hashing, constant-time verify,
+    identity.rs        scrypt token hashing, constant-time verify,
                        IdentityStore, roles
-  audit.py             JSON Lines audit log with rotation and redaction
-  store.py             Tier 2 write access (ConfigStore), atomic file writes;
-                       save_tool appends a version (never overwrites),
-                       delete_tool soft-deletes (deleted: true, history kept)
-  _atomic.py           Shared atomic-write/revision helpers (store.py and
-                       credentials.py both use these, independently)
-  ui.py                What is left of /ui: redirects to /app, 410 for
-                       old form posts, the OAuth callback routes
-                       (from oauth.py), has_ui_identity
-  oauth.py             Google/Microsoft authorization-code flow: state
+    audit.rs           JSON Lines audit log with rotation and redaction
+    store.rs           Tier 2 write access (ConfigStore); save_tool appends
+                       a version, delete_tool soft-deletes
+    atomic.rs          Shared atomic-write/revision helpers
+    ui.rs              What is left of /ui: redirects to /app, 410 for old
+                       form posts, the OAuth callback routes
+    oauth.rs           Google/Microsoft authorization-code flow: state
                        store, consent URLs, code exchange, the callbacks
-  api/                 The console's JSON API at /api/v1 (FastAPI
-                       sub-app) -- see "Console API"
-    session.py          Session, SessionStore, LoginThrottle
-    service.py          Read model: audit reader, call statistics and
-                         the per-page builders, shared with
-                         admin_service.py
-    deps.py             Session/role/CSRF/If-Match dependencies
-    models.py           Pydantic response models (the output boundary)
-    app.py              Session and read routes; `python -m
-                         gatekeeper.api` prints the OpenAPI schema
-    writes.py           Write and request-decision routes
-    extras.py           Stats, bundled docs, OAuth sign-in start
-    web.py              Serves the React build at /app, with its CSP
-                         and manifest.webmanifest
-  _web/                The React build (image only; .gitignored)
+    api/               The console's JSON API at /api/v1 -- see "Console
+                       API": app.rs (routes, reads and writes), service.rs
+                       (read model, shared with admin_service), models.rs
+                       (request validation), deps.rs (session/role/CSRF/
+                       If-Match), session.rs, events.rs, web.rs (serves the
+                       React build at /app, with its CSP)
+    errors.rs          DenialReason, ConfigError, opaque denials
+    artifacts.rs       Release-bound artifacts: deterministic build (image
+                       build), read-only store with sha256 verification
+    ratelimit.rs       Per-identity, per-category sliding window limiter
+    runas.rs, privdrop.rs  run_as and the privilege drop
+    pyjson.rs, yaml.rs, pyre.rs, pyfmt.rs, pathutil.rs, fnmatch.rs,
+    timeutil.rs        The file and text formats the Python version wrote,
+                       kept byte for byte
+  tests/               Integration tests; fixtures/ holds frozen outputs
+                       of the Python implementation, interop/ the Python
+                       MCP SDK client scripts
+scripts/
+  google/              google_api.py (+ _hermes_home.py), vendored, run
+                       by the `google` executor under Python
+  microsoft/           microsoft_api.py, stdlib-only, run by `microsoft`
+tests/                 pytest for scripts/ and the Dockerfile checks
 frontend/              React console source: Vite, TypeScript, Tailwind;
-                       openapi.json + src/api/schema.d.ts are generated
-  errors.py            DenialReason enum, opaque denial for catalog info
-  artifacts.py         Release-bound artifacts: deterministic build from repo
-                       paths (image build), read-only store with sha256
-                       verification -- see "Release-bound artifacts"
-  execute_artifact.py  `artifact` executor: list/info/read/transfer
-  execute_kuma.py      `kuma` executor: Uptime Kuma monitors over a minimal
-                       Socket.IO client (list, add HTTP, pause/resume own)
-  execute_git.py       `git` executor: fast-forward push of one feat/* branch
-                       from a listed repository, via a throwaway bare repo
-  ratelimit.py         Per-identity, per-category sliding window limiter
+                       openapi.json is the committed API schema,
+                       src/api/schema.d.ts is generated from it
 config/
   toolkits.yaml         Tier 1 -- immutable at runtime
   tools.yaml             Seed catalog -- mutable via the console
   examples/               Ready-made templates: identities.yaml,
                          toolkits.yaml (incl. a working http + truenas +
                          ssh entry), tools.yaml
-tests/
-  test_api_auth.py, test_api_read.py, test_api_write.py,
-  test_api_extras.py, test_api_security.py, test_api_parity.py,
-  test_api_web.py, api_env.py (shared API setup), test_oauth.py,
-  test_behaviour.py, test_negative_corpus.py, test_integration_mcp.py,
-  test_credentials.py, test_execute_http.py,
-  test_execute_truenas.py, test_execute_ssh.py, test_execute_opencode.py, test_execute_kuma.py, test_execute_git.py,
-  test_toolkit_reference.py, test_agent_messaging.py, test_admin_mcp.py,
-  test_catalog_versioning.py, test_pending.py, test_notifications.py,
-  test_mcp_live_catalog.py, conftest.py
 ```
 
 ## Console API (`api/`, `/api/v1`)
@@ -805,7 +775,7 @@ writes through these routes.
   too). A store whose file does not exist yet has the ETag `"0"`, which
   matches only while the file is still missing.
 - **Output boundary.** Responses are serialised through the Pydantic
-  models in `api/models.py`, which drop every field they do not name.
+  models in `api/models.rs`, which drop every field they do not name.
   `CredentialMeta` has no value field and `IdentityOut` no hash field.
   Free-form `dict` fields exist only where the console shows the data
   verbatim (audit records, a pending payload, a tool spec).
@@ -818,15 +788,16 @@ writes through these routes.
   default-src 'none'; frame-ancestors 'none'; base-uri 'none'`,
   `nosniff`, `no-referrer` and `Cache-Control: no-store`.
 - **Schema.** `GET /api/v1/openapi.json` is admin-only; there are no
-  interactive docs pages. `python -m gatekeeper.api` prints the same
-  schema with sorted keys and a fixed `v1` version, so generated client
-  types change only when the API does.
+  interactive docs pages. It is `frontend/openapi.json`, committed and
+  embedded in the binary (`gatekeeper openapi` prints it): sorted keys, a
+  fixed `v1` version, edited by hand together with the routes, so
+  generated client types change only when the API does.
 - **Audit pagination.** `GET /audit` pages newest-first over the audit
   log's tail window (`AUDIT_READ_BYTES`). The cursor is opaque so it
   can become a row key when the Stage 1 SQLite audit index lands, without
   a client change.
 
-- **Writes (`api/writes.py`).** Each route calls the store method the
+- **Writes (`api/writes.rs`).** Each route calls the store method the
   pre-1.0 `/ui` form handler did and ends the same sessions:
   `POST /tools`, `PUT /tools/{id}` (YAML in, Tier 1 checked by
   `parse_tool_spec`; a new ID in the YAML renames), `PUT
@@ -868,7 +839,7 @@ writes through these routes.
   since been taken, are closed as `stale` with a reason that says why --
   neither could ever be approved.
 
-- **Live updates (`api/events.py`, 1.3.0).** `GET /events` (any console
+- **Live updates (`api/events.rs`, 1.3.0).** `GET /events` (any console
   session) is a Server-Sent Events stream. Every change gatekeeper makes is
   audited first, so `AuditLog.add_listener` is the one hook: `EventHub`
   maps each record to topics (`requests`, `audit`, `tools`, ...; an
@@ -888,10 +859,12 @@ writes through these routes.
   were opened on, so a live reread under an open form cannot turn a
   conflicting save into a silent overwrite.
 
-- **Stats, documents, OAuth sign-in (`api/extras.py`, 0.57.0).** `GET
+- **Stats, documents, OAuth sign-in (`api/extras.rs`, 0.57.0).** `GET
   /stats?window=24h|7d|30d` (`service.stats_view`:
   tiles, an hourly or daily series, per-toolkit, per-identity, latency
-  and admin-action tables). Since 1.1.2 each window reads exactly its own
+  and admin-action tables, and since 1.15.0 a per-tool `tools` list,
+  each row tagged with its toolkit, that the console's "Top tools" card
+  filters by a toolkit dropdown). Since 1.1.2 each window reads exactly its own
   span: `read_audit(since=...)` walks back until the first older record,
   bounded by the same 2 MiB tail, and `truncated` means that tail ended
   before the window's start. `GET /documents`
@@ -902,7 +875,7 @@ writes through these routes.
   /oauth/providers` lists the providers some toolkit uses with the
   credentials it names, and `POST /oauth/{provider}/authorize` (admin,
   CSRF) starts a Google or Microsoft sign-in (provider code in
-  `oauth.py`) and answers the consent URL, redirect URI and scopes as
+  `oauth.rs`) and answers the consent URL, redirect URI and scopes as
   data. The browser comes back to the unchanged callback path (still the
   redirect URI registered with the provider), which redirects to
   `/app/credentials?oauth=<code>&provider=&credential=` instead of
@@ -917,7 +890,7 @@ old console.
 ## Console SPA (`frontend/`, `/app`)
 
 A React 19 + TypeScript (strict) single-page app built with Vite, served by
-gatekeeper itself at `/app` (`api/web.py`). It is a pure client of
+gatekeeper itself at `/app` (`api/web.rs`). It is a pure client of
 `/api/v1`: it holds no catalog logic, so FR-11.1 holds for it too.
 
 - **Stack.** React Router for pages, TanStack Query for fetching, caching
@@ -926,10 +899,10 @@ gatekeeper itself at `/app` (`api/web.py`). It is a pure client of
   runtime), Recharts for the activity chart, `lucide-react` icons. Dark mode
   follows `prefers-color-scheme`.
 - **Typed client.** `frontend/openapi.json` is the server's schema
-  (`python -m gatekeeper.api`); `openapi-typescript` turns it into
+  (committed, embedded in the binary); `openapi-typescript` turns it into
   `src/api/schema.d.ts`, and `src/api/client.ts` types every path, query
-  and response from it. CI regenerates both and fails on a diff, and
-  `tests/test_api_web.py` fails when the committed schema is stale. The
+  and response from it. CI regenerates the types and fails on a diff, and
+  `rust/tests/api_web.rs` fails when the routes and the schema disagree. The
   client sends `X-CSRF-Token` on every mutating request and `If-Match` from
   the last read's `ETag`, and a 412 becomes a `ConflictError`.
 - **Sessions.** A 401 from any query drops the cached session and routes
@@ -952,13 +925,13 @@ gatekeeper itself at `/app` (`api/web.py`). It is a pure client of
   falls back to `index.html` (client routes, including dotted tool IDs),
   while a missing asset stays 404. Responses are gzipped
   (`GZipMiddleware`, `minimum_size=500`). The build is looked
-  up in `GATEKEEPER_WEB_DIR`, then the package's `_web/` (the image), then
-  `frontend/dist` (a checkout); with none, `/app` answers 503 with the
-  build command.
+  up in `GATEKEEPER_WEB_DIR` (the image sets it), then `frontend/dist` in
+  the checkout the binary was built from; with none, `/app` answers 503
+  with the build command.
 - **Build.** The Dockerfile's first stage (`node:22.22.0-bookworm-slim`
   pinned by digest) runs `npm ci --ignore-scripts && npm run build`; the
-  result is copied into `src/gatekeeper/_web/` before `pip install`, and
-  `[tool.setuptools.package-data]` ships it. The runtime image has no Node.
+  result is copied to `/usr/share/gatekeeper/web` (`GATEKEEPER_WEB_DIR`).
+  The runtime image has no Node.
 
 Phase 2 (0.54.0) was read-only. Since phase 3a (0.55.0) tools (YAML
 editor, enable/disable, delete), identities
@@ -976,7 +949,7 @@ they will decide, and
 a toolkit deploy that spells out what changes and needs a ticked
 acknowledgement. Everything an agent wrote is rendered as text.
 
-## What is left of `/ui` (`ui.py`)
+## What is left of `/ui` (`ui.rs`)
 
 The server-rendered console that lived at `/ui` (0.x) was removed in
 1.0.0. `build_ui_routes` keeps only what a browser or an identity provider
@@ -1009,7 +982,7 @@ other path.
 The PWA manifest is `/app/manifest.webmanifest` (`start_url` and `scope`
 `/app/`, icon `/app/icon.svg`), built from `frontend/public/`. The old
 `/ui` manifest, icon and the never-registered service-worker stub are
-gone with `src/gatekeeper/_pwa/`.
+gone with the Python package's `_pwa/`.
 
 ## Audit log format
 
@@ -1035,10 +1008,24 @@ a bearer token was sent, `fingerprint`: the first 12 hex digits of that
 token's `token_lookup` (SHA-256). The token itself is never logged. Two
 failures with the same fingerprint are the same stale token, and comparing
 it with the `token_lookup` values in an older `identities.yaml` says whose
-token it was.
+token it was. Compute it for a candidate token with
+`printf %s "$TOKEN" | sha256sum | cut -c1-12`.
+
+Since 1.16.0 the record also carries, each only when it applies:
+`forwarded_for` (the `X-Forwarded-For`, else `X-Real-IP`, header as sent,
+unverified, capped at 160), `mcp_session: true` (an `Mcp-Session-Id` was
+sent; its value is not logged), and for a refused token `presented_format`
+(`gatekeeper`, `gk_malformed` or `foreign`: the value's shape, never the
+value), `presented_length`, and `lookup_identity` when an identity's
+`token_lookup` matches but its `token_hash` does not (an inconsistent
+`identities.yaml` entry). On a refused POST to `/mcp` or `/admin/mcp` with a
+`Content-Length` of at most 8 KiB the body is read for at most 500 ms, and its JSON-RPC
+`mcp_method` and, on `initialize`, `mcp_client` (`clientInfo` name and
+version, capped at 120) are added. The field names avoid "token" because
+the audit log masks every key containing it.
 
 ```json
-{"kind": "auth_failure", "reason": "unknown_token", "detail": "POST /mcp from 10.10.110.102", "client": "10.10.110.102", "method": "POST", "path": "/mcp", "user_agent": "python-httpx/0.28", "fingerprint": "a1b2c3d4e5f6", "ts": "..."}
+{"kind": "auth_failure", "reason": "unknown_token", "detail": "POST /mcp from 10.10.110.102", "client": "10.10.110.102", "method": "POST", "path": "/mcp", "user_agent": "python-httpx/0.28", "fingerprint": "a1b2c3d4e5f6", "presented_format": "gatekeeper", "presented_length": 46, "mcp_method": "initialize", "mcp_client": "hermes 0.9.1", "ts": "..."}
 ```
 
 ## Telling connected agents the catalog changed
@@ -1050,7 +1037,7 @@ the tool list once when the session is established and keep it, so a tool
 created by `admin.tool_create` stayed invisible to every already-connected
 agent until it reconnected.
 
-`notifications.py`'s `CatalogNotifier` closes that gap. It lives on the
+`mcp/notifier.rs`'s `CatalogNotifier` closes that gap. It lives on the
 `Service`, so the two places that can change what an agent may call --
 `ConfigStore._write_tools` / `_write_identities` and `Service.reload_config`
 (the SIGHUP and toolkit-deploy path) -- announce the change without knowing
@@ -1082,16 +1069,16 @@ with FR-1.4's per-identity filtering of `tools/list` itself.
 
 ## Scale: single instance, blocking I/O by design
 
-gatekeeper runs as one process (`ratelimit.py`'s `RateLimiter` says so
+gatekeeper runs as one process (`ratelimit.rs`'s `RateLimiter` says so
 directly: "with multiple instances the counter would need to be shared").
 Within that scope, several hot paths do plain synchronous file I/O on the
 asyncio event loop rather than using a thread pool or an async file API:
 
-- `AuditLog.write` (`audit.py`) opens and appends the log file per call.
-- `CredentialStore._raw()` (`credentials.py`) re-reads and re-parses
+- `AuditLog.write` (`audit.rs`) opens and appends the log file per call.
+- `CredentialStore._raw()` (`credentials.rs`) re-reads and re-parses
   `credentials.yaml`, and re-runs Fernet decryption, on every credential
   resolution -- there is no in-memory cache of the decrypted value.
-- `api/service.py`'s `read_audit` reads the audit log on every API
+- `api/service.rs`'s `read_audit` reads the audit log on every API
   request that shows it. It walks backwards from EOF in `AUDIT_CHUNK_BYTES`
   (256 KB) chunks and stops once it has the `limit` records the request
   asks for, so a typical 200-row page decodes one chunk rather than the
@@ -1125,35 +1112,41 @@ itself, which already documents its own single-instance assumption.
 
 ## Rust implementation (`rust/`)
 
-`rust/` is a port of `src/gatekeeper/` to Rust (1.13.0). The Python package
-is its specification: same validation and check order, same user-visible
-strings, same file and wire formats, so a deployment can switch binaries
-without touching a config file. Since 1.13.0 it is what the image runs
-(`/usr/local/bin/gatekeeper`); the Python package stays in the repository
-as the reference the `rust` CI job's parity tests compare against.
+`rust/` is a port of the original Python package (1.13.0), and since 1.17.0
+the only implementation: the Python package and its tests were removed.
+The port kept the Python behavior on purpose -- same validation and check
+order, same user-visible strings, same file and wire formats -- so a
+deployment switched binaries without touching a config file.
 
-- **Module map.** Module names follow the Python ones (`tier1.py` ->
-  `tier1`, `execute_http.py` -> `execute::http`, `api/*` -> `api::*`);
-  `rust/PORTING.md` has the full table and the porting rules.
+- **Module names** follow the Python ones (`tier1.py` -> `tier1`,
+  `execute/http.rs` -> `execute::http`, `api/*` -> `api::*`);
+  `rust/PORTING.md` keeps the map and a short history.
 - **Stack.** axum and tokio for the HTTP side; MCP's streamable HTTP
   transport is implemented in `mcp/` for both protocol eras and tested
-  against clients from the Python SDK. russh replaces asyncssh,
-  tokio-tungstenite replaces `websockets`, hyper + rustls replace httpx.
+  against clients from the official Python MCP SDK
+  (`rust/tests/interop/`). russh for ssh, tokio-tungstenite for WebSocket,
+  hyper + rustls for outbound HTTP.
 - **Python formats on purpose.** `pyjson` writes what `json.dumps` wrote
   (audit log, mailbox), `yaml` reads and writes with PyYAML's YAML 1.1
   rules, `pyre` runs operator `pattern:` regexes on PCRE2 with Python's
   spellings translated, `pathutil` is `os.path`'s non-strict `realpath`.
-- **Unchanged parts.** The React console and `frontend/openapi.json`
-  (embedded in the binary, and what `/api/v1` answers to), and the vendored
-  Google and Microsoft CLI scripts, which still run under Python as a
-  subprocess (`GATEKEEPER_PYTHON`, else `python3`).
+- **Frozen expectations.** What the Python implementation produced and
+  the parity tests used to compare against live -- error texts, the
+  examples as loaded, `init` output, the admin tool list, the MCP wire
+  transcript, token hashes, a credential store and audit lines -- is kept
+  in `rust/tests/fixtures/`. A deliberate change to one of those outputs
+  is edited into its fixture by hand.
+- **Still Python.** The vendored Google and Microsoft CLI scripts
+  (`scripts/`), which run as a subprocess (`GATEKEEPER_PYTHON`, else
+  `python3`); `frontend/openapi.json` is a committed file, embedded in the
+  binary, and what `/api/v1` answers to.
 - **Image.** The `build` stage cross-compiles for the target architecture
   with PCRE2 linked statically; the console is copied to
   `/usr/share/gatekeeper/web` (`GATEKEEPER_WEB_DIR`); a venv at `/opt/venv`
   holds only Google's client libraries for `google_api.py`
   (`GATEKEEPER_PYTHON=/opt/venv/bin/python`).
-- **Version.** `rust/build.rs` reads `pyproject.toml`, so a release still
-  bumps one file.
+- **Version.** `version` in `rust/Cargo.toml` (`CARGO_PKG_VERSION`); CI
+  reads the same field.
 - **Deviations.** Where Python crashed (an uncaught exception on malformed
   input) the port returns the error a caller would expect instead; each
   such place carries a `PORT NOTE:` comment.
