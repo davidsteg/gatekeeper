@@ -331,6 +331,55 @@ tools:
     timeout_seconds: 15
     max_output_bytes: 8192
 
+  # A body field can send a file instead of a template: `{from_file: <path
+  # parameter>, encoding: base64}` is replaced by that file's content,
+  # base64-encoded, just before the request goes out. The parameter must be
+  # a derived `path` (the agent names the file, the server builds and
+  # checks the path), and its `must_resolve_under` must lie within the
+  # toolkit's `path_roots` -- the `github` toolkit allows the agent scratch
+  # directory only. At call time the file must be a regular file with one
+  # link, still under that root once opened (a symlink pointing out is
+  # refused), at most `max_file_bytes` (checked before reading), and not
+  # named like a secret (config.yaml, .env, .env.*, *.key, *.pem,
+  # credentials*). The audit log records path and size, never content.
+  # Such a tool is never category `read`.
+
+  - id: github.blob_create_from_file
+    toolkit: github
+    version: 1
+    title: Create a Git blob from a scratch file
+    description: >-
+      Uploads one file from the agent scratch directory as a Git blob and
+      returns its SHA, for a later tree or commit. Blobs are
+      content-addressed: the same file always gives the same SHA.
+    category: write_external
+    idempotent: true
+    enabled: false
+    method: POST
+    path: "/repos/davidsteg/{repo}/git/blobs"
+    body:
+      content: {from_file: path, encoding: base64}
+      encoding: "base64"
+    max_file_bytes: 1048576
+    parameters:
+      repo:
+        type: string
+        required: true
+        pattern: "^[a-z0-9][a-z0-9._-]{0,99}$"
+        description: Repository name under davidsteg/.
+      file:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){0,7}$"
+        description: File path relative to the scratch directory.
+      path:
+        type: path
+        derived: "/mnt/raid/agent/hermes-dev/scratch/{file}"
+        must_resolve_under: /mnt/raid/agent/hermes-dev/scratch
+    required_scopes: ["repo:davidsteg/{repo}"]
+    timeout_seconds: 20
+    max_output_bytes: 8192
+
   # -- truenas executor (FR-8.3a-f) ------------------------------------------
   # No 'path'/'argv' here either -- 'method' is a JSON-RPC method name,
   # checked against the toolkit's allowed_rpc_methods, and 'params' is an

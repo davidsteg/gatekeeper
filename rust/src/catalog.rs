@@ -266,6 +266,9 @@ pub struct ToolDef {
     pub body_template: Option<Value>,
     /// Raw JSON body mode (`body: {raw_param: <name>}`).
     pub body_raw_param: Option<String>,
+    /// The per-file ceiling for the body's `from_file` fields (1.21.0);
+    /// set exactly when the body has one ([`body_file_params`]).
+    pub max_file_bytes: Option<i64>,
     /// Per-tool base_url override (0.45.5).
     pub base_url: Option<String>,
 
@@ -748,6 +751,11 @@ pub fn validate_against_tier1(tool: &ToolDef, toolkit: &Toolkit) -> ConfigResult
                     repr_list(&toolkit.allowed_path_prefixes)
                 )));
             }
+            // A body `from_file` reads the gatekeeper host's disk, so its
+            // root is Tier 1's to allow (FR-4.10), as for a local tool.
+            if tool.max_file_bytes.is_some() {
+                check_param_roots(tool, toolkit, where_)?;
+            }
             // A per-tool base_url override on a hostname toolkit names a
             // host too; one outside `allowed_hosts` could never connect, so
             // it is disabled here instead of failing on every call.
@@ -1016,6 +1024,199 @@ pub fn collect_template_strings(body: Option<&Value>) -> Vec<String> {
     out
 }
 
+/// The only encoding a body `from_file` field can have: the file's bytes
+/// go into a JSON string, so they have to be text-safe.
+pub const BODY_FILE_ENCODINGS: &[&str] = &["base64"];
+
+/// The ceiling no tool's `max_file_bytes` may exceed: the whole file is
+/// held in memory, and once more as base64, for the length of a call.
+pub const MAX_FILE_BYTES_CEILING: i64 = 10 * 1024 * 1024;
+
+/// The parameters a body template reads files from, in order (1.21.0).
+///
+/// A mapping with a `from_file` key is not an ordinary body object: it is
+/// `{from_file: <path parameter>, encoding: base64}`, which the executor
+/// replaces by that file's content (`execute::http::fill_body_files`), and
+/// exactly those two keys. `Err` names the first malformed one.
+pub fn body_file_params(body: Option<&Value>, where_: &str) -> ConfigResult<Vec<String>> {
+    fn walk(v: &Value, at: &str, where_: &str, out: &mut Vec<String>) -> ConfigResult<()> {
+        match v {
+            Value::Object(m) if m.contains_key("from_file") => {
+                let mut unknown: Vec<&str> =
+                    m.keys().map(String::as_str).filter(|k| *k != "from_file" && *k != "encoding").collect();
+                unknown.sort();
+                if !unknown.is_empty() {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: '{at}' reads a file and takes only 'from_file' and 'encoding' \
+                         -- unknown fields {}",
+                        repr_list(&unknown)
+                    )));
+                }
+                let name = match &m["from_file"] {
+                    Value::String(s) if !s.is_empty() => s.clone(),
+                    other => {
+                        return Err(ConfigError::new(format!(
+                            "{where_}: '{at}.from_file' must be the name of a path parameter, not {}",
+                            repr_value(other)
+                        )))
+                    }
+                };
+                match m.get("encoding") {
+                    Some(Value::String(e)) if BODY_FILE_ENCODINGS.contains(&e.as_str()) => {}
+                    other => {
+                        return Err(ConfigError::new(format!(
+                            "{where_}: '{at}.encoding' must be one of {}, not {}",
+                            repr_list(BODY_FILE_ENCODINGS),
+                            repr_value(other.unwrap_or(&Value::Null))
+                        )))
+                    }
+                }
+                out.push(name);
+            }
+            Value::Object(m) => {
+                for (k, x) in m {
+                    walk(x, &format!("{at}.{k}"), where_, out)?;
+                }
+            }
+            Value::Array(a) => {
+                for (i, x) in a.iter().enumerate() {
+                    walk(x, &format!("{at}[{i}]"), where_, out)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    if let Some(b) = body {
+        walk(b, "body", where_, &mut out)?;
+    }
+    Ok(out)
+}
+
+/// The fields any tool spec may carry, whatever its executor. `executor`
+/// is only a reminder for the reader; it has to name the toolkit's own.
+const COMMON_TOOL_FIELDS: &[&str] = &[
+    "category",
+    "description",
+    "enabled",
+    "executor",
+    "id",
+    "idempotent",
+    "max_output_bytes",
+    "parameters",
+    "required_scopes",
+    "ssh_dispatch",
+    "timeout_seconds",
+    "title",
+    "toolkit",
+    "version",
+];
+
+/// The fields only a tool on one executor reads.
+fn executor_tool_fields(executor: &str) -> &'static [&'static str] {
+    match executor {
+        "docker" | "local" | "ssh" => &["argv", "binary"],
+        "http" => &["base_url", "body", "max_file_bytes", "method", "path", "query"],
+        "truenas" => &["method", "params"],
+        "file" => &["file_operation", "operation", "run_as"],
+        "google" => &["google_action", "google_args"],
+        "microsoft" => &["microsoft_action", "microsoft_args"],
+        "opencode" => &["opencode_operation", "operation"],
+        "agent" => &["agent_operation", "operation"],
+        "artifact" => &["artifact_operation", "operation"],
+        "kuma" => &["kuma_operation", "operation"],
+        "git" => &["git_operation", "operation"],
+        _ => &[],
+    }
+}
+
+/// The fields a parameter spec may carry.
+const PARAMETER_FIELDS: &[&str] = &[
+    "allow_control_characters",
+    "derived",
+    "description",
+    "flag",
+    "maximum",
+    "minimum",
+    "must_resolve_under",
+    "pattern",
+    "required",
+    "type",
+    "values",
+];
+
+/// The fields a `google_args`/`microsoft_args` entry may carry.
+const CLI_ARG_FIELDS: &[&str] = &["flag", "positional", "switch"];
+
+/// Every field of `spec` that nothing reads for a tool on `executor`, as
+/// a dotted path (`parameters.repo.patern`), sorted (1.21.0). A field
+/// nothing reads is not harmless: the tool looks like it does what the
+/// field says, and does something else.
+pub fn unknown_tool_fields(spec: &Map<String, Value>, executor: &str) -> Vec<String> {
+    let known = executor_tool_fields(executor);
+    let mut out: Vec<String> = spec
+        .keys()
+        .filter(|k| !COMMON_TOOL_FIELDS.contains(&k.as_str()) && !known.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    if let Some(Value::Object(params)) = spec.get("parameters") {
+        for (name, p) in params {
+            if let Value::Object(p) = p {
+                out.extend(
+                    p.keys().filter(|k| !PARAMETER_FIELDS.contains(&k.as_str())).map(|k| format!("parameters.{name}.{k}")),
+                );
+            }
+        }
+    }
+    for args_key in ["google_args", "microsoft_args"] {
+        if !known.contains(&args_key) {
+            continue;
+        }
+        if let Some(Value::Object(args)) = spec.get(args_key) {
+            for (name, a) in args {
+                if let Value::Object(a) = a {
+                    out.extend(
+                        a.keys().filter(|k| !CLI_ARG_FIELDS.contains(&k.as_str())).map(|k| format!("{args_key}.{name}.{k}")),
+                    );
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The strict half of [`parse_tool_spec`]: no field nothing reads, and an
+/// `executor` that names the toolkit's own. Runs after `parse_tool`, so
+/// a definition that is wrong anyway keeps that error.
+fn check_tool_fields(spec: &Value, tier1: &Tier1) -> ConfigResult<()> {
+    let Value::Object(spec) = spec else { return Ok(()) };
+    let Some(Value::String(toolkit_name)) = spec.get("toolkit") else { return Ok(()) };
+    let Ok(toolkit) = tier1.toolkit(toolkit_name) else { return Ok(()) };
+    let where_ = format!("tool {}", repr_value(spec.get("id").unwrap_or(&Value::Null)));
+    let unknown = unknown_tool_fields(spec, &toolkit.executor);
+    if !unknown.is_empty() {
+        return Err(ConfigError::new(format!(
+            "{where_}: unknown fields {} -- nothing reads them for a tool on the {} executor, so the \
+             tool would not do what they say. Remove or correct them.",
+            repr_list(&unknown),
+            repr_str(&toolkit.executor)
+        )));
+    }
+    if let Some(executor) = spec.get("executor").filter(|v| !v.is_null()) {
+        if !py_eq(executor, &Value::String(toolkit.executor.clone())) {
+            return Err(ConfigError::new(format!(
+                "{where_}: executor={} does not match toolkit {}, whose executor is {}",
+                repr_value(executor),
+                repr_str(toolkit_name),
+                repr_str(&toolkit.executor)
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
     let Value::Object(spec) = spec else {
         return Err(ConfigError::new("tools.yaml: every entry must be a mapping"));
@@ -1095,6 +1296,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         query_template: IndexMap::new(),
         body_template: None,
         body_raw_param: None,
+        max_file_bytes: None,
         base_url: None,
         rpc_method: None,
         params_template: None,
@@ -1165,6 +1367,51 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
             }
             if let Some(base) = get_some(spec, "base_url") {
                 tool.base_url = Some(validate_http_base_url(&py_str(base), where_, "base_url")?);
+            }
+            let file_params = body_file_params(tool.body_template.as_ref(), where_)?;
+            for name in &file_params {
+                match parameters.get(name) {
+                    Some(p) if p.ptype == "path" => {}
+                    _ => {
+                        return Err(ConfigError::new(format!(
+                            "{where_}: body reads 'from_file' {}, which is not a declared parameter \
+                             of type 'path' -- only a derived path checked against \
+                             'must_resolve_under' may name the file",
+                            repr_str(name)
+                        )))
+                    }
+                }
+            }
+            match (file_params.is_empty(), get_some(spec, "max_file_bytes")) {
+                (true, None) => {}
+                (true, Some(_)) => {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: 'max_file_bytes' is only meaningful with a body 'from_file' field"
+                    )))
+                }
+                (false, None) => {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: a body 'from_file' field needs 'max_file_bytes', the largest \
+                         file the tool may send"
+                    )))
+                }
+                (false, Some(raw)) => {
+                    let limit = py_int(raw)?;
+                    if !(1..=MAX_FILE_BYTES_CEILING).contains(&limit) {
+                        return Err(ConfigError::new(format!(
+                            "{where_}: max_file_bytes={limit} must be between 1 and {MAX_FILE_BYTES_CEILING}"
+                        )));
+                    }
+                    tool.max_file_bytes = Some(limit);
+                }
+            }
+            // A tool that sends a local file out is never `read`, which
+            // `admin.tool_enable` applies without a human.
+            if !file_params.is_empty() && tool.category == "read" {
+                return Err(ConfigError::new(format!(
+                    "{where_}: a body 'from_file' field sends a local file to the target -- \
+                     its category cannot be 'read'"
+                )));
             }
             all_templates.push(path_template.clone());
             all_templates.extend(tool.query_template.values().cloned());
@@ -1549,8 +1796,16 @@ pub fn normalize_tool_entry(entry: &Map<String, Value>) -> Value {
 
 /// Public entry point for a single definition. The admin API and the UI
 /// take exactly the same path as startup.
+///
+/// Stricter than startup in one way (1.21.0): a field nothing reads is an
+/// error here ([`unknown_tool_fields`]), so `admin.tool_validate`,
+/// `admin.tool_create`/`tool_update` and the console refuse it. Startup
+/// and reload only warn ([`Catalog::unknown_fields`]), so a stored tool
+/// that already carries one keeps loading.
 pub fn parse_tool_spec(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
-    parse_tool(spec, tier1)
+    let tool = parse_tool(spec, tier1)?;
+    check_tool_fields(spec, tier1)?;
+    Ok(tool)
 }
 
 /// The loaded catalog.
@@ -1562,6 +1817,9 @@ pub struct Catalog {
     pub raw: Vec<Value>,
     /// Definitions that violate Tier 1: the resolved flat spec plus reason.
     pub rejected: Vec<(Value, String)>,
+    /// Loaded tools carrying fields nothing reads, one warning each
+    /// (1.21.0). A write with such a field is refused ([`parse_tool_spec`]).
+    pub unknown_fields: Vec<String>,
 }
 
 impl Catalog {
@@ -1659,6 +1917,9 @@ pub fn load_catalog_value(raw: &Value, tier1: &Tier1, strict: bool) -> ConfigRes
             }
         };
         let toolkit = tier1.toolkit(&tool.toolkit)?;
+        if let Err(exc) = check_tool_fields(&spec, tier1) {
+            catalog.unknown_fields.push(exc.message);
+        }
         for expanded in expand_tool(&tool, toolkit) {
             if catalog.tools.contains_key(&expanded.id) {
                 return Err(ConfigError::new(format!("Duplicate tool ID {}", repr_str(&expanded.id))));

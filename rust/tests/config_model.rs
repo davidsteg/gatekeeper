@@ -724,3 +724,76 @@ fn redact_secrets_defaults_per_executor_and_must_be_a_bool() {
     let err = tier1_text(tmp.path(), &doc("    redact_secrets: \"no\"\n")).unwrap_err();
     assert!(err.to_string().contains("'redact_secrets' must be true or false"), "{err}");
 }
+
+// -- Body fields from a file (1.21.0) -----------------------------------------
+
+fn http_tier1(tmp: &std::path::Path, path_roots: &str) -> gatekeeper::tier1::Tier1 {
+    tier1_text(
+        tmp,
+        &format!(
+            "toolkits:\n  gh:\n    executor: http\n    base_url: \"https://api.github.com\"\n    allowed_methods: [\"GET\", \"POST\"]\n    allowed_path_prefixes: [\"/repos/\"]\n    allowed_hosts: [api.github.com]\n    path_roots: {path_roots}\n"
+        ),
+    )
+    .unwrap()
+}
+
+fn blob_spec() -> Value {
+    json!({
+        "id": "gh.blob", "toolkit": "gh", "title": "Blob", "description": "d",
+        "category": "write_external", "idempotent": true,
+        "method": "POST", "path": "/repos/x/git/blobs",
+        "body": {"content": {"from_file": "path", "encoding": "base64"}, "encoding": "base64"},
+        "max_file_bytes": 1048576,
+        "parameters": {
+            "file": {"type": "string", "pattern": "^[a-z]+$", "required": true},
+            "path": {"type": "path", "derived": "/srv/scratch/{file}", "must_resolve_under": "/srv/scratch"},
+        },
+    })
+}
+
+#[test]
+fn from_file_spec_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = http_tier1(dir.path(), "[/srv/scratch]");
+    let t = parse_tool_spec(&blob_spec(), &tier1).unwrap();
+    assert_eq!(t.max_file_bytes, Some(1048576));
+    assert_eq!(gatekeeper::catalog::body_file_params(t.body_template.as_ref(), "t").unwrap(), vec!["path"]);
+    // `path` is derived, so the agent only ever sees `file`.
+    assert_eq!(t.input_schema()["required"], json!(["file"]));
+}
+
+#[test]
+fn from_file_spec_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = http_tier1(dir.path(), "[/srv/scratch]");
+    let refused = |edit: &dyn Fn(&mut Value)| {
+        let mut spec = blob_spec();
+        edit(&mut spec);
+        err_text(parse_tool_spec(&spec, &tier1))
+    };
+    assert!(refused(&|s| s["body"]["content"]["from_file"] = json!("file")).contains("not a declared parameter of type 'path'"));
+    assert!(refused(&|s| s["body"]["content"]["from_file"] = json!("nope")).contains("not a declared parameter"));
+    assert!(refused(&|s| s["body"]["content"]["encoding"] = json!("utf-8")).contains("'body.content.encoding' must be one of ['base64']"));
+    assert!(refused(&|s| { s["body"]["content"].as_object_mut().unwrap().remove("encoding"); }).contains("must be one of"));
+    assert!(refused(&|s| s["body"]["content"]["max_bytes"] = json!(5)).contains("unknown fields ['max_bytes']"));
+    assert!(refused(&|s| { s.as_object_mut().unwrap().remove("max_file_bytes"); }).contains("needs 'max_file_bytes'"));
+    assert!(refused(&|s| s["max_file_bytes"] = json!(0)).contains("must be between 1 and 10485760"));
+    assert!(refused(&|s| s["max_file_bytes"] = json!(10485761)).contains("must be between 1 and 10485760"));
+    assert!(refused(&|s| s["category"] = json!("read")).contains("its category cannot be 'read'"));
+    assert!(refused(&|s| s["body"] = json!({"title": "x"})).contains("'max_file_bytes' is only meaningful"));
+    // Nested in a list is still a file field.
+    let mut nested = blob_spec();
+    nested["body"] = json!({"files": [{"from_file": "path", "encoding": "base64"}]});
+    assert!(parse_tool_spec(&nested, &tier1).is_ok());
+}
+
+#[test]
+fn from_file_root_must_be_within_the_toolkit_path_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    let narrow = http_tier1(dir.path(), "[/srv/other]");
+    let err = parse_tool_spec(&blob_spec(), &narrow).unwrap_err();
+    assert!(err.is_tier1_violation(), "{}", err.message);
+    assert!(err.message.contains("lies outside the path_roots"), "{}", err.message);
+    let none = http_tier1(dir.path(), "[]");
+    assert!(err_text(parse_tool_spec(&blob_spec(), &none)).contains("declares no path_roots"));
+}

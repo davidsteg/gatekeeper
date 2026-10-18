@@ -54,6 +54,15 @@ never automatically and never from `/admin/mcp` (see below).
 - **Tier 2** defines: the tool catalog, identities and grants, scopes, and
   named credential values.
 
+A tool definition has a fixed set of fields per executor (`catalog.rs`'s
+`unknown_tool_fields`, 1.21.0), and the parameters and `*_args` entries in it
+have theirs. `admin.tool_validate`, `admin.tool_create`/`tool_update` and the
+console refuse a definition with any other field: a field nothing reads
+makes a tool look like it does something it does not. `executor:` is
+allowed as a reminder, and must name the toolkit's own. At startup and
+reload such a field is only a warning, so a stored tool that already
+carries one keeps loading.
+
 ## Roles
 
 | Role | MCP (`/mcp`) | Admin MCP (`/admin/mcp`) | Console (`/app`) read | Tier 2 write |
@@ -135,6 +144,26 @@ override changes the target, not the target restrictions (an override host
 outside `allowed_hosts` disables the tool at load). Executor-side refusals
 are audited as the call's `denial_reason`/`detail` (names and addresses,
 never a secret); the outcome stays `failed`.
+
+**Body fields from a file (1.21.0).** A body field written
+`{from_file: <param>, encoding: base64}` is not a template: the executor
+replaces it by that file's content, base64-encoded, just before sending
+(`execute::http::fill_body_files`), as in
+`github.blob_create_from_file` in `config/examples/tools.yaml`. At load,
+`<param>` must be a declared `type: path` parameter (derived, with
+`must_resolve_under`), that root must lie within the toolkit's `path_roots`
+(Tier 1 decides which part of the gatekeeper host's disk an http tool may
+send, FR-4.10), the tool must declare `max_file_bytes` (1 to 10 MiB), and
+its category cannot be `read`. At call time the path was resolved and
+checked against its root with the other parameters; the executor then opens
+it without following a final symlink and without blocking, and checks the
+*opened* file again: a regular file, one hard link, the kernel's name for it
+(`/proc/self/fd`) still under the root, a size within `max_file_bytes`
+before a byte is read, and a basename that matches none of `config.yaml`,
+`.env`, `.env.*`, `*.key`, `*.pem`, `credentials*` (case-insensitive). Any
+refusal is a denial before a connection exists, so nothing was sent. The
+request `validate::build_http_request` returns, which the audit log's
+`command` describes, carries the path and its limits, never the content.
 
 A *proposed* `allowed_cidrs` (toolkit create or update, 1.11.0) is held to
 two more rules, at submit and again at deploy: an entry wider than /16
@@ -939,6 +968,9 @@ gatekeeper itself at `/app` (`api/web.rs`). It is a pure client of
   Markdown subset (headings, lists, fenced code, tables, and links, which
   become `<a>` only for `http(s)://` and `#` targets) is built as React
   elements (`pages/markdown.tsx`) for release notes and the Docs page.
+  Lines made only of HTML tags (the README's centered header and its
+  `<picture>` screenshots) and `![images](src)` are left out there; any
+  other HTML stays text.
 - **Serving.** `index.html` is `no-store`; hashed files under
   `/app/assets/` are `immutable`; any other `/app/...` path without a file
   falls back to `index.html` (client routes, including dotted tool IDs),
@@ -1002,7 +1034,10 @@ that keeps browser-initiated requests out of the audit log's
 other path.
 
 The PWA manifest is `/app/manifest.webmanifest` (`start_url` and `scope`
-`/app/`, icon `/app/icon.svg`), built from `frontend/public/`. The old
+`/app/`, icon `/app/icon.svg`), built from `frontend/public/`. The
+favicon (`/app/favicon.svg`) is also the console's logo in the sidebar and
+on the sign-in page; `icon.svg` is the same mark full-bleed, for maskable
+home-screen icons. The README's copy is `.readme-assets/logo.svg`. The old
 `/ui` manifest, icon and the never-registered service-worker stub are
 gone with the Python package's `_pwa/`.
 
@@ -1038,6 +1073,11 @@ is masked the same way; the known-credential redactor and the
 secret-shape masking of 1.18.0 (`secretmask`, `[redacted]`) then run over
 both, whatever the toolkit's `redact_secrets` says, so a `cmd` parameter of
 `export API_TOKEN=...` is masked too.
+
+A call whose `http` body read files ([body fields from a
+file](#executors), 1.21.0) carries `files`: one `{"path", "bytes"}` per file
+sent. The content itself is never recorded -- it exists only in the request
+bytes.
 
 So that one call cannot flood the log, every string in `parameters` is cut
 after 1000 characters and `command` after 2000, with a `… [+N chars]` note of

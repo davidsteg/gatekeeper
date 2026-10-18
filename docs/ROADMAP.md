@@ -21,6 +21,11 @@ item.
 - `docker` and `local` executors
 - `http` executor — SSRF-safe, no redirects followed, credential-as-header
   injection, response size/field capping, external-data marking (`execute/http.rs`)
+- `http` body fields from a file (`from_file`, 1.21.0) — a derived path under
+  a Tier 1 `path_roots` root, regular files only, re-checked once opened,
+  `max_file_bytes` before reading, a never-send name list; path and size in
+  the audit, never content
+- Strict tool definitions (1.21.0) — writes refuse fields nothing reads
 - `truenas` executor — JSON-RPC 2.0 over WebSocket, RPC-method whitelist
   (`execute/truenas.rs`)
 - `ssh` executor — reuses the `docker`/`local` binary+argv tool shape

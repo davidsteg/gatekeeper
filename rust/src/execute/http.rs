@@ -12,6 +12,13 @@
 //! injected as a header by this module directly, never through a tool's
 //! own query/body template (FR-8.14).
 //!
+//! A body field `{from_file: <path parameter>, encoding: base64}` sends a
+//! file's content instead of a template ([`fill_body_files`], 1.21.0): a
+//! regular file only, still under its `must_resolve_under` once opened,
+//! no larger than the tool's `max_file_bytes` (checked before a byte is
+//! read), never one whose name is on [`BODY_FILE_DENYLIST`]. The content
+//! exists only in the bytes sent; the audit record gets path and size.
+//!
 //! A tool may declare `body: {raw_param: <name>}` to hand one parameter's
 //! own JSON document to the target as the request body byte for byte
 //! ([`raw_json_body`]) -- the body's *shape* is the only thing that
@@ -528,6 +535,131 @@ pub fn raw_json_body(raw_param: &str, body: Option<Value>) -> Result<(Option<Vec
     Ok((Some(pyjson::dumps_with(&value, &pyjson::Opts::unicode()).into_bytes()), None))
 }
 
+/// Basenames a body file may never have, matched case-insensitively:
+/// what a secret is usually called, whatever directory it sits in.
+pub const BODY_FILE_DENYLIST: &[&str] = &["config.yaml", ".env", ".env.*", "*.key", "*.pem", "credentials*"];
+
+/// The [`BODY_FILE_DENYLIST`] entry `path`'s basename matches.
+fn denylisted(path: &str) -> Option<&'static str> {
+    let name = crate::pathutil::basename(path).to_lowercase();
+    BODY_FILE_DENYLIST.iter().copied().find(|pat| crate::fnmatch::fnmatchcase(&name, pat))
+}
+
+/// Reads one body file for [`fill_body_files`], or says why not.
+///
+/// `path` was resolved and checked against `root` when the call was
+/// validated; everything is checked again on the opened file, because the
+/// path can have changed since. Opened without following a final symlink
+/// and without blocking (a FIFO would hang the call), then: a regular file
+/// with no second hard link (a link made inside the root to a file
+/// outside it resolves to the inside path), the kernel's own name for it
+/// still under `root`, and its size within `max_bytes` *before* reading.
+/// Messages name path and size only.
+pub fn read_body_file(path: &str, root: &str, max_bytes: u64) -> Result<Vec<u8>, Denied> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let invalid = |detail: String| Denied::new(DenialReason::ParamInvalid, detail);
+    let escape = || {
+        Denied::new(DenialReason::PathEscape, format!("Body file {} resolves outside {}.", repr_str(path), repr_str(root)))
+    };
+    let deny_name = |p: &str, pat: &str| {
+        invalid(format!(
+            "Body file {} matches {} on the never-send list; such a file is not sent. Nothing was sent.",
+            repr_str(p),
+            repr_str(pat)
+        ))
+    };
+    if let Some(pat) = denylisted(path) {
+        return Err(deny_name(path, pat));
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|e| match e.raw_os_error() {
+            Some(libc::ELOOP) => invalid(format!("Body file {} is a symbolic link; it is not followed. Nothing was sent.", repr_str(path))),
+            _ => invalid(format!("Body file {} cannot be opened: {}. Nothing was sent.", repr_str(path), errno_str(e.raw_os_error().unwrap_or(0)))),
+        })?;
+    let meta = file.metadata().map_err(|e| invalid(format!("Body file {} cannot be read: {e}.", repr_str(path))))?;
+    if !meta.file_type().is_file() {
+        return Err(invalid(format!("Body file {} is not a regular file. Nothing was sent.", repr_str(path))));
+    }
+    if meta.nlink() > 1 {
+        return Err(invalid(format!(
+            "Body file {} has {} hard links; only a file with one is sent. Nothing was sent.",
+            repr_str(path),
+            meta.nlink()
+        )));
+    }
+    let opened = std::fs::read_link(format!("/proc/self/fd/{}", std::os::fd::AsRawFd::as_raw_fd(&file)))
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|_| escape())?;
+    let real_root = crate::pathutil::realpath(root).map_err(|_| escape())?;
+    if !crate::pathutil::is_under(&opened, &real_root) {
+        return Err(escape());
+    }
+    if let Some(pat) = denylisted(&opened) {
+        return Err(deny_name(&opened, pat));
+    }
+    let too_large = |size: u64| {
+        invalid(format!(
+            "Body file {} is {size} bytes, over this tool's limit of {max_bytes}. Nothing was read or sent.",
+            repr_str(path)
+        ))
+    };
+    if meta.len() > max_bytes {
+        return Err(too_large(meta.len()));
+    }
+    // One byte past the limit tells a file that grew since the fstat.
+    let mut content = Vec::with_capacity(meta.len() as usize);
+    file.take(max_bytes + 1)
+        .read_to_end(&mut content)
+        .map_err(|e| invalid(format!("Body file {} cannot be read: {e}. Nothing was sent.", repr_str(path))))?;
+    if content.len() as u64 > max_bytes {
+        return Err(too_large(content.len() as u64));
+    }
+    Ok(content)
+}
+
+/// Replaces every body file field (`validate::build_http_request`'s
+/// `{from_file, encoding, must_resolve_under, max_file_bytes}`) by the
+/// file's content, base64-encoded, and returns `(path, size)` per file.
+/// Runs before any connection, so a refused file means nothing was sent.
+pub fn fill_body_files(body: &mut Value) -> Result<Vec<(String, u64)>, Denied> {
+    fn walk(v: &mut Value, out: &mut Vec<(String, u64)>) -> Result<(), Denied> {
+        use base64::Engine as _;
+        match v {
+            Value::Object(m) if m.contains_key("from_file") => {
+                let text = |key: &str| m.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+                let (path, root) = (text("from_file"), text("must_resolve_under"));
+                let max = m.get("max_file_bytes").and_then(Value::as_u64).unwrap_or(0);
+                if text("encoding") != "base64" || root.is_empty() {
+                    return Err(Denied::new(DenialReason::Tier1Violation, "Body file field without its limits."));
+                }
+                let content = read_body_file(&path, &root, max)?;
+                out.push((path, content.len() as u64));
+                *v = Value::String(base64::engine::general_purpose::STANDARD.encode(&content));
+            }
+            Value::Object(m) => {
+                for x in m.values_mut() {
+                    walk(x, out)?;
+                }
+            }
+            Value::Array(a) => {
+                for x in a.iter_mut() {
+                    walk(x, out)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(body, &mut out)?;
+    Ok(out)
+}
+
 /// One `http` call. `credentials`/`toolkit.credential` rather than a
 /// pre-resolved value: this module is one of the few places allowed to call
 /// [`CredentialStore::resolve`].
@@ -636,6 +768,13 @@ pub async fn run(
     if raw_content.is_some() {
         set_header(&mut headers, "Content-Type".into(), "application/json".into());
     }
+    let mut body_files: Vec<(String, u64)> = Vec::new();
+    if let Some(b) = body.as_mut() {
+        match fill_body_files(b) {
+            Ok(files) => body_files = files,
+            Err(denial) => return Ok(denied(denial)),
+        }
+    }
 
     let method = method.to_uppercase();
     let mut content: Option<Vec<u8>> = None;
@@ -685,10 +824,12 @@ pub async fn run(
             elapsed_ms(started),
         )
         .untrusted(true)
+        .read_files(body_files.clone())
     };
     let failed_result = |exc: String, started: Instant| -> ExecResult {
         ExecResult::new(OUTCOME_FAILED, None, "", format!("Request failed: {exc}"), false, elapsed_ms(started))
             .untrusted(true)
+            .read_files(body_files.clone())
     };
 
     let request = Prepared { scheme: scheme.clone(), host: host.clone(), addr: resolved.addr, method, target, headers, content };
@@ -747,7 +888,9 @@ pub async fn run(
         stdout = redact(&stdout);
         stderr = redact(&stderr);
     }
-    Ok(ExecResult::new(outcome, Some(status as i64), stdout, stderr, truncated, elapsed_ms(started)).untrusted(true))
+    Ok(ExecResult::new(outcome, Some(status as i64), stdout, stderr, truncated, elapsed_ms(started))
+        .untrusted(true)
+        .read_files(body_files))
 }
 
 /// `headers[name] = value` on an ordered, case-insensitive header list.

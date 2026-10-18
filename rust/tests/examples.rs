@@ -65,7 +65,7 @@ fn tool_value(t: &ToolDef) -> Value {
         "max_output_bytes": t.max_output_bytes, "binary": t.binary, "argv": t.argv,
         "http_method": t.http_method, "path_template": t.path_template,
         "query_template": t.query_template, "body_template": t.body_template,
-        "body_raw_param": t.body_raw_param, "base_url": t.base_url, "rpc_method": t.rpc_method,
+        "body_raw_param": t.body_raw_param, "max_file_bytes": t.max_file_bytes, "base_url": t.base_url, "rpc_method": t.rpc_method,
         "params_template": t.params_template, "file_operation": t.file_operation,
         "google_action": t.google_action, "google_args": opt_args(&t.google_args),
         "microsoft_action": t.microsoft_action, "microsoft_args": opt_args(&t.microsoft_args),

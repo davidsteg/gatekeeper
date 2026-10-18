@@ -106,6 +106,8 @@ pub struct CallRecord {
     /// line, the RPC method -- as one line (1.20.0). `None` when the call
     /// was denied before a request existed.
     pub command: Option<String>,
+    /// Files an `http` body sent (1.21.0): path and size, never content.
+    pub body_files: Vec<(String, u64)>,
 }
 
 /// A logged parameter value is cut after this many characters, so a
@@ -286,6 +288,15 @@ impl AuditLog {
         // The caller's address; absent when not called over HTTP.
         if let Some(client) = record.client.filter(|c| !c.is_empty()) {
             event.insert("client".into(), client.into());
+        }
+        // Absent when the call read no file, so other records keep their shape.
+        if !record.body_files.is_empty() {
+            let files: Vec<Value> = record
+                .body_files
+                .into_iter()
+                .map(|(path, bytes)| serde_json::json!({"path": path, "bytes": bytes}))
+                .collect();
+            event.insert("files".into(), Value::Array(files));
         }
         self.write(Value::Object(event))
     }
