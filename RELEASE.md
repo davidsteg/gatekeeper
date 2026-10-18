@@ -12,6 +12,15 @@ A refused `/mcp` request now says more about who sent it. Behind a Docker port m
   - `mcp_method`, and `mcp_client` on an `initialize`: the JSON-RPC method and the client's own `clientInfo` name and version, read from the refused POST body. Only on `/mcp` and `/admin/mcp`, and only a body with a `Content-Length` of at most 8 KiB, read for at most 500 ms, so the 401 never waits long.
 - The audit page in the console shows these in the detail column, and marks `forwarded_for` and `mcp_client` as unverified, and calls the 12 hex digits a `fingerprint`, not a `token`: they are the start of the SHA-256 of the presented token, not its first characters.
 
+## 1.15.0
+
+The Stats page has a "Top tools" card: the ten most-called tools in the chosen window, for all toolkits or for one picked from a dropdown.
+
+### Added
+
+- **Top tools on `/app/stats`.** Each row shows a tool's calls split into ok, denied and failed, and links to the audit log filtered to that tool. The toolkit dropdown lists every toolkit with calls in the window and is kept in the URL (`?toolkit=`), so a reload or a shared link keeps it.
+- **`GET /api/v1/stats` returns `tools`**: every tool called in the window, most calls first, as `name`, `toolkit` and the usual `ok`/`denied`/`failed`/`total` counts. A tool the current catalog no longer has is tagged `_unknown`, as in the per-toolkit table.
+
 ## 1.14.2
 
 Security fixes from an audit of the Rust build. The first two were reachable from the network without a token; the rest need a token, a console session, or a file or repository an agent can write. None of them got anyone past authentication.

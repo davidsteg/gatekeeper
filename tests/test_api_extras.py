@@ -77,6 +77,22 @@ async def test_stats_count_tool_calls(env):
     assert body["identities"][0]["name"] == "bot"
 
 
+async def test_stats_top_tools_carry_their_toolkit(env):
+    # Most calls first; a tool the catalog does not know is tagged
+    # `_unknown`, so the console's per-toolkit filter can still show it.
+    for outcome in ("ok", "ok", "failed"):
+        env["audit"].write({"kind": "call", "identity": "bot", "tool": "demo.show", "outcome": outcome})
+    env["audit"].write({"kind": "call", "identity": "bot", "tool": "gone.tool", "outcome": "denied"})
+    env["audit"].write({"kind": "admin_change", "actor": "root", "action": "tool_create", "target": "demo.show"})
+    async with _client(env["app"]) as c:
+        await login(c, "eye")
+        body = (await c.get(f"{API}/stats")).json()
+    assert body["tools"] == [
+        {"name": "demo.show", "toolkit": "demo", "total": 3, "ok": 2, "denied": 0, "failed": 1},
+        {"name": "gone.tool", "toolkit": "_unknown", "total": 1, "ok": 0, "denied": 1, "failed": 0},
+    ]
+
+
 async def test_stats_read_their_whole_window_and_nothing_older(env):
     # 250 calls inside the last hour (more than the 200 records the 24 h
     # window used to stop at), then one from two days ago appended before

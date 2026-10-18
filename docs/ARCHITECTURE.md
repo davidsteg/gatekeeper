@@ -891,7 +891,9 @@ writes through these routes.
 - **Stats, documents, OAuth sign-in (`api/extras.py`, 0.57.0).** `GET
   /stats?window=24h|7d|30d` (`service.stats_view`:
   tiles, an hourly or daily series, per-toolkit, per-identity, latency
-  and admin-action tables). Since 1.1.2 each window reads exactly its own
+  and admin-action tables, and since 1.15.0 a per-tool `tools` list,
+  each row tagged with its toolkit, that the console's "Top tools" card
+  filters by a toolkit dropdown). Since 1.1.2 each window reads exactly its own
   span: `read_audit(since=...)` walks back until the first older record,
   bounded by the same 2 MiB tail, and `truncated` means that tail ended
   before the window's start. `GET /documents`
