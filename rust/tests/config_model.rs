@@ -707,3 +707,20 @@ fn file_tool_run_as_override() {
     assert_eq!(mk(Some(json!(" 1:2 "))).unwrap().run_as.as_deref(), Some("1:2"));
     assert!(err_text(mk(Some(json!("1")))).starts_with("tool 'files.read': 'run_as' '1' is neither"));
 }
+
+#[test]
+fn redact_secrets_defaults_per_executor_and_must_be_a_bool() {
+    let tmp = tempfile::tempdir().unwrap();
+    let doc = |extra: &str| {
+        format!(
+            "toolkits:\n  files:\n    executor: file\n    path_roots: [/tmp]\n{extra}  api:\n    executor: http\n    base_url: \"http://10.0.0.1\"\n    allowed_methods: [GET]\n    allowed_path_prefixes: [/]\n    allowed_cidrs: [10.0.0.0/8]\n"
+        )
+    };
+    let t = tier1_text(tmp.path(), &doc("")).unwrap();
+    assert!(t.toolkits["files"].redact_secrets);
+    assert!(!t.toolkits["api"].redact_secrets);
+    let off = tier1_text(tmp.path(), &doc("    redact_secrets: false\n")).unwrap();
+    assert!(!off.toolkits["files"].redact_secrets);
+    let err = tier1_text(tmp.path(), &doc("    redact_secrets: \"no\"\n")).unwrap_err();
+    assert!(err.to_string().contains("'redact_secrets' must be true or false"), "{err}");
+}
