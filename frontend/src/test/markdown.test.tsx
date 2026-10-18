@@ -56,3 +56,21 @@ describe("Markdown, prose extras", () => {
     expect(container.textContent).toContain("2 * 3 = 6");
   });
 });
+
+describe("Markdown, README extras", () => {
+  it("leaves out tag-only HTML lines and images, keeps text and other HTML as text", () => {
+    const { container } = render(
+      <Markdown text={[
+        '<p align="center">', '  <img src=".readme-assets/logo.svg" width="96" alt="">', "</p>", "",
+        "<picture>", '  <source media="(prefers-color-scheme: dark)" srcset="a.png">', '  <img alt="Overview" src="b.png">', "</picture>", "",
+        "Intro ![shot](x.png) text <b>kept</b>",
+      ].join("\n")} />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("picture")).toBeNull();
+    expect(container.textContent).not.toContain("<p");
+    expect(container.textContent).not.toContain("source");
+    expect(container.textContent).not.toContain("shot");
+    expect(container.textContent).toContain("Intro  text <b>kept</b>");
+  });
+});
