@@ -1022,6 +1022,29 @@ A `call` record carries `client`, the address the call came over (the
 forwarded one behind a trusted proxy), next to `identity`. Records written
 before 1.7.0 have none.
 
+Since 1.20.0 a `call` record also carries `command`, right after
+`parameters`: what the executor was handed, as one line. For `local`,
+`docker` and `ssh` that is the argv, shell-quoted (`/usr/bin/docker exec web
+ls /srv`); for `http` the method, path, query and JSON body (`POST
+/repos/o/r/git/blobs {"content": ...}`); for `truenas` the RPC method and its
+params; for `google`/`microsoft` the action and CLI arguments; for the
+operation executors (`git`, `kuma`, `opencode`, `agent`, `artifact`) the
+operation name. A `file` call has none (its `parameters` say it all), and so
+does a call denied before a request was built. The environment, where
+credentials travel, is never part of it. The value of a parameter whose name
+marks it secret is masked to `***` wherever it lands in the command, as it
+is in `parameters`, and an `http` body or `truenas` param with such a key
+is masked the same way; the known-credential redactor and the
+secret-shape masking of 1.18.0 (`secretmask`, `[redacted]`) then run over
+both, whatever the toolkit's `redact_secrets` says, so a `cmd` parameter of
+`export API_TOKEN=...` is masked too.
+
+So that one call cannot flood the log, every string in `parameters` is cut
+after 1000 characters and `command` after 2000, with a `… [+N chars]` note of
+what was dropped. Masking runs before the cut, so a secret straddling it is
+never left half-visible. The console's Detail column shows the denial
+reason, then `command` (or `name=value` parameters for older records).
+
 An `auth_failure` on `/mcp` or `/admin/mcp` carries `client`, the caller's
 address (the forwarded one when it came through a trusted proxy), `method`,
 `path`, `user_agent` (capped at 160 characters) when the client sent one,

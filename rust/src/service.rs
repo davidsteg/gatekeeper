@@ -597,6 +597,7 @@ impl Service {
             }
         };
         let tool = tool.expect("authorized tool");
+        let command = describe_request(&request, &values);
 
         let timeout_seconds = tool.timeout_seconds.min(toolkit.max_timeout_seconds);
         let max_output_bytes = tool.max_output_bytes.min(toolkit.max_output_bytes);
@@ -844,6 +845,7 @@ impl Service {
             detail: result.denial_detail.clone(),
             credential_names,
             client: client.map(str::to_string),
+            command,
         })?;
         Ok(result)
     }
@@ -1010,6 +1012,55 @@ impl Service {
         }
         None
     }
+}
+
+/// The audit log's `command` (1.20.0): what the executor is handed, as
+/// one line. Never the environment, which is where credentials travel.
+/// The value of a parameter whose name marks it secret (`token`,
+/// `api_key`, ...) is masked wherever it lands, as it is in the logged
+/// `parameters`; the audit log then masks the credentials it knows.
+fn describe_request(request: &Request, values: &validate::Values) -> Option<String> {
+    use crate::audit::{is_secret_key, scrub, Redactor};
+    use crate::execute::ssh::shlex_quote;
+    let quoted = |args: &[String]| args.iter().map(|a| shlex_quote(a)).collect::<Vec<_>>().join(" ");
+    let masked_pairs = |pairs: &indexmap::IndexMap<String, String>| -> Map<String, Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(if is_secret_key(k) { "***".into() } else { v.clone() })))
+            .collect()
+    };
+    let line = match request {
+        Request::Argv { argv, .. } => quoted(argv),
+        Request::Http(req) => {
+            let mut line = format!("{} {}", req.method, req.path);
+            if !req.query.is_empty() {
+                let query: Vec<String> = masked_pairs(&req.query)
+                    .into_iter()
+                    .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or_default()))
+                    .collect();
+                line = format!("{line}?{}", query.join("&"));
+            }
+            if let Some(body) = &req.body {
+                line = format!("{line} {}", scrub(body.clone(), &Redactor::new()));
+            }
+            line
+        }
+        Request::Rpc { method, params } => format!("{method} {}", Value::Object(masked_pairs(params))),
+        Request::Google { action, args, .. } | Request::Microsoft { action, args, .. } => {
+            [action.clone(), quoted(args)].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" ")
+        }
+        Request::Opencode(op) | Request::Agent(op) | Request::Artifact(op) | Request::Kuma(op) | Request::Git(op) => {
+            op.clone()
+        }
+        Request::File | Request::Unknown => return None,
+    };
+    let mut line = line;
+    for (name, value) in values {
+        if is_secret_key(name) && !value.is_empty() {
+            line = line.replace(value.as_str(), "***");
+        }
+    }
+    Some(line)
 }
 
 /// The executor-specific request built inside the denial-audited block.

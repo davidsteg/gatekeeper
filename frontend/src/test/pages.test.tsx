@@ -737,6 +737,38 @@ describe("ui review fixes", () => {
     expect(await screen.findByText("homelab (10.10.110.5)")).toBeInTheDocument();
   });
 
+  it("shows what a call ran in the detail column", async () => {
+    const entries = [
+      {
+        ts: "2026-10-18T13:35:00Z", kind: "call", identity: "homelab", tool: "docker.exec", outcome: "ok",
+        parameters: { container: "web", cmd: "ls /srv" }, command: "/usr/bin/docker exec web sh -c 'ls /srv'",
+      },
+      {
+        ts: "2026-10-18T13:34:00Z", kind: "call", identity: "homelab", tool: "github.blob_create", outcome: "ok",
+        parameters: { content: "aGVsbG8=", encoding: "base64" },
+      },
+      {
+        ts: "2026-10-18T13:33:00Z", kind: "call", identity: "homelab", tool: "docker.exec", outcome: "denied",
+        denial_reason: "param_invalid", detail: "cmd does not match", parameters: { cmd: "rm -rf /" },
+      },
+      {
+        ts: "2026-10-18T13:32:00Z", kind: "call", identity: "homelab", tool: "file.write", outcome: "ok",
+        command: "x".repeat(400),
+      },
+    ];
+    serve((url) => {
+      if (url.endsWith("/session")) return json(200, SESSION);
+      if (url.includes("/audit")) return json(200, { entries, next_cursor: null, window_truncated: false });
+      return undefined;
+    });
+    renderAt("/audit");
+    expect(await screen.findByText("/usr/bin/docker exec web sh -c 'ls /srv'")).toBeInTheDocument();
+    expect(screen.getByText("content=aGVsbG8= encoding=base64")).toBeInTheDocument();
+    expect(screen.getByText("param_invalid · cmd does not match · cmd=rm -rf /")).toBeInTheDocument();
+    const long = screen.getByText(`${"x".repeat(300)}…`);
+    expect(long).toHaveAttribute("title", "x".repeat(400));
+  });
+
   it("names what an agent proposed in the overview feed, not its random ID", async () => {
     const { describeEvent } = await import("@/pages/events");
     expect(describeEvent({
