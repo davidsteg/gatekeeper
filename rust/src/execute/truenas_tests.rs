@@ -78,8 +78,8 @@ fn toolkit_yaml(dir: &std::path::Path, name: &str, ws_url: &str, methods: &str, 
     load_tier1(path.to_str().unwrap()).unwrap()
 }
 
-fn params(pairs: &[(&str, &str)]) -> IndexMap<String, String> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+fn params(pairs: &[(&str, &str)]) -> IndexMap<String, Value> {
+    pairs.iter().map(|(k, v)| (k.to_string(), Value::String(v.to_string()))).collect()
 }
 
 const METHODS: &str = "[\"pool.query\", \"pool.dataset.create\", \"pool.unknown\"]";

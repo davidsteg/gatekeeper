@@ -253,7 +253,7 @@ pub(super) async fn close(mut ws: Ws) {
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     method: &str,
-    params: &IndexMap<String, String>,
+    params: &IndexMap<String, Value>,
     toolkit: &Toolkit,
     credentials: Option<&CredentialStore>,
     timeout_seconds: f64,
@@ -330,7 +330,7 @@ pub async fn run(
         let request_id = uuid::Uuid::new_v4().to_string();
         // FR-8.3d: params are JSON-RPC params, never string-concatenated,
         // sent positionally in declaration order.
-        let values: Vec<Value> = params.values().map(|v| Value::String(v.clone())).collect();
+        let values: Vec<Value> = params.values().cloned().collect();
         send_method(&mut ws, method, values, &request_id).await.map_err(AuthFailure::Ws)?;
         recv_result(&mut ws, &request_id, timeout_seconds).await.map_err(AuthFailure::Ws)
     };

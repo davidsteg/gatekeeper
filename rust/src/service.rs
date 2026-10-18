@@ -580,15 +580,26 @@ impl Service {
                 // distinct name would otherwise be a counter kept forever.
                 let metric_id = if catalog.get(tool_id).is_some() { tool_id } else { UNKNOWN_TOOL_METRIC };
                 self.count(metric_id, &identity.id, "denied");
+                // Looked up in the catalog, not taken from `tool`: a call
+                // denied before authorization still must not log a secret.
+                let secret_names = catalog.get(tool_id).map(secret_parameter_names).unwrap_or_default();
+                let parameters: Map<String, Value> = arguments
+                    .iter()
+                    .map(|(k, v)| (k.clone(), if secret_names.contains(k) { Value::String("***".into()) } else { v.clone() }))
+                    .collect();
+                let mut detail = denial.detail.clone();
+                for value in arguments.iter().filter(|(k, _)| secret_names.contains(*k)).filter_map(|(_, v)| v.as_str()) {
+                    detail = mask_value(&detail, value);
+                }
                 self.audit_call(CallRecord {
                     identity: identity.id.clone(),
                     tool_id: tool_id.to_string(),
                     tool_version: tool.as_ref().map(|t| t.version),
-                    parameters: Value::Object(arguments.clone()),
+                    parameters: Value::Object(parameters),
                     scopes,
                     outcome: "denied".into(),
                     denial_reason: Some(denial.reason.as_str().to_string()),
-                    detail: Some(denial.detail.clone()),
+                    detail: Some(detail),
                     credential_names,
                     client: client.map(str::to_string),
                     ..Default::default()
@@ -597,7 +608,15 @@ impl Service {
             }
         };
         let tool = tool.expect("authorized tool");
-        let command = describe_request(&request, &values);
+        // The values of the tool's secret parameters, masked in everything
+        // this call writes or returns from here on.
+        let secret_names = secret_parameter_names(&tool);
+        let secret_values: Vec<String> = values
+            .iter()
+            .filter(|(k, v)| secret_names.contains(*k) && !v.is_empty())
+            .map(|(_, v)| v.clone())
+            .collect();
+        let command = describe_request(&request, &values, &secret_names);
 
         let timeout_seconds = tool.timeout_seconds.min(toolkit.max_timeout_seconds);
         let max_output_bytes = tool.max_output_bytes.min(toolkit.max_output_bytes);
@@ -825,12 +844,22 @@ impl Service {
             if toolkit.redact_secrets {
                 masked = crate::secretmask::mask_secrets(&masked);
             }
+            for value in &secret_values {
+                masked = mask_value(&masked, value);
+            }
             *text = masked;
+        }
+        if let Some(detail) = result.denial_detail.as_mut() {
+            for value in &secret_values {
+                *detail = mask_value(detail, value);
+            }
         }
 
         self.count(tool_id, &identity.id, &result.outcome);
-        let parameters: Map<String, Value> =
-            values.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+        let parameters: Map<String, Value> = values
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(if secret_names.contains(k) { "***".into() } else { v.clone() })))
+            .collect();
         self.audit_call(CallRecord {
             identity: identity.id.clone(),
             tool_id: tool.id.clone(),
@@ -1020,7 +1049,27 @@ impl Service {
 /// The value of a parameter whose name marks it secret (`token`,
 /// `api_key`, ...) is masked wherever it lands, as it is in the logged
 /// `parameters`; the audit log then masks the credentials it knows.
-fn describe_request(request: &Request, values: &validate::Values) -> Option<String> {
+/// The names of `tool`'s `secret: true` parameters (1.23.0).
+fn secret_parameter_names(tool: &ToolDef) -> HashSet<String> {
+    tool.parameters.values().filter(|p| p.secret).map(|p| p.name.clone()).collect()
+}
+
+/// `text` with every occurrence of `value` -- raw, and as it reads inside
+/// a JSON string -- replaced by `***`.
+fn mask_value(text: &str, value: &str) -> String {
+    if value.is_empty() {
+        return text.to_string();
+    }
+    let mut out = text.replace(value, "***");
+    let quoted = Value::String(value.to_string()).to_string();
+    let escaped = &quoted[1..quoted.len() - 1];
+    if escaped != value {
+        out = out.replace(escaped, "***");
+    }
+    out
+}
+
+fn describe_request(request: &Request, values: &validate::Values, secret_names: &HashSet<String>) -> Option<String> {
     use crate::audit::{is_secret_key, scrub, Redactor};
     use crate::execute::ssh::shlex_quote;
     let quoted = |args: &[String]| args.iter().map(|a| shlex_quote(a)).collect::<Vec<_>>().join(" ");
@@ -1046,7 +1095,10 @@ fn describe_request(request: &Request, values: &validate::Values) -> Option<Stri
             }
             line
         }
-        Request::Rpc { method, params } => format!("{method} {}", Value::Object(masked_pairs(params))),
+        Request::Rpc { method, params } => {
+            let params: Map<String, Value> = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            format!("{method} {}", scrub(Value::Object(params), &Redactor::new()))
+        }
         Request::Google { action, args, .. } | Request::Microsoft { action, args, .. } => {
             [action.clone(), quoted(args)].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" ")
         }
@@ -1057,7 +1109,9 @@ fn describe_request(request: &Request, values: &validate::Values) -> Option<Stri
     };
     let mut line = line;
     for (name, value) in values {
-        if is_secret_key(name) && !value.is_empty() {
+        if secret_names.contains(name) {
+            line = mask_value(&line, value);
+        } else if is_secret_key(name) && !value.is_empty() {
             line = line.replace(value.as_str(), "***");
         }
     }
@@ -1068,7 +1122,7 @@ fn describe_request(request: &Request, values: &validate::Values) -> Option<Stri
 enum Request {
     Argv { argv: Vec<String>, env: Option<HashMap<String, String>> },
     Http(validate::HttpRequest),
-    Rpc { method: String, params: indexmap::IndexMap<String, String> },
+    Rpc { method: String, params: indexmap::IndexMap<String, Value> },
     Google { action: String, args: Vec<String>, env: HashMap<String, String> },
     Microsoft { action: String, args: Vec<String>, env: HashMap<String, String> },
     Opencode(String),

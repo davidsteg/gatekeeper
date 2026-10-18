@@ -521,7 +521,7 @@ pub fn build_rpc_call(
     tool: &ToolDef,
     values: &Values,
     toolkit: &Toolkit,
-) -> Result<(String, IndexMap<String, String>), Denied> {
+) -> Result<(String, IndexMap<String, Value>), Denied> {
     let method = tool.rpc_method.clone().unwrap_or_default();
     if !toolkit.allows_rpc_method(&method) {
         return Err(denied(
@@ -532,17 +532,62 @@ pub fn build_rpc_call(
     let mut params = IndexMap::new();
     if let Some(templates) = &tool.params_template {
         for (key, template) in templates {
-            let missing = placeholders_missing(template, values);
+            params.insert(key.clone(), resolve_rpc_template(template, key, tool, values)?);
+        }
+    }
+    Ok((method, params))
+}
+
+/// One RPC argument: leaf strings get `{param}` substitution, other leaves
+/// pass through. A leaf that is exactly `{name}` of an integer or boolean
+/// parameter becomes a JSON number or boolean, so `quota: "{quota}"`
+/// reaches the API as `quota: 1073741824`.
+fn resolve_rpc_template(template: &Value, key: &str, tool: &ToolDef, values: &Values) -> Result<Value, Denied> {
+    match template {
+        Value::String(s) => {
+            let missing = placeholders_missing(s, values);
             if !missing.is_empty() {
                 return Err(denied(
                     DenialReason::ParamMissing,
                     format!("Params template {} needs {}.", repr_str(key), repr_list(&missing)),
                 ));
             }
-            params.insert(key.clone(), substitute(template, values));
+            if let Some(param) = whole_placeholder(s).and_then(|name| tool.parameters.get(name)) {
+                let raw = values.get(&param.name).map(String::as_str).unwrap_or_default();
+                match param.ptype.as_str() {
+                    "integer" => {
+                        if let Ok(n) = raw.parse::<i64>() {
+                            return Ok(Value::from(n));
+                        }
+                        if let Ok(n) = raw.parse::<u64>() {
+                            return Ok(Value::from(n));
+                        }
+                    }
+                    "boolean" => return Ok(Value::Bool(raw == "true")),
+                    _ => {}
+                }
+            }
+            Ok(Value::String(substitute(s, values)))
         }
+        Value::Object(m) => {
+            let mut out = Map::new();
+            for (k, v) in m {
+                out.insert(k.clone(), resolve_rpc_template(v, key, tool, values)?);
+            }
+            Ok(Value::Object(out))
+        }
+        Value::Array(a) => {
+            a.iter().map(|v| resolve_rpc_template(v, key, tool, values)).collect::<Result<Vec<_>, _>>().map(Value::Array)
+        }
+        other => Ok(other.clone()),
     }
-    Ok((method, params))
+}
+
+/// The parameter name when `template` is one placeholder and nothing else.
+fn whole_placeholder(template: &str) -> Option<&str> {
+    let caps = placeholder_re().captures(template)?;
+    let whole = caps.get(0)?;
+    (whole.start() == 0 && whole.end() == template.len()).then(|| caps.get(1).map(|m| m.as_str())).flatten()
 }
 
 /// `_build_cli_args`: the argv tail both vendored-CLI executors build.

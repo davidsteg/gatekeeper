@@ -152,15 +152,18 @@ item.
   poller) rather than anything the MCP surface can offer. Deliberately not
   faked: a "notify" that only fires when the recipient happens to call
   something anyway is the mailbox with a misleading name.
-- **Nested `params_template` values** — the `truenas` executor's
-  `params_template` (`validate.rs`'s `build_rpc_call`) only substitutes
-  flat string placeholders into a positional argument list; it cannot
-  build a single positional argument that is itself an object. This is
-  why `config/examples/tools.yaml` has a TrueNAS `zfs.snapshot.delete`
-  (single string `id` argument) but no `zfs.snapshot.create`, whose real
-  signature takes one nested object (`{dataset, name, recursive}`).
-  Extending `params_template` to accept nested dict values, substituting
-  their leaves the same way, would close this.
+- **Nested `params_template` values — done (1.23.0).** A `truenas` tool's
+  `params` value may be an object or array whose leaf strings are
+  templates, and a leaf that is exactly `{param}` of an integer or boolean
+  parameter is sent as a number or boolean (`validate.rs`'s
+  `build_rpc_call`). `zfs.snapshot.create`'s `{dataset, name, recursive}`
+  and `pool.dataset.unlock`'s `datasets: [{name, passphrase}]` can be
+  written now.
+- **Secret parameters on other executors.** `secret: true` (1.23.0) is
+  accepted only on `truenas` tools, where the value travels in the RPC
+  body. On `docker`/`local`/`ssh` it would have to reach the process on
+  stdin, never in argv; on `http` it would need the same care in the body
+  and never in the path or query. Not built until a tool needs it.
 - **OAuth2 — done for Google Workspace (0.38.0).** The `google` executor
   runs `google_api.py` as a local subprocess, materializes an `oauth2`
   credential bundle (client_id/client_secret/refresh_token, plus the

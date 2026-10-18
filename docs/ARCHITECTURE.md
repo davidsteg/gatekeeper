@@ -273,6 +273,26 @@ The whitelist acts on JSON-RPC method *names* — a method not listed
 structurally does not exist for any tool, there is no separate "permission"
 to deny it (`execute/truenas.rs`).
 
+A tool's `params` hold one template per positional argument, in order.
+Since 1.23.0 a value may be an object or an array, nested to any depth:
+leaf strings are templates, other leaves (numbers, booleans, null) are
+sent as written, and a leaf that is exactly `{param}` of an `integer` or
+`boolean` parameter is sent as a JSON number or boolean rather than its
+text (`quota: "{quota}"` becomes `quota: 1073741824`). Every placeholder in
+a nested value must name a declared parameter, as in any template.
+
+A parameter marked `secret: true` (1.23.0) carries a secret the *caller*
+brings, such as a dataset passphrase that must not be stored on the NAS or
+in gatekeeper. It must be a string with a `pattern`, cannot be derived,
+and may only appear in a `truenas` tool's `params`: a scope, a derived
+value, an argv, a URL or a file would put it somewhere it is logged or
+visible to other processes, so a definition doing that does not load. Its
+value is `***` in the call record's `parameters` and `command` -- also
+when the call is denied, before or after authorization -- and is masked
+(raw and JSON-escaped) in stdout, stderr and the denial detail before the
+agent sees them, so an API error quoting its input does not hand it back.
+The published `inputSchema` marks it `writeOnly`.
+
 `ssh` toolkit boundaries: `ssh_host`, `ssh_port`, `ssh_user`,
 `ssh_known_hosts` (required — the exact `ssh-keyscan` output pinning the
 host key, since an SSH connection with host-key checking disabled is

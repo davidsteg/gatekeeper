@@ -159,6 +159,10 @@ pub struct Parameter {
     pub pattern_source: Option<String>,
     /// FR-6.3's control-character reject is off for this parameter.
     pub allow_control_characters: bool,
+    /// The value is a secret the caller brings (a dataset passphrase): it
+    /// never reaches the audit log or the tracing log and is masked in
+    /// the output. Only a `truenas` tool's `params` may carry it.
+    pub secret: bool,
 }
 
 impl Parameter {
@@ -178,6 +182,7 @@ impl Parameter {
             flag: None,
             pattern_source: None,
             allow_control_characters: false,
+            secret: false,
         }
     }
 
@@ -214,6 +219,9 @@ impl Parameter {
                     schema.insert("pattern".into(), Value::String(text));
                 }
             }
+        }
+        if self.secret {
+            schema.insert("writeOnly".into(), Value::Bool(true));
         }
         schema.insert("description".into(), Value::String(self.description.clone()));
         Value::Object(schema)
@@ -274,7 +282,11 @@ pub struct ToolDef {
 
     // -- `truenas` --
     pub rpc_method: Option<String>,
-    pub params_template: Option<IndexMap<String, String>>,
+    /// One template per positional RPC argument. A value is a string or a
+    /// nested object/array whose leaf strings are `{param}` templates
+    /// (1.23.0); a leaf that is exactly `{param}` of an integer or boolean
+    /// parameter is sent as a JSON number or boolean.
+    pub params_template: Option<IndexMap<String, Value>>,
 
     // -- `file` --
     pub file_operation: Option<String>,
@@ -464,6 +476,14 @@ fn parse_parameter(name: &str, spec: &Value, where_: &str) -> ConfigResult<Param
         }
     }
 
+    let secret = spec.get("secret").is_some_and(py_truthy);
+    if secret && (ptype != "string" || derived.is_some()) {
+        return Err(ConfigError::new(format!(
+            "{where_}: parameter {} is secret, so it must be a string with a 'pattern', not derived",
+            repr_str(name)
+        )));
+    }
+
     let values = match spec.get("values") {
         None => Vec::new(),
         Some(v) => py_iter(v)?.iter().map(py_str).collect(),
@@ -483,6 +503,7 @@ fn parse_parameter(name: &str, spec: &Value, where_: &str) -> ConfigResult<Param
         flag: get_some(spec, "flag").map(py_str),
         pattern_source,
         allow_control_characters: spec.get("allow_control_characters").is_some_and(py_truthy),
+        secret,
     })
 }
 
@@ -976,6 +997,19 @@ pub fn str_str_map(value: Option<&Value>, where_: &str, field: &str) -> ConfigRe
     }
 }
 
+/// A truenas tool's `params`: one template per positional argument, each
+/// a string or a nested object/array (1.23.0). Every leaf that is not a
+/// string (a number, a boolean, null) is sent as written.
+pub fn rpc_params_map(value: Option<&Value>, where_: &str) -> ConfigResult<IndexMap<String, Value>> {
+    match value {
+        None | Some(Value::Null) => Ok(IndexMap::new()),
+        Some(Value::Object(m)) => Ok(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        Some(_) => Err(ConfigError::new(format!(
+            "{where_}: 'params' must be a mapping of argument name to template"
+        ))),
+    }
+}
+
 /// `_body_raw_param`: recognises `body: {raw_param: <name>}`. `Ok(None)`
 /// for an ordinary body template.
 pub fn body_raw_param(value: &Value, where_: &str, field: &str) -> ConfigResult<Option<String>> {
@@ -1142,6 +1176,7 @@ const PARAMETER_FIELDS: &[&str] = &[
     "must_resolve_under",
     "pattern",
     "required",
+    "secret",
     "type",
     "values",
 ];
@@ -1423,8 +1458,10 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
                 return Err(ConfigError::new(format!("{where_}: field 'method' is missing")));
             };
             tool.rpc_method = Some(method.clone());
-            let params = str_str_map(spec.get("params"), where_, "params")?;
-            all_templates.extend(params.values().cloned());
+            let params = rpc_params_map(spec.get("params"), where_)?;
+            for value in params.values() {
+                all_templates.extend(collect_template_strings(Some(value)));
+            }
             tool.params_template = Some(params);
         }
         "file" => {
@@ -1544,6 +1581,28 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
             tool.git_operation = Some(op);
         }
         _ => {}
+    }
+
+    // A secret goes only where it is sent: a truenas tool's `params`.
+    // Scopes and derived values are logged, and the other executors put
+    // their values on a command line, in a URL or in a file.
+    let secrets: Vec<&String> = parameters.values().filter(|p| p.secret).map(|p| &p.name).collect();
+    if !secrets.is_empty() {
+        if toolkit.executor != "truenas" {
+            return Err(ConfigError::new(format!(
+                "{where_}: secret parameters are only supported on truenas tools, not {}",
+                repr_str(&toolkit.executor)
+            )));
+        }
+        let logged = scopes.iter().chain(parameters.values().filter_map(|p| p.derived.as_ref()));
+        for template in logged {
+            if let Some(name) = placeholders(template).into_iter().find(|p| secrets.contains(&p)) {
+                return Err(ConfigError::new(format!(
+                    "{where_}: secret parameter {} may only be used in 'params'",
+                    repr_str(&name)
+                )));
+            }
+        }
     }
 
     // Every placeholder must point to a declared parameter.
