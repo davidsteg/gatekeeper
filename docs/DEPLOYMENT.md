@@ -975,6 +975,6 @@ confusing diffs.
 ### Docker Hub secrets
 
 Image push requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` in the
-GitHub repo's Settings → Secrets. Without them, the `image` job fails at
-"Log in to Docker Hub" — the `tests` job (including the `RELEASE.md` check)
-still runs and gates the build either way.
+GitHub repo's Settings → Secrets. Without them, the `publish` job fails at
+"Log in to Docker Hub" — the `version` job (the `RELEASE.md` check), the
+test jobs and the unpushed `image` build still run and gate it either way.

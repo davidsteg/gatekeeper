@@ -32,6 +32,7 @@ pub mod credentials;
 pub mod identity;
 pub mod pending;
 pub mod realip;
+pub mod secretmask;
 
 // Configuration data model.
 pub mod catalog;

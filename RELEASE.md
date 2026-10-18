@@ -1,4 +1,4 @@
-## 1.18.0
+## 1.19.0
 
 Three fixes to the console found in a review of `/app`: risky approvals ask first, a batch decides only what was on screen, and the version no longer runs out of the sidebar.
 
@@ -11,6 +11,30 @@ Three fixes to the console found in a review of `/app`: risky approvals ask firs
 ### Fixed
 
 - The version in the desktop sidebar was cut off at the sidebar's edge. It now sits under the signed-in identity.
+
+## 1.18.1
+
+Releases come out faster. Nothing in the image changes.
+
+### Changed
+
+- **The image is built alongside the tests, and pushed only after all of them pass.** It used to be built only after every test job had finished. Now the `image` job builds it at the same time without pushing, and a new `publish` job waits for every test job, rebuilds it entirely from that build's cache and pushes it. Nothing reaches Docker Hub before the tests are green, as before.
+- **The release decision runs first, in its own `version` job.** A missing version bump or `RELEASE.md` section now fails a run within seconds instead of after the test suite.
+- **Rust dependencies are cached in the Docker build** (cargo-chef). A change to gatekeeper's own code no longer recompiles every dependency, which roughly halves the Rust stage of the image build. A version bump does not invalidate the cache.
+- **The Rust suite as root runs in its own job**, next to the normal Rust suite instead of after it.
+## 1.18.0
+
+Tools that print config files no longer hand out the secrets in them. On `docker`, `local`, `ssh` and `file` toolkits, values that look like secrets come back as `[redacted]`.
+
+### Added
+
+- **Secret-shaped values are masked in tool output.** A `cat .env`, `docker compose config` or `file` read of a config returns `DB_PASSWORD=[redacted]`, `"token": "[redacted]"`, `postgres://app:[redacted]@db` and private-key blocks with the key replaced. Keys are matched by the same rule as the audit log's secret fields (`token`, `password`, `secret`, `apikey`, `authorization`) plus `passwd`, `private_key`, `access_key` and `cookie`, so a harmless `max_tokens: 4096` is masked too.
+- **New Tier 1 toolkit field `redact_secrets`.** On by default for `docker`, `local`, `ssh` and `file`, off for the other executors. Set `redact_secrets: false` on a toolkit whose agent must see files exactly as they are, such as one that edits source code; set `true` to mask any other toolkit's output.
+- **A masked read cannot be written back.** On a redacting `file` toolkit, a `write` or `edit` whose text contains `[redacted]` is refused with `param_invalid`, because it would replace the real secret on disk with the mask. Edit the lines you mean to change instead.
+
+### Fixed
+
+- **Known credential values are now masked in `local`, `docker` and `file` output too.** Secrets from the credential store were scrubbed only from the executors that were handed the redactor (`http`, `ssh`, `truenas` and the rest); a `local` or `file` tool that printed one returned it as is.
 
 ## 1.17.1
 
