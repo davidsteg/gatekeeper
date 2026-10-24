@@ -663,6 +663,8 @@ def _main() -> int:
             old_string=request.get("old_string"),
             new_string=request.get("new_string"),
             max_output_bytes=int(request["max_output_bytes"]),
+            max_entries=request.get("max_entries"),
+            files_only=bool(request.get("files_only", False)),
         )
     except Exception as exc:  # noqa: BLE001 -- reported, never swallowed
         sys.stdout.write(json.dumps(_fail(str(exc))))

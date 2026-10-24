@@ -18,6 +18,7 @@ parameter allowlist (FR-6.2).
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 from typing import Any
@@ -333,6 +334,27 @@ def build_http_request(
         body = _resolve_body_template(tool.body_template, values)
 
     return tool.http_method, path, query, body
+
+
+def build_http_verify(
+    tool: ToolDef, values: dict[str, str], toolkit: Toolkit
+) -> tuple[str, str, dict[str, str], Any]:
+    """Builds the optional `verify` request exactly like the main request:
+
+    same parameter values, same substitution, same Tier 1 re-check on the
+    resolved path and method (`build_http_request` on a copy of the tool
+    whose request fields are the verify block's).
+    """
+    assert tool.verify is not None
+    verify_tool = dataclasses.replace(
+        tool,
+        http_method=tool.verify["method"],
+        path_template=tool.verify["path"],
+        query_template=tool.verify["query"],
+        body_template=tool.verify["body"],
+        body_raw_param=None,
+    )
+    return build_http_request(verify_tool, values, toolkit)
 
 
 def build_rpc_call(

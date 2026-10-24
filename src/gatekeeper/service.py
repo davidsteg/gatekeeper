@@ -517,6 +517,7 @@ class Service:
             argv: list[str] = []
             env: dict[str, str] | None = None
             http_request: tuple[str, str, dict[str, str], dict[str, str] | None] | None = None
+            verify_request: tuple[str, str, dict[str, str], Any] | None = None
             rpc_call: tuple[str, dict[str, str]] | None = None
             google_call: tuple[str, list[str]] | None = None
             google_env: dict[str, str] | None = None
@@ -535,6 +536,12 @@ class Service:
                 env = self._environment(toolkit)
             elif toolkit.executor == "http":
                 http_request = validate.build_http_request(tool, values, toolkit)
+                if tool.verify is not None:
+                    # Built (and Tier 1-checked) here, before anything is
+                    # sent: a verify that cannot be resolved denies the
+                    # whole call instead of firing a main request whose
+                    # read-back is already known to be impossible.
+                    verify_request = validate.build_http_verify(tool, values, toolkit)
             elif toolkit.executor == "truenas":
                 rpc_call = validate.build_rpc_call(tool, values, toolkit)
             elif toolkit.executor == "google":
@@ -628,6 +635,22 @@ class Service:
                     timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes,
                     idempotent=tool.idempotent, redact=self.audit.redact,
                 )
+                if verify_request is not None:
+                    verify_result: execute.Result | None = None
+                    if result.outcome == execute.OUTCOME_OK:
+                        v_method, v_path, v_query, v_body = verify_request
+                        verify_result = await execute_http.run(
+                            method=v_method, path=v_path, query=v_query, body=v_body,
+                            toolkit=toolkit, credentials=self.credentials,
+                            timeout_seconds=timeout_seconds,
+                            max_output_bytes=max_output_bytes,
+                            # Verify only reads (catalog.py `_parse_verify`),
+                            # so a timeout is a plain failure, never UNKNOWN.
+                            idempotent=True, redact=self.audit.redact,
+                        )
+                        if tool.verify.get("require_body"):
+                            verify_result = execute_http.require_body(verify_result)
+                    result = execute_http.combine_verify(result, verify_result)
             elif toolkit.executor == "agent":
                 assert agent_operation is not None
                 result = await execute_agent.run(
@@ -678,6 +701,9 @@ class Service:
                     # A per-tool override is also Tier 1 (tools.yaml, not
                     # agent-supplied), and narrows the toolkit's authority.
                     run_as=effective_run_as,
+                    # `file_operation: delete` only; None/False otherwise.
+                    max_entries=tool.delete_max_entries,
+                    files_only=tool.delete_files_only,
                 )
             elif toolkit.executor == "opencode":
                 assert opencode_operation is not None

@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
+import stat
 import sys
 import time
 from pathlib import Path
@@ -90,6 +92,8 @@ def perform(
     old_string: str | None = None,
     new_string: str | None = None,
     max_output_bytes: int,
+    max_entries: int | None = None,
+    files_only: bool = False,
 ) -> _Op:
     """Dispatches to the one operation, on an already-validated path.
 
@@ -110,6 +114,10 @@ def perform(
         return _patch(path, old_string, new_string)
     if operation == "list":
         return _list(path, max_output_bytes)
+    if operation == "delete":
+        if max_entries is None:
+            raise ValueError("'max_entries' is required for delete")
+        return _delete(path, max_entries, files_only, max_output_bytes)
     raise ValueError(f"Unknown file operation: {operation!r}")
 
 
@@ -126,6 +134,8 @@ async def run(
     max_output_bytes: int,
     idempotent: bool = False,
     run_as: str | None = None,
+    max_entries: int | None = None,
+    files_only: bool = False,
 ) -> Result:
     """Executes a file operation directly in Python."""
     started = time.monotonic()
@@ -143,6 +153,27 @@ async def run(
             duration_ms=duration,
         )
 
+    if operation == "delete":
+        # `validate_path` resolves symlinks before its scope check -- right
+        # for reading, wrong for deleting: a symlink in the path would make
+        # the delete act on its target. Only a path that is already its own
+        # resolved form (no symlink anywhere in it) may be deleted, and
+        # never a configured root itself.
+        problem = None
+        if os.path.abspath(path) != str(validated):
+            problem = f"Refusing to delete {path!r}: the path contains a symlink."
+        elif any(str(validated) == os.path.realpath(r) for r in path_roots):
+            problem = f"Refusing to delete {path!r}: it is a configured path root."
+        if problem:
+            return Result(
+                outcome=OUTCOME_FAILED,
+                exit_code=1,
+                stdout="",
+                stderr=problem + " Nothing was deleted.",
+                truncated=False,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+
     if run_as is not None:
         # Path already checked above against this toolkit's Tier 1 roots --
         # the child re-checks it anyway (see `validate_path`).
@@ -159,6 +190,8 @@ async def run(
             max_output_bytes=max_output_bytes,
             idempotent=idempotent,
             started=started,
+            max_entries=max_entries,
+            files_only=files_only,
         )
 
     try:
@@ -169,6 +202,8 @@ async def run(
             old_string=old_string,
             new_string=new_string,
             max_output_bytes=max_output_bytes,
+            max_entries=max_entries,
+            files_only=files_only,
         )
     except Exception as exc:
         duration = int((time.monotonic() - started) * 1000)
@@ -206,6 +241,8 @@ async def _run_as_user(
     max_output_bytes: int,
     idempotent: bool,
     started: float,
+    max_entries: int | None = None,
+    files_only: bool = False,
 ) -> Result:
     """Runs one operation in a child process that first becomes ``run_as``.
 
@@ -225,6 +262,8 @@ async def _run_as_user(
             "path_roots": list(path_roots),
             "protected": list(protected),
             "max_output_bytes": max_output_bytes,
+            "max_entries": max_entries,
+            "files_only": files_only,
         }
     ).encode("utf-8")
 
@@ -423,3 +462,82 @@ def _list(path: Path, max_output_bytes: int) -> _Op:
     if truncated:
         text += "\n... [truncated]"
     return (OUTCOME_OK, 0, text, "", truncated)
+
+
+def _delete(path: Path, max_entries: int, files_only: bool, max_output_bytes: int) -> _Op:
+    """Lists the tree under ``path``, then deletes it -- or nothing.
+
+    The listing comes first and decides: more than ``max_entries`` entries,
+    or (with ``files_only``) any sub-directory, aborts before a single
+    entry is removed. Symlinks are never followed: they are listed and
+    counted as entries (``l``), and removing one removes the link only.
+    The response carries the listing and then the proof -- the path no
+    longer exists (``lexists``), checked after the delete, not assumed.
+    """
+    try:
+        top = os.lstat(path)
+    except FileNotFoundError:
+        return (OUTCOME_FAILED, 1, "", f"Not found: {path}", False)
+    except PermissionError:
+        return (OUTCOME_FAILED, 1, "", f"Permission denied: {path}", False)
+
+    entries: list[str] = []
+    is_dir = stat.S_ISDIR(top.st_mode)
+    if is_dir:
+        stack = [path]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as it:
+                    children = sorted(it, key=lambda e: e.name)
+            except PermissionError:
+                return (OUTCOME_FAILED, 1, "", f"Permission denied: {current}", False)
+            for child in children:
+                rel = os.path.relpath(child.path, path)
+                if child.is_symlink():
+                    entries.append("l " + rel)
+                elif child.is_dir(follow_symlinks=False):
+                    if files_only:
+                        return (
+                            OUTCOME_FAILED, 1, "",
+                            f"Aborted, nothing deleted: {path} contains the "
+                            f"sub-directory {rel!r} (files_only).",
+                            False,
+                        )
+                    entries.append("d " + rel)
+                    stack.append(child.path)
+                else:
+                    entries.append("f " + rel)
+                if len(entries) > max_entries:
+                    return (
+                        OUTCOME_FAILED, 1, "",
+                        f"Aborted, nothing deleted: {path} has more than "
+                        f"{max_entries} entries (max_entries).",
+                        False,
+                    )
+    listing = "\n".join(sorted(entries))
+    if len(listing) > max_output_bytes:
+        listing = listing[:max_output_bytes] + "\n... [truncated]"
+
+    try:
+        if is_dir:
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+    except PermissionError as exc:
+        return (OUTCOME_FAILED, 1, listing, f"Permission denied: {exc}", False)
+    except OSError as exc:
+        return (OUTCOME_FAILED, 1, listing, f"Delete error: {exc}", False)
+
+    kind = "directory" if is_dir else "file"
+    header = f"listed {len(entries)} entries under {kind} {path}:"
+    if os.path.lexists(path):
+        return (
+            OUTCOME_FAILED, 1, f"{header}\n{listing}",
+            f"Delete reported success but {path} still exists.", False,
+        )
+    return (
+        OUTCOME_OK, 0,
+        f"{header}\n{listing}\nremoved: {path} (path no longer exists)".replace(":\n\n", ":\n"),
+        "", False,
+    )

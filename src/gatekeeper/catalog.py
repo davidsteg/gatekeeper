@@ -22,6 +22,11 @@ from .tier1 import Tier1, Toolkit, _validate_http_base_url
 #: Placeholders in argv, derived and scope templates.
 PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
+#: HTTP methods that may change state on the target. A `verify` block may
+#: use one only together with a fixed `body` (FR-1 of the verify request:
+#: verify reads, it never acts on agent input in a new shape).
+WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
 #: Tool IDs follow `<toolkit>.<action>` (FR-5.1b).
 TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 
@@ -180,6 +185,14 @@ class ToolDef:
     #: parsing (see `_parse_tool_spec`'s http branch); the executor-side
     #: override is applied in `service.call` before `execute_http.run`.
     base_url: str | None = None
+
+    #: Optional read-back request (`verify:` block), sent after the main
+    #: request with the same toolkit and the same validated parameter
+    #: values. Keys: `method`, `path`, `query` (str->str), `body` (nested
+    #: template or None). A write method is only accepted with a fixed
+    #: `body` (checked at load time, see `_parse_verify`). None = no verify,
+    #: the pre-existing behaviour.
+    verify: dict[str, Any] | None = None
     # -- `truenas` executor (FR-8.3a-f) --------------------------------
     #: JSON-RPC method name. Not agent-suppliable -- fixed per tool, exactly
     #: like `binary` for the argv executors.
@@ -190,6 +203,11 @@ class ToolDef:
     #: One of ``read``/``write``/``patch``/``list``. The path comes from
     #: a parameter (validated against ``path_roots`` at call time).
     file_operation: str | None = None
+    #: `file_operation: delete` only (`delete: {max_entries, files_only}`):
+    #: the upper bound on listed entries -- above it, nothing is deleted --
+    #: and whether any sub-directory aborts the delete. Required for delete.
+    delete_max_entries: int | None = None
+    delete_files_only: bool = False
 
     # -- `google` executor (FR-8.3a-f counterpart) ---------------------
     #: The google_api.py action string, fixed per tool (e.g. "gmail
@@ -503,6 +521,23 @@ def _validate_against_tier1(tool: ToolDef, toolkit: Toolkit) -> None:
                 f"allowed_path_prefixes {list(toolkit.allowed_path_prefixes)} "
                 f"of toolkit {toolkit.name!r}"
             )
+        # A verify request is held to exactly the same Tier 1 limits as the
+        # main request: same toolkit, allowlisted method, allowed path.
+        if tool.verify is not None:
+            if not toolkit.allows_method(tool.verify["method"]):
+                raise Tier1Violation(
+                    f"{where}: verify method {tool.verify['method']!r} is not in "
+                    f"the allowlist {list(toolkit.allowed_methods)} of toolkit "
+                    f"{toolkit.name!r}"
+                )
+            verify_prefix = tool.verify["path"].split("{", 1)[0]
+            if not toolkit.allows_path(verify_prefix):
+                raise Tier1Violation(
+                    f"{where}: verify path {tool.verify['path']!r} matches none "
+                    f"of the allowed_path_prefixes "
+                    f"{list(toolkit.allowed_path_prefixes)} of toolkit "
+                    f"{toolkit.name!r}"
+                )
 
     elif toolkit.executor == "truenas":
         if not toolkit.allows_rpc_method(tool.rpc_method or ""):
@@ -739,6 +774,9 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
     #: Per-tool base_url override -- only the `http` branch sets this
     #: (0.45.5); every other executor leaves it at None.
     tool_base_url: str | None = None
+    verify: dict[str, Any] | None = None
+    delete_max_entries: int | None = None
+    delete_files_only: bool = False
     #: Per-tool run_as override -- only the `file` branch sets this; the
     #: other executors leave it at None, and a `run_as` on a non-file tool
     #: is rejected by tier1.py at load time.
@@ -791,6 +829,13 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         all_templates.append(path_template)
         all_templates.extend(query_template.values())
         all_templates.extend(_collect_template_strings(body_template))
+        if spec.get("verify") is not None:
+            verify = _parse_verify(spec["verify"], where)
+            # Same typo guard as the main request: a verify placeholder can
+            # only ever be one of this tool's declared, validated parameters.
+            all_templates.append(verify["path"])
+            all_templates.extend(verify["query"].values())
+            all_templates.extend(_collect_template_strings(verify["body"]))
 
     elif toolkit.executor == "truenas":
         rpc_method = spec.get("method")
@@ -801,11 +846,20 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
 
     elif toolkit.executor == "file":
         op = spec.get("file_operation") or spec.get("operation")
-        if op not in ("read", "write", "patch", "list"):
+        if op not in ("read", "write", "patch", "list", "delete"):
             raise ConfigError(
-                f"{where}: field 'file_operation' must be one of read/write/patch/list"
+                f"{where}: field 'file_operation' must be one of "
+                "read/write/patch/list/delete"
             )
         file_operation = op
+        if op == "delete":
+            delete_max_entries, delete_files_only = _parse_delete(
+                spec.get("delete"), where
+            )
+        elif spec.get("delete") is not None:
+            raise ConfigError(
+                f"{where}: 'delete' options only apply to file_operation: delete"
+            )
 
         # Per-tool `run_as` override (file executor only). The toolkit's
         # own `run_as` is parsed in tier1.py; this is the tool-level field
@@ -932,6 +986,9 @@ def _parse_tool(spec: dict[str, Any], tier1: Tier1) -> ToolDef:
         agent_operation=agent_operation,
         run_as=tool_run_as,
         base_url=tool_base_url,
+        verify=verify,
+        delete_max_entries=delete_max_entries,
+        delete_files_only=delete_files_only,
     )
     _validate_against_tier1(tool, toolkit)
     return tool
@@ -1001,6 +1058,70 @@ def _body_raw_param(value: Any, where: str, field: str) -> str | None:
             f"(a non-empty string), not {name!r}"
         )
     return name
+
+
+def _parse_verify(value: Any, where: str) -> dict[str, Any]:
+    """Parses an http tool's optional `verify:` block.
+
+    verify only reads: a GET (or any other non-write method), or a write
+    method with a *fixed* `body` template. Placeholders inside that body
+    are allowed -- the caller adds them to the typo guard, so each one is a
+    declared, pattern-validated parameter. A write method without a body,
+    or with the raw-param mode (the agent's document as the body), is
+    refused here, at load time.
+    """
+    if not isinstance(value, dict):
+        raise ConfigError(f"{where}: 'verify' must be a mapping")
+    unknown = sorted(set(value) - {"method", "path", "query", "body", "require_body"})
+    if unknown:
+        raise ConfigError(f"{where}: 'verify' has unknown keys {unknown}")
+    method = value.get("method", "GET")
+    if not isinstance(method, str) or not method:
+        raise ConfigError(f"{where}: 'verify.method' must be a string")
+    method = method.upper()
+    path = value.get("path")
+    if not isinstance(path, str) or not path.startswith("/"):
+        raise ConfigError(f"{where}: 'verify.path' must be a string starting with '/'")
+    query = _str_str_map(value.get("query"), where, "verify.query")
+    raw_body = value.get("body")
+    if isinstance(raw_body, dict) and "raw_param" in raw_body:
+        raise ConfigError(
+            f"{where}: 'verify.body' cannot use raw_param -- a verify body must "
+            "be a fixed template"
+        )
+    body = None if raw_body is None else _nested_body_map(raw_body, where, "verify.body")
+    if method in WRITE_METHODS and body is None:
+        raise ConfigError(
+            f"{where}: verify method {method!r} writes; it is only allowed "
+            "with a fixed 'verify.body'"
+        )
+    require_body = value.get("require_body", False)
+    if not isinstance(require_body, bool):
+        raise ConfigError(f"{where}: 'verify.require_body' must be true or false")
+    return {
+        "method": method, "path": path, "query": query, "body": body,
+        "require_body": require_body,
+    }
+
+
+def _parse_delete(value: Any, where: str) -> tuple[int, bool]:
+    """Parses `delete: {max_entries: N, files_only: bool}` (N is required)."""
+    if not isinstance(value, dict):
+        raise ConfigError(
+            f"{where}: file_operation delete needs 'delete: {{max_entries: N}}'"
+        )
+    unknown = sorted(set(value) - {"max_entries", "files_only"})
+    if unknown:
+        raise ConfigError(f"{where}: 'delete' has unknown keys {unknown}")
+    max_entries = value.get("max_entries")
+    if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
+        raise ConfigError(
+            f"{where}: 'delete.max_entries' is required and must be a positive integer"
+        )
+    files_only = value.get("files_only", False)
+    if not isinstance(files_only, bool):
+        raise ConfigError(f"{where}: 'delete.files_only' must be true or false")
+    return max_entries, files_only
 
 
 def _nested_body_map(

@@ -20,6 +20,7 @@ them.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import ipaddress
 import json
 import socket
@@ -233,6 +234,68 @@ def _raw_json_body(raw_param: str, body: Any) -> tuple[bytes | None, Any]:
     # mode is about the parameter alone deciding the body, not about that
     # body having to arrive as text.
     return json.dumps(value, ensure_ascii=False).encode("utf-8"), None
+
+
+#: Bodies `verify.require_body` treats as "nothing there" -- what APIs such
+#: as Tdarr's cruddb getById answer, with HTTP 200, for a missing document.
+_EMPTY_BODIES = frozenset({"", "null", "{}", "[]", '""'})
+
+
+def require_body(verify: Result) -> Result:
+    """`verify.require_body: true`: a 2xx with an empty body is a failure."""
+    if verify.outcome != OUTCOME_OK or verify.stdout.strip() not in _EMPTY_BODIES:
+        return verify
+    return dataclasses.replace(
+        verify,
+        outcome=OUTCOME_FAILED,
+        stderr="verify response body is empty (require_body).",
+    )
+
+
+def combine_verify(main: Result, verify: Result | None) -> Result:
+    """Folds a main request and its `verify` read-back into one Result.
+
+    stdout is a JSON object with both results -- `main` and `verify`, each
+    `{outcome, status, body, error}` -- so the agent sees what the target
+    said to the action and what it says now. The combined outcome is `ok`
+    only if both are ok. A failed main request is passed through with
+    `verify: {"skipped": ...}` (nothing to verify); a main that succeeded
+    but whose verify failed is `failed`, and stderr says so explicitly.
+    """
+
+    def part(r: Result) -> dict[str, Any]:
+        return {
+            "outcome": r.outcome,
+            "status": r.exit_code,
+            "body": r.stdout,
+            "error": r.stderr,
+            "truncated": r.truncated,
+        }
+
+    payload: dict[str, Any] = {"main": part(main)}
+    if verify is None:
+        payload["verify"] = {"skipped": "main request did not succeed"}
+        outcome, stderr = main.outcome, main.stderr
+    elif verify.outcome == OUTCOME_OK:
+        payload["verify"] = part(verify)
+        outcome, stderr = OUTCOME_OK, ""
+    else:
+        payload["verify"] = part(verify)
+        outcome = OUTCOME_FAILED
+        stderr = (
+            "VERIFY FAILED: the main request succeeded "
+            f"(HTTP {main.exit_code}), but the verify request did not "
+            f"(HTTP {verify.exit_code}). {verify.stderr}".rstrip()
+        )
+    return Result(
+        outcome=outcome,
+        exit_code=main.exit_code,
+        stdout=json.dumps(payload, ensure_ascii=False),
+        stderr=stderr,
+        truncated=main.truncated or (verify is not None and verify.truncated),
+        duration_ms=main.duration_ms + (verify.duration_ms if verify else 0),
+        external_untrusted=True,
+    )
 
 
 async def run(
