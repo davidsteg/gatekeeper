@@ -1,3 +1,20 @@
+## 1.27.0
+
+Optional query parameters that can actually be left out, a stricter check of `http` templates, and an optional read-back after an `http` tool's request.
+
+### Added
+
+- **`verify:` on an `http` tool.** A second request, sent only after the main request succeeded, with the same toolkit and the same validated parameter values: `method` (default `GET`), `path`, `query`, `body` and `require_body`. The result's stdout is then a JSON object `{"main": ..., "verify": ...}`, each with `outcome`, `status`, `body`, `error` and `truncated`. The call is `ok` only if both are; a verify that fails makes the call `failed` with `VERIFY FAILED: ...` in stderr. A main request that did not succeed is passed through with `verify: {"skipped": ...}`. `require_body: true` also fails a 2xx whose body is empty (`""`, `null`, `{}`, `[]`). A method other than `GET` needs a fixed `verify.body`; `raw_param` and `from_file` are refused there. The verify method and path must satisfy the toolkit's `allowed_methods` and `allowed_path_prefixes`, at load and again on the resolved request before anything is sent. The audit record's `command` names both requests.
+
+### Changed
+
+- **An absent optional query parameter leaves its key out.** A `query` value whose placeholders are only `required: false` parameters the agent did not supply is no longer refused with `Query template 'x' needs [...]`: the key is not sent at all (no empty value), so the target's own default applies. A required parameter is still refused, and a key is never sent half-filled. Path placeholders stay mandatory, and body templates are unchanged.
+- **Every brace in an `http` template must be `{<declared parameter>}`.** In `path`, `query`, `body` and `verify`, a `{name?}`, `{Name}`, `{ name }`, `{}` or a stray `{`/`}` used to load (and pass `admin.tool_validate`) and went to the target literally. It is now a load error naming the location, the template and the token.
+
+### Upgrading
+
+- A stored `http` tool whose template contains such a brace no longer loads and is disabled at startup with that error; `admin.tool_validate` and the console refuse it. Replace the marker with the plain `{name}` and declare the parameter `required: false` if it is optional.
+
 ## 1.26.0
 
 A headless mode for an instance whose configuration only its deployment may change, and a way to store a credential without the console.

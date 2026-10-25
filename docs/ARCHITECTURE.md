@@ -161,6 +161,25 @@ outside `allowed_hosts` disables the tool at load). Executor-side refusals
 are audited as the call's `denial_reason`/`detail` (names and addresses,
 never a secret); the outcome stays `failed`.
 
+**Query parameters and template syntax (1.27.0).** A `query` key whose
+template names only `required: false` parameters the agent did not supply
+is left out of the request entirely (no key, no empty value); one required
+or undeclared name is still `param_missing`, and a key is never sent
+half-substituted (`validate::build_http_request`). Path placeholders stay
+mandatory; body templates are unchanged. At load, every brace in an `http`
+`path`/`query`/`body`/`verify` template must be exactly
+`{<declared parameter>}` (`catalog::check_http_placeholder_syntax`), so
+`{name?}`, `{Name}` or a stray brace no longer reaches the target literally.
+
+**Read-back (`verify:`, 1.27.0).** An `http` tool may declare a second
+request that runs only after the main one succeeded, with the same
+parameter values and the same Tier 1 checks (`validate::build_http_verify`,
+built before the main request is sent). Only `GET` goes without a fixed
+`verify.body`; there is no raw-param or `from_file` body. A timeout on the
+verify is `failed`, never `unknown`. Main and verify are folded into one
+result (`execute::http::combine_verify`): `ok` only if both are, stdout
+`{"main": ..., "verify": ...}`; `require_body` fails an empty 2xx.
+
 **Body fields from a file (1.21.0).** A body field written
 `{from_file: <param>, encoding: base64}` is not a template: the executor
 replaces it by that file's content, base64-encoded, just before sending

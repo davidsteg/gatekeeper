@@ -2,7 +2,7 @@
 name = "gatekeeper"
 # The release version: what the binary, `/mcp`'s serverInfo and the image
 # tag report. Every change on main bumps it (RELEASE.md); CI reads it here.
-version = "1.26.0"
+version = "1.27.0"
 edition = "2021"
 rust-version = "1.85"
 description = "MCP server for controlled host operations"

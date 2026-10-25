@@ -244,6 +244,30 @@ impl CliArg {
     }
 }
 
+/// HTTP methods a `verify` block may use without a fixed `body`. An
+/// allowlist, not a denylist of writes: any other method may change state,
+/// so it is only accepted together with a fixed `verify.body`. Only `GET`,
+/// because Tier 1's `allowed_methods` knows no other read method.
+pub const VERIFY_READ_METHODS: &[&str] = &["GET"];
+
+/// The keys a `verify:` block may carry.
+pub const VERIFY_FIELDS: &[&str] = &["body", "method", "path", "query", "require_body"];
+
+/// An `http` tool's `verify:` block (1.27.0): a second request that reads
+/// back what the main request did. Its templates take the tool's own
+/// parameters; there is no raw-body mode.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HttpVerify {
+    /// Upper-cased; one of [`VERIFY_READ_METHODS`] unless `body` is set.
+    pub method: String,
+    pub path_template: String,
+    pub query_template: IndexMap<String, String>,
+    pub body_template: Option<Value>,
+    /// A 2xx whose body is empty (`""`, `null`, `{}`, `[]`, `""`) fails
+    /// the verify.
+    pub require_body: bool,
+}
+
 /// A parsed, Tier-1-checked tool definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolDef {
@@ -283,6 +307,10 @@ pub struct ToolDef {
     pub max_file_bytes: Option<i64>,
     /// Per-tool base_url override (0.45.5).
     pub base_url: Option<String>,
+    /// Optional read-back request (`verify:`, 1.27.0), sent after a
+    /// successful main request with the same toolkit and the same
+    /// validated parameter values.
+    pub verify: Option<HttpVerify>,
 
     // -- `truenas` --
     pub rpc_method: Option<String>,
@@ -781,6 +809,25 @@ pub fn validate_against_tier1(tool: &ToolDef, toolkit: &Toolkit) -> ConfigResult
                     repr_list(&toolkit.allowed_path_prefixes)
                 )));
             }
+            // A verify request is held to exactly the main request's Tier 1
+            // limits: same toolkit, allowlisted method, allowed path.
+            if let Some(verify) = &tool.verify {
+                if !toolkit.allows_method(&verify.method) {
+                    return Err(ConfigError::tier1(format!(
+                        "{where_}: verify method {} is not in the allowlist {} of toolkit {tk_name}",
+                        repr_str(&verify.method),
+                        repr_list(&toolkit.allowed_methods)
+                    )));
+                }
+                let verify_prefix = verify.path_template.split('{').next().unwrap_or("");
+                if !toolkit.allows_path(verify_prefix) {
+                    return Err(ConfigError::tier1(format!(
+                        "{where_}: verify path {} matches none of the allowed_path_prefixes {} of toolkit {tk_name}",
+                        repr_str(&verify.path_template),
+                        repr_list(&toolkit.allowed_path_prefixes)
+                    )));
+                }
+            }
             // A body `from_file` reads the gatekeeper host's disk, so its
             // root is Tier 1's to allow (FR-4.10), as for a local tool.
             if tool.max_file_bytes.is_some() {
@@ -1057,6 +1104,124 @@ pub fn nested_body_map(value: &Value, _where: &str, _field: &str) -> ConfigResul
     Ok(value.clone())
 }
 
+/// Anything brace-shaped in an `http` template: a complete `{...}` group,
+/// or a lone `{`/`}` with no partner.
+fn brace_token_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\{[^{}]*\}|[{}]").expect("static regex"))
+}
+
+/// Every brace in an `http` path/query/body template is a known
+/// placeholder (1.27.0).
+///
+/// [`placeholder_re`] only *finds* the well-formed `{name}` shape, so the
+/// unknown-parameter guard never saw `{name?}`, `{Name}`, `{ name }` or a
+/// stray brace -- such a template loaded (and passed `admin.tool_validate`)
+/// and the text went to the target literally. There is no escaping and no
+/// other placeholder syntax, so any brace that is not exactly
+/// `{<declared parameter>}` is a configuration error. For an optional query
+/// value the answer is not a marker but `required: false`: an absent
+/// optional leaves its key out (`validate::build_http_request`).
+pub fn check_http_placeholder_syntax(
+    templates: &[(String, String)],
+    parameters: &IndexMap<String, Parameter>,
+    where_: &str,
+) -> ConfigResult<()> {
+    for (location, template) in templates {
+        for m in brace_token_re().find_iter(template) {
+            let token = m.as_str();
+            let name = placeholder_re()
+                .captures(token)
+                .filter(|c| c.get(0).map(|g| g.as_str()) == Some(token))
+                .map(|c| c[1].to_string());
+            // A well-formed `{name}` is the unknown-parameter guard's to
+            // judge (its message is a frozen fixture); this check is only
+            // about shapes that guard cannot see.
+            if name.is_some() {
+                continue;
+            }
+            let what = "unsupported syntax";
+            let declared: Vec<String> = {
+                let mut d: Vec<String> = parameters.keys().cloned().collect();
+                d.sort();
+                d
+            };
+            return Err(ConfigError::new(format!(
+                "{where_}: {location} template {} contains {} ({what}), which is not a known \
+                 placeholder. The only placeholder syntax is '{{name}}' with a declared parameter \
+                 (declared: {}); for an optional query value declare the parameter with \
+                 required: false instead of marking the placeholder.",
+                repr_str(template),
+                repr_str(token),
+                repr_list(&declared)
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Parses an http tool's optional `verify:` block (1.27.0).
+///
+/// verify only reads: a method in [`VERIFY_READ_METHODS`] needs no body;
+/// any other method is accepted only with a *fixed* `body` template.
+/// Placeholders inside it are allowed -- the caller adds them to the
+/// unknown-parameter guard, so each is a declared, validated parameter.
+/// Raw-body mode (the agent's own document as the body) is refused.
+pub fn parse_verify(value: &Value, where_: &str) -> ConfigResult<HttpVerify> {
+    let Value::Object(m) = value else {
+        return Err(ConfigError::new(format!("{where_}: 'verify' must be a mapping")));
+    };
+    let mut unknown: Vec<String> = m.keys().filter(|k| !VERIFY_FIELDS.contains(&k.as_str())).cloned().collect();
+    if !unknown.is_empty() {
+        unknown.sort();
+        return Err(ConfigError::new(format!("{where_}: 'verify' has unknown keys {}", repr_list(&unknown))));
+    }
+    let method = match m.get("method") {
+        None | Some(Value::Null) => "GET".to_string(),
+        Some(Value::String(s)) if !s.is_empty() => s.to_uppercase(),
+        Some(_) => return Err(ConfigError::new(format!("{where_}: 'verify.method' must be a string"))),
+    };
+    let path_template = match m.get("path") {
+        Some(Value::String(p)) if p.starts_with('/') => p.clone(),
+        _ => {
+            return Err(ConfigError::new(format!(
+                "{where_}: 'verify.path' must be a string starting with '/'"
+            )))
+        }
+    };
+    let query_template = str_str_map(m.get("query"), where_, "verify.query")?;
+    let body_template = match get_some(m, "body") {
+        None => None,
+        Some(Value::Object(b)) if b.contains_key("raw_param") => {
+            return Err(ConfigError::new(format!(
+                "{where_}: 'verify.body' cannot use raw_param -- a verify body must be a fixed template"
+            )))
+        }
+        Some(raw) => {
+            if !body_file_params(Some(raw), where_)?.is_empty() {
+                return Err(ConfigError::new(format!(
+                    "{where_}: 'verify.body' cannot read 'from_file' -- a verify body must be a fixed template"
+                )));
+            }
+            Some(nested_body_map(raw, where_, "verify.body")?)
+        }
+    };
+    if !VERIFY_READ_METHODS.contains(&method.as_str()) && body_template.is_none() {
+        return Err(ConfigError::new(format!(
+            "{where_}: verify method {} is not a read method ({}) and writes or may write; it is \
+             only allowed with a fixed 'verify.body'",
+            repr_str(&method),
+            VERIFY_READ_METHODS.join(", ")
+        )));
+    }
+    let require_body = match m.get("require_body") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(ConfigError::new(format!("{where_}: 'verify.require_body' must be true or false"))),
+    };
+    Ok(HttpVerify { method, path_template, query_template, body_template, require_body })
+}
+
 /// `_collect_template_strings`: a nested body template's leaf strings.
 pub fn collect_template_strings(body: Option<&Value>) -> Vec<String> {
     fn walk(v: &Value, out: &mut Vec<String>) {
@@ -1168,7 +1333,7 @@ fn executor_tool_fields(executor: &str) -> &'static [&'static str] {
     match executor {
         "docker" | "local" => &["argv", "binary", "stdin"],
         "ssh" => &["argv", "binary"],
-        "http" => &["base_url", "body", "max_file_bytes", "method", "path", "query"],
+        "http" => &["base_url", "body", "max_file_bytes", "method", "path", "query", "verify"],
         "truenas" => &["job", "method", "params"],
         "file" => &["file_operation", "mode", "operation", "run_as"],
         "google" => &["google_action", "google_args"],
@@ -1358,6 +1523,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         body_raw_param: None,
         max_file_bytes: None,
         base_url: None,
+        verify: None,
         rpc_method: None,
         rpc_job: false,
         params_template: None,
@@ -1494,9 +1660,32 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
                      its category cannot be 'read'"
                 )));
             }
+            if let Some(raw_verify) = get_some(spec, "verify") {
+                tool.verify = Some(parse_verify(raw_verify, where_)?);
+            }
+            // Every brace in an http template must be exactly
+            // `{<declared parameter>}` (1.27.0) -- before, `{name?}`,
+            // `{Name}`, `{ name }` or a stray brace loaded and went to the
+            // target literally.
+            let mut located: Vec<(String, String)> = vec![("path".into(), path_template.clone())];
+            located.extend(tool.query_template.iter().map(|(k, v)| (format!("query {}", repr_str(k)), v.clone())));
+            located.extend(collect_template_strings(tool.body_template.as_ref()).into_iter().map(|v| ("body".into(), v)));
+            if let Some(v) = &tool.verify {
+                located.push(("verify.path".into(), v.path_template.clone()));
+                located.extend(v.query_template.iter().map(|(k, t)| (format!("verify.query {}", repr_str(k)), t.clone())));
+                located.extend(
+                    collect_template_strings(v.body_template.as_ref()).into_iter().map(|t| ("verify.body".into(), t)),
+                );
+            }
+            check_http_placeholder_syntax(&located, &parameters, where_)?;
             all_templates.push(path_template.clone());
             all_templates.extend(tool.query_template.values().cloned());
             all_templates.extend(collect_template_strings(tool.body_template.as_ref()));
+            if let Some(v) = &tool.verify {
+                all_templates.push(v.path_template.clone());
+                all_templates.extend(v.query_template.values().cloned());
+                all_templates.extend(collect_template_strings(v.body_template.as_ref()));
+            }
             tool.path_template = Some(path_template);
         }
         "truenas" => {
