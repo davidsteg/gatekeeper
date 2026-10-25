@@ -22,7 +22,7 @@ use crate::audit::{AuditLog, CallRecord};
 use crate::catalog::{load_catalog, Catalog, ToolDef};
 use crate::credentials::CredentialStore;
 use crate::errors::{ConfigError, DenialReason, Denied};
-use crate::execute::{self, ExecResult, Redact, ResourceLocks, OUTCOME_OK};
+use crate::execute::{self, ExecResult, Redact, ResourceLocks, OUTCOME_FAILED, OUTCOME_OK};
 use crate::identity::{load_identities, Identity, IdentityStore};
 use crate::mcp::CatalogNotifier;
 use crate::messages::MessageStore;
@@ -707,7 +707,20 @@ impl Service {
                                     true,
                                     Some(&redact),
                                 )
-                                .await?;
+                                .await
+                                // The main write already happened: an error
+                                // here must not drop its result (1.28.1). It
+                                // is a failed verify, reported next to main.
+                                .unwrap_or_else(|e| {
+                                    ExecResult::new(
+                                        OUTCOME_FAILED,
+                                        None,
+                                        "",
+                                        format!("verify request could not be sent: {e}"),
+                                        false,
+                                        0,
+                                    )
+                                });
                                 let require = tool.verify.as_ref().is_some_and(|d| d.require_body);
                                 Some(if require { execute::http::require_body(r) } else { r })
                             } else {

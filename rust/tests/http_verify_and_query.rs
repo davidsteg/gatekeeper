@@ -18,6 +18,12 @@ type Seen = Arc<Mutex<Vec<String>>>;
 
 /// A minimal HTTP/1.1 server: records `METHOD path?query` and answers by path.
 async fn server() -> (u16, Seen) {
+    server_with(|| {}).await
+}
+
+/// [`server`], running `on_post` before it answers any POST.
+async fn server_with(on_post: impl Fn() + Send + Sync + 'static) -> (u16, Seen) {
+    let on_post = Arc::new(on_post);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let seen: Seen = Arc::default();
@@ -26,6 +32,7 @@ async fn server() -> (u16, Seen) {
         loop {
             let Ok((mut stream, _)) = listener.accept().await else { return };
             let seen = seen2.clone();
+            let on_post = on_post.clone();
             tokio::spawn(async move {
                 let mut buf = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -52,6 +59,9 @@ async fn server() -> (u16, Seen) {
                 let method = parts.next().unwrap_or_default().to_string();
                 let target = parts.next().unwrap_or_default().to_string();
                 seen.lock().unwrap().push(format!("{method} {target}"));
+                if method == "POST" {
+                    on_post();
+                }
                 let path = target.split('?').next().unwrap_or_default();
                 let (status, body) = match (method.as_str(), path) {
                     ("POST", "/api/fail") => (500, r#"{"error": "boom"}"#.to_string()),
@@ -227,6 +237,96 @@ fn well_formed_templates_still_load() {
     parse_tool_spec(&spec, &tier1).unwrap();
 }
 
+/// A Stash tool as it is configured live: a GraphQL POST whose body
+/// carries the query inline, selection-set braces and all.
+fn stash_tool(id: &str, query: &str, variables: Value, parameters: Value) -> Value {
+    http_tool(
+        id,
+        json!({"method": "POST", "path": "/api/graphql", "category": "read",
+               "body": {"query": query, "variables": variables}, "parameters": parameters}),
+    )
+}
+
+const FIND_SCENE: &str = "query FindScene($id: ID!) { findScene(id: $id) { id title date \
+                          files { path size duration video_codec } studio { name } } }";
+
+#[test]
+fn graphql_bodies_with_inline_queries_load_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = tier1_at(dir.path(), tier1_doc(1));
+    let id_param = json!({"type": "string", "pattern": "^[0-9]+$", "required": true});
+    let cases = [
+        stash_tool("api.scene_get", FIND_SCENE, json!({"id": "{scene_id}"}), json!({"scene_id": id_param})),
+        // The whole query inline, the placeholder inside GraphQL braces.
+        stash_tool(
+            "api.scene_inline",
+            r#"{ findScene(id: "{scene_id}") { id files { path } } }"#,
+            json!({}),
+            json!({"scene_id": id_param}),
+        ),
+        stash_tool("api.stats", "{ stats { scene_count scenes_size performer_count } }", json!({}), json!({})),
+        stash_tool(
+            "api.scenes_by_path",
+            "query($f: FindFilterType) { findScenes(filter: $f, scene_filter: {path: {value: \"x\", modifier: INCLUDES}}) \
+             { count scenes { id files { path } } } }",
+            json!({"f": {"per_page": 25}}),
+            json!({}),
+        ),
+        // A JSON document inside a string leaf is literal text too.
+        stash_tool("api.literal", "{ systemStatus { status } }", json!({"raw": "{\"a\": {}}"}), json!({})),
+    ];
+    for spec in cases {
+        let id = spec["id"].clone();
+        parse_tool_spec(&spec, &tier1).unwrap_or_else(|e| panic!("{id} must load: {}", e.message));
+    }
+}
+
+#[test]
+fn a_graphql_body_still_refuses_an_undeclared_placeholder_and_a_marker() {
+    let id_param = json!({"scene_id": {"type": "string", "pattern": "^[0-9]+$", "required": true}});
+    // A typo in the placeholder name.
+    let msg = refused(stash_tool("api.x", FIND_SCENE, json!({"id": "{undeclared_param}"}), id_param.clone()));
+    assert_eq!(msg, "tool 'api.x': template references unknown parameter 'undeclared_param'");
+    let inline = r#"{ findScene(id: "{scene_idd}") { id } }"#;
+    let msg = refused(stash_tool("api.x", inline, json!({}), id_param.clone()));
+    assert_eq!(msg, "tool 'api.x': template references unknown parameter 'scene_idd'");
+    // The optional marker is still refused in a body, spaces or not.
+    for marker in ["{scene_id?}", "{ scene_id ? }"] {
+        let msg = refused(stash_tool("api.x", FIND_SCENE, json!({"id": marker}), id_param.clone()));
+        assert!(msg.contains("body template"), "{msg}");
+        assert!(msg.contains(&format!("'{marker}' (unsupported syntax)")), "{msg}");
+    }
+    // Path and query keep the strict 1.27.0 rule.
+    let mut spec = stash_tool("api.x", FIND_SCENE, json!({"id": "{scene_id}"}), id_param);
+    spec["query"] = json!({"x": "{ scene_id }"});
+    let msg = refused(spec);
+    assert!(msg.contains("query 'x' template") && msg.contains("'{ scene_id }' (unsupported syntax)"), "{msg}");
+}
+
+#[tokio::test]
+async fn a_graphql_body_is_sent_with_its_braces_and_the_value_filled_in() {
+    let (port, _seen) = server().await;
+    let id_param = json!({"type": "string", "pattern": "^[0-9]+$", "required": true});
+    let tool = stash_tool(
+        "api.scene_inline",
+        r#"{ findScene(id: "{scene_id}") { id files { path } } }"#,
+        json!({"id": "{scene_id}"}),
+        json!({"scene_id": id_param}),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = tier1_at(dir.path(), tier1_doc(port));
+    let parsed = parse_tool_spec(&tool, &tier1).unwrap();
+    let req = build_http_request(&parsed, &vals(&[("scene_id", "42")]), &tier1.toolkit("api").unwrap()).unwrap();
+    assert_eq!(
+        req.body,
+        Some(json!({"query": r#"{ findScene(id: "42") { id files { path } } }"#, "variables": {"id": "42"}}))
+    );
+    let e = builder().tier1(tier1_doc(port)).tools(vec![tool]).build();
+    let who = agent("bot", &["api.scene_inline"], &[]);
+    let r = e.service.call(&who, "api.scene_inline", &args(json!({"scene_id": "42"})), None).await.unwrap();
+    assert_eq!(r.outcome, "ok", "{}", r.stderr);
+}
+
 #[test]
 fn admin_tool_validate_reports_the_bad_placeholder() {
     let e = builder().tier1(tier1_doc(1)).tools(vec![]).build();
@@ -369,4 +469,43 @@ async fn a_tool_without_verify_answers_as_before() {
     let who = agent("bot", &["api.search"], &[]);
     let r = e.service.call(&who, "api.search", &args(json!({"term": "abc"})), None).await.unwrap();
     assert_eq!(r.stdout, r#"{"echo": true}"#);
+}
+
+#[tokio::test]
+async fn a_verify_that_errors_out_keeps_the_main_result() {
+    // The main POST succeeds, and while it is answered the credential
+    // store becomes unreadable: the verify request then fails inside the
+    // executor (a `ConfigError`, not an HTTP status). The write happened,
+    // so its result must survive as a failed verify, not vanish.
+    let target: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::default();
+    let hook = target.clone();
+    let (port, seen) = server_with(move || {
+        if let Some(path) = hook.lock().unwrap().as_ref() {
+            std::fs::write(path, "credentials: [not, a, mapping\n").unwrap();
+        }
+    })
+    .await;
+    let mut doc = tier1_doc(port);
+    doc["toolkits"]["api"]["credential"] = json!("api-key");
+    let e = builder().tier1(doc).tools(vec![write_tool(json!({"path": "/api/items/{name}"}))]).credentials().build();
+    e.credentials.as_ref().unwrap().create("api-key", "bearer", "s3cret-value", None, None, None, "root", "").unwrap();
+    *target.lock().unwrap() = Some(e.tmp.join("credentials.yaml"));
+
+    let who = agent("bot", &["api.save"], &[]);
+    let r = e.service.call(&who, "api.save", &args(json!({"name": "abc"})), None).await.unwrap();
+    assert_eq!(seen.lock().unwrap().as_slice(), ["POST /api/save/abc"], "the write went out, the verify could not");
+    assert_eq!(r.outcome, "failed");
+    assert!(
+        r.stderr.starts_with("VERIFY FAILED: the main request succeeded (HTTP 200), but the verify request did not (HTTP None). verify request could not be sent: "),
+        "{}",
+        r.stderr
+    );
+    let out: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(out["main"]["outcome"], "ok");
+    assert_eq!(out["main"]["status"], 200);
+    assert_eq!(out["main"]["body"], r#"{"ok": true}"#);
+    assert_eq!(out["verify"]["outcome"], "failed");
+    assert!(!r.stdout.contains("s3cret-value") && !r.stderr.contains("s3cret-value"));
+    let record = e.audit_lines().pop().unwrap();
+    assert_eq!(record["outcome"], "failed");
 }

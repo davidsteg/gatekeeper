@@ -1,3 +1,20 @@
+## 1.28.1
+
+GraphQL tools with an inline query load again, and a verify that cannot be sent no longer loses the result of the write before it.
+
+### Fixed
+
+- **An `http` body with braces in it loads again.** 1.27.0 refused every brace in an `http` template that was not exactly `{<declared parameter>}`, in the body as well. A GraphQL tool sends its query inline in a body string (`{ findScene(id: $id) { id files { path } } }`), so every such tool -- the Stash tools among them -- stopped loading and was disabled at startup. A string leaf of `body` and `verify.body` is now read as before 1.27.0: a brace that is not the `{name}` placeholder shape is literal text. The guard against typos stays: a `{name}` there must still be a declared parameter (`template references unknown parameter 'undeclared_param'`), and the optional marker `{name?}` is still refused, with the 1.27.0 message. `path`, `query`, `verify.path` and `verify.query` keep the strict 1.27.0 rule.
+- **A verify that cannot be sent keeps the main result.** When the main request of a tool with `verify:` succeeded but the verify request then failed inside gatekeeper before any response (for example, the credential store became unreadable), the call returned an error and the main request's result was lost, although the write had happened. It is now reported like any failed verify: outcome `failed`, `VERIFY FAILED: the main request succeeded (HTTP 200), but the verify request did not (HTTP None). verify request could not be sent: ...` in stderr, and stdout carries the main result next to the failed verify.
+
+### Why this way
+
+- Braces in a body are data more often than not: GraphQL selection sets, input objects, JSON inside a string. Requiring an escape (`{{`) or a per-tool opt-out would have meant editing every live GraphQL tool, and gatekeeper had no escape syntax to offer. Before 1.27.0, body braces were always literal (that is what the Python implementation and the Rust port did), so restoring that keeps every stored tool loading without a change. The only real risk in a body is a mistyped placeholder name, and the unknown-parameter check, which matches the exact `{name}` shape, catches it in a body as anywhere else. A `{name?}` marker cannot be GraphQL or JSON (no `?` inside braces there), so refusing it costs nothing. URL templates have no use for a literal brace, so the strict rule stays there.
+
+### Upgrading
+
+- Nothing to do. A GraphQL tool disabled by 1.27.0/1.28.0 loads again after the update. A body string that literally contains `{word}` with a lowercase identifier inside is still read as a placeholder, as it always was.
+
 ## 1.28.0
 
 `file_operation: delete` is bounded, lists before it deletes, and cannot be steered through a symlink.

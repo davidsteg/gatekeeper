@@ -1115,50 +1115,88 @@ fn brace_token_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\{[^{}]*\}|[{}]").expect("static regex"))
 }
 
-/// Every brace in an `http` path/query/body template is a known
-/// placeholder (1.27.0).
+/// A placeholder written as an optional marker, `{name?}` (spaces
+/// allowed). No JSON or GraphQL text has a `?` inside braces, so this is
+/// the one shape still refused in a body template.
+fn optional_marker_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\?\s*\}").expect("static regex"))
+}
+
+/// Where an `http` template sits, which decides how strictly its braces
+/// are read (1.28.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateKind {
+    /// `path`, `query`, `verify.path`, `verify.query`: URL text, where a
+    /// brace has no meaning of its own -- every brace must be exactly
+    /// `{<declared parameter>}`.
+    Url,
+    /// A string leaf of `body`/`verify.body`. Its braces are often the
+    /// payload itself (a GraphQL query such as
+    /// `{ findScene(id: $id) { id files { path } } }`, embedded JSON), so
+    /// anything that is not the `{name}` placeholder shape is literal text,
+    /// as it always was. A well-formed `{name}` must still be declared (the
+    /// unknown-parameter guard), and an optional marker `{name?}` is still
+    /// refused.
+    Body,
+}
+
+/// Every brace in an `http` path/query template is a known placeholder
+/// (1.27.0); a body template only refuses the `{name?}` marker (1.28.1).
 ///
 /// [`placeholder_re`] only *finds* the well-formed `{name}` shape, so the
 /// unknown-parameter guard never saw `{name?}`, `{Name}`, `{ name }` or a
 /// stray brace -- such a template loaded (and passed `admin.tool_validate`)
 /// and the text went to the target literally. There is no escaping and no
-/// other placeholder syntax, so any brace that is not exactly
-/// `{<declared parameter>}` is a configuration error. For an optional query
-/// value the answer is not a marker but `required: false`: an absent
-/// optional leaves its key out (`validate::build_http_request`).
+/// other placeholder syntax, so in a URL template any brace that is not
+/// exactly `{<declared parameter>}` is a configuration error. A body is
+/// different: braces there are routinely data (GraphQL selection sets,
+/// JSON in a string), and 1.27.0 refusing them disabled every GraphQL tool
+/// with an inline query. For an optional query value the answer is not a
+/// marker but `required: false`: an absent optional leaves its key out
+/// (`validate::build_http_request`).
 pub fn check_http_placeholder_syntax(
-    templates: &[(String, String)],
+    templates: &[(String, TemplateKind, String)],
     parameters: &IndexMap<String, Parameter>,
     where_: &str,
 ) -> ConfigResult<()> {
-    for (location, template) in templates {
-        for m in brace_token_re().find_iter(template) {
-            let token = m.as_str();
-            let name = placeholder_re()
-                .captures(token)
-                .filter(|c| c.get(0).map(|g| g.as_str()) == Some(token))
-                .map(|c| c[1].to_string());
-            // A well-formed `{name}` is the unknown-parameter guard's to
-            // judge (its message is a frozen fixture); this check is only
-            // about shapes that guard cannot see.
-            if name.is_some() {
-                continue;
+    let declared = || -> Vec<String> {
+        let mut d: Vec<String> = parameters.keys().cloned().collect();
+        d.sort();
+        d
+    };
+    let error = |location: &str, template: &str, token: &str| -> ConfigError {
+        ConfigError::new(format!(
+            "{where_}: {location} template {} contains {} (unsupported syntax), which is not a known \
+             placeholder. The only placeholder syntax is '{{name}}' with a declared parameter \
+             (declared: {}); for an optional query value declare the parameter with \
+             required: false instead of marking the placeholder.",
+            repr_str(template),
+            repr_str(token),
+            repr_list(&declared())
+        ))
+    };
+    for (location, kind, template) in templates {
+        match kind {
+            TemplateKind::Body => {
+                if let Some(m) = optional_marker_re().find(template) {
+                    return Err(error(location, template, m.as_str()));
+                }
             }
-            let what = "unsupported syntax";
-            let declared: Vec<String> = {
-                let mut d: Vec<String> = parameters.keys().cloned().collect();
-                d.sort();
-                d
-            };
-            return Err(ConfigError::new(format!(
-                "{where_}: {location} template {} contains {} ({what}), which is not a known \
-                 placeholder. The only placeholder syntax is '{{name}}' with a declared parameter \
-                 (declared: {}); for an optional query value declare the parameter with \
-                 required: false instead of marking the placeholder.",
-                repr_str(template),
-                repr_str(token),
-                repr_list(&declared)
-            )));
+            TemplateKind::Url => {
+                for m in brace_token_re().find_iter(template) {
+                    let token = m.as_str();
+                    let well_formed = placeholder_re()
+                        .captures(token)
+                        .is_some_and(|c| c.get(0).map(|g| g.as_str()) == Some(token));
+                    // A well-formed `{name}` is the unknown-parameter
+                    // guard's to judge (its message is a frozen fixture);
+                    // this check is only about shapes that guard cannot see.
+                    if !well_formed {
+                        return Err(error(location, template, token));
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -1710,18 +1748,25 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
             if let Some(raw_verify) = get_some(spec, "verify") {
                 tool.verify = Some(parse_verify(raw_verify, where_)?);
             }
-            // Every brace in an http template must be exactly
+            // Every brace in an http path/query template must be exactly
             // `{<declared parameter>}` (1.27.0) -- before, `{name?}`,
             // `{Name}`, `{ name }` or a stray brace loaded and went to the
             // target literally.
-            let mut located: Vec<(String, String)> = vec![("path".into(), path_template.clone())];
-            located.extend(tool.query_template.iter().map(|(k, v)| (format!("query {}", repr_str(k)), v.clone())));
-            located.extend(collect_template_strings(tool.body_template.as_ref()).into_iter().map(|v| ("body".into(), v)));
+            // Body leaves are read leniently (1.28.1): braces there are
+            // usually payload (GraphQL), see `TemplateKind::Body`.
+            use TemplateKind::{Body, Url};
+            let mut located: Vec<(String, TemplateKind, String)> = vec![("path".into(), Url, path_template.clone())];
+            located.extend(tool.query_template.iter().map(|(k, v)| (format!("query {}", repr_str(k)), Url, v.clone())));
+            located.extend(
+                collect_template_strings(tool.body_template.as_ref()).into_iter().map(|v| ("body".into(), Body, v)),
+            );
             if let Some(v) = &tool.verify {
-                located.push(("verify.path".into(), v.path_template.clone()));
-                located.extend(v.query_template.iter().map(|(k, t)| (format!("verify.query {}", repr_str(k)), t.clone())));
+                located.push(("verify.path".into(), Url, v.path_template.clone()));
                 located.extend(
-                    collect_template_strings(v.body_template.as_ref()).into_iter().map(|t| ("verify.body".into(), t)),
+                    v.query_template.iter().map(|(k, t)| (format!("verify.query {}", repr_str(k)), Url, t.clone())),
+                );
+                located.extend(
+                    collect_template_strings(v.body_template.as_ref()).into_iter().map(|t| ("verify.body".into(), Body, t)),
                 );
             }
             check_http_placeholder_syntax(&located, &parameters, where_)?;

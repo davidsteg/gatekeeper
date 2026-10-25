@@ -167,9 +167,13 @@ is left out of the request entirely (no key, no empty value); one required
 or undeclared name is still `param_missing`, and a key is never sent
 half-substituted (`validate::build_http_request`). Path placeholders stay
 mandatory; body templates are unchanged. At load, every brace in an `http`
-`path`/`query`/`body`/`verify` template must be exactly
+`path`/`query`/`verify.path`/`verify.query` template must be exactly
 `{<declared parameter>}` (`catalog::check_http_placeholder_syntax`), so
 `{name?}`, `{Name}` or a stray brace no longer reaches the target literally.
+A `body`/`verify.body` string leaf is read leniently (1.28.1): its braces are
+usually payload (a GraphQL query sent inline), so anything that is not the
+`{name}` shape stays literal text, as before 1.27.0. A `{name}` there must
+still be a declared parameter, and the `{name?}` marker is still refused.
 
 **Read-back (`verify:`, 1.27.0).** An `http` tool may declare a second
 request that runs only after the main one succeeded, with the same
@@ -178,7 +182,10 @@ built before the main request is sent). Only `GET` goes without a fixed
 `verify.body`; there is no raw-param or `from_file` body. A timeout on the
 verify is `failed`, never `unknown`. Main and verify are folded into one
 result (`execute::http::combine_verify`): `ok` only if both are, stdout
-`{"main": ..., "verify": ...}`; `require_body` fails an empty 2xx.
+`{"main": ..., "verify": ...}`; `require_body` fails an empty 2xx. A verify
+that cannot be sent at all (an executor error after the main request
+succeeded) is a failed verify next to the kept main result, never an error
+that drops it (1.28.1).
 
 **Body fields from a file (1.21.0).** A body field written
 `{from_file: <param>, encoding: base64}` is not a template: the executor
