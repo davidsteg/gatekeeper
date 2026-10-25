@@ -762,6 +762,8 @@ impl Service {
                         idempotent: tool.idempotent,
                         run_as: effective_run_as,
                         mode: tool.file_mode,
+                        max_entries: tool.delete_max_entries,
+                        files_only: tool.delete_files_only,
                     };
                     // A masked read written back would replace the real
                     // secret with the mask: refuse it before it touches disk.

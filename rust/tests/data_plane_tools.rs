@@ -1,6 +1,7 @@
 //! The 1.25.0 tool features the CastorCloud node builds on: a fixed
 //! `stdin` text, file `delete`, a fixed file `mode`, a secret file
-//! `content`, and the opt-in `structuredContent`.
+//! `content`, and the opt-in `structuredContent`; plus the 1.28.0 bound
+//! on `delete` (`delete: {max_entries, files_only}`).
 
 mod app_env;
 
@@ -113,6 +114,47 @@ async fn delete_removes_a_tree_but_never_a_root_or_a_protected_resource() {
 }
 
 #[tokio::test]
+async fn a_delete_block_bounds_the_tree_before_anything_goes() {
+    let bounded = file_tool("files.prune", "delete", json!({"delete": {"max_entries": 2, "files_only": true}}));
+    let (e, root) = file_env(vec![bounded]);
+    let who = agent("node", &["files.prune"], &[]);
+    let call = |p: String| {
+        let e = &e;
+        let who = &who;
+        async move { e.service.call(who, "files.prune", &args(json!({"path": p})), None).await.unwrap() }
+    };
+
+    std::fs::create_dir_all(format!("{root}/many")).unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(format!("{root}/many/{name}"), "x").unwrap();
+    }
+    let r = call(format!("{root}/many")).await;
+    assert_eq!(r.outcome, "failed");
+    assert!(r.stderr.contains("more than 2 entries (max_entries)"), "{}", r.stderr);
+    assert!(std::path::Path::new(&format!("{root}/many/a")).exists());
+
+    std::fs::create_dir_all(format!("{root}/nested/sub")).unwrap();
+    let r = call(format!("{root}/nested")).await;
+    assert!(r.stderr.contains("sub-directory 'sub' (files_only)"), "{}", r.stderr);
+    assert!(std::path::Path::new(&format!("{root}/nested/sub")).exists());
+
+    std::fs::create_dir_all(format!("{root}/two")).unwrap();
+    std::fs::write(format!("{root}/two/a"), "x").unwrap();
+    std::fs::write(format!("{root}/two/b"), "x").unwrap();
+    let r = call(format!("{root}/two")).await;
+    assert_eq!(r.outcome, "ok", "{}", r.stderr);
+    assert!(!std::path::Path::new(&format!("{root}/two")).exists());
+
+    // A symlinked directory in the path is refused, not resolved to its target.
+    std::fs::create_dir_all(format!("{root}/real")).unwrap();
+    std::fs::write(format!("{root}/real/f"), "x").unwrap();
+    std::os::unix::fs::symlink(format!("{root}/real"), format!("{root}/alias")).unwrap();
+    let r = call(format!("{root}/alias/f")).await;
+    assert_ne!(r.outcome, "ok");
+    assert!(std::path::Path::new(&format!("{root}/real/f")).exists());
+}
+
+#[tokio::test]
 async fn a_fixed_mode_and_a_secret_content_that_stays_out_of_the_log() {
     let tool = file_tool(
         "files.put_key",
@@ -164,6 +206,21 @@ fn bad_definitions_are_refused_at_load() {
     }
     let delete = file_tool("files.x", "delete", json!({"category": "read"}));
     assert!(refused(files.clone(), delete).contains("delete"));
+    for (block, want) in [
+        (json!({"max_entries": 0}), "'delete.max_entries'"),
+        (json!({"max_entries": 100_001}), "MAX_DELETE_ENTRIES"),
+        (json!({"max_entries": "5"}), "'delete.max_entries'"),
+        (json!({"files_only": "yes"}), "'delete.files_only'"),
+        (json!({"depth": 3}), "unknown keys ['depth']"),
+        (json!([1]), "'delete' must be a mapping"),
+    ] {
+        let tool = file_tool("files.x", "delete", json!({"delete": block}));
+        let err = refused(files.clone(), tool);
+        assert!(err.contains(want), "{err}");
+    }
+    let not_delete = file_tool("files.x", "write", json!({"delete": {"max_entries": 5},
+        "parameters": {"path": path_param(), "content": content_param(false)}}));
+    assert!(refused(files.clone(), not_delete).contains("only apply to file_operation: delete"));
 
     // A secret is not allowed into a path, nor onto a local command line.
     let secret_path = file_tool(

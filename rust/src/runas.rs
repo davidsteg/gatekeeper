@@ -708,17 +708,23 @@ pub fn child_main() -> i32 {
         return 0;
     }
     let outcome = (|| -> Result<crate::execute::file::Op, String> {
-        let path = crate::execute::file::validate_path(
-            &str_value(require(&request, "path")?),
+        let sent = str_value(require(&request, "path")?);
+        let validated = crate::execute::file::validate_path(
+            &sent,
             &str_list(&request, "path_roots"),
             &str_list(&request, "protected"),
         )?;
         let operation = str_value(require(&request, "operation")?);
+        // A delete walks the path as sent, never the resolved one (see
+        // `execute::file::run`); it was validated all the same.
+        let path = if operation == "delete" { sent } else { validated };
         let content = opt_str(&request, "content");
         let old_string = opt_str(&request, "old_string");
         let new_string = opt_str(&request, "new_string");
         let max_output_bytes = py_int(require(&request, "max_output_bytes")?)?;
         let mode = request.get("mode").and_then(Value::as_u64).map(|m| m as u32);
+        let max_entries = request.get("max_entries").and_then(Value::as_i64);
+        let files_only = request.get("files_only").and_then(Value::as_bool).unwrap_or(false);
         crate::execute::file::perform(
             &operation,
             &path,
@@ -729,6 +735,8 @@ pub fn child_main() -> i32 {
             mode,
             &str_list(&request, "path_roots"),
             &str_list(&request, "protected"),
+            max_entries,
+            files_only,
         )
     })();
     let mut op = match outcome {

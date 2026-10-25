@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 
 pub mod agent;
 pub mod artifact;
+pub mod bounded_delete;
 pub mod file;
 pub mod git;
 pub mod google;

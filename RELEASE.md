@@ -1,3 +1,23 @@
+## 1.28.0
+
+`file_operation: delete` is bounded, lists before it deletes, and cannot be steered through a symlink.
+
+### Added
+
+- **`delete: {max_entries, files_only}` on a delete tool.** `max_entries` (1 to 100000, default 100000) caps how many entries may lie below the target; `files_only: true` refuses any sub-directory. Both are checked on a full listing *before* anything is removed: above the cap, or with a sub-directory, the call fails with `Aborted, nothing deleted: ...` and the tree is untouched. `delete` on any other file operation does not load.
+
+### Changed
+
+- **A delete lists first, then removes exactly what it listed.** The 1.25.0 delete resolved the path and removed the tree recursively. It now walks the path as sent: the matching root is opened, every component below it without following symlinks (relative to its parent's directory fd), and a symlink anywhere in the path, the target included, is refused instead of resolved. A tree nested deeper than 64 levels, or with an entry named in `protected_resources` anywhere below the target, aborts before anything goes, as do listing errors.
+- **Swapping a directory for a symlink mid-call removes nothing outside the tree.** Before removing, the chain from the root to the target's parent is re-checked, and every entry is re-checked by device, inode and type right before it goes, through the directory fds held since the listing. An entry added, removed or replaced in between stops the delete at that point: the outcome is `failed`, and stdout starts with `deleted before abort:` and lists what was removed.
+- **The success output lists the removed entries.** A directory reports `Deleted <path> (directory, N entries below it):` followed by one `d`/`f`/`l` line per entry, capped at the tool's `max_output_bytes`. A file still reports `Deleted <path>`, and a path that does not exist is still `ok` (`Nothing to delete at <path>`).
+- Refusals now end with `Nothing was deleted.`. Deleting a path root still fails with `Refusing to delete the path root <path>`.
+
+### Upgrading
+
+- A delete tool without a `delete:` block loads as before, with the 100000-entry cap. A tree with more entries below it, or nested deeper than 64 levels, now fails instead of being deleted. Split such a cleanup into several calls.
+- A delete through a symlinked directory inside a path root (not the root itself) is now refused. Name the real path instead.
+
 ## 1.27.0
 
 Optional query parameters that can actually be left out, a stricter check of `http` templates, and an optional read-back after an `http` tool's request.

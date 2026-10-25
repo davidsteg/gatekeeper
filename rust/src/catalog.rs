@@ -327,6 +327,10 @@ pub struct ToolDef {
     pub file_operation: Option<String>,
     /// A `write` tool's fixed file mode (1.25.0).
     pub file_mode: Option<u32>,
+    /// A `delete` tool's `delete: {max_entries, files_only}` (1.28.0).
+    /// `None` without a block: the ceiling, `MAX_DELETE_ENTRIES`.
+    pub delete_max_entries: Option<i64>,
+    pub delete_files_only: bool,
 
     // -- `google` --
     pub google_action: Option<String>,
@@ -1328,6 +1332,47 @@ const COMMON_TOOL_FIELDS: &[&str] = &[
     "version",
 ];
 
+/// `delete: {max_entries: N, files_only: bool}` on a delete tool (1.28.0).
+/// Both keys are optional; `max_entries` is 1 to `MAX_DELETE_ENTRIES`.
+fn parse_delete_block(value: &Value, where_: &str) -> ConfigResult<(i64, bool)> {
+    use crate::execute::bounded_delete::MAX_DELETE_ENTRIES;
+    let Value::Object(block) = value else {
+        return Err(ConfigError::new(format!("{where_}: 'delete' must be a mapping")));
+    };
+    let unknown: Vec<&str> = block.keys().map(String::as_str).filter(|k| !["files_only", "max_entries"].contains(k)).collect();
+    if !unknown.is_empty() {
+        return Err(ConfigError::new(format!("{where_}: 'delete' has unknown keys {}", repr_list(&unknown))));
+    }
+    let max_entries = match block.get("max_entries") {
+        None | Some(Value::Null) => MAX_DELETE_ENTRIES,
+        Some(Value::Number(n)) => match n.as_i64() {
+            Some(n) if (1..=MAX_DELETE_ENTRIES).contains(&n) => n,
+            _ => {
+                return Err(ConfigError::new(format!(
+                    "{where_}: 'delete.max_entries' must be an integer from 1 to {MAX_DELETE_ENTRIES} (MAX_DELETE_ENTRIES), not {n}"
+                )))
+            }
+        },
+        Some(other) => {
+            return Err(ConfigError::new(format!(
+                "{where_}: 'delete.max_entries' must be an integer from 1 to {MAX_DELETE_ENTRIES}, not {}",
+                repr_value(other)
+            )))
+        }
+    };
+    let files_only = match block.get("files_only") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(other) => {
+            return Err(ConfigError::new(format!(
+                "{where_}: 'delete.files_only' must be true or false, not {}",
+                repr_value(other)
+            )))
+        }
+    };
+    Ok((max_entries, files_only))
+}
+
 /// The fields only a tool on one executor reads.
 fn executor_tool_fields(executor: &str) -> &'static [&'static str] {
     match executor {
@@ -1335,7 +1380,7 @@ fn executor_tool_fields(executor: &str) -> &'static [&'static str] {
         "ssh" => &["argv", "binary"],
         "http" => &["base_url", "body", "max_file_bytes", "method", "path", "query", "verify"],
         "truenas" => &["job", "method", "params"],
-        "file" => &["file_operation", "mode", "operation", "run_as"],
+        "file" => &["delete", "file_operation", "mode", "operation", "run_as"],
         "google" => &["google_action", "google_args"],
         "microsoft" => &["microsoft_action", "microsoft_args"],
         "opencode" => &["opencode_operation", "operation"],
@@ -1529,6 +1574,8 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         params_template: None,
         file_operation: None,
         file_mode: None,
+        delete_max_entries: None,
+        delete_files_only: false,
         google_action: None,
         google_args: None,
         microsoft_action: None,
@@ -1723,6 +1770,19 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
                         "{where_}: 'mode' {} is not allowed -- only a write tool takes one, as a quoted string of {}",
                         repr_value(other),
                         repr_list(FILE_MODES)
+                    )))
+                }
+            }
+            match get_some(spec, "delete") {
+                None => {}
+                Some(block) if op == "delete" => {
+                    let (max_entries, files_only) = parse_delete_block(block, where_)?;
+                    tool.delete_max_entries = Some(max_entries);
+                    tool.delete_files_only = files_only;
+                }
+                Some(_) => {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: 'delete' options only apply to file_operation: delete"
                     )))
                 }
             }
