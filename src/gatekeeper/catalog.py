@@ -29,6 +29,14 @@ PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 #: verify request: verify reads, it never acts on agent input in a new shape).
 READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+#: Upper bound for a delete tool's `delete.max_entries`. The whole listing is
+#: held in memory as `_Entry` objects, and every entry is stat'ed and
+#: re-checked within the one request; 100k is tens of MB worst case and
+#: seconds of work, while bulk deletes beyond that do not belong in a single
+#: agent call. `execute_file.MAX_DELETE_ENTRIES` repeats it (the `run_as`
+#: child does not import this module); a test keeps the two equal.
+MAX_DELETE_ENTRIES = 100_000
+
 #: Tool IDs follow `<toolkit>.<action>` (FR-5.1b).
 TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 
@@ -191,8 +199,9 @@ class ToolDef:
     #: Optional read-back request (`verify:` block), sent after the main
     #: request with the same toolkit and the same validated parameter
     #: values. Keys: `method`, `path`, `query` (str->str), `body` (nested
-    #: template or None). A write method is only accepted with a fixed
-    #: `body` (checked at load time, see `_parse_verify`). None = no verify,
+    #: template or None). Only `READ_METHODS` (GET/HEAD/OPTIONS) may go
+    #: without a body; any other method needs a fixed `body` (checked at
+    #: load time, see `_parse_verify`). None = no verify,
     #: the pre-existing behaviour.
     verify: dict[str, Any] | None = None
     # -- `truenas` executor (FR-8.3a-f) --------------------------------
@@ -1065,12 +1074,12 @@ def _body_raw_param(value: Any, where: str, field: str) -> str | None:
 def _parse_verify(value: Any, where: str) -> dict[str, Any]:
     """Parses an http tool's optional `verify:` block.
 
-    verify only reads: a GET (or any other non-write method), or a write
-    method with a *fixed* `body` template. Placeholders inside that body
-    are allowed -- the caller adds them to the typo guard, so each one is a
-    declared, pattern-validated parameter. A write method without a body,
-    or with the raw-param mode (the agent's document as the body), is
-    refused here, at load time.
+    verify only reads: a method in `READ_METHODS` (GET/HEAD/OPTIONS) needs
+    no body; any other method is only accepted with a *fixed* `body`
+    template. Placeholders inside that body are allowed -- the caller adds
+    them to the typo guard, so each one is a declared, pattern-validated
+    parameter. Any other method without a body, or a body in raw-param mode
+    (the agent's document as the body), is refused here, at load time.
     """
     if not isinstance(value, dict):
         raise ConfigError(f"{where}: 'verify' must be a mapping")
@@ -1120,6 +1129,11 @@ def _parse_delete(value: Any, where: str) -> tuple[int, bool]:
     if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
         raise ConfigError(
             f"{where}: 'delete.max_entries' is required and must be a positive integer"
+        )
+    if max_entries > MAX_DELETE_ENTRIES:
+        raise ConfigError(
+            f"{where}: 'delete.max_entries' is {max_entries}, the maximum is "
+            f"{MAX_DELETE_ENTRIES} (MAX_DELETE_ENTRIES)"
         )
     files_only = value.get("files_only", False)
     if not isinstance(files_only, bool):

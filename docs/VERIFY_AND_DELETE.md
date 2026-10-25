@@ -54,7 +54,7 @@ Response (stdout is JSON):
 ```yaml
 file_operation: delete
 delete:
-  max_entries: 5     # required, int >= 1
+  max_entries: 5     # required, 1 <= int <= 100000 (MAX_DELETE_ENTRIES)
   files_only: true   # optional, default false
 ```
 
@@ -73,9 +73,12 @@ Sequence (`execute_file._delete`, called through `perform` -- so the
 3. The tree is listed via those fds, **without following symlinks** (a
    symlink is one entry `l name`; its target is never entered). Each entry's
    `(st_dev, st_ino, type)` is recorded.
-4. More than `max_entries` entries, any sub-directory (with `files_only`), or
-   any entry whose name is in `protected_resources` (e.g. a `.git` anywhere
-   under the target) aborts. Nothing is deleted, and the outcome is `failed`.
+4. More than `max_entries` entries, any sub-directory (with `files_only`), a
+   directory more than 64 levels below the target (`MAX_DELETE_DEPTH`; the
+   target is level 0 -- each level holds one fd and some stack while
+   listing and deleting), or any entry whose name is in `protected_resources`
+   (e.g. a `.git` anywhere under the target) aborts. So does a listing error
+   (I/O error, out of fds). Nothing is deleted, and the outcome is `failed`.
 5. Delete exactly the listed entries, bottom-up, with `unlink`/`rmdir` on
    the dir fds. First the root -> parent chain is re-walked and must still be
    the same directories. Each directory is re-opened `O_NOFOLLOW` and must
@@ -87,9 +90,13 @@ Sequence (`execute_file._delete`, called through `perform` -- so the
    by then (`(nothing)` if nothing was).
 6. Proof: the target's name must no longer exist in its parent's fd.
 
-Symlinks inside the tree are removed as links. Whatever happens to the path
-during the call, the held fds point at the directories that were checked, so
-a delete can never leave the tree under the root.
+Symlinks inside the tree are removed as links. The chain check in step 5
+cannot pin the path: right after it, the tree may still be renamed elsewhere,
+and there is a residual window between an entry's final check and its
+`unlink`. What holds throughout is that only listed entries whose
+`(st_dev, st_ino, type)` matched are removed, by name, through the fds held
+since the listing, never following a symlink -- the most a race can do is
+remove that name, never a target outside the tree.
 
 stdout on success:
 

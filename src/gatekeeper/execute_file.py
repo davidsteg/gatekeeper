@@ -20,6 +20,7 @@ before, unchanged.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import stat
@@ -125,6 +126,11 @@ def perform(
     if operation == "delete":
         if max_entries is None:
             raise ValueError("'max_entries' is required for delete")
+        if not 1 <= max_entries <= MAX_DELETE_ENTRIES:
+            raise ValueError(
+                f"'max_entries' must be between 1 and {MAX_DELETE_ENTRIES} "
+                f"(MAX_DELETE_ENTRIES), not {max_entries}"
+            )
         if not path_roots:
             raise ValueError("'path_roots' is required for delete")
         return _delete(
@@ -473,6 +479,19 @@ def _list(path: Path, max_output_bytes: int) -> _Op:
 _DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
 _NOFOLLOW_DIR_FLAGS = _DIR_FLAGS | getattr(os, "O_NOFOLLOW", 0)
 
+#: How many directory levels below the target a delete descends (the target
+#: is level 0, its sub-directories level 1). Each level holds one directory
+#: fd open while listing and while deleting, and costs ~2 Python stack
+#: frames: 64 keeps a call at <= 64 + path-component fds, far under a
+#: typical RLIMIT_NOFILE (1024/4096), and far under the interpreter's
+#: recursion limit (~1000) with headroom for the caller's frames. Real
+#: cleanup trees (caches, build and download dirs) are far shallower.
+MAX_DELETE_DEPTH = 64
+
+#: Same value as `catalog.MAX_DELETE_ENTRIES` (see there for why); repeated
+#: so the `run_as` child need not import the catalog. A test keeps them equal.
+MAX_DELETE_ENTRIES = 100_000
+
 
 class _DeleteAbort(Exception):
     """An anomaly during a delete: stop at once, report what was removed."""
@@ -491,6 +510,16 @@ class _Entry:
 
 def _ident(st: os.stat_result) -> tuple[int, int, int]:
     return (st.st_dev, st.st_ino, stat.S_IFMT(st.st_mode))
+
+
+def _open_into(fds: list[int], name: str, flags: int, dir_fd: int | None = None) -> None:
+    """Opens ``name`` and appends the fd to ``fds`` -- or closes it again."""
+    fd = os.open(name, flags, dir_fd=dir_fd)
+    try:
+        fds.append(fd)
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def _after_listing(path: str) -> None:
@@ -549,20 +578,24 @@ def _delete(
     deleted: list[str] = []
     try:
         try:
-            fds.append(os.open(root_real, _DIR_FLAGS))
+            _open_into(fds, root_real, _DIR_FLAGS)
             for name in rest[:-1]:
-                fds.append(os.open(name, _NOFOLLOW_DIR_FLAGS, dir_fd=fds[-1]))
+                _open_into(fds, name, _NOFOLLOW_DIR_FLAGS, dir_fd=fds[-1])
             top_st = os.stat(final, dir_fd=fds[-1], follow_symlinks=False)
+            chain = [_ident(os.fstat(fd)) for fd in fds]
         except FileNotFoundError:
             return (OUTCOME_FAILED, 1, "", f"Not found: {path}", False)
         except PermissionError:
             return (OUTCOME_FAILED, 1, "", f"Permission denied: {path}", False)
         except OSError as exc:
-            # ELOOP (O_NOFOLLOW hit a symlink) or ENOTDIR.
-            return refuse(f"the path contains a symlink or a non-directory ({exc.strerror}).")
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                # O_NOFOLLOW hit a symlink, or a component is not a directory.
+                return refuse(
+                    f"the path contains a symlink or a non-directory ({exc.strerror})."
+                )
+            return refuse(f"cannot open the path ({exc.strerror}).")
         if stat.S_ISLNK(top_st.st_mode):
             return refuse("the path is a symlink.")
-        chain = [_ident(os.fstat(fd)) for fd in fds]
         parent_fd = fds[-1]
 
         is_dir = stat.S_ISDIR(top_st.st_mode)
@@ -572,13 +605,17 @@ def _delete(
             if is_dir:
                 fd = _open_dir_checked(parent_fd, top)
                 try:
-                    _list_tree(fd, top, path, protected, files_only, max_entries, entries)
+                    _list_tree(fd, top, path, protected, files_only, max_entries, entries, 0)
                 finally:
                     os.close(fd)
         except _DeleteAbort as exc:
             return (OUTCOME_FAILED, 1, "", f"Aborted, nothing deleted: {exc}", False)
         except PermissionError as exc:
             return (OUTCOME_FAILED, 1, "", f"Permission denied: {exc}. Nothing was deleted.",
+                    False)
+        except (OSError, RecursionError, MemoryError) as exc:
+            return (OUTCOME_FAILED, 1, "",
+                    f"Aborted, nothing deleted: listing failed ({type(exc).__name__}: {exc})",
                     False)
         listing = _cap("\n".join(sorted(entries)), max_output_bytes)
 
@@ -592,7 +629,7 @@ def _delete(
                 _check_entry(parent_fd, top)
                 os.unlink(final, dir_fd=parent_fd)
                 deleted.append(path)
-        except (_DeleteAbort, OSError) as exc:
+        except (_DeleteAbort, OSError, RecursionError, MemoryError) as exc:
             done = "\n".join(deleted) if deleted else "(nothing)"
             if isinstance(exc, PermissionError):
                 msg = f"Permission denied: {exc}."
@@ -652,20 +689,26 @@ def _match_root(
 def _open_dir_checked(parent_fd: int, entry: _Entry) -> int:
     """Opens ``entry`` under ``parent_fd`` without following symlinks.
 
-    The opened directory must still be the one that was listed.
+    The opened directory must still be the one that was listed. The fd is
+    closed again on any exception, so a failed call never leaks one.
     """
+    where = entry.rel or entry.name
     try:
         fd = os.open(entry.name, _NOFOLLOW_DIR_FLAGS, dir_fd=parent_fd)
     except PermissionError:
         raise
     except OSError as exc:
-        raise _DeleteAbort(
-            f"cannot open directory {entry.rel or entry.name!r} without following "
-            f"symlinks ({exc.strerror})"
-        ) from exc
-    if _ident(os.fstat(fd)) != entry.ident:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise _DeleteAbort(
+                f"cannot open directory {where!r} without following symlinks ({exc.strerror})"
+            ) from exc
+        raise _DeleteAbort(f"cannot open directory {where!r} ({exc.strerror})") from exc
+    try:
+        if _ident(os.fstat(fd)) != entry.ident:
+            raise _DeleteAbort(f"directory {where!r} changed since it was listed")
+    except BaseException:
         os.close(fd)
-        raise _DeleteAbort(f"directory {entry.rel or entry.name!r} changed since it was listed")
+        raise
     return fd
 
 
@@ -677,8 +720,13 @@ def _list_tree(
     files_only: bool,
     max_entries: int,
     entries: list[str],
+    depth: int,
 ) -> None:
-    """Lists ``node``'s directory (open as ``dir_fd``), recursively, by fd."""
+    """Lists ``node``'s directory (open as ``dir_fd``), recursively, by fd.
+
+    ``depth`` is ``node``'s level below the target (the target is 0); a
+    sub-directory deeper than ``MAX_DELETE_DEPTH`` aborts before it is opened.
+    """
     for name in sorted(os.listdir(dir_fd)):
         rel = f"{node.rel}/{name}" if node.rel else name
         if name in protected:
@@ -700,9 +748,15 @@ def _list_tree(
                 f"{target} has more than {max_entries} entries (max_entries)."
             )
         if kind == "d":
+            if depth + 1 > MAX_DELETE_DEPTH:
+                raise _DeleteAbort(
+                    f"{target} is nested deeper than {MAX_DELETE_DEPTH} levels "
+                    "(MAX_DELETE_DEPTH)"
+                )
             fd = _open_dir_checked(dir_fd, child)
             try:
-                _list_tree(fd, child, target, protected, files_only, max_entries, entries)
+                _list_tree(fd, child, target, protected, files_only, max_entries, entries,
+                           depth + 1)
             finally:
                 os.close(fd)
 
@@ -720,17 +774,19 @@ def _check_entry(dir_fd: int, entry: _Entry) -> None:
 def _check_chain(root_real: str, comps: list[str], chain: list[tuple[int, int, int]]) -> None:
     """Re-walks root -> target's parent; every directory must be the listed one.
 
-    The fds held since the listing keep pointing at the original directories
-    whatever happens to the path, so the delete can never leave the tree --
-    this check makes a path that was changed under it fail loudly instead of
-    deleting a tree that is no longer at the requested path.
+    This makes a path that was changed under the delete fail loudly instead
+    of deleting a tree that is no longer at the requested path. It cannot
+    pin the path: right after this check the tree may still be renamed
+    elsewhere. What holds regardless is that only listed entries with a
+    matching ``(st_dev, st_ino, type)`` are removed, through the fds held
+    since the listing, never following a symlink.
     """
     fds: list[int] = []
     try:
         try:
-            fds.append(os.open(root_real, _DIR_FLAGS))
+            _open_into(fds, root_real, _DIR_FLAGS)
             for name in comps:
-                fds.append(os.open(name, _NOFOLLOW_DIR_FLAGS, dir_fd=fds[-1]))
+                _open_into(fds, name, _NOFOLLOW_DIR_FLAGS, dir_fd=fds[-1])
         except OSError as exc:
             raise _DeleteAbort(
                 f"the path changed since it was listed ({exc.strerror})"

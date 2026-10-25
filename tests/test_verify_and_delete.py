@@ -737,3 +737,184 @@ def test_delete_via_service_uses_pattern_and_bounds(tmp_path, tier1):
     with pytest.raises(Denied):
         asyncio.run(service.call(ident, "fs.rm_test_dir", {"path": str(root / "keep")}))
     assert (root / "keep" / "a").exists()
+
+
+# -- delete: resource bounds (depth, fds, max_entries cap) -------------------
+
+
+needs_proc_fd = pytest.mark.skipif(not os.path.isdir("/proc/self/fd"),
+                                   reason="fd counting needs /proc/self/fd")
+
+
+def _fd_count():
+    return len(os.listdir("/proc/self/fd"))
+
+
+def _nest(base, levels):
+    """Creates base/d/d/... ``levels`` deep via fds (the path exceeds PATH_MAX)."""
+    fd = os.open(base, os.O_RDONLY)
+    try:
+        for _ in range(levels):
+            os.mkdir("d", dir_fd=fd)
+            nxt = os.open("d", os.O_RDONLY, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    finally:
+        os.close(fd)
+
+
+def _depth(base):
+    """How many nested ``d`` levels exist under ``base``, walked via fds."""
+    n, fd = 0, os.open(base, os.O_RDONLY)
+    try:
+        while "d" in os.listdir(fd):
+            nxt = os.open("d", os.O_RDONLY, dir_fd=fd)
+            os.close(fd)
+            fd, n = nxt, n + 1
+    finally:
+        os.close(fd)
+    return n
+
+
+def _unnest(base):
+    """Removes a ``_nest`` chain, two fds at a time (no deep recursion)."""
+    fd = os.open(base, os.O_RDONLY)
+    try:
+        while "d" in os.listdir(fd):
+            os.rename("d", "top", src_dir_fd=fd, dst_dir_fd=fd)
+            top = os.open("top", os.O_RDONLY, dir_fd=fd)
+            try:
+                if "d" in os.listdir(top):
+                    os.rename("d", "d", src_dir_fd=top, dst_dir_fd=fd)
+            finally:
+                os.close(top)
+            os.rmdir("top", dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
+@needs_proc_fd
+def test_delete_deep_tree_aborts_before_recursing(tmp_path):
+    target = tmp_path / "deep-test"
+    os.mkdir(target)
+    _nest(target, 1100)
+    try:
+        before = _fd_count()
+        r = _del(target, tmp_path, max_entries=5000, files_only=False)
+        assert _fd_count() == before
+        assert r.outcome == OUTCOME_FAILED
+        assert "nothing deleted" in r.stderr and "MAX_DELETE_DEPTH" in r.stderr
+        assert _depth(target) == 1100
+    finally:
+        _unnest(target)
+
+
+@pytest.mark.parametrize(("levels", "ok"), [(64, True), (65, False)])
+def test_delete_depth_boundary(tmp_path, levels, ok):
+    target = tmp_path / "deep-test"
+    os.mkdir(target)
+    _nest(target, levels)
+    r = _del(target, tmp_path, max_entries=100, files_only=False)
+    if ok:
+        assert r.outcome == OUTCOME_OK, r.stderr
+        assert not target.exists()
+    else:
+        assert r.outcome == OUTCOME_FAILED
+        assert "nothing deleted" in r.stderr and "MAX_DELETE_DEPTH" in r.stderr
+        assert _depth(target) == levels
+
+
+@needs_proc_fd
+@pytest.mark.parametrize("exc", [OSError(5, "Input/output error"), RecursionError("deep")])
+def test_delete_fstat_failure_leaks_no_fd(tmp_path, monkeypatch, exc):
+    import gatekeeper.execute_file as ef
+
+    root = tmp_path / "root"
+    target = root / "abc-test"
+    _tree(target, files=["a", "s/b"], dirs=["s"])
+    real_fstat = os.fstat
+
+    def fstat(fd):
+        # Only the target's own directory fds fail -- not the root chain.
+        if os.readlink(f"/proc/self/fd/{fd}").endswith(("abc-test", "/s")):
+            raise exc
+        return real_fstat(fd)
+
+    before = _fd_count()
+    monkeypatch.setattr(ef.os, "fstat", fstat)
+    r = _del(target, root, max_entries=10, files_only=False)
+    monkeypatch.undo()
+    assert _fd_count() == before
+    assert r.outcome == OUTCOME_FAILED and "nothing deleted" in r.stderr, r.stderr
+    assert sorted(os.listdir(target)) == ["a", "s"] and (target / "s" / "b").exists()
+
+
+@needs_proc_fd
+def test_delete_recursion_error_keeps_deleted_list(tmp_path, monkeypatch):
+    import gatekeeper.execute_file as ef
+
+    target = tmp_path / "abc-test"
+    _tree(target, files=["a", "b", "c", "d"])
+    real_check = ef._check_entry
+    calls = []
+
+    def check(dir_fd, entry):
+        calls.append(entry.name)
+        if len(calls) == 3:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real_check(dir_fd, entry)
+
+    monkeypatch.setattr(ef, "_check_entry", check)
+    before = _fd_count()
+    r = _del(target, tmp_path, max_entries=10)
+    assert _fd_count() == before
+    assert r.outcome == OUTCOME_FAILED
+    assert "Delete error" in r.stderr and "Aborted after deleting 2 entries" in r.stderr
+    assert r.stdout.splitlines() == ["deleted before abort:", "a", "b"]
+    assert sorted(os.listdir(target)) == ["c", "d"]
+
+
+def test_delete_max_entries_cap(tier1, tmp_path):
+    from gatekeeper import catalog
+    from gatekeeper import execute_file as ef
+
+    assert ef.MAX_DELETE_ENTRIES == catalog.MAX_DELETE_ENTRIES == 100_000
+    root = tmp_path / "media"
+    for n in (1, 100_000):
+        tool = parse_tool_spec(_rm_spec(root, delete={"max_entries": n}), tier1)
+        assert tool.delete_max_entries == n
+    with pytest.raises(ConfigError, match="max_entries"):
+        parse_tool_spec(_rm_spec(root, delete={"max_entries": 0}), tier1)
+    with pytest.raises(ConfigError, match="maximum is 100000"):
+        parse_tool_spec(_rm_spec(root, delete={"max_entries": 100_001}), tier1)
+    _tree(tmp_path / "abc-test", files=["a"])
+    for n in (0, 100_001):
+        with pytest.raises(ValueError, match="MAX_DELETE_ENTRIES"):
+            ef.perform(operation="delete", path=str(tmp_path / "abc-test"),
+                       max_output_bytes=100, max_entries=n, path_roots=[str(tmp_path)])
+    assert (tmp_path / "abc-test" / "a").exists()
+
+
+def test_delete_emfile_is_not_reported_as_symlink(tmp_path, monkeypatch):
+    import errno
+
+    import gatekeeper.execute_file as ef
+
+    target = tmp_path / "abc-test"
+    _tree(target, files=["a", "sub/b"], dirs=["sub"])
+    real_open = os.open
+
+    def fake_open(name, flags, *args, dir_fd=None, **kw):
+        if name == "sub" and dir_fd is not None:
+            raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
+        return real_open(name, flags, *args, dir_fd=dir_fd, **kw)
+
+    # `_delete`'s platform check looks the function up in supports_dir_fd.
+    monkeypatch.setattr(ef.os, "supports_dir_fd", os.supports_dir_fd | {fake_open})
+    monkeypatch.setattr(ef.os, "open", fake_open)
+    r = _del(target, tmp_path, max_entries=10, files_only=False)
+    monkeypatch.undo()
+    assert r.outcome == OUTCOME_FAILED
+    assert "nothing deleted" in r.stderr and "Too many open files" in r.stderr
+    assert "symlink" not in r.stderr
+    assert (target / "sub" / "b").exists() and (target / "a").exists()
