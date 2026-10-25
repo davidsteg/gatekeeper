@@ -651,14 +651,18 @@ def _main() -> int:
     from .execute_file import perform, validate_path
 
     try:
-        path = validate_path(
-            str(request["path"]),
-            list(request.get("path_roots") or []),
-            list(request.get("protected") or []),
-        )
+        operation = str(request["operation"])
+        path_roots = list(request.get("path_roots") or [])
+        protected = list(request.get("protected") or [])
+        path = validate_path(str(request["path"]), path_roots, protected)
         outcome, exit_code, stdout, stderr, truncated = perform(
-            operation=str(request["operation"]),
-            path=path,
+            operation=operation,
+            # delete walks the path as sent, without following symlinks, and
+            # re-does its own root/protected/symlink checks -- the resolved
+            # form would hide a symlink in it (see `execute_file._delete`).
+            path=str(request["path"]) if operation == "delete" else path,
+            path_roots=path_roots,
+            protected=protected,
             content=request.get("content"),
             old_string=request.get("old_string"),
             new_string=request.get("new_string"),

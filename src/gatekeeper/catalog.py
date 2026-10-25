@@ -22,10 +22,12 @@ from .tier1 import Tier1, Toolkit, _validate_http_base_url
 #: Placeholders in argv, derived and scope templates.
 PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
-#: HTTP methods that may change state on the target. A `verify` block may
-#: use one only together with a fixed `body` (FR-1 of the verify request:
-#: verify reads, it never acts on agent input in a new shape).
-WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+#: HTTP methods a `verify` block may use without a fixed `body`. An
+#: allowlist, not a denylist of writes: any other method (POST, PUT, but also
+#: WebDAV's MOVE/COPY/MKCOL/PROPFIND, or whatever a server invents) may change
+#: state, so it is only allowed together with a fixed `body` (FR-1 of the
+#: verify request: verify reads, it never acts on agent input in a new shape).
+READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 #: Tool IDs follow `<toolkit>.<action>` (FR-5.1b).
 TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
@@ -1090,10 +1092,11 @@ def _parse_verify(value: Any, where: str) -> dict[str, Any]:
             "be a fixed template"
         )
     body = None if raw_body is None else _nested_body_map(raw_body, where, "verify.body")
-    if method in WRITE_METHODS and body is None:
+    if method not in READ_METHODS and body is None:
         raise ConfigError(
-            f"{where}: verify method {method!r} writes; it is only allowed "
-            "with a fixed 'verify.body'"
+            f"{where}: verify method {method!r} is not a read method "
+            f"({', '.join(sorted(READ_METHODS))}) and writes or may write; it is "
+            "only allowed with a fixed 'verify.body'"
         )
     require_body = value.get("require_body", False)
     if not isinstance(require_body, bool):

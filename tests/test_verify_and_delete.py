@@ -166,6 +166,29 @@ def test_verify_write_method_without_fixed_body_is_rejected(tier1, method):
         parse_tool_spec(spec, tier1)
 
 
+@pytest.mark.parametrize("method", ["MOVE", "COPY", "MKCOL", "PROPFIND", "PURGE"])
+def test_verify_non_read_method_without_body_is_rejected(tier1, method):
+    """Allowlist, not denylist: WebDAV and unknown methods may write too."""
+    spec = _index_spec(verify={"method": method, "path": "/api/v2/cruddb"})
+    with pytest.raises(ConfigError, match="not a read method"):
+        parse_tool_spec(spec, tier1)
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS", "head"])
+def test_verify_read_method_without_body_is_ok(tier1, method):
+    from gatekeeper.errors import Tier1Violation
+
+    spec = _index_spec(verify={"method": method, "path": "/api/v2/cruddb"})
+    try:
+        tool = parse_tool_spec(spec, tier1)
+    except Tier1Violation as exc:
+        # The fixture's toolkit only allows GET/POST; that is a separate
+        # (Tier 1) gate -- the point here is that it is not the ConfigError.
+        assert "verify method" in str(exc)
+    else:
+        assert tool.verify["method"] == method.upper()
+
+
 def test_verify_raw_param_body_is_rejected(tier1):
     spec = _index_spec(verify={"method": "POST", "path": "/api/v2/cruddb",
                                "body": {"raw_param": "path"}})
@@ -442,6 +465,261 @@ def test_delete_root_itself_is_refused(tmp_path):
     r = _del(tmp_path / "r", tmp_path / "r")
     assert r.outcome == OUTCOME_FAILED and "path root" in r.stderr
     assert (tmp_path / "r" / "a").exists()
+
+
+def test_delete_single_file(tmp_path):
+    _tree(tmp_path / "d", files=["one.x", "two.x"])
+    r = _del(tmp_path / "d" / "one.x", tmp_path)
+    assert r.outcome == OUTCOME_OK, r.stderr
+    assert "under file" in r.stdout and "path no longer exists" in r.stdout
+    assert sorted(os.listdir(tmp_path / "d")) == ["two.x"]
+
+
+def test_delete_under_symlinked_root_is_allowed(tmp_path):
+    """An admin-configured root may itself be a symlink (/mnt/x -> /real/x)."""
+    real = tmp_path / "real"
+    _tree(real / "abc-test", files=["a"])
+    os.symlink(real, tmp_path / "link")
+    r = _del(tmp_path / "link" / "abc-test", tmp_path / "link")
+    assert r.outcome == OUTCOME_OK, r.stderr
+    assert not (real / "abc-test").exists()
+
+
+# -- delete: races between listing and deleting -----------------------------
+
+
+def _count(base):
+    return sum(len(files) for _, _, files in os.walk(base))
+
+
+def _race(monkeypatch, fn):
+    """Runs ``fn`` once, between `_delete`'s listing and its first unlink."""
+    import gatekeeper.execute_file as ef
+
+    calls = []
+
+    def hook(path):
+        calls.append(path)
+        fn()
+
+    monkeypatch.setattr(ef, "_after_listing", hook)
+    return calls
+
+
+def test_race_parent_swapped_for_symlink_after_listing(tmp_path, monkeypatch):
+    """BLOCKER probe: root/p -> outside after the check must not reach outside."""
+    root = tmp_path / "root"
+    _tree(root / "p" / "abc-test", files=["a", "b"])
+    outside = tmp_path / "outside"
+    _tree(outside / "abc-test", files=[f"v{i}" for i in range(100)])
+
+    def swap():
+        os.rename(root / "p", root / "p-old")
+        os.symlink(outside, root / "p")
+
+    calls = _race(monkeypatch, swap)
+    r = _del(root / "p" / "abc-test", root, max_entries=10)
+    assert calls, "the race hook did not run"
+    assert r.outcome == OUTCOME_FAILED
+    assert "changed" in r.stderr and "nothing deleted" in r.stderr
+    assert _count(outside) == 100
+    assert sorted(os.listdir(root / "p-old" / "abc-test")) == ["a", "b"]
+
+
+def test_parent_symlink_before_call_is_refused(tmp_path):
+    root = tmp_path / "root"
+    _tree(root / "real" / "abc-test", files=["a"])
+    os.symlink(root / "real", root / "p")  # in scope once resolved
+    r = _del(root / "p" / "abc-test", root)
+    assert r.outcome == OUTCOME_FAILED and "symlink" in r.stderr
+    assert (root / "real" / "abc-test" / "a").exists()
+
+
+def test_race_files_added_after_listing_abort(tmp_path, monkeypatch):
+    """max_entries probe: 50 files added after the listing are not deleted."""
+    root = tmp_path / "root"
+    target = root / "abc-test"
+    _tree(target, files=[f"{i}.x" for i in range(5)])
+    outside = tmp_path / "outside"
+    _tree(outside, files=["keep"])
+
+    def add():
+        for i in range(50):
+            (target / f"extra{i}").write_text("x")
+
+    _race(monkeypatch, add)
+    r = _del(target, root, max_entries=10)
+    assert r.outcome == OUTCOME_FAILED
+    assert "no longer matches the listing" in r.stderr
+    assert "deleted before abort:" in r.stdout
+    assert len(os.listdir(target)) == 55  # nothing removed at all
+    assert (outside / "keep").exists()
+
+
+def test_race_files_added_to_later_subdir_reports_partial(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    target = root / "abc-test"
+    _tree(target, files=["a/1", "a/2", "z/1"], dirs=["a", "z"])
+
+    def add():
+        for i in range(50):
+            (target / "z" / f"extra{i}").write_text("x")
+
+    _race(monkeypatch, add)
+    r = _del(target, root, max_entries=10, files_only=False)
+    assert r.outcome == OUTCOME_FAILED
+    assert "Aborted after deleting 3 entries" in r.stderr
+    assert r.stdout.splitlines() == ["deleted before abort:", "a/1", "a/2", "a"]
+    assert len(os.listdir(target / "z")) == 51  # z/1 + every extra survive
+    assert not (target / "a").exists()
+
+
+def test_race_file_swapped_for_symlink_to_outside(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    target = root / "abc-test"
+    _tree(target, files=["a", "b"])
+    outside = tmp_path / "outside"
+    _tree(outside, files=["secret"])
+
+    def swap():
+        os.unlink(target / "b")
+        os.symlink(outside / "secret", target / "b")
+
+    _race(monkeypatch, swap)
+    r = _del(target, root)
+    assert r.outcome == OUTCOME_FAILED and "replaced" in r.stderr
+    assert (outside / "secret").read_text() == "x"
+    assert os.path.islink(target / "b")
+
+
+def test_race_dir_swapped_for_symlink_to_outside(tmp_path, monkeypatch):
+    import shutil
+
+    root = tmp_path / "root"
+    target = root / "abc-test"
+    _tree(target, files=["sub/x"], dirs=["sub"])
+    outside = tmp_path / "outside"
+    _tree(outside, files=[f"v{i}" for i in range(10)])
+
+    def swap():
+        shutil.rmtree(target / "sub")
+        os.symlink(outside, target / "sub")
+
+    _race(monkeypatch, swap)
+    r = _del(target, root, files_only=False)
+    assert r.outcome == OUTCOME_FAILED
+    assert _count(outside) == 10
+    assert os.path.islink(target / "sub")
+
+
+def test_protected_resource_inside_subtree_aborts(tmp_path):
+    """Probe: a protected name *below* the target is not deleted with it."""
+    root = tmp_path / "root"
+    target = root / "t1-test"
+    _tree(target, files=["a", ".git/x"], dirs=[".git"])
+    r = asyncio.run(file_run(operation="delete", path=str(target), path_roots=[str(root)],
+                             protected=[".git"], timeout_seconds=5, max_output_bytes=65536,
+                             max_entries=10, files_only=False))
+    assert r.outcome == OUTCOME_FAILED
+    assert "nothing deleted" in r.stderr and "protected" in r.stderr
+    assert sorted(os.listdir(target)) == [".git", "a"]
+    assert (target / ".git" / "x").exists()
+
+
+def test_dotdot_inside_root_is_refused(tmp_path):
+    root = tmp_path / "root"
+    _tree(root / "keep", files=["k"])
+    _tree(root / "t2-test", files=["a"])
+    r = _del(f"{root}/keep/../t2-test", root)
+    assert r.outcome == OUTCOME_FAILED and "'..'" in r.stderr
+    assert (root / "t2-test" / "a").exists() and (root / "keep" / "k").exists()
+
+
+# -- delete: run_as parity (the child calls `perform` directly) -------------
+
+
+def _perform(path, root, protected=("gatekeeper",), files_only=False):
+    from gatekeeper.execute_file import perform
+
+    return perform(operation="delete", path=str(path), max_output_bytes=65536,
+                   max_entries=10, files_only=files_only, path_roots=[str(root)],
+                   protected=list(protected))
+
+
+def test_perform_refuses_like_run(tmp_path):
+    root = tmp_path / "root"
+    _tree(root / "real" / "abc-test", files=["a"])
+    os.symlink(root / "real", root / "p")
+    os.symlink(root / "real" / "abc-test", root / "lnk-test")
+    _tree(root / "t1-test", files=["a", ".git/x"], dirs=[".git"])
+
+    cases = [
+        (root / "p" / "abc-test", "symlink"),  # symlinked parent
+        (root / "lnk-test", "symlink"),  # target is a symlink
+        (root, "path root"),
+        (f"{root}/real/../real/abc-test", "'..'"),
+        (f"{root}/./real/abc-test", "'.'"),
+        (tmp_path / "elsewhere", "outside the path roots"),
+    ]
+    for path, why in cases:
+        outcome, _code, _out, err, _t = _perform(path, root)
+        assert outcome == OUTCOME_FAILED and why in err, (path, err)
+    outcome, _code, _out, err, _t = _perform(root / "t1-test", root, protected=[".git"])
+    assert outcome == OUTCOME_FAILED and "protected" in err
+    assert (root / "real" / "abc-test" / "a").exists()
+    assert (root / "t1-test" / ".git" / "x").exists()
+
+
+def test_perform_delete_requires_path_roots(tmp_path):
+    from gatekeeper.execute_file import perform
+
+    _tree(tmp_path / "abc-test", files=["a"])
+    with pytest.raises(ValueError, match="path_roots"):
+        perform(operation="delete", path=str(tmp_path / "abc-test"),
+                max_output_bytes=100, max_entries=5)
+    assert (tmp_path / "abc-test" / "a").exists()
+
+
+def _runas_main(monkeypatch, capsys, request):
+    """Runs the child's `_main` in-process, privilege steps stubbed out."""
+    import io
+    import types
+
+    from gatekeeper import _runas
+
+    monkeypatch.setattr(_runas, "_set_no_new_privs", lambda: None)
+    monkeypatch.setattr(_runas, "resolve_run_as", lambda spec: (os.getuid(), os.getgid(), "me"))
+    monkeypatch.setattr(_runas, "become", lambda uid, gid, name: None)
+    stdin = types.SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))
+    monkeypatch.setattr("sys.stdin", stdin)
+    assert _runas._main() == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_runas_child_passes_raw_path_roots_and_protected(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "root"
+    _tree(root / "real" / "abc-test", files=["a"])
+    os.symlink(root / "real", root / "p")
+    _tree(root / "t1-test", files=["a", ".git/x"], dirs=[".git"])
+    _tree(root / "ok-test", files=["a"])
+    base = {"run_as": "me", "operation": "delete", "path_roots": [str(root)],
+            "max_output_bytes": 65536, "max_entries": 10, "files_only": False}
+
+    out = _runas_main(monkeypatch, capsys,
+                      {**base, "path": str(root / "p" / "abc-test"), "protected": []})
+    assert out["outcome"] == OUTCOME_FAILED and "symlink" in out["stderr"]
+    out = _runas_main(monkeypatch, capsys,
+                      {**base, "path": str(root / "t1-test"), "protected": [".git"]})
+    assert out["outcome"] == OUTCOME_FAILED and "protected" in out["stderr"]
+    out = _runas_main(monkeypatch, capsys, {**base, "path": str(root), "protected": []})
+    assert out["outcome"] == OUTCOME_FAILED and "path root" in out["stderr"]
+    assert (root / "real" / "abc-test" / "a").exists()
+    assert (root / "t1-test" / ".git" / "x").exists()
+
+    out = _runas_main(monkeypatch, capsys,
+                      {**base, "path": str(root / "ok-test"), "protected": []})
+    assert out["outcome"] == OUTCOME_OK, out["stderr"]
+    assert not (root / "ok-test").exists()
 
 
 def test_delete_via_service_uses_pattern_and_bounds(tmp_path, tier1):

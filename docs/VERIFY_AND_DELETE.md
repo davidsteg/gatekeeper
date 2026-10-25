@@ -19,8 +19,10 @@ verify:
 ```
 
 Load-time rules (`catalog._parse_verify`, `_validate_against_tier1`):
-- `POST`/`PUT`/`PATCH`/`DELETE` are only allowed **with a fixed `body`**
-  (a template written in the tool). Without one, the tool fails to load.
+- Only `GET`/`HEAD`/`OPTIONS` may be used without a body (an allowlist,
+  `catalog.READ_METHODS`). Any other method (`POST`, `PUT`, but also WebDAV's
+  `MOVE`/`COPY`/`MKCOL`/`PROPFIND`, ...) is only allowed **with a fixed
+  `body`** (a template written in the tool). Without one, the tool fails to load.
 - `body: {raw_param: ...}` is rejected in verify (no agent document as body).
 - Every `{placeholder}` must be a declared parameter of the tool (same typo
   guard as the main request), so it can only carry pattern-validated values.
@@ -56,18 +58,38 @@ delete:
   files_only: true   # optional, default false
 ```
 
-Sequence (`execute_file._delete`):
+Sequence (`execute_file._delete`, called through `perform` -- so the
+`run_as` child runs exactly the same checks, not only the parent):
 1. Path checks as for every file tool: absolute, `path_roots`,
-   `protected_resources`, and the parameter `pattern`. In addition: the path
-   must not contain a symlink anywhere (abspath == realpath), and it must not
-   be a path root itself.
-2. The tree is listed **without following symlinks** (a symlink is one entry
-   `l name`; its target is never entered).
-3. More than `max_entries` entries, or (with `files_only`) any
-   sub-directory, aborts. Nothing is deleted, and the outcome is `failed`.
-4. Delete (`rmtree` for a directory, `unlink` for a file; symlinks inside the
-   tree are removed as links).
-5. Proof: `os.path.lexists(path)` must be false afterwards.
+   `protected_resources`, and the parameter `pattern` (`validate_path`, on the
+   resolved path). Then `_delete` works on the path **as sent**, not resolved:
+   any `.` or `..` segment is refused; the path must lie literally under a
+   path root (matched by the root's abspath or realpath -- a root may itself be
+   a symlink by admin config) and must not be a root itself; no segment may be
+   a protected name.
+2. No path strings from here on. The root is opened via its realpath, then
+   every component below it is opened `O_NOFOLLOW` relative to its parent's
+   fd. A symlink in any component, the target included, is refused.
+3. The tree is listed via those fds, **without following symlinks** (a
+   symlink is one entry `l name`; its target is never entered). Each entry's
+   `(st_dev, st_ino, type)` is recorded.
+4. More than `max_entries` entries, any sub-directory (with `files_only`), or
+   any entry whose name is in `protected_resources` (e.g. a `.git` anywhere
+   under the target) aborts. Nothing is deleted, and the outcome is `failed`.
+5. Delete exactly the listed entries, bottom-up, with `unlink`/`rmdir` on
+   the dir fds. First the root -> parent chain is re-walked and must still be
+   the same directories. Each directory is re-opened `O_NOFOLLOW` and must
+   still be the listed inode with exactly the listed names; each entry is
+   `fstatat`-checked right before it is unlinked. The first extra, missing or
+   replaced entry (or an `rmdir` that fails because the directory gained an
+   entry) stops the delete: the outcome is `failed`, stderr says why, and
+   stdout begins with `deleted before abort:`, followed by what was removed
+   by then (`(nothing)` if nothing was).
+6. Proof: the target's name must no longer exist in its parent's fd.
+
+Symlinks inside the tree are removed as links. Whatever happens to the path
+during the call, the held fds point at the directories that were checked, so
+a delete can never leave the tree under the root.
 
 stdout on success:
 

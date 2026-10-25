@@ -22,10 +22,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import stat
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .execute import OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN, Result
@@ -87,13 +87,15 @@ def validate_path(
 def perform(
     *,
     operation: str,
-    path: Path,
+    path: Path | str,
     content: str | None = None,
     old_string: str | None = None,
     new_string: str | None = None,
     max_output_bytes: int,
     max_entries: int | None = None,
     files_only: bool = False,
+    path_roots: list[str] | None = None,
+    protected: list[str] | None = None,
 ) -> _Op:
     """Dispatches to the one operation, on an already-validated path.
 
@@ -101,6 +103,12 @@ def perform(
     execute literally the same code: there is one implementation of read,
     write, patch and list, not a privileged copy that could drift from the
     unprivileged one.
+
+    ``delete`` is the exception to "already-validated": it takes the
+    *original* path string, not ``validate_path``'s resolved one (resolving
+    would silently turn a symlink in the path into its target), plus
+    ``path_roots`` and ``protected``, and does its own authoritative checks
+    -- so the ``run_as`` child gets them too, not just the parent.
     """
     if operation == "read":
         return _read(path, max_output_bytes)
@@ -117,7 +125,12 @@ def perform(
     if operation == "delete":
         if max_entries is None:
             raise ValueError("'max_entries' is required for delete")
-        return _delete(path, max_entries, files_only, max_output_bytes)
+        if not path_roots:
+            raise ValueError("'path_roots' is required for delete")
+        return _delete(
+            str(path), list(path_roots), list(protected or []),
+            max_entries, files_only, max_output_bytes,
+        )
     raise ValueError(f"Unknown file operation: {operation!r}")
 
 
@@ -153,26 +166,12 @@ async def run(
             duration_ms=duration,
         )
 
-    if operation == "delete":
-        # `validate_path` resolves symlinks before its scope check -- right
-        # for reading, wrong for deleting: a symlink in the path would make
-        # the delete act on its target. Only a path that is already its own
-        # resolved form (no symlink anywhere in it) may be deleted, and
-        # never a configured root itself.
-        problem = None
-        if os.path.abspath(path) != str(validated):
-            problem = f"Refusing to delete {path!r}: the path contains a symlink."
-        elif any(str(validated) == os.path.realpath(r) for r in path_roots):
-            problem = f"Refusing to delete {path!r}: it is a configured path root."
-        if problem:
-            return Result(
-                outcome=OUTCOME_FAILED,
-                exit_code=1,
-                stdout="",
-                stderr=problem + " Nothing was deleted.",
-                truncated=False,
-                duration_ms=int((time.monotonic() - started) * 1000),
-            )
+    # `validate_path` resolves symlinks before its scope check -- right for
+    # reading, wrong for deleting: a symlink in the path would make the
+    # delete act on its target. So delete gets the path as the agent sent it,
+    # and `_delete` (in this process or in the run_as child) walks it itself
+    # without following symlinks.
+    target: Path | str = path if operation == "delete" else validated
 
     if run_as is not None:
         # Path already checked above against this toolkit's Tier 1 roots --
@@ -180,7 +179,7 @@ async def run(
         return await _run_as_user(
             run_as=run_as,
             operation=operation,
-            path=str(validated),
+            path=str(target),
             content=content,
             old_string=old_string,
             new_string=new_string,
@@ -197,13 +196,15 @@ async def run(
     try:
         result = perform(
             operation=operation,
-            path=validated,
+            path=target,
             content=content,
             old_string=old_string,
             new_string=new_string,
             max_output_bytes=max_output_bytes,
             max_entries=max_entries,
             files_only=files_only,
+            path_roots=path_roots,
+            protected=protected,
         )
     except Exception as exc:
         duration = int((time.monotonic() - started) * 1000)
@@ -464,80 +465,315 @@ def _list(path: Path, max_output_bytes: int) -> _Op:
     return (OUTCOME_OK, 0, text, "", truncated)
 
 
-def _delete(path: Path, max_entries: int, files_only: bool, max_output_bytes: int) -> _Op:
-    """Lists the tree under ``path``, then deletes it -- or nothing.
+#: Flags for walking a delete target. Every component below the root is
+#: opened ``O_NOFOLLOW`` relative to its parent's fd, so a symlink anywhere
+#: in the path -- present before the call or swapped in during it -- fails
+#: the open instead of being followed. ``getattr``: neither flag exists on
+#: Windows, where ``dir_fd`` is unsupported anyway (see ``_delete``).
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+_NOFOLLOW_DIR_FLAGS = _DIR_FLAGS | getattr(os, "O_NOFOLLOW", 0)
 
-    The listing comes first and decides: more than ``max_entries`` entries,
-    or (with ``files_only``) any sub-directory, aborts before a single
-    entry is removed. Symlinks are never followed: they are listed and
-    counted as entries (``l``), and removing one removes the link only.
-    The response carries the listing and then the proof -- the path no
-    longer exists (``lexists``), checked after the delete, not assumed.
+
+class _DeleteAbort(Exception):
+    """An anomaly during a delete: stop at once, report what was removed."""
+
+
+@dataclass
+class _Entry:
+    """One listed entry, with the identity it must still have when deleted."""
+
+    name: str
+    rel: str
+    kind: str  # "f" | "d" | "l"
+    ident: tuple[int, int, int]  # (st_dev, st_ino, file type)
+    children: list[_Entry] = field(default_factory=list)
+
+
+def _ident(st: os.stat_result) -> tuple[int, int, int]:
+    return (st.st_dev, st.st_ino, stat.S_IFMT(st.st_mode))
+
+
+def _after_listing(path: str) -> None:
+    """No-op seam between listing and deleting; tests patch it to race."""
+
+
+def _delete(
+    path: str,
+    path_roots: list[str],
+    protected: list[str],
+    max_entries: int,
+    files_only: bool,
+    max_output_bytes: int,
+) -> _Op:
+    """Lists the tree under ``path``, then deletes exactly that -- or aborts.
+
+    ``path`` is the caller's original string, not a resolved one. Nothing
+    here touches the filesystem by path string: the matching path root is
+    opened (via its realpath -- a root may be a symlink by admin config),
+    every component below it is opened ``O_NOFOLLOW`` relative to its
+    parent's fd, and listing and deleting work on those fds only. A symlink
+    in any component, including the target itself, is refused.
+
+    The listing decides: more than ``max_entries`` entries, any
+    sub-directory (``files_only``), or any entry named in ``protected``
+    aborts before a single entry is removed. The delete then removes the
+    listed entries -- and only those -- bottom-up, re-checking each one's
+    ``(st_dev, st_ino, type)`` right before it goes; an extra, missing or
+    changed entry stops it at the first anomaly, and the report says what
+    was removed by then. Symlinks inside the tree are listed (``l``) and
+    removed as links, never followed. The proof comes last: the target's
+    name no longer exists in its parent, checked, not assumed.
+    """
+    def refuse(why: str) -> _Op:
+        return (OUTCOME_FAILED, 1, "", f"Refusing to delete {path!r}: {why} Nothing was deleted.",
+                False)
+
+    if not {os.open, os.stat, os.unlink, os.rmdir} <= os.supports_dir_fd:
+        return refuse("this platform cannot delete without following symlinks.")
+    if not path.startswith("/"):
+        return refuse("the path must be absolute.")
+    comps = [c for c in path.split("/") if c]
+    if any(c in (".", "..") for c in comps):
+        return refuse("the path contains a '.' or '..' segment.")
+    for prot in protected:
+        if prot in comps:
+            return refuse(f"it touches the protected resource {prot!r}.")
+
+    root_real, rest, problem = _match_root(comps, path_roots)
+    if problem:
+        return refuse(problem)
+    final = rest[-1]
+
+    # Open root + every directory down to the target's parent, no symlinks.
+    fds: list[int] = []
+    deleted: list[str] = []
+    try:
+        try:
+            fds.append(os.open(root_real, _DIR_FLAGS))
+            for name in rest[:-1]:
+                fds.append(os.open(name, _NOFOLLOW_DIR_FLAGS, dir_fd=fds[-1]))
+            top_st = os.stat(final, dir_fd=fds[-1], follow_symlinks=False)
+        except FileNotFoundError:
+            return (OUTCOME_FAILED, 1, "", f"Not found: {path}", False)
+        except PermissionError:
+            return (OUTCOME_FAILED, 1, "", f"Permission denied: {path}", False)
+        except OSError as exc:
+            # ELOOP (O_NOFOLLOW hit a symlink) or ENOTDIR.
+            return refuse(f"the path contains a symlink or a non-directory ({exc.strerror}).")
+        if stat.S_ISLNK(top_st.st_mode):
+            return refuse("the path is a symlink.")
+        chain = [_ident(os.fstat(fd)) for fd in fds]
+        parent_fd = fds[-1]
+
+        is_dir = stat.S_ISDIR(top_st.st_mode)
+        top = _Entry(final, "", "d" if is_dir else "f", _ident(top_st))
+        entries: list[str] = []
+        try:
+            if is_dir:
+                fd = _open_dir_checked(parent_fd, top)
+                try:
+                    _list_tree(fd, top, path, protected, files_only, max_entries, entries)
+                finally:
+                    os.close(fd)
+        except _DeleteAbort as exc:
+            return (OUTCOME_FAILED, 1, "", f"Aborted, nothing deleted: {exc}", False)
+        except PermissionError as exc:
+            return (OUTCOME_FAILED, 1, "", f"Permission denied: {exc}. Nothing was deleted.",
+                    False)
+        listing = _cap("\n".join(sorted(entries)), max_output_bytes)
+
+        _after_listing(path)
+
+        try:
+            _check_chain(root_real, rest[:-1], chain)
+            if is_dir:
+                _delete_dir(parent_fd, top, path, deleted)
+            else:
+                _check_entry(parent_fd, top)
+                os.unlink(final, dir_fd=parent_fd)
+                deleted.append(path)
+        except (_DeleteAbort, OSError) as exc:
+            done = "\n".join(deleted) if deleted else "(nothing)"
+            if isinstance(exc, PermissionError):
+                msg = f"Permission denied: {exc}."
+            else:
+                msg = f"{exc}." if isinstance(exc, _DeleteAbort) else f"Delete error: {exc}."
+            if deleted:
+                msg += f" Aborted after deleting {len(deleted)} entries (see stdout)."
+            else:
+                msg = f"Aborted, nothing deleted: {msg}"
+            return (OUTCOME_FAILED, 1, _cap(f"deleted before abort:\n{done}", max_output_bytes),
+                    msg, False)
+
+        kind = "directory" if is_dir else "file"
+        header = f"listed {len(entries)} entries under {kind} {path}:"
+        try:
+            os.stat(final, dir_fd=parent_fd, follow_symlinks=False)
+            still_there = True
+        except FileNotFoundError:
+            still_there = False
+        if still_there:
+            return (
+                OUTCOME_FAILED, 1, f"{header}\n{listing}",
+                f"Delete reported success but {path} still exists.", False,
+            )
+        return (
+            OUTCOME_OK, 0,
+            f"{header}\n{listing}\nremoved: {path} (path no longer exists)".replace(":\n\n", ":\n"),
+            "", False,
+        )
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def _match_root(
+    comps: list[str], path_roots: list[str]
+) -> tuple[str, list[str], str | None]:
+    """Picks the path root ``comps`` lies under, literally (no resolving).
+
+    A root matches by its abspath or its realpath, compared by components.
+    Returns ``(root realpath, components below it, problem)``.
+    """
+    best: tuple[str, list[str]] | None = None
+    for root in path_roots:
+        real = os.path.realpath(root)
+        for cand in (os.path.abspath(root), real):
+            rc = [c for c in cand.split("/") if c]
+            if comps == rc:
+                return ("", [], "it is a configured path root.")
+            if comps[: len(rc)] == rc and (best is None or len(rc) > len(best[1])):
+                best = (real, rc)
+    if best is None:
+        return ("", [], "the path contains a symlink or is outside the path roots.")
+    return (best[0], comps[len(best[1]):], None)
+
+
+def _open_dir_checked(parent_fd: int, entry: _Entry) -> int:
+    """Opens ``entry`` under ``parent_fd`` without following symlinks.
+
+    The opened directory must still be the one that was listed.
     """
     try:
-        top = os.lstat(path)
-    except FileNotFoundError:
-        return (OUTCOME_FAILED, 1, "", f"Not found: {path}", False)
+        fd = os.open(entry.name, _NOFOLLOW_DIR_FLAGS, dir_fd=parent_fd)
     except PermissionError:
-        return (OUTCOME_FAILED, 1, "", f"Permission denied: {path}", False)
-
-    entries: list[str] = []
-    is_dir = stat.S_ISDIR(top.st_mode)
-    if is_dir:
-        stack = [path]
-        while stack:
-            current = stack.pop()
-            try:
-                with os.scandir(current) as it:
-                    children = sorted(it, key=lambda e: e.name)
-            except PermissionError:
-                return (OUTCOME_FAILED, 1, "", f"Permission denied: {current}", False)
-            for child in children:
-                rel = os.path.relpath(child.path, path)
-                if child.is_symlink():
-                    entries.append("l " + rel)
-                elif child.is_dir(follow_symlinks=False):
-                    if files_only:
-                        return (
-                            OUTCOME_FAILED, 1, "",
-                            f"Aborted, nothing deleted: {path} contains the "
-                            f"sub-directory {rel!r} (files_only).",
-                            False,
-                        )
-                    entries.append("d " + rel)
-                    stack.append(child.path)
-                else:
-                    entries.append("f " + rel)
-                if len(entries) > max_entries:
-                    return (
-                        OUTCOME_FAILED, 1, "",
-                        f"Aborted, nothing deleted: {path} has more than "
-                        f"{max_entries} entries (max_entries).",
-                        False,
-                    )
-    listing = "\n".join(sorted(entries))
-    if len(listing) > max_output_bytes:
-        listing = listing[:max_output_bytes] + "\n... [truncated]"
-
-    try:
-        if is_dir:
-            shutil.rmtree(path)
-        else:
-            os.unlink(path)
-    except PermissionError as exc:
-        return (OUTCOME_FAILED, 1, listing, f"Permission denied: {exc}", False)
+        raise
     except OSError as exc:
-        return (OUTCOME_FAILED, 1, listing, f"Delete error: {exc}", False)
+        raise _DeleteAbort(
+            f"cannot open directory {entry.rel or entry.name!r} without following "
+            f"symlinks ({exc.strerror})"
+        ) from exc
+    if _ident(os.fstat(fd)) != entry.ident:
+        os.close(fd)
+        raise _DeleteAbort(f"directory {entry.rel or entry.name!r} changed since it was listed")
+    return fd
 
-    kind = "directory" if is_dir else "file"
-    header = f"listed {len(entries)} entries under {kind} {path}:"
-    if os.path.lexists(path):
-        return (
-            OUTCOME_FAILED, 1, f"{header}\n{listing}",
-            f"Delete reported success but {path} still exists.", False,
-        )
-    return (
-        OUTCOME_OK, 0,
-        f"{header}\n{listing}\nremoved: {path} (path no longer exists)".replace(":\n\n", ":\n"),
-        "", False,
-    )
+
+def _list_tree(
+    dir_fd: int,
+    node: _Entry,
+    target: str,
+    protected: list[str],
+    files_only: bool,
+    max_entries: int,
+    entries: list[str],
+) -> None:
+    """Lists ``node``'s directory (open as ``dir_fd``), recursively, by fd."""
+    for name in sorted(os.listdir(dir_fd)):
+        rel = f"{node.rel}/{name}" if node.rel else name
+        if name in protected:
+            raise _DeleteAbort(f"{target} contains the protected resource {rel!r}")
+        st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        if stat.S_ISLNK(st.st_mode):
+            kind = "l"
+        elif stat.S_ISDIR(st.st_mode):
+            if files_only:
+                raise _DeleteAbort(f"{target} contains the sub-directory {rel!r} (files_only).")
+            kind = "d"
+        else:
+            kind = "f"
+        child = _Entry(name, rel, kind, _ident(st))
+        node.children.append(child)
+        entries.append(f"{kind} {rel}")
+        if len(entries) > max_entries:
+            raise _DeleteAbort(
+                f"{target} has more than {max_entries} entries (max_entries)."
+            )
+        if kind == "d":
+            fd = _open_dir_checked(dir_fd, child)
+            try:
+                _list_tree(fd, child, target, protected, files_only, max_entries, entries)
+            finally:
+                os.close(fd)
+
+
+def _check_entry(dir_fd: int, entry: _Entry) -> None:
+    """``entry`` must still exist under ``dir_fd`` with its listed identity."""
+    try:
+        st = os.stat(entry.name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise _DeleteAbort(f"{entry.rel or entry.name!r} vanished since it was listed") from exc
+    if _ident(st) != entry.ident:
+        raise _DeleteAbort(f"{entry.rel or entry.name!r} was replaced since it was listed")
+
+
+def _check_chain(root_real: str, comps: list[str], chain: list[tuple[int, int, int]]) -> None:
+    """Re-walks root -> target's parent; every directory must be the listed one.
+
+    The fds held since the listing keep pointing at the original directories
+    whatever happens to the path, so the delete can never leave the tree --
+    this check makes a path that was changed under it fail loudly instead of
+    deleting a tree that is no longer at the requested path.
+    """
+    fds: list[int] = []
+    try:
+        try:
+            fds.append(os.open(root_real, _DIR_FLAGS))
+            for name in comps:
+                fds.append(os.open(name, _NOFOLLOW_DIR_FLAGS, dir_fd=fds[-1]))
+        except OSError as exc:
+            raise _DeleteAbort(
+                f"the path changed since it was listed ({exc.strerror})"
+            ) from exc
+        if [_ident(os.fstat(fd)) for fd in fds] != chain:
+            raise _DeleteAbort("the path changed since it was listed")
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def _delete_dir(parent_fd: int, node: _Entry, target: str, deleted: list[str]) -> None:
+    """Removes exactly ``node``'s listed entries, bottom-up, then ``node``."""
+    fd = _open_dir_checked(parent_fd, node)
+    try:
+        expected = {child.name for child in node.children}
+        current = set(os.listdir(fd))
+        if current != expected:
+            extra = sorted(current - expected)
+            missing = sorted(expected - current)
+            where = node.rel or target
+            raise _DeleteAbort(
+                f"{where!r} no longer matches the listing (unexpected: {extra[:5]}, "
+                f"missing: {missing[:5]})"
+            )
+        for child in node.children:
+            if child.kind == "d":
+                _delete_dir(fd, child, target, deleted)
+            else:
+                _check_entry(fd, child)
+                os.unlink(child.name, dir_fd=fd)
+                deleted.append(child.rel)
+    finally:
+        os.close(fd)
+    _check_entry(parent_fd, node)
+    # A directory that gained an entry since the check fails here (ENOTEMPTY).
+    os.rmdir(node.name, dir_fd=parent_fd)
+    deleted.append(node.rel or target)
+
+
+def _cap(text: str, max_output_bytes: int) -> str:
+    """Caps ``text`` at ``max_output_bytes`` UTF-8 bytes."""
+    data = text.encode("utf-8")
+    if len(data) <= max_output_bytes:
+        return text
+    return data[:max_output_bytes].decode("utf-8", errors="ignore") + "\n... [truncated]"
