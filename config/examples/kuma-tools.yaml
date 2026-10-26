@@ -1,0 +1,100 @@
+# Example tool definitions for the 1.29.0 kuma features: port monitors,
+# retries, toolkit notifications and `fixed:` values. Documentation and a
+# test fixture (rust/src/execute/kuma_tests.rs) -- NOT loaded by default.
+#
+# They expect a kuma toolkit named `uptimekuma` in toolkits.yaml, e.g.:
+#
+#   uptimekuma:
+#     executor: kuma
+#     base_url: "http://kuma.lan:3001"
+#     allowed_cidrs: [10.10.200.91/32]
+#     allowed_kuma_operations: [monitor_list, monitor_add_http, monitor_add_port]
+#     # Every monitor gatekeeper adds is attached to exactly these Kuma
+#     # notifications (Tier 1: changed only by an approved toolkit change).
+#     # An ID Kuma does not know aborts the add before anything is written.
+#     kuma_notification_ids: [1, 4]
+#     # Where a port monitor may point: CIDRs for IPv4 targets, exact
+#     # hostnames otherwise (never resolved by gatekeeper). Required when
+#     # monitor_add_port is allowed.
+#     allowed_monitor_targets: [10.10.200.0/24, nas.lan]
+#     credential: kuma
+#     max_timeout_seconds: 30
+#
+# `fixed:` pins interval/maxretries/retry_interval: the caller does not
+# send them (they are not parameters), and the catalog checks them against
+# the executor bounds (interval 30-3600, maxretries 0-10, retry_interval
+# 20-3600). A key both in `fixed` and `parameters` is a load error.
+
+tools:
+  - id: uptimekuma.monitor_add
+    toolkit: uptimekuma
+    version: 1
+    title: Add an HTTP monitor
+    description: >-
+      Adds an HTTP(s) GET monitor to Uptime Kuma, checked every 60 s with 3
+      retries, alerting the toolkit's notifications. Returns monitor_id and
+      active. Check the monitor list first: the same name can exist twice.
+    category: write
+    idempotent: false
+    enabled: false
+    kuma_operation: monitor_add_http
+    fixed:
+      interval: 60
+      maxretries: 3
+      retry_interval: 60
+    parameters:
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,79}$"
+        description: Display name in Kuma.
+      url:
+        type: string
+        required: true
+        pattern: "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/-]*)?$"
+        description: The URL to check, http or https, no user, password or query.
+      expected_status:
+        type: enum
+        required: false
+        values: ["200-299", "300-399", "401", "403"]
+        description: Status code or range that counts as up. Default 200-299.
+    required_scopes: []
+    timeout_seconds: 20
+    max_output_bytes: 4096
+
+  - id: uptimekuma.monitor_add_port
+    toolkit: uptimekuma
+    version: 1
+    title: Add a TCP port monitor
+    description: >-
+      Adds a TCP port monitor to Uptime Kuma for a host in the toolkit's
+      allowed_monitor_targets, checked every 60 s with 3 retries, alerting
+      the toolkit's notifications. Returns monitor_id and active.
+    category: write
+    idempotent: false
+    enabled: false
+    kuma_operation: monitor_add_port
+    fixed:
+      interval: 60
+      maxretries: 3
+      retry_interval: 60
+    parameters:
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,59}$"
+        description: Display name in Kuma, 1-60 characters.
+      hostname:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$"
+        description: Hostname or IPv4 address, no scheme, port or path.
+      port:
+        type: integer
+        required: true
+        minimum: 1
+        maximum: 65535
+        description: TCP port, 1-65535.
+    required_scopes: []
+    timeout_seconds: 20
+    max_output_bytes: 4096

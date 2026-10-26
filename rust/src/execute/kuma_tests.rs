@@ -27,6 +27,8 @@ struct FakeKuma {
     stall: Option<String>,
     received: Vec<(String, Vec<Value>)>,
     monitors: BTreeMap<i64, Value>,
+    /// The `notificationList` pushed after login; `None` sends none.
+    notifications: Option<Value>,
 }
 
 impl FakeKuma {
@@ -49,7 +51,19 @@ impl FakeKuma {
                 "url": "https://blog.example.org/", "description": "Managed by gatekeeper (toolkit kuma)",
             }),
         );
-        FakeKuma { version: "1.23.16".into(), two_factor: false, stall: None, received: Vec::new(), monitors }
+        // Kuma pushes whole notification rows; `config` holds the secrets.
+        let notifications = Some(json!([
+            {"id": 1, "name": "Telegram", "active": 1, "config": format!("{{\"telegramBotToken\":\"{FOREIGN_SECRET}\"}}")},
+            {"id": 4, "name": "Mail", "active": 1, "config": "{}"},
+        ]));
+        FakeKuma {
+            version: "1.23.16".into(),
+            two_factor: false,
+            stall: None,
+            received: Vec::new(),
+            monitors,
+            notifications,
+        }
     }
 }
 
@@ -129,6 +143,10 @@ async fn handler(stream: tokio::net::TcpStream, state: Shared) {
                     state.lock().monitors.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
                 let _ = ws.send(send(format!("42{}", json!(["monitorList", monitors])))).await;
                 let _ = ws.send(send(format!("42{}", json!(["info", {"version": version}])))).await;
+                let notifications = state.lock().notifications.clone();
+                if let Some(list) = notifications {
+                    let _ = ws.send(send(format!("42{}", json!(["notificationList", list])))).await;
+                }
             }
             continue;
         } else if !logged_in {
@@ -177,13 +195,14 @@ async fn kuma() -> Kuma {
     Kuma { port, state }
 }
 
-const ALL_OPS: [&str; 4] = ["monitor_list", "monitor_add_http", "monitor_pause", "monitor_resume"];
+const ALL_OPS: [&str; 5] = ["monitor_list", "monitor_add_http", "monitor_add_port", "monitor_pause", "monitor_resume"];
 
 fn try_tier1(dir: &std::path::Path, port: u16, overrides: Value) -> ConfigResult<Tier1> {
     let mut spec = json!({
         "executor": "kuma", "base_url": format!("http://127.0.0.1:{port}"),
         "allowed_cidrs": ["127.0.0.1/32"], "credential": "kuma",
         "allowed_kuma_operations": ALL_OPS, "max_timeout_seconds": 30,
+        "allowed_monitor_targets": ["10.10.200.0/24", "nas.lan"],
     });
     for (k, v) in overrides.as_object().unwrap() {
         spec[k] = v.clone();
@@ -265,6 +284,7 @@ async fn add_http_sends_a_fixed_http_monitor() {
     assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
     let out: Value = serde_json::from_str(&result.stdout).unwrap();
     assert_eq!(out["monitor_id"], 3);
+    assert_eq!(out["active"], true);
     let sent = k.received_args("add");
     assert_eq!(sent.len(), 1);
     let sent = sent[0].as_object().unwrap();
@@ -547,7 +567,8 @@ fn socket_url_and_major_version() {
     assert_eq!(major_version(Some(&[json!({"version": "1.23.16"})])), 1);
     assert_eq!(major_version(Some(&[json!({"primaryBaseURL": null})])), 1);
     assert_eq!(major_version(None), 1);
-    assert_eq!(http_monitor("n", "u", 30, "200", "tk", 1)["timeout"], 24);
+    let settings = MonitorSettings { interval: 30, maxretries: 0, retry_interval: 30, notification_ids: vec![] };
+    assert_eq!(http_monitor("n", "u", "200", &settings, "tk", 1)["timeout"], 24);
 }
 
 #[tokio::test]
@@ -616,7 +637,7 @@ fn tier1_refuses_an_incomplete_kuma_toolkit() {
     assert_eq!(
         err.message,
         "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', \
-         'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['monitor_delete'])"
+         'monitor_add_port', 'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['monitor_delete'])"
     );
     let err = try_tier1(e.dir.path(), 3001, json!({"credential": ""})).unwrap_err();
     assert_eq!(
@@ -750,7 +771,7 @@ fn catalog_messages_match_python() {
     assert_eq!(
         parse(json!({"kuma_operation": "monitor_delete"})),
         "tool 'kuma.monitor_add_http': kuma_operation 'monitor_delete' is unknown (known: ['monitor_add_http', \
-         'monitor_list', 'monitor_pause', 'monitor_resume'])"
+         'monitor_add_port', 'monitor_list', 'monitor_pause', 'monitor_resume'])"
     );
     assert_eq!(parse(json!({"kuma_operation": null})), "tool 'kuma.monitor_add_http': field 'kuma_operation' is missing");
     let mut spec = tools()[2].clone();
@@ -868,4 +889,326 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         }
     }
     out
+}
+
+// -- 1.29.0: port monitors, retries, toolkit notifications --------------------
+
+const NOTIFY: &str = r#"{"kuma_notification_ids": [1, 4]}"#;
+
+fn notify_overrides() -> Value {
+    serde_json::from_str(NOTIFY).unwrap()
+}
+
+/// The acceptance case of the feature: both add operations, with the
+/// values a tool's `fixed:` supplies (60/3/60) and the toolkit's
+/// notifications 1 and 4, answer with monitor_id and active.
+#[tokio::test]
+async fn both_adds_carry_retries_and_exactly_the_toolkit_notifications() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, notify_overrides());
+    let fixed = [("interval", "60"), ("maxretries", "3"), ("retry_interval", "60")];
+    let mut http: Vec<(&str, &str)> = vec![("name", "Docs"), ("url", "https://docs.example.org/")];
+    http.extend(fixed);
+    let mut port: Vec<(&str, &str)> = vec![("name", "NAS SSH"), ("hostname", "10.10.200.90"), ("port", "22")];
+    port.extend(fixed);
+    for (op, values) in [("monitor_add_http", &http), ("monitor_add_port", &port)] {
+        let result = run_op(t.toolkit("kuma").unwrap(), &e.store, op, values).await;
+        assert_eq!(result.outcome, OUTCOME_OK, "{op}: {}", result.stderr);
+        let out: Value = serde_json::from_str(&result.stdout).unwrap();
+        assert!(out["monitor_id"].is_u64(), "{op}: {out}");
+        assert_eq!(out["active"], true, "{op}");
+        assert_eq!(out["notification_ids"], json!([1, 4]));
+        assert_eq!((out["interval"].clone(), out["maxretries"].clone(), out["retry_interval"].clone()), (json!(60), json!(3), json!(60)));
+        assert!(!result.stdout.contains(FOREIGN_SECRET));
+    }
+    let sent = k.received_args("add");
+    assert_eq!(sent.len(), 2);
+    for monitor in &sent {
+        assert_eq!(monitor["interval"], 60);
+        assert_eq!(monitor["maxretries"], 3);
+        assert_eq!(monitor["retryInterval"], 60);
+        assert_eq!(monitor["notificationIDList"], json!({"1": true, "4": true}));
+    }
+    assert_eq!(sent[0]["type"], "http");
+    assert_eq!(sent[1]["type"], "port");
+    assert_eq!(sent[1]["hostname"], "10.10.200.90");
+    assert_eq!(sent[1]["port"], 22);
+    assert!(sent[1]["description"].as_str().unwrap().starts_with(MANAGED_MARKER));
+    assert!(k.events().iter().all(|e| ["login", "add", "getMonitor"].contains(&e.as_str())), "{:?}", k.events());
+}
+
+#[tokio::test]
+async fn a_listed_hostname_target_is_accepted_case_insensitively() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let result = run_op(
+        t.toolkit("kuma").unwrap(),
+        &e.store,
+        "monitor_add_port",
+        &[("name", "NAS"), ("hostname", "NAS.lan"), ("port", "443")],
+    )
+    .await;
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    let sent = &k.received_args("add")[0];
+    assert_eq!(sent["hostname"], "nas.lan");
+    // Without a toolkit list there is nothing to attach, and no retries unless asked.
+    assert_eq!(sent["notificationIDList"], json!({}));
+    assert_eq!(sent["maxretries"], 0);
+    assert_eq!(sent["retryInterval"], 60);
+}
+
+#[tokio::test]
+async fn port_target_outside_allowed_monitor_targets_sends_nothing() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, notify_overrides());
+    for host in ["10.10.201.5", "8.8.8.8", "other.lan", "nas.lan.evil.org"] {
+        let result = run_op(
+            t.toolkit("kuma").unwrap(),
+            &e.store,
+            "monitor_add_port",
+            &[("name", "x"), ("hostname", host), ("port", "22")],
+        )
+        .await;
+        assert_eq!(result.outcome, OUTCOME_FAILED, "{host}");
+        assert_eq!(result.denial_reason.as_deref(), Some("tier1_violation"), "{host}");
+        assert!(result.stderr.contains("allowed_monitor_targets"), "{}", result.stderr);
+    }
+    assert!(k.events().is_empty(), "{:?}", k.events());
+}
+
+#[tokio::test]
+async fn unknown_notification_id_aborts_before_the_add() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, json!({"kuma_notification_ids": [1, 7]}));
+    let result =
+        run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_add_http", &[("name", "x"), ("url", "https://x.org/")]).await;
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert_eq!(result.denial_reason.as_deref(), Some("tier1_violation"));
+    assert!(result.stderr.contains("Notification ID(s) 7 "), "{}", result.stderr);
+    assert!(!result.stderr.contains(FOREIGN_SECRET));
+    assert!(k.received_args("add").is_empty());
+    assert_eq!(k.state.lock().monitors.len(), 2);
+}
+
+#[tokio::test]
+async fn no_notification_list_from_kuma_aborts_before_the_add() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    k.state.lock().notifications = None;
+    let t = tier1(e.dir.path(), k.port, notify_overrides());
+    let result = run_with(
+        t.toolkit("kuma").unwrap(),
+        &e.store,
+        "monitor_add_port",
+        &[("name", "x"), ("hostname", "nas.lan"), ("port", "22")],
+        10.0,
+        None,
+    )
+    .await;
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert!(result.stderr.contains("no notification list"), "{}", result.stderr);
+    assert!(k.received_args("add").is_empty());
+}
+
+#[test]
+fn retry_and_port_values_are_bounded_by_the_executor() {
+    let http = |extra: &[(&str, &str)]| {
+        let mut v = vec![("name", "x"), ("url", "https://x.org/")];
+        v.extend_from_slice(extra);
+        check_values("monitor_add_http", &vals(&v)).map_err(|d| d.detail)
+    };
+    assert_eq!(http(&[("maxretries", "0"), ("retry_interval", "20")]), Ok(()));
+    assert_eq!(http(&[("maxretries", "10"), ("retry_interval", "3600")]), Ok(()));
+    assert_eq!(http(&[("maxretries", "11")]), Err("Parameter 'maxretries' must be 0-10.".into()));
+    assert_eq!(http(&[("maxretries", "-1")]), Err("Parameter 'maxretries' must be 0-10.".into()));
+    assert_eq!(http(&[("retry_interval", "19")]), Err("Parameter 'retry_interval' must be 20-3600 seconds.".into()));
+    assert_eq!(http(&[("retry_interval", "3601")]), Err("Parameter 'retry_interval' must be 20-3600 seconds.".into()));
+    let port = |pairs: &[(&str, &str)]| check_values("monitor_add_port", &vals(pairs)).map_err(|d| d.detail);
+    assert_eq!(port(&[("name", "x"), ("hostname", "nas.lan"), ("port", "22")]), Ok(()));
+    assert_eq!(port(&[("name", "x"), ("hostname", "10.0.0.1"), ("port", "65535")]), Ok(()));
+    for bad in ["0", "65536", "", "x", "-1"] {
+        assert_eq!(
+            port(&[("name", "x"), ("hostname", "nas.lan"), ("port", bad)]),
+            Err("Parameter 'port' must be 1-65535.".into()),
+            "{bad}"
+        );
+    }
+    for bad in ["", "tcp://nas.lan", "nas.lan:22", "nas.lan/x", "user@nas.lan", "-nas.lan", "nas..lan", "[::1]", "::1", "nas lan"] {
+        let err = port(&[("name", "x"), ("hostname", bad), ("port", "22")]).unwrap_err();
+        assert!(err.starts_with("Parameter 'hostname' must be a hostname or an IPv4 address"), "{bad}: {err}");
+    }
+    assert_eq!(
+        port(&[("name", &"n".repeat(61)), ("hostname", "nas.lan"), ("port", "22")]),
+        Err("Parameter 'name' must be 1-60 characters.".into())
+    );
+    assert_eq!(port(&[("name", &"n".repeat(60)), ("hostname", "nas.lan"), ("port", "22")]), Ok(()));
+    assert_eq!(
+        port(&[("name", "x"), ("hostname", "nas.lan"), ("port", "22"), ("interval", "29")]),
+        Err("Parameter 'interval' must be 30-3600 seconds.".into())
+    );
+}
+
+#[test]
+fn tier1_checks_the_new_kuma_toolkit_fields() {
+    let e = env();
+    let t = tier1(e.dir.path(), 3001, json!({"kuma_notification_ids": [4, 1], "allowed_monitor_targets": ["10.1.2.3/16", "NAS.lan"]}));
+    let tk = t.toolkit("kuma").unwrap();
+    assert_eq!(tk.kuma_notification_ids, vec![4, 1]);
+    assert_eq!(tk.allowed_monitor_targets, vec!["10.1.0.0/16".to_string(), "nas.lan".to_string()]);
+    let cases = [
+        (json!({"kuma_notification_ids": [0]}), "kuma_notification_ids entry 0 is not a positive integer"),
+        (json!({"kuma_notification_ids": ["1"]}), "is not a positive integer"),
+        (json!({"kuma_notification_ids": [1, 1]}), "lists 1 twice"),
+        (json!({"kuma_notification_ids": 1}), "must be a list"),
+        (json!({"allowed_monitor_targets": ["https://nas.lan"]}), "neither a CIDR nor a hostname"),
+        (json!({"allowed_monitor_targets": []}), "monitor_add_port needs 'allowed_monitor_targets'"),
+        (json!({"allowed_monitor_targets": null}), "monitor_add_port needs 'allowed_monitor_targets'"),
+    ];
+    for (overrides, fragment) in cases {
+        let err = try_tier1(e.dir.path(), 3001, overrides).unwrap_err();
+        assert!(err.message.contains(fragment), "{fragment}: {}", err.message);
+    }
+    // Without monitor_add_port the list may stay empty.
+    let ok = try_tier1(
+        e.dir.path(),
+        3001,
+        json!({"allowed_kuma_operations": ["monitor_list"], "allowed_monitor_targets": null}),
+    );
+    assert!(ok.is_ok());
+}
+
+#[test]
+fn monitor_target_check_matches_networks_and_exact_hostnames() {
+    let e = env();
+    let t = tier1(e.dir.path(), 3001, json!({}));
+    let tk = t.toolkit("kuma").unwrap();
+    for ok in ["10.10.200.1", "10.10.200.255", "nas.lan", "NAS.LAN"] {
+        assert!(check_monitor_target(tk, ok).is_ok(), "{ok}");
+    }
+    for bad in ["10.10.201.1", "127.0.0.1", "lan", "x.nas.lan", "10.10.200.0.nip.io"] {
+        assert!(check_monitor_target(tk, bad).is_err(), "{bad}");
+    }
+}
+
+// -- 1.29.0: `fixed:` and the shipped example tools ----------------------------
+
+/// `config/examples/kuma-tools.yaml` against a toolkit `uptimekuma`.
+fn example_kuma_tools(dir: &std::path::Path, port: u16, notify: Value) -> (Tier1, crate::catalog::Catalog) {
+    let mut spec = json!({
+        "executor": "kuma", "base_url": format!("http://127.0.0.1:{port}"),
+        "allowed_cidrs": ["127.0.0.1/32"], "credential": "kuma",
+        "allowed_kuma_operations": ["monitor_list", "monitor_add_http", "monitor_add_port"],
+        "allowed_monitor_targets": ["10.10.200.0/24", "nas.lan"], "max_timeout_seconds": 30,
+    });
+    spec["kuma_notification_ids"] = notify;
+    let doc = json!({"toolkits": {"uptimekuma": spec}, "audit": {"dir": dir.join("logs").to_str().unwrap()}});
+    let path = dir.join("toolkits.yaml");
+    std::fs::write(&path, crate::yaml::dump(&doc)).unwrap();
+    let t = load_tier1(path.to_str().unwrap()).unwrap();
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/examples/kuma-tools.yaml");
+    let catalog = crate::catalog::load_catalog(examples.to_str().unwrap(), &t, true).unwrap();
+    (t, catalog)
+}
+
+#[test]
+fn example_kuma_tools_load_with_their_fixed_values() {
+    let e = env();
+    let (_, catalog) = example_kuma_tools(e.dir.path(), 3001, json!([1, 4]));
+    for id in ["uptimekuma.monitor_add", "uptimekuma.monitor_add_port"] {
+        let tool = &catalog.tools[id];
+        let fixed: Vec<(&str, i64)> = tool.kuma_fixed.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        assert_eq!(fixed, [("interval", 60), ("maxretries", 3), ("retry_interval", 60)], "{id}");
+        // A fixed value is not something the caller can send.
+        let schema = tool.input_schema();
+        for key in ["interval", "maxretries", "retry_interval"] {
+            assert!(schema["properties"].get(key).is_none(), "{id} {key}");
+        }
+    }
+}
+
+#[test]
+fn fixed_values_are_merged_and_cannot_be_overridden() {
+    let e = env();
+    let (_, catalog) = example_kuma_tools(e.dir.path(), 3001, json!([1, 4]));
+    let tool = &catalog.tools["uptimekuma.monitor_add_port"];
+    let args = json!({"name": "NAS", "hostname": "nas.lan", "port": 22});
+    let values = crate::validate::resolve_parameters(tool, args.as_object().unwrap()).unwrap();
+    assert_eq!(values.get("interval").map(String::as_str), Some("60"));
+    assert_eq!(values.get("maxretries").map(String::as_str), Some("3"));
+    assert_eq!(values.get("retry_interval").map(String::as_str), Some("60"));
+    let args = json!({"name": "NAS", "hostname": "nas.lan", "port": 22, "maxretries": 0});
+    let err = crate::validate::resolve_parameters(tool, args.as_object().unwrap()).unwrap_err();
+    assert_eq!(err.reason, DenialReason::ParamUnknown, "{}", err.detail);
+}
+
+#[test]
+fn catalog_checks_fixed_against_the_executor_bounds() {
+    let e = env();
+    let t = tier1(e.dir.path(), 3001, json!({}));
+    let parse = |fixed: Value, params: Value| {
+        let mut spec = tools()[1].clone();
+        spec["fixed"] = fixed;
+        if !params.is_null() {
+            spec["parameters"] = params;
+        }
+        crate::catalog::parse_tool_spec(&spec, &t).map(|_| ()).map_err(|e| e.message)
+    };
+    let mut no_interval = add_params();
+    no_interval.as_object_mut().unwrap().remove("interval");
+    assert_eq!(parse(json!({"maxretries": 3, "retry_interval": 60}), Value::Null), Ok(()));
+    assert_eq!(parse(json!({"interval": 60}), no_interval.clone()), Ok(()));
+    let cases = [
+        (json!({"interval": 60}), Value::Null, "'interval' is both in 'fixed' and declared as a parameter"),
+        (json!({"interval": 10}), no_interval.clone(), "fixed.interval must be an integer from 30 to 3600, not 10"),
+        (json!({"maxretries": 11}), Value::Null, "fixed.maxretries must be an integer from 0 to 10, not 11"),
+        (json!({"retry_interval": 19}), Value::Null, "fixed.retry_interval must be an integer from 20 to 3600, not 19"),
+        (json!({"maxretries": "3"}), Value::Null, "fixed.maxretries must be an integer"),
+        (json!({"expected_status": "200"}), Value::Null, "'fixed' cannot set 'expected_status'"),
+        (json!([60]), Value::Null, "'fixed' must be a mapping"),
+    ];
+    for (fixed, params, fragment) in cases {
+        let err = parse(fixed, params).unwrap_err();
+        assert!(err.contains(fragment), "{fragment}: {err}");
+    }
+    // An operation that does not read the key cannot fix it.
+    let mut spec = tools()[2].clone();
+    spec["fixed"] = json!({"interval": 60});
+    let err = crate::catalog::parse_tool_spec(&spec, &t).unwrap_err().message;
+    assert!(err.contains("does not read 'interval'"), "{err}");
+    // A parameter declared wider than the executor bound is refused too.
+    let mut p = add_params();
+    p["maxretries"] = json!({"type": "integer", "minimum": 0, "maximum": 50, "description": "r"});
+    let err = parse(Value::Null, p).unwrap_err();
+    assert!(err.contains("'maxretries' must be an integer with minimum >= 0 and maximum <= 10"), "{err}");
+}
+
+/// End to end through the example tool: the caller sends only name,
+/// hostname and port; Kuma gets 60/3/60 and notifications 1 and 4.
+#[tokio::test]
+async fn example_port_tool_end_to_end() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let (t, catalog) = example_kuma_tools(e.dir.path(), k.port, json!([1, 4]));
+    let tool = &catalog.tools["uptimekuma.monitor_add_port"];
+    let args = json!({"name": "NAS SSH", "hostname": "10.10.200.90", "port": 22});
+    let values = crate::validate::resolve_parameters(tool, args.as_object().unwrap()).unwrap();
+    let pairs: Vec<(&str, &str)> = values.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let result = run_op(t.toolkit("uptimekuma").unwrap(), &e.store, "monitor_add_port", &pairs).await;
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    let sent = &k.received_args("add")[0];
+    assert_eq!((sent["interval"].clone(), sent["maxretries"].clone(), sent["retryInterval"].clone()), (json!(60), json!(3), json!(60)));
+    assert_eq!(sent["notificationIDList"], json!({"1": true, "4": true}));
+    let out: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(out["monitor_id"], 3);
+    assert_eq!(out["active"], true);
 }

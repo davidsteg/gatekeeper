@@ -73,7 +73,8 @@ pub const ARTIFACT_OPERATIONS: &[&str] = &["info", "list", "read", "transfer"];
 /// monitors over Socket.IO. Read is `monitor_list`; the other three write.
 /// There is no delete, no edit and nothing for notifications or settings --
 /// not as a denied operation, but as one this executor has no code for.
-pub const KUMA_OPERATIONS: &[&str] = &["monitor_add_http", "monitor_list", "monitor_pause", "monitor_resume"];
+pub const KUMA_OPERATIONS: &[&str] =
+    &["monitor_add_http", "monitor_add_port", "monitor_list", "monitor_pause", "monitor_resume"];
 
 /// Bounds of `monitor_add_http`'s `interval`, in seconds. Kuma itself
 /// accepts 20 s to 24 days; this is the narrower range a gatekeeper-made
@@ -81,6 +82,30 @@ pub const KUMA_OPERATIONS: &[&str] = &["monitor_add_http", "monitor_list", "moni
 /// executor's call-time check read one value.
 pub const KUMA_INTERVAL_MIN: i64 = 30;
 pub const KUMA_INTERVAL_MAX: i64 = 3600;
+
+/// Bounds of the add operations' `maxretries` (1.29.0): how many failed
+/// checks Kuma retries before it marks a monitor down. 0 is Kuma's own
+/// default; 10 caps how long a real outage may go unreported.
+pub const KUMA_MAXRETRIES_MIN: i64 = 0;
+pub const KUMA_MAXRETRIES_MAX: i64 = 10;
+
+/// Bounds of the add operations' `retry_interval` (Kuma's `retryInterval`),
+/// in seconds (1.29.0). 20 is Kuma's own floor.
+pub const KUMA_RETRY_INTERVAL_MIN: i64 = 20;
+pub const KUMA_RETRY_INTERVAL_MAX: i64 = 3600;
+
+/// Bounds of `monitor_add_port`'s `port` (1.29.0).
+pub const KUMA_PORT_MIN: i64 = 1;
+pub const KUMA_PORT_MAX: i64 = 65535;
+
+/// The values a kuma tool definition may pin with `fixed:` (1.29.0), each
+/// with the executor bounds it is checked against at load and at call
+/// time. Sorted.
+pub const KUMA_FIXABLE: &[(&str, i64, i64)] = &[
+    ("interval", KUMA_INTERVAL_MIN, KUMA_INTERVAL_MAX),
+    ("maxretries", KUMA_MAXRETRIES_MIN, KUMA_MAXRETRIES_MAX),
+    ("retry_interval", KUMA_RETRY_INTERVAL_MIN, KUMA_RETRY_INTERVAL_MAX),
+];
 
 /// The accepted-status ranges a `monitor_add_http` may name -- Kuma's own
 /// notation (a code or a `low-high` range). A tool's `expected_status`
@@ -327,6 +352,14 @@ pub struct Toolkit {
     /// reached under `allowed_hosts`/`allowed_cidrs` like an `http`
     /// toolkit; the login is the toolkit's `credential` (kind `basic`).
     pub allowed_kuma_operations: Vec<String>,
+    /// Kuma notification IDs every monitor this toolkit adds is attached
+    /// to (1.29.0) -- exactly these, never one an agent names. Checked
+    /// against Kuma's own notification list before every `add`.
+    pub kuma_notification_ids: Vec<u64>,
+    /// Where a `monitor_add_port` monitor may point (1.29.0): IP networks
+    /// (an IPv4 target must lie in one) and exact hostnames (a hostname
+    /// target must be one of them, compared lowercase, never resolved).
+    pub allowed_monitor_targets: Vec<String>,
     // -- `git` executor only --
     /// Subset of [`GIT_OPERATIONS`], the git binary, and the repositories a
     /// push may come from -- each a local path paired with the one remote
@@ -387,6 +420,8 @@ impl Default for Toolkit {
             allowed_artifacts: Vec::new(),
             handover_dir: None,
             allowed_kuma_operations: Vec::new(),
+            kuma_notification_ids: Vec::new(),
+            allowed_monitor_targets: Vec::new(),
             allowed_git_operations: Vec::new(),
             git_binary: None,
             git_repos: Vec::new(),
@@ -1262,6 +1297,79 @@ fn parse_allowed_hosts(value: Option<&Value>, where_: &str) -> ConfigResult<Vec<
     Ok(out)
 }
 
+/// `kuma_notification_ids` (1.29.0): absent or null is none; otherwise a
+/// list of distinct positive integers. Whether Kuma has them is checked
+/// when a monitor is added -- Kuma is not reachable at load time.
+fn parse_kuma_notification_ids(value: Option<&Value>, where_: &str) -> ConfigResult<Vec<u64>> {
+    let items = match value {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(_) => {
+            return Err(ConfigError::new(format!(
+                "{where_}: 'kuma_notification_ids' must be a list of Kuma notification IDs (positive integers)"
+            )))
+        }
+    };
+    let mut out: Vec<u64> = Vec::new();
+    for item in items {
+        let id = match item {
+            Value::Number(n) => n.as_u64().filter(|id| *id >= 1),
+            _ => None,
+        };
+        let Some(id) = id else {
+            return Err(ConfigError::new(format!(
+                "{where_}: kuma_notification_ids entry {} is not a positive integer",
+                repr_value(item)
+            )));
+        };
+        if out.contains(&id) {
+            return Err(ConfigError::new(format!("{where_}: kuma_notification_ids lists {id} twice")));
+        }
+        out.push(id);
+    }
+    Ok(out)
+}
+
+/// A DNS hostname as `monitor_add_port` accepts one: dot-separated labels
+/// of letters, digits and `-` (not at a label's start or end), each 1-63
+/// characters, 253 in total. No scheme, port, path or userinfo can pass.
+pub fn is_monitor_hostname(s: &str) -> bool {
+    if s.is_empty() || s.len() > 253 {
+        return false;
+    }
+    s.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    })
+}
+
+/// `allowed_monitor_targets` (1.29.0): each entry an IP network (`ip_network`
+/// with host bits masked off, stored normalized) or an exact hostname
+/// (stored lowercase).
+fn parse_monitor_targets(value: Option<&Value>, where_: &str) -> ConfigResult<Vec<String>> {
+    let raw = str_tuple(value, &format!("{where_}: allowed_monitor_targets"))?;
+    let mut out: Vec<String> = Vec::new();
+    for entry in raw {
+        let normalized = if let Ok(net) = ip_network(&entry) {
+            net.to_string()
+        } else if is_monitor_hostname(&entry) && entry.parse::<std::net::Ipv4Addr>().is_err() {
+            entry.to_ascii_lowercase()
+        } else {
+            return Err(ConfigError::new(format!(
+                "{where_}: allowed_monitor_targets entry {} is neither a CIDR nor a hostname",
+                repr_str(&entry)
+            )));
+        };
+        if !out.contains(&normalized) {
+            out.push(normalized);
+        }
+    }
+    Ok(out)
+}
+
 /// `allowed_cidrs` and `allowed_hosts` of an http/opencode/kuma toolkit
 /// (`_parse_network_allowlist`). At least one must be non-empty: a toolkit
 /// with neither would have no target restriction at all. Either may stand
@@ -1840,6 +1948,14 @@ fn parse_toolkit(
                 return Err(ConfigError::new(format!(
                     "{where_}: allowed_kuma_operations must be a non-empty subset of {}{tail}",
                     repr_list(KUMA_OPERATIONS)
+                )));
+            }
+            tk.kuma_notification_ids = parse_kuma_notification_ids(spec.get("kuma_notification_ids"), where_)?;
+            tk.allowed_monitor_targets = parse_monitor_targets(spec.get("allowed_monitor_targets"), where_)?;
+            if tk.allows_kuma_operation("monitor_add_port") && tk.allowed_monitor_targets.is_empty() {
+                return Err(ConfigError::new(format!(
+                    "{where_}: monitor_add_port needs 'allowed_monitor_targets' -- the networks \
+                     (CIDR) and exact hostnames a port monitor may point at"
                 )));
             }
         }

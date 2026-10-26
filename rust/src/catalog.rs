@@ -30,8 +30,9 @@ use crate::pyfmt::{repr_list, repr_str, repr_value, type_name};
 use crate::pyre::PyRegex;
 use crate::runas::parse_run_as;
 use crate::tier1::{
-    py_eq, py_int, py_str, py_truthy, url_hostname, validate_http_base_url, Tier1, Toolkit, KUMA_INTERVAL_MAX,
-    KUMA_INTERVAL_MIN, KUMA_STATUS_CODES,
+    py_eq, py_int, py_str, py_truthy, url_hostname, validate_http_base_url, Tier1, Toolkit, KUMA_FIXABLE,
+    KUMA_INTERVAL_MAX, KUMA_INTERVAL_MIN, KUMA_MAXRETRIES_MAX, KUMA_MAXRETRIES_MIN, KUMA_PORT_MAX, KUMA_PORT_MIN,
+    KUMA_RETRY_INTERVAL_MAX, KUMA_RETRY_INTERVAL_MIN, KUMA_STATUS_CODES,
 };
 
 /// Placeholders in argv, derived and scope templates.
@@ -94,14 +95,19 @@ pub const ARTIFACT_OPERATION_PARAMS: &[(&str, OpParams)] = &[
     ("transfer", (&["artifact"], &["version"])),
 ];
 
-/// `kuma` executor: what each operation reads. `monitor_add_http` takes
-/// exactly the four fields a gatekeeper-made monitor has a say in; the
-/// monitor type, method, notifications and everything else are fixed in
-/// `execute::kuma::http_monitor`. There is no parameter for a Kuma URL or
-/// account -- both are Tier 1.
+/// `kuma` executor: what each operation reads. The add operations take
+/// exactly the fields a gatekeeper-made monitor has a say in; the monitor
+/// type, method and everything else are fixed in `execute::kuma`, and the
+/// notifications are the toolkit's `kuma_notification_ids`, never a
+/// parameter. There is no parameter for a Kuma URL or account -- both are
+/// Tier 1.
 pub const KUMA_OPERATION_PARAMS: &[(&str, OpParams)] = &[
     ("monitor_list", (&[], &[])),
-    ("monitor_add_http", (&["name", "url"], &["interval", "expected_status"])),
+    (
+        "monitor_add_http",
+        (&["name", "url"], &["interval", "expected_status", "maxretries", "retry_interval"]),
+    ),
+    ("monitor_add_port", (&["name", "hostname", "port"], &["interval", "maxretries", "retry_interval"])),
     ("monitor_pause", (&["monitor_id"], &[])),
     ("monitor_resume", (&["monitor_id"], &[])),
 ];
@@ -109,7 +115,7 @@ pub const KUMA_OPERATION_PARAMS: &[(&str, OpParams)] = &[
 /// The `kuma` operations that change something. A tool for one of them is
 /// never category `read`: `read` is what `admin.tool_create` applies
 /// without a human, and these must go through approval.
-pub const KUMA_WRITE_OPERATIONS: &[&str] = &["monitor_add_http", "monitor_pause", "monitor_resume"];
+pub const KUMA_WRITE_OPERATIONS: &[&str] = &["monitor_add_http", "monitor_add_port", "monitor_pause", "monitor_resume"];
 
 /// `git` executor: `push` reads the repository's key in the toolkit's
 /// `repos:` and the branch. There is no parameter for a path, a remote, a
@@ -347,6 +353,10 @@ pub struct ToolDef {
     /// The `kuma` executor's operation (`tier1::KUMA_OPERATIONS`), fixed
     /// per tool like `agent_operation`.
     pub kuma_operation: Option<String>,
+    /// A `kuma` tool's `fixed:` values (1.29.0): settings the tool pins
+    /// instead of letting the caller send them (`interval`, `maxretries`,
+    /// `retry_interval`). Never also a declared parameter.
+    pub kuma_fixed: IndexMap<String, i64>,
     /// The `git` executor's operation (`tier1::GIT_OPERATIONS`), fixed per
     /// tool like `agent_operation`.
     pub git_operation: Option<String>,
@@ -693,6 +703,25 @@ fn validate_kuma_params(
             )));
         }
     }
+    for (param, min, max) in [
+        ("maxretries", KUMA_MAXRETRIES_MIN, KUMA_MAXRETRIES_MAX),
+        ("retry_interval", KUMA_RETRY_INTERVAL_MIN, KUMA_RETRY_INTERVAL_MAX),
+        ("port", KUMA_PORT_MIN, KUMA_PORT_MAX),
+    ] {
+        if let Some(p) = parameters.get(param) {
+            if p.ptype != "integer" || below(&p.minimum, min) || above(&p.maximum, max) {
+                return Err(ConfigError::new(format!(
+                    "{where_}: parameter {} must be an integer with minimum >= {min} and maximum <= {max}",
+                    repr_str(param)
+                )));
+            }
+        }
+    }
+    if let Some(hostname) = parameters.get("hostname") {
+        if hostname.ptype != "string" {
+            return Err(ConfigError::new(format!("{where_}: parameter 'hostname' must be a string with a pattern")));
+        }
+    }
     if let Some(status) = parameters.get("expected_status") {
         if status.ptype != "enum" || !status.values.iter().all(|v| KUMA_STATUS_CODES.contains(&v.as_str())) {
             return Err(ConfigError::new(format!(
@@ -714,6 +743,66 @@ fn validate_kuma_params(
         }
     }
     Ok(())
+}
+
+/// A `kuma` tool's `fixed:` mapping (1.29.0): values the tool pins so the
+/// caller does not send them. Each key must be one the operation reads and
+/// one of [`KUMA_FIXABLE`], must not also be declared under `parameters`
+/// (then it would be both the caller's and the tool's), and its value an
+/// integer inside the same bounds the executor enforces at call time.
+fn parse_kuma_fixed(
+    value: Option<&Value>,
+    operation: &str,
+    parameters: &IndexMap<String, Parameter>,
+    where_: &str,
+) -> ConfigResult<IndexMap<String, i64>> {
+    let entries = match value {
+        None | Some(Value::Null) => return Ok(IndexMap::new()),
+        Some(Value::Object(m)) => m,
+        Some(_) => return Err(ConfigError::new(format!("{where_}: 'fixed' must be a mapping"))),
+    };
+    let (required, optional) = op_params(KUMA_OPERATION_PARAMS, operation).unwrap_or((&[], &[]));
+    let mut out = IndexMap::new();
+    for (key, raw) in entries {
+        let Some((_, min, max)) = KUMA_FIXABLE.iter().find(|(k, _, _)| k == key) else {
+            let names: Vec<&str> = KUMA_FIXABLE.iter().map(|(k, _, _)| *k).collect();
+            return Err(ConfigError::new(format!(
+                "{where_}: 'fixed' cannot set {} -- only {}",
+                repr_str(key),
+                repr_list(&names)
+            )));
+        };
+        if !required.contains(&key.as_str()) && !optional.contains(&key.as_str()) {
+            return Err(ConfigError::new(format!(
+                "{where_}: kuma operation {} does not read {}, so 'fixed' cannot set it",
+                repr_str(operation),
+                repr_str(key)
+            )));
+        }
+        if parameters.contains_key(key) {
+            return Err(ConfigError::new(format!(
+                "{where_}: {} is both in 'fixed' and declared as a parameter -- a value is either \
+                 the tool's or the caller's, not both",
+                repr_str(key)
+            )));
+        }
+        let number = match raw {
+            Value::Number(n) => n.as_i64(),
+            _ => None,
+        };
+        match number {
+            Some(n) if (*min..=*max).contains(&n) => {
+                out.insert(key.clone(), n);
+            }
+            _ => {
+                return Err(ConfigError::new(format!(
+                    "{where_}: fixed.{key} must be an integer from {min} to {max}, not {}",
+                    repr_value(raw)
+                )))
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// `_validate_git_params`: a `push` changes a remote, so it is never
@@ -1424,7 +1513,7 @@ fn executor_tool_fields(executor: &str) -> &'static [&'static str] {
         "opencode" => &["opencode_operation", "operation"],
         "agent" => &["agent_operation", "operation"],
         "artifact" => &["artifact_operation", "operation"],
-        "kuma" => &["kuma_operation", "operation"],
+        "kuma" => &["fixed", "kuma_operation", "operation"],
         "git" => &["git_operation", "operation"],
         _ => &[],
     }
@@ -1622,6 +1711,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         agent_operation: None,
         artifact_operation: None,
         kuma_operation: None,
+        kuma_fixed: IndexMap::new(),
         git_operation: None,
         run_as: None,
         destination: None,
@@ -1920,6 +2010,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
             }
             validate_op_params("kuma", KUMA_OPERATION_PARAMS, &op, &parameters, where_)?;
             validate_kuma_params(&op, &tool.category, &parameters, where_)?;
+            tool.kuma_fixed = parse_kuma_fixed(spec.get("fixed"), &op, &parameters, where_)?;
             tool.kuma_operation = Some(op);
         }
         "git" => {
