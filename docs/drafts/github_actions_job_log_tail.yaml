@@ -1,0 +1,22 @@
+# DRAFT (1.30.0) -- not live. Tier 1 (toolkits.yaml, github toolkit) needs:
+#   redirect_allowed_hosts: [productionresultssa0.blob.core.windows.net, ... productionresultssaN]
+#   (exact names; GitHub's job-log 302 targets these storage accounts)
+#   allowed_path_prefixes must cover /repos/davidsteg/gatekeeper/actions/jobs/
+- id: github.actions_job_log_tail
+  toolkit: github
+  version: 1
+  title: Actions job log tail
+  description: Last N lines (max 200) of one GitHub Actions job log of davidsteg/gatekeeper.
+  category: read
+  enabled: true
+  idempotent: true
+  method: GET
+  path: /repos/davidsteg/gatekeeper/actions/jobs/{job_id}/logs
+  parameters:
+    job_id: {type: string, pattern: "^[0-9]{1,20}$", required: true}
+  follow_redirect:
+    max: 1
+    allowed_hosts: [productionresultssa0.blob.core.windows.net]
+  output_tail_lines: 200
+  timeout_seconds: 30
+  max_output_bytes: 65536

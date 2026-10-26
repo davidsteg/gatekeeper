@@ -108,6 +108,9 @@ pub struct CallRecord {
     pub command: Option<String>,
     /// Files an `http` body sent (1.21.0): path and size, never content.
     pub body_files: Vec<(String, u64)>,
+    /// An `http` tool's followed (or refused) redirect hop (1.30.0):
+    /// statuses and host, never the URL.
+    pub redirect: Option<Value>,
 }
 
 /// A logged parameter value is cut after this many characters, so a
@@ -297,6 +300,9 @@ impl AuditLog {
                 .map(|(path, bytes)| serde_json::json!({"path": path, "bytes": bytes}))
                 .collect();
             event.insert("files".into(), Value::Array(files));
+        }
+        if let Some(redirect) = record.redirect {
+            event.insert("redirect".into(), redirect);
         }
         self.write(Value::Object(event))
     }

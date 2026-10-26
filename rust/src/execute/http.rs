@@ -8,7 +8,8 @@
 //! query value, or body field (FR-8.7); the resolved IP is checked against
 //! the toolkit's CIDR allowlist immediately before connecting, closing the
 //! DNS-rebinding gap a one-time hostname check would leave open (FR-8.9);
-//! redirects are reported, never followed (FR-8.8); the credential is
+//! redirects are reported, never followed (FR-8.8) -- except the one hop a
+//! GET tool's `follow_redirect` names (1.30.0, [`HttpOptions`]); the credential is
 //! injected as a header by this module directly, never through a tool's
 //! own query/body template (FR-8.14).
 //!
@@ -71,6 +72,38 @@ use crate::tier1::{is_public_address, py_truthy, urlsplit, Toolkit};
 /// a single "list all series" call must not smuggle thousands of fields
 /// worth of untrusted text into the agent's context.
 pub const MAX_JSON_ITEMS: i64 = 500;
+
+/// How much of a body `output_tail_lines` reads at most (1.30.0): the
+/// tail is taken from the first 20 MiB; a longer body is cut there and the
+/// result marked truncated.
+pub const TAIL_READ_CAP: usize = 20 << 20;
+
+/// Per-call options of [`run_with`] beyond what [`run`] takes (1.30.0).
+#[derive(Debug, Clone, Default)]
+pub struct HttpOptions {
+    /// The tool's `follow_redirect`: one hop, GET only, to one of its
+    /// exact hosts (which `catalog` already checked against the toolkit's
+    /// Tier 1 `redirect_allowed_hosts`). Sent without the credential; the
+    /// Location URL itself never reaches the answer or the audit log.
+    pub follow_redirect: Option<crate::validate::FollowRedirect>,
+    /// The tool's `output_tail_lines`: only the body's last N lines.
+    pub tail_lines: Option<usize>,
+    /// The toolkit's `redact_secrets` (pre-1.30.0 behaviour for ordinary
+    /// http stdout, unchanged here): mask secret-shaped values before
+    /// `output_tail_lines` cuts the body down to its last N lines, so a
+    /// PEM block whose `BEGIN` line would otherwise fall outside the tail
+    /// window is still recognised whole (m1/M1, 140G). This does *not*
+    /// run before `max_output_bytes`: in the non-tail path `read_capped`
+    /// already applies that cap, and masking afterwards cannot restore a
+    /// secret the cap split in two -- masking there is the same
+    /// best-effort pass `service.rs` always ran, not a new guarantee.
+    pub mask_secrets: bool,
+}
+
+/// The redirect statuses `follow_redirect` acts on.
+fn is_redirect(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
 
 /// httpx's default per-operation timeout (connect, read), which Python's
 /// `httpx.AsyncClient(verify=True)` applied under the tool's own
@@ -750,6 +783,40 @@ pub async fn run(
     idempotent: bool,
     redact: Option<&Redact>,
 ) -> Result<ExecResult, ConfigError> {
+    run_with(
+        method,
+        path,
+        query,
+        body,
+        raw_param,
+        toolkit,
+        credentials,
+        timeout_seconds,
+        max_output_bytes,
+        idempotent,
+        redact,
+        &HttpOptions::default(),
+    )
+    .await
+}
+
+/// [`run`] with the 1.30.0 per-tool options: `follow_redirect`,
+/// `output_tail_lines` and in-executor secret masking.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with(
+    method: &str,
+    path: &str,
+    query: &IndexMap<String, String>,
+    body: Option<&Value>,
+    raw_param: Option<&str>,
+    toolkit: &Toolkit,
+    credentials: Option<&CredentialStore>,
+    timeout_seconds: f64,
+    max_output_bytes: i64,
+    idempotent: bool,
+    redact: Option<&Redact>,
+    options: &HttpOptions,
+) -> Result<ExecResult, ConfigError> {
     let base_url = toolkit.base_url.as_deref().expect("http toolkit without base_url");
     let started = Instant::now();
 
@@ -911,9 +978,75 @@ pub async fn run(
         Ok(Err(Failure::Http(exc))) => return Ok(failed_result(exc, started)),
         Ok(Ok(parts)) => parts,
     };
+    // The status the credential was sent to: the only one that may mark it
+    // suspect. A redirect target never sees the credential.
+    let credential_status = status;
+
+    // `follow_redirect` (1.30.0): one hop, GET only, checked like the first
+    // target before any connection, without the credential.
+    let mut redirect_note: Option<Value> = None;
+    let mut hop_followed_host: Option<String> = None;
+    let (status, response_headers, response_body) = match options.follow_redirect.as_ref() {
+        Some(follow) if is_redirect(status) && request.method == "GET" => {
+            drop(response_body);
+            let hop = match redirect_hop(status, &response_headers, follow, toolkit).await {
+                Ok(hop) => hop,
+                Err(denial) => {
+                    let mut r = denied(denial);
+                    r.redirect = Some(serde_json::json!({"from_status": status, "followed": false}));
+                    return Ok(r.untrusted(true).read_files(body_files.clone()));
+                }
+            };
+            let hop_host = hop.host.clone();
+            match tokio::time::timeout_at(deadline, send(&hop)).await {
+                Err(_) | Ok(Err(Failure::Timeout)) => return Ok(timeout_result(started)),
+                Ok(Err(Failure::Http(exc))) => {
+                    return Ok(failed_result(format!("redirect to {}: {exc}", repr_str(&hop_host)), started))
+                }
+                Ok(Ok((hop_status, hop_headers, hop_body))) => {
+                    redirect_note = Some(serde_json::json!({
+                        "from_status": status, "host": hop_host, "status": hop_status, "followed": true,
+                    }));
+                    hop_followed_host = Some(hop_host);
+                    (hop_status, hop_headers, hop_body)
+                }
+            }
+        }
+        _ => (status, response_headers, response_body),
+    };
+
+    // m3 fix (140G): a non-2xx hop response never reaches the agent as a
+    // body -- the hop target is reached only because it was pre-vetted for
+    // SSRF, not because its error pages are safe to repeat (e.g. an Azure
+    // 403 body can name the blob path and the expiry/permissions of the
+    // signed URL that was followed). Only the status and host are kept.
+    if let Some(hop_host) = hop_followed_host.as_ref() {
+        if !(200..300).contains(&status) {
+            drop(response_body);
+            let mut result = ExecResult::new(
+                OUTCOME_FAILED,
+                Some(status as i64),
+                "",
+                format!("Redirect hop to {} answered {status}; body discarded.", repr_str(hop_host)),
+                false,
+                elapsed_ms(started),
+            )
+            .untrusted(true)
+            .read_files(body_files.clone());
+            result.redirect = redirect_note;
+            return Ok(result);
+        }
+    }
 
     let max = max_output_bytes.max(0) as usize;
-    let (raw, truncated) = match tokio::time::timeout_at(deadline, read_capped(response_body, &response_headers, max)).await {
+    let tail = options.tail_lines.filter(|_| (200..300).contains(&status));
+    let reading = async {
+        match tail {
+            Some(_) => read_capped(response_body, &response_headers, TAIL_READ_CAP).await,
+            None => read_capped(response_body, &response_headers, max).await,
+        }
+    };
+    let (raw, mut truncated) = match tokio::time::timeout_at(deadline, reading).await {
         Ok(Ok(r)) => r,
         Err(_) | Ok(Err(Failure::Timeout)) => return Ok(timeout_result(started)),
         Ok(Err(Failure::Http(exc))) => return Ok(failed_result(exc, started)),
@@ -921,7 +1054,27 @@ pub async fn run(
 
     let content_type = header_text(&response_headers, "content-type");
     let mut stdout = String::from_utf8_lossy(&raw).into_owned();
-    if content_type.contains("json") && !truncated {
+    let mut tail_note = String::new();
+    if let Some(n) = tail {
+        if truncated {
+            tail_note = format!(
+                "The response is larger than {} MiB; these are the last lines of its first {} MiB, not of the whole body.",
+                TAIL_READ_CAP >> 20,
+                TAIL_READ_CAP >> 20
+            );
+        }
+        // M1 fix (140G): mask on the *full* capped text before cutting to
+        // the last N lines, not after -- a PEM block whose BEGIN line sits
+        // outside the tail window must still be recognised by the secret
+        // regex, which needs the whole block to match.
+        if options.mask_secrets {
+            stdout = crate::secretmask::mask_secrets(&stdout);
+        }
+        stdout = last_lines(&stdout, n);
+        let (kept, cut) = keep_last_bytes(&stdout, max);
+        stdout = kept;
+        truncated |= cut;
+    } else if content_type.contains("json") && !truncated {
         // PORT NOTE: parsed with serde_json, so the few documents Python's
         // `json.loads` accepts and serde_json does not (NaN/Infinity
         // literals, lone surrogate escapes) fall back to the raw text, and
@@ -934,31 +1087,146 @@ pub async fn run(
     }
 
     if let (Some(credential), Some(store)) = (credential.as_ref(), credentials) {
-        if status == 401 || status == 403 {
+        if credential_status == 401 || credential_status == 403 {
             store.mark_suspect(&credential.name, "auth_failed")?;
         }
     }
 
     let mut stderr = String::new();
     let outcome = if (300..400).contains(&status) {
-        // FR-8.8: reported as data, never chased. The Location header is
-        // itself untrusted external data and is included as such.
-        let location = header_text(&response_headers, "location");
-        stderr = format!("Redirect ({status}) to {}, not followed.", repr_str(&location));
+        if options.follow_redirect.is_some() {
+            // A tool that follows redirects talks to signed, short-lived
+            // URLs: the Location is never repeated, only that there was one.
+            stderr = match &redirect_note {
+                Some(_) => format!("Redirect ({status}) after the one allowed hop, not followed (follow_redirect.max is 1)."),
+                None => format!("Redirect ({status}), not followed."),
+            };
+        } else {
+            // FR-8.8: reported as data, never chased. The Location header is
+            // itself untrusted external data and is included as such.
+            let location = header_text(&response_headers, "location");
+            stderr = format!("Redirect ({status}) to {}, not followed.", repr_str(&location));
+        }
         OUTCOME_FAILED
     } else if (200..300).contains(&status) {
         OUTCOME_OK
     } else {
         OUTCOME_FAILED
     };
+    if !tail_note.is_empty() {
+        stderr = if stderr.is_empty() { tail_note } else { format!("{stderr} {tail_note}") };
+    }
 
+    if options.mask_secrets && tail.is_none() {
+        stdout = crate::secretmask::mask_secrets(&stdout);
+    }
     if let Some(redact) = redact {
         stdout = redact(&stdout);
         stderr = redact(&stderr);
     }
-    Ok(ExecResult::new(outcome, Some(status as i64), stdout, stderr, truncated, elapsed_ms(started))
+    let mut result = ExecResult::new(outcome, Some(status as i64), stdout, stderr, truncated, elapsed_ms(started))
         .untrusted(true)
-        .read_files(body_files))
+        .read_files(body_files);
+    result.redirect = redirect_note;
+    Ok(result)
+}
+
+/// The one hop of a tool's `follow_redirect` (1.30.0), checked before any
+/// connection: the Location must be an absolute `https` URL on the default
+/// port, without userinfo, whose host is a name (not an address) in the
+/// tool's `follow_redirect.allowed_hosts` *and* the toolkit's Tier 1
+/// `redirect_allowed_hosts`; it is then resolved once and every address
+/// must be public ([`resolve_and_check`] with that one host as the list).
+/// The request carries no credential header or query and no body.
+///
+/// Denials name the status and at most the host -- never the URL, which
+/// for the targets this exists for (GitHub's job logs) is a signed,
+/// short-lived capability.
+async fn redirect_hop(
+    status: u16,
+    headers: &HeaderMap,
+    follow: &crate::validate::FollowRedirect,
+    toolkit: &Toolkit,
+) -> Result<Prepared, Denied> {
+    let refuse = |reason: DenialReason, why: &str| {
+        Denied::new(reason, format!("Redirect ({status}) not followed: {why}"))
+    };
+    let location = header_text(headers, "location");
+    let url = url::Url::parse(&location)
+        .map_err(|_| refuse(DenialReason::SsrfBlocked, "the Location is not an absolute URL."))?;
+    if url.scheme() != "https" {
+        return Err(refuse(DenialReason::SsrfBlocked, "the Location is not an https URL."));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(refuse(DenialReason::SsrfBlocked, "the Location carries userinfo."));
+    }
+    if url.port().is_some() {
+        return Err(refuse(DenialReason::SsrfBlocked, "the Location names a port; only the https default is followed."));
+    }
+    let host = match url.host() {
+        Some(url::Host::Domain(d)) => crate::tier1::normalize_hostname(d),
+        Some(_) => return Err(refuse(DenialReason::SsrfBlocked, "the Location's host is an IP address, not a name.")),
+        None => return Err(refuse(DenialReason::SsrfBlocked, "the Location has no host.")),
+    };
+    if !follow.allowed_hosts.contains(&host) || !toolkit.redirect_allowed_hosts.contains(&host) {
+        return Err(refuse(
+            DenialReason::HostNotAllowed,
+            &format!("host {} is not in this tool's follow_redirect.allowed_hosts.", repr_str(&host)),
+        ));
+    }
+    // The same target rules as any request, with this one name as the
+    // list: so the public-address floor always applies, and the answer is
+    // resolved once and connected to as checked (no rebinding window).
+    let mut hop_toolkit = toolkit.clone();
+    hop_toolkit.allowed_hosts = vec![host.clone()];
+    hop_toolkit.allowed_cidrs = Vec::new();
+    let addr = resolve_and_check(&host, 443, &hop_toolkit).await?.addr;
+    let target = url[url::Position::BeforePath..url::Position::AfterQuery].to_string();
+    let target = if target.is_empty() { "/".to_string() } else { target };
+    let headers: Vec<(String, String)> = vec![
+        ("Host".into(), host.clone()),
+        ("Accept".into(), "*/*".into()),
+        ("Accept-Encoding".into(), "gzip, deflate".into()),
+        ("Connection".into(), "keep-alive".into()),
+        ("User-Agent".into(), USER_AGENT.into()),
+    ];
+    Ok(Prepared { scheme: "https".into(), host, addr, method: "GET".into(), target, headers, content: None })
+}
+
+/// The last `n` lines of `text`; a final line ending does not count as an
+/// empty last line, and is kept.
+pub fn last_lines(text: &str, n: usize) -> String {
+    let body = text.strip_suffix('\n').unwrap_or(text);
+    let ends_with_newline = body.len() != text.len();
+    let mut start = 0;
+    let mut seen = 0;
+    for (idx, byte) in body.bytes().enumerate().rev() {
+        if byte == b'\n' {
+            seen += 1;
+            if seen == n {
+                start = idx + 1;
+                break;
+            }
+        }
+    }
+    let mut out = body[start..].to_string();
+    if ends_with_newline {
+        out.push('\n');
+    }
+    out
+}
+
+/// `text` cut from the front to at most `max` bytes, on a character
+/// boundary, and whether anything was cut. A tail keeps its end.
+pub fn keep_last_bytes(text: &str, max: usize) -> (String, bool) {
+    if text.len() <= max {
+        return (text.to_string(), false);
+    }
+    let mut start = text.len() - max;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    (text[start..].to_string(), true)
 }
 
 /// `headers[name] = value` on an ordered, case-insensitive header list.
@@ -1684,3 +1952,7 @@ pub(crate) mod test_hooks {
 #[cfg(test)]
 #[path = "allowed_hosts_tests.rs"]
 mod allowed_hosts_tests;
+
+#[cfg(test)]
+#[path = "redirect_tail_tests.rs"]
+mod redirect_tail_tests;

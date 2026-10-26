@@ -1,3 +1,9 @@
+## 1.30.0
+
+- `http` tools: `follow_redirect: {max: 1, allowed_hosts: [...]}` (GET only) follows one redirect to an exact host that is also in the toolkit's new Tier 1 `redirect_allowed_hosts`; the target is checked (https, default port, no userinfo, name not IP, public address) before connecting, gets no credential, and its URL never reaches the answer or the audit log (only status and host, audit field `redirect`).
+- `http` tools: `output_tail_lines: N` (1-1000) reads up to 20 MiB and returns only the last N lines, then applies `max_output_bytes` from the end.
+- `redact_secrets` on an `http` toolkit now masks the full response body before `output_tail_lines` cuts it to the last N lines, so a PEM block outside the tail window is still masked whole; this is new only for the tail path -- the existing non-tail behaviour (mask after `max_output_bytes` already cut the body, same as before 1.30.0) is unchanged.
+
 ## 1.29.0
 
 The `kuma` executor adds TCP port monitors, retry settings and toolkit-pinned notifications, and a kuma tool can pin values with `fixed:`.

@@ -437,6 +437,69 @@ pub struct HttpRequest {
     pub body: Option<Value>,
 }
 
+/// An `http` tool's `follow_redirect:` block (1.30.0).
+///
+/// `max` is always 1: one hop, from the toolkit's own target to one of
+/// `allowed_hosts`. Every host is an exact name -- no wildcard, no IP
+/// literal -- and must also be in the toolkit's Tier 1
+/// `redirect_allowed_hosts` (checked in `catalog::validate_against_tier1`),
+/// so a console-written tool can narrow where a redirect may go but never
+/// widen it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FollowRedirect {
+    pub max: u32,
+    pub allowed_hosts: Vec<String>,
+}
+
+/// The ceiling of `output_tail_lines` (1.30.0).
+pub const MAX_OUTPUT_TAIL_LINES: i64 = 1000;
+
+/// Parses and checks `follow_redirect: {max: 1, allowed_hosts: [...]}`.
+pub fn parse_follow_redirect(value: &Value, where_: &str) -> crate::errors::ConfigResult<FollowRedirect> {
+    use crate::errors::ConfigError;
+    let Value::Object(m) = value else {
+        return Err(ConfigError::new(format!(
+            "{where_}: 'follow_redirect' must be a mapping {{max: 1, allowed_hosts: [...]}}"
+        )));
+    };
+    let mut unknown: Vec<String> =
+        m.keys().filter(|k| k.as_str() != "max" && k.as_str() != "allowed_hosts").cloned().collect();
+    if !unknown.is_empty() {
+        unknown.sort();
+        return Err(ConfigError::new(format!("{where_}: 'follow_redirect' has unknown keys {}", repr_list(&unknown))));
+    }
+    match m.get("max") {
+        Some(Value::Number(n)) if n.as_i64() == Some(1) => {}
+        other => {
+            return Err(ConfigError::new(format!(
+                "{where_}: 'follow_redirect.max' must be 1 -- gatekeeper follows at most one redirect, not {}",
+                crate::pyfmt::repr_value(other.unwrap_or(&Value::Null))
+            )))
+        }
+    }
+    let hosts = crate::tier1::parse_host_list(m.get("allowed_hosts"), &format!("{where_}: follow_redirect"))?;
+    if hosts.is_empty() {
+        return Err(ConfigError::new(format!(
+            "{where_}: 'follow_redirect.allowed_hosts' must not be empty -- name the exact hosts a redirect may go to"
+        )));
+    }
+    Ok(FollowRedirect { max: 1, allowed_hosts: hosts })
+}
+
+/// Parses and checks `output_tail_lines: N` (1 to [`MAX_OUTPUT_TAIL_LINES`]).
+pub fn parse_output_tail_lines(value: &Value, where_: &str) -> crate::errors::ConfigResult<usize> {
+    use crate::errors::ConfigError;
+    match value {
+        Value::Number(n) if n.as_i64().is_some_and(|v| (1..=MAX_OUTPUT_TAIL_LINES).contains(&v)) => {
+            Ok(n.as_i64().unwrap() as usize)
+        }
+        other => Err(ConfigError::new(format!(
+            "{where_}: 'output_tail_lines' must be an integer from 1 to {MAX_OUTPUT_TAIL_LINES}, not {}",
+            crate::pyfmt::repr_value(other)
+        ))),
+    }
+}
+
 /// Builds the HTTP request parts and checks the result against Tier 1
 /// (FR-8.5/8.7). Scheme and host are never built here.
 pub fn build_http_request(tool: &ToolDef, values: &Values, toolkit: &Toolkit) -> Result<HttpRequest, Denied> {
