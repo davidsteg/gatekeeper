@@ -660,6 +660,74 @@ pub fn fill_body_files(body: &mut Value) -> Result<Vec<(String, u64)>, Denied> {
     Ok(out)
 }
 
+/// Bodies `verify.require_body` treats as "nothing there" -- what APIs
+/// such as Tdarr's cruddb getById answer, with HTTP 200, for a missing
+/// document.
+const EMPTY_BODIES: &[&str] = &["", "null", "{}", "[]", "\"\""];
+
+/// `verify.require_body: true` (1.27.0): a 2xx with an empty body is a
+/// failure.
+pub fn require_body(verify: ExecResult) -> ExecResult {
+    if verify.outcome != OUTCOME_OK || !EMPTY_BODIES.contains(&verify.stdout.trim()) {
+        return verify;
+    }
+    ExecResult { outcome: OUTCOME_FAILED.to_string(), stderr: "verify response body is empty (require_body).".into(), ..verify }
+}
+
+/// Folds a main request and its `verify` read-back into one result
+/// (1.27.0).
+///
+/// stdout is a JSON object with both -- `main` and `verify`, each
+/// `{outcome, status, body, error, truncated}` -- so the agent sees what
+/// the target said to the action and what it says now. The outcome is
+/// `ok` only if both are. A main request that did not succeed is passed
+/// through with `verify: {"skipped": ...}` (its outcome, `unknown`
+/// included, stands); a main that succeeded but whose verify did not is
+/// `failed`, and stderr says so. A main refused by the executor itself
+/// (SSRF block, missing credential) keeps its denial for the audit.
+pub fn combine_verify(main: ExecResult, verify: Option<ExecResult>) -> ExecResult {
+    fn part(r: &ExecResult) -> Value {
+        serde_json::json!({
+            "outcome": r.outcome, "status": r.exit_code, "body": r.stdout,
+            "error": r.stderr, "truncated": r.truncated,
+        })
+    }
+    let mut payload = serde_json::Map::new();
+    payload.insert("main".into(), part(&main));
+    let (outcome, stderr) = match &verify {
+        None => {
+            payload.insert("verify".into(), serde_json::json!({"skipped": "main request did not succeed"}));
+            (main.outcome.clone(), main.stderr.clone())
+        }
+        Some(v) if v.outcome == OUTCOME_OK => {
+            payload.insert("verify".into(), part(v));
+            (OUTCOME_OK.to_string(), String::new())
+        }
+        Some(v) => {
+            payload.insert("verify".into(), part(v));
+            let status = |c: Option<i64>| c.map(|c| c.to_string()).unwrap_or_else(|| "None".into());
+            let text = format!(
+                "VERIFY FAILED: the main request succeeded (HTTP {}), but the verify request did not (HTTP {}). {}",
+                status(main.exit_code),
+                status(v.exit_code),
+                v.stderr
+            );
+            (OUTCOME_FAILED.to_string(), text.trim_end().to_string())
+        }
+    };
+    let truncated = main.truncated || verify.as_ref().is_some_and(|v| v.truncated);
+    let duration_ms = main.duration_ms + verify.as_ref().map_or(0, |v| v.duration_ms);
+    ExecResult {
+        outcome,
+        stdout: crate::pyjson::dumps_with(&Value::Object(payload), &crate::pyjson::Opts::unicode()),
+        stderr,
+        truncated,
+        duration_ms,
+        external_untrusted: true,
+        ..main
+    }
+}
+
 /// One `http` call. `credentials`/`toolkit.credential` rather than a
 /// pre-resolved value: this module is one of the few places allowed to call
 /// [`CredentialStore::resolve`].

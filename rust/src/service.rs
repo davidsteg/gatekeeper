@@ -22,7 +22,7 @@ use crate::audit::{AuditLog, CallRecord};
 use crate::catalog::{load_catalog, Catalog, ToolDef};
 use crate::credentials::CredentialStore;
 use crate::errors::{ConfigError, DenialReason, Denied};
-use crate::execute::{self, ExecResult, Redact, ResourceLocks, OUTCOME_OK};
+use crate::execute::{self, ExecResult, Redact, ResourceLocks, OUTCOME_FAILED, OUTCOME_OK};
 use crate::identity::{load_identities, Identity, IdentityStore};
 use crate::mcp::CatalogNotifier;
 use crate::messages::MessageStore;
@@ -545,7 +545,15 @@ impl Service {
                     env: self.environment(&toolkit)?,
                     stdin: t.stdin.clone(),
                 },
-                "http" => Request::Http(validate::build_http_request(&t, &values, &toolkit)?),
+                "http" => {
+                    let req = validate::build_http_request(&t, &values, &toolkit)?;
+                    // Built (and Tier 1-checked) here, before anything is
+                    // sent: a verify that cannot be resolved denies the
+                    // whole call instead of firing a main request whose
+                    // read-back is already known to be impossible.
+                    let verify = validate::build_http_verify(&t, &values, &toolkit)?;
+                    Request::Http(req, verify)
+                }
                 "truenas" => {
                     let (method, params) = validate::build_rpc_call(&t, &values, &toolkit)?;
                     Request::Rpc { method, params }
@@ -656,7 +664,7 @@ impl Service {
                         .await?
                     }
                 }
-                Request::Http(req) => {
+                Request::Http(req, verify) => {
                     // Per-tool base_url override (0.45.5): the override wins
                     // when set, the toolkit value stands otherwise.
                     if let Some(base_url) = tool.base_url.as_deref().filter(|b| !b.is_empty()) {
@@ -664,7 +672,7 @@ impl Service {
                             toolkit.base_url = Some(base_url.to_string());
                         }
                     }
-                    execute::http::run(
+                    let main = execute::http::run(
                         &req.method,
                         &req.path,
                         &req.query,
@@ -678,7 +686,49 @@ impl Service {
                         tool.idempotent,
                         Some(&redact),
                     )
-                    .await?
+                    .await?;
+                    match verify {
+                        None => main,
+                        Some(v) => {
+                            let read_back = if main.outcome == OUTCOME_OK {
+                                let r = execute::http::run(
+                                    &v.method,
+                                    &v.path,
+                                    &v.query,
+                                    v.body.as_ref(),
+                                    None,
+                                    &toolkit,
+                                    credentials,
+                                    timeout_seconds as f64,
+                                    max_output_bytes,
+                                    // verify only reads (or sends a fixed
+                                    // body), so a timeout is a plain
+                                    // failure, never `unknown`.
+                                    true,
+                                    Some(&redact),
+                                )
+                                .await
+                                // The main write already happened: an error
+                                // here must not drop its result (1.28.1). It
+                                // is a failed verify, reported next to main.
+                                .unwrap_or_else(|e| {
+                                    ExecResult::new(
+                                        OUTCOME_FAILED,
+                                        None,
+                                        "",
+                                        format!("verify request could not be sent: {e}"),
+                                        false,
+                                        0,
+                                    )
+                                });
+                                let require = tool.verify.as_ref().is_some_and(|d| d.require_body);
+                                Some(if require { execute::http::require_body(r) } else { r })
+                            } else {
+                                None
+                            };
+                            execute::http::combine_verify(main, read_back)
+                        }
+                    }
                 }
                 Request::Agent(operation) => {
                     let store = self.mailbox(&toolkit);
@@ -725,6 +775,8 @@ impl Service {
                         idempotent: tool.idempotent,
                         run_as: effective_run_as,
                         mode: tool.file_mode,
+                        max_entries: tool.delete_max_entries,
+                        files_only: tool.delete_files_only,
                     };
                     // A masked read written back would replace the real
                     // secret with the mask: refuse it before it touches disk.
@@ -1090,19 +1142,25 @@ fn describe_request(request: &Request, values: &validate::Values, secret_names: 
             Some(text) => format!("{} < [stdin: {} bytes]", quoted(argv), text.len()),
             None => quoted(argv),
         },
-        Request::Http(req) => {
-            let mut line = format!("{} {}", req.method, req.path);
-            if !req.query.is_empty() {
-                let query: Vec<String> = masked_pairs(&req.query)
-                    .into_iter()
-                    .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or_default()))
-                    .collect();
-                line = format!("{line}?{}", query.join("&"));
+        Request::Http(req, verify) => {
+            let describe = |req: &validate::HttpRequest| {
+                let mut line = format!("{} {}", req.method, req.path);
+                if !req.query.is_empty() {
+                    let query: Vec<String> = masked_pairs(&req.query)
+                        .into_iter()
+                        .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or_default()))
+                        .collect();
+                    line = format!("{line}?{}", query.join("&"));
+                }
+                if let Some(body) = &req.body {
+                    line = format!("{line} {}", scrub(body.clone(), &Redactor::new()));
+                }
+                line
+            };
+            match verify {
+                None => describe(req),
+                Some(v) => format!("{} ; verify: {}", describe(req), describe(v)),
             }
-            if let Some(body) = &req.body {
-                line = format!("{line} {}", scrub(body.clone(), &Redactor::new()));
-            }
-            line
         }
         Request::Rpc { method, params } => {
             let params: Map<String, Value> = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -1130,7 +1188,9 @@ fn describe_request(request: &Request, values: &validate::Values, secret_names: 
 /// The executor-specific request built inside the denial-audited block.
 enum Request {
     Argv { argv: Vec<String>, env: Option<HashMap<String, String>>, stdin: Option<String> },
-    Http(validate::HttpRequest),
+    /// The main request and, when the tool has a `verify:` block, its
+    /// read-back (1.27.0).
+    Http(validate::HttpRequest, Option<validate::HttpRequest>),
     Rpc { method: String, params: indexmap::IndexMap<String, Value> },
     Google { action: String, args: Vec<String>, env: HashMap<String, String> },
     Microsoft { action: String, args: Vec<String>, env: HashMap<String, String> },

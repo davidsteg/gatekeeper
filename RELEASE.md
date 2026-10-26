@@ -1,3 +1,57 @@
+## 1.28.1
+
+GraphQL tools with an inline query load again, and a verify that cannot be sent no longer loses the result of the write before it.
+
+### Fixed
+
+- **An `http` body with braces in it loads again.** 1.27.0 refused every brace in an `http` template that was not exactly `{<declared parameter>}`, in the body as well. A GraphQL tool sends its query inline in a body string (`{ findScene(id: $id) { id files { path } } }`), so every such tool -- the Stash tools among them -- stopped loading and was disabled at startup. A string leaf of `body` and `verify.body` is now read as before 1.27.0: a brace that is not the `{name}` placeholder shape is literal text. The guard against typos stays: a `{name}` there must still be a declared parameter (`template references unknown parameter 'undeclared_param'`), and the optional marker `{name?}` is still refused, with the 1.27.0 message. `path`, `query`, `verify.path` and `verify.query` keep the strict 1.27.0 rule.
+- **A verify that cannot be sent keeps the main result.** When the main request of a tool with `verify:` succeeded but the verify request then failed inside gatekeeper before any response (for example, the credential store became unreadable), the call returned an error and the main request's result was lost, although the write had happened. It is now reported like any failed verify: outcome `failed`, `VERIFY FAILED: the main request succeeded (HTTP 200), but the verify request did not (HTTP None). verify request could not be sent: ...` in stderr, and stdout carries the main result next to the failed verify.
+
+### Why this way
+
+- Braces in a body are data more often than not: GraphQL selection sets, input objects, JSON inside a string. Requiring an escape (`{{`) or a per-tool opt-out would have meant editing every live GraphQL tool, and gatekeeper had no escape syntax to offer. Before 1.27.0, body braces were always literal (that is what the Python implementation and the Rust port did), so restoring that keeps every stored tool loading without a change. The only real risk in a body is a mistyped placeholder name, and the unknown-parameter check, which matches the exact `{name}` shape, catches it in a body as anywhere else. A `{name?}` marker cannot be GraphQL or JSON (no `?` inside braces there), so refusing it costs nothing. URL templates have no use for a literal brace, so the strict rule stays there.
+
+### Upgrading
+
+- Nothing to do. A GraphQL tool disabled by 1.27.0/1.28.0 loads again after the update. A body string that literally contains `{word}` with a lowercase identifier inside is still read as a placeholder, as it always was.
+
+## 1.28.0
+
+`file_operation: delete` is bounded, lists before it deletes, and cannot be steered through a symlink.
+
+### Added
+
+- **`delete: {max_entries, files_only}` on a delete tool.** `max_entries` (1 to 100000, default 100000) caps how many entries may lie below the target; `files_only: true` refuses any sub-directory. Both are checked on a full listing *before* anything is removed: above the cap, or with a sub-directory, the call fails with `Aborted, nothing deleted: ...` and the tree is untouched. `delete` on any other file operation does not load.
+
+### Changed
+
+- **A delete lists first, then removes exactly what it listed.** The 1.25.0 delete resolved the path and removed the tree recursively. It now walks the path as sent: the matching root is opened, every component below it without following symlinks (relative to its parent's directory fd), and a symlink anywhere in the path, the target included, is refused instead of resolved. A tree nested deeper than 64 levels, or with an entry named in `protected_resources` anywhere below the target, aborts before anything goes, as do listing errors.
+- **Swapping a directory for a symlink mid-call removes nothing outside the tree.** Before removing, the chain from the root to the target's parent is re-checked, and every entry is re-checked by device, inode and type right before it goes, through the directory fds held since the listing. An entry added, removed or replaced in between stops the delete at that point: the outcome is `failed`, and stdout starts with `deleted before abort:` and lists what was removed.
+- **The success output lists the removed entries.** A directory reports `Deleted <path> (directory, N entries below it):` followed by one `d`/`f`/`l` line per entry, capped at the tool's `max_output_bytes`. A file still reports `Deleted <path>`, and a path that does not exist is still `ok` (`Nothing to delete at <path>`).
+- Refusals now end with `Nothing was deleted.`. Deleting a path root still fails with `Refusing to delete the path root <path>`.
+
+### Upgrading
+
+- A delete tool without a `delete:` block loads as before, with the 100000-entry cap. A tree with more entries below it, or nested deeper than 64 levels, now fails instead of being deleted. Split such a cleanup into several calls.
+- A delete through a symlinked directory inside a path root (not the root itself) is now refused. Name the real path instead.
+
+## 1.27.0
+
+Optional query parameters that can actually be left out, a stricter check of `http` templates, and an optional read-back after an `http` tool's request.
+
+### Added
+
+- **`verify:` on an `http` tool.** A second request, sent only after the main request succeeded, with the same toolkit and the same validated parameter values: `method` (default `GET`), `path`, `query`, `body` and `require_body`. The result's stdout is then a JSON object `{"main": ..., "verify": ...}`, each with `outcome`, `status`, `body`, `error` and `truncated`. The call is `ok` only if both are; a verify that fails makes the call `failed` with `VERIFY FAILED: ...` in stderr. A main request that did not succeed is passed through with `verify: {"skipped": ...}`. `require_body: true` also fails a 2xx whose body is empty (`""`, `null`, `{}`, `[]`). A method other than `GET` needs a fixed `verify.body`; `raw_param` and `from_file` are refused there. The verify method and path must satisfy the toolkit's `allowed_methods` and `allowed_path_prefixes`, at load and again on the resolved request before anything is sent. The audit record's `command` names both requests.
+
+### Changed
+
+- **An absent optional query parameter leaves its key out.** A `query` value whose placeholders are only `required: false` parameters the agent did not supply is no longer refused with `Query template 'x' needs [...]`: the key is not sent at all (no empty value), so the target's own default applies. A required parameter is still refused, and a key is never sent half-filled. Path placeholders stay mandatory, and body templates are unchanged.
+- **Every brace in an `http` template must be `{<declared parameter>}`.** In `path`, `query`, `body` and `verify`, a `{name?}`, `{Name}`, `{ name }`, `{}` or a stray `{`/`}` used to load (and pass `admin.tool_validate`) and went to the target literally. It is now a load error naming the location, the template and the token.
+
+### Upgrading
+
+- A stored `http` tool whose template contains such a brace no longer loads and is disabled at startup with that error; `admin.tool_validate` and the console refuse it. Replace the marker with the plain `{name}` and declare the parameter `required: false` if it is optional.
+
 ## 1.26.0
 
 A headless mode for an instance whose configuration only its deployment may change, and a way to store a credential without the console.

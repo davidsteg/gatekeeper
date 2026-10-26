@@ -161,6 +161,32 @@ outside `allowed_hosts` disables the tool at load). Executor-side refusals
 are audited as the call's `denial_reason`/`detail` (names and addresses,
 never a secret); the outcome stays `failed`.
 
+**Query parameters and template syntax (1.27.0).** A `query` key whose
+template names only `required: false` parameters the agent did not supply
+is left out of the request entirely (no key, no empty value); one required
+or undeclared name is still `param_missing`, and a key is never sent
+half-substituted (`validate::build_http_request`). Path placeholders stay
+mandatory; body templates are unchanged. At load, every brace in an `http`
+`path`/`query`/`verify.path`/`verify.query` template must be exactly
+`{<declared parameter>}` (`catalog::check_http_placeholder_syntax`), so
+`{name?}`, `{Name}` or a stray brace no longer reaches the target literally.
+A `body`/`verify.body` string leaf is read leniently (1.28.1): its braces are
+usually payload (a GraphQL query sent inline), so anything that is not the
+`{name}` shape stays literal text, as before 1.27.0. A `{name}` there must
+still be a declared parameter, and the `{name?}` marker is still refused.
+
+**Read-back (`verify:`, 1.27.0).** An `http` tool may declare a second
+request that runs only after the main one succeeded, with the same
+parameter values and the same Tier 1 checks (`validate::build_http_verify`,
+built before the main request is sent). Only `GET` goes without a fixed
+`verify.body`; there is no raw-param or `from_file` body. A timeout on the
+verify is `failed`, never `unknown`. Main and verify are folded into one
+result (`execute::http::combine_verify`): `ok` only if both are, stdout
+`{"main": ..., "verify": ...}`; `require_body` fails an empty 2xx. A verify
+that cannot be sent at all (an executor error after the main request
+succeeded) is a failed verify next to the kept main result, never an error
+that drops it (1.28.1).
+
 **Body fields from a file (1.21.0).** A body field written
 `{from_file: <param>, encoding: base64}` is not a template: the executor
 replaces it by that file's content, base64-encoded, just before sending
@@ -320,11 +346,29 @@ script, SQL), written while the output is read so a full pipe cannot
 deadlock; it is never a template, and the record logs only its size. The
 `file` executor gains `delete`, which refuses a path root and any
 directory with a protected resource below it, and does not follow
-symlinks; and a `write` tool may fix the mode (`0600`, `0640`, `0644`),
+symlinks (bounded since 1.28.0, see below); and a `write` tool may fix the mode (`0600`, `0640`, `0644`),
 set before the content is written. A toolkit with `structured_content:
 true` adds MCP `structuredContent` (outcome, exit code, the masked stdout
 and stderr, truncated, external_untrusted) to each result, for a program
 that parses results rather than reading them.
+
+**Bounded delete (1.28.0).** `execute::bounded_delete` replaces the
+recursive remove. It works on the path as sent, never on a resolved one:
+the matching root is opened by its realpath, every component below it
+`O_NOFOLLOW` relative to its parent's fd, so a symlink in the path is
+refused rather than followed. It then lists the whole tree through fds
+(symlinks are entries, never entered) and aborts before removing anything
+on more than `delete.max_entries` entries (at most and by default
+`MAX_DELETE_ENTRIES` = 100000), on any sub-directory with
+`delete.files_only`, on a level deeper than `MAX_DELETE_DEPTH` = 64, on a
+`protected_resources` name anywhere below the target, or on a listing
+error. Removal re-walks the root-to-parent chain, then goes bottom-up with
+`unlinkat` on the fds held since the listing, each entry re-checked by
+`(st_dev, st_ino, type)` first; the first extra, missing or replaced entry
+stops it and stdout names what was already removed. A race can at most
+remove a name inside the listed tree, never follow a link out of it. The
+`run_as` child gets `max_entries`/`files_only` in its request and runs the
+same function.
 
 `ssh` toolkit boundaries: `ssh_host`, `ssh_port`, `ssh_user`,
 `ssh_known_hosts` (required — the exact `ssh-keyscan` output pinning the

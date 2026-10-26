@@ -461,6 +461,23 @@ pub fn build_http_request(tool: &ToolDef, values: &Values, toolkit: &Toolkit) ->
     for (key, template) in &tool.query_template {
         let missing = placeholders_missing(template, values);
         if !missing.is_empty() {
+            // An optional parameter the agent did not supply leaves its
+            // query key out entirely -- no key, no empty value -- so the
+            // target's own default applies, as an omitted optional CLI
+            // argument is left off the argv. Only when *every* missing name
+            // is a declared, optional, non-derived parameter: a required (or
+            // undeclared) name is still a denial, even for a caller that
+            // skipped `resolve_parameters`. The key is dropped as a whole,
+            // never sent half-substituted. Path placeholders stay mandatory
+            // (a path without its segment is another endpoint), and body
+            // templates are unchanged (absent vs. null vs. empty is the
+            // target's semantics, not ours to guess).
+            let all_optional = missing.iter().all(|name| {
+                tool.parameters.get(name).is_some_and(|p| !p.required && !p.is_derived())
+            });
+            if all_optional {
+                continue;
+            }
             return Err(denied(
                 DenialReason::ParamMissing,
                 format!("Query template {} needs {}.", repr_str(key), repr_list(&missing)),
@@ -474,6 +491,24 @@ pub fn build_http_request(tool: &ToolDef, values: &Values, toolkit: &Toolkit) ->
         None => None,
     };
     Ok(HttpRequest { method, path, query, body })
+}
+
+/// Builds an `http` tool's optional `verify` request (1.27.0) exactly like
+/// the main one: same parameter values, same substitution, same Tier 1
+/// re-check of the resolved path and method -- [`build_http_request`] on a
+/// copy of the tool whose request fields are the verify block's. `None`
+/// when the tool has no `verify`.
+pub fn build_http_verify(tool: &ToolDef, values: &Values, toolkit: &Toolkit) -> Result<Option<HttpRequest>, Denied> {
+    let Some(verify) = &tool.verify else { return Ok(None) };
+    let mut verify_tool = tool.clone();
+    verify_tool.http_method = Some(verify.method.clone());
+    verify_tool.path_template = Some(verify.path_template.clone());
+    verify_tool.query_template = verify.query_template.clone();
+    verify_tool.body_template = verify.body_template.clone();
+    verify_tool.body_raw_param = None;
+    verify_tool.max_file_bytes = None;
+    verify_tool.verify = None;
+    build_http_request(&verify_tool, values, toolkit).map(Some)
 }
 
 /// The body's `{from_file: <param>, encoding}` fields, pointed at the file

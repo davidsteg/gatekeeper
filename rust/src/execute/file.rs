@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::local::{kill_group, returncode, timeout_duration};
+use super::bounded_delete;
 use super::{elapsed_ms, ExecResult, OUTCOME_FAILED, OUTCOME_OK, OUTCOME_UNKNOWN};
 use crate::pathutil;
 use crate::pyfmt::{os_error, repr_list, repr_str, str_value};
@@ -67,6 +68,12 @@ pub struct FileCall {
     /// A `write` tool's fixed file mode (`mode: "0600"`, 1.25.0). `None`
     /// keeps the umask's default for a new file and an existing file's mode.
     pub mode: Option<u32>,
+    /// A `delete` tool's `delete.max_entries` (1.28.0): above it, nothing
+    /// is deleted. `None` is the ceiling,
+    /// [`bounded_delete::MAX_DELETE_ENTRIES`].
+    pub max_entries: Option<i64>,
+    /// A `delete` tool's `delete.files_only`: any sub-directory aborts.
+    pub files_only: bool,
 }
 
 /// Python's `ValueError("lstat: embedded null character in path")`, which
@@ -151,6 +158,11 @@ pub fn validate_path(path: &str, path_roots: &[String], protected: &[String]) ->
 /// implementation of read, write, patch and list, not a privileged copy
 /// that could drift from the unprivileged one. `Err` is the text of an
 /// exception Python's caller turned into a failed result.
+///
+/// `delete` is the exception to "already-validated path": it takes the
+/// path *as the agent sent it* (resolving would turn a symlink in it into
+/// its target) and does its own checks, so the `run_as` child runs them
+/// too -- see [`bounded_delete`].
 #[allow(clippy::too_many_arguments)]
 pub fn perform(
     operation: &str,
@@ -162,6 +174,8 @@ pub fn perform(
     mode: Option<u32>,
     path_roots: &[String],
     protected: &[String],
+    max_entries: Option<i64>,
+    files_only: bool,
 ) -> Result<Op, String> {
     match operation {
         "read" => read(path, max_output_bytes),
@@ -169,7 +183,14 @@ pub fn perform(
             let content = content.ok_or("'content' parameter is required for write")?;
             Ok(write(path, content, mode))
         }
-        "delete" => delete(path, path_roots, protected),
+        "delete" => bounded_delete::delete(
+            path,
+            path_roots,
+            protected,
+            max_entries.unwrap_or(bounded_delete::MAX_DELETE_ENTRIES),
+            files_only,
+            max_output_bytes,
+        ),
         "patch" => match (old_string, new_string) {
             (Some(old), Some(new)) => patch(path, old, new),
             _ => Err("'old_string' and 'new_string' are required for patch".to_string()),
@@ -190,15 +211,20 @@ pub async fn run(call: &FileCall) -> ExecResult {
         }
     };
 
+    // `validate_path` resolves symlinks before its scope check: right for
+    // reading, wrong for deleting, which would then act on a link's
+    // target. A delete gets the path as sent and walks it itself.
+    let target = if call.operation == "delete" { call.path.as_str() } else { validated.as_str() };
+
     if let Some(run_as) = &call.run_as {
         // Path already checked above against this toolkit's Tier 1 roots --
         // the child re-checks it anyway (see `validate_path`).
-        return run_as_user(run_as, call, &validated, started).await;
+        return run_as_user(run_as, call, target, started).await;
     }
 
     match perform(
         &call.operation,
-        &validated,
+        target,
         call.content.as_deref(),
         call.old_string.as_deref(),
         call.new_string.as_deref(),
@@ -206,6 +232,8 @@ pub async fn run(call: &FileCall) -> ExecResult {
         call.mode,
         &call.path_roots,
         &call.protected,
+        call.max_entries,
+        call.files_only,
     ) {
         Ok(op) => ExecResult::new(op.outcome, op.exit_code, op.stdout, op.stderr, op.truncated, elapsed_ms(started)),
         Err(exc) => ExecResult::new(OUTCOME_FAILED, Some(1), "", exc, false, elapsed_ms(started)),
@@ -318,6 +346,8 @@ async fn run_as_user(run_as: &str, call: &FileCall, path: &str, started: Instant
         "protected": call.protected,
         "max_output_bytes": call.max_output_bytes,
         "mode": call.mode,
+        "max_entries": call.max_entries,
+        "files_only": call.files_only,
     }));
 
     let done = |outcome: &str, exit_code: Option<i64>, out: String, err: String, trunc: bool| {
@@ -549,56 +579,6 @@ fn write_with_mode(path: &str, content: &str, mode: u32) -> std::io::Result<()> 
     // An existing file keeps its mode on open: narrow it before the content lands.
     file.set_permissions(std::fs::Permissions::from_mode(mode))?;
     file.write_all(content.as_bytes())
-}
-
-/// Deletes a file, or a directory with everything under it (1.25.0).
-/// Never a path root itself; a symlink inside the tree is removed, not
-/// followed. Nothing there is success: deleting is idempotent.
-fn delete(path: &str, path_roots: &[String], protected: &[String]) -> Result<Op, String> {
-    for root in path_roots {
-        if realpath_checked(root)? == path {
-            return Ok(failed(format!("Refusing to delete the path root {path}")));
-        }
-    }
-    // `validate_path` checked the path's own segments; a directory must not
-    // take a protected resource below it down with it either.
-    if let Some(name) = protected_below(Path::new(path), protected) {
-        return Ok(failed(format!("Refusing to delete {path}: it contains protected resource {}", repr_str(&name))));
-    }
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(e) if errno(&e) == Some(libc::ENOENT) => return Ok(ok(format!("Nothing to delete at {path}"), false)),
-        Err(e) if is_permission(&e) => return Ok(failed(format!("Permission denied: {path}"))),
-        Err(e) => return Err(os_error(&e, path)),
-    };
-    let removed = if meta.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
-    match removed {
-        Ok(()) => Ok(ok(format!("Deleted {path}"), false)),
-        Err(e) if is_permission(&e) => Ok(failed(format!("Permission denied: {path}"))),
-        Err(e) => Ok(failed(format!("Delete error: {}", os_error(&e, path)))),
-    }
-}
-
-/// The first protected name anywhere below `dir`, symlinks not followed
-/// (`remove_dir_all` does not follow them either). An unreadable entry
-/// counts as protected: what cannot be checked is not deleted.
-fn protected_below(dir: &Path, protected: &[String]) -> Option<String> {
-    let entries = match std::fs::symlink_metadata(dir) {
-        Ok(meta) if meta.is_dir() => std::fs::read_dir(dir),
-        _ => return None,
-    };
-    let Ok(entries) = entries else { return Some(dir.display().to_string()) };
-    for entry in entries {
-        let Ok(entry) = entry else { return Some(dir.display().to_string()) };
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if protected.contains(&name) {
-            return Some(name);
-        }
-        if let Some(found) = protected_below(&entry.path(), protected) {
-            return Some(found);
-        }
-    }
-    None
 }
 
 /// Python's `UnicodeDecodeError` text for strict UTF-8 decoding.
