@@ -1,3 +1,25 @@
+## 1.29.0
+
+The `kuma` executor adds TCP port monitors, retry settings and toolkit-pinned notifications, and a kuma tool can pin values with `fixed:`.
+
+### Added
+
+- **`monitor_add_port`.** A new kuma operation (category `write`) adds a TCP port monitor (`type: port`). It takes `name` (1-60 characters), `hostname` (a hostname or IPv4 address, with no scheme, port, path or userinfo) and `port` (1-65535), plus `interval`, `maxretries` and `retry_interval`. The target must be listed in the new toolkit field `allowed_monitor_targets`: an IPv4 address must lie in one of its CIDRs, and a hostname must match one of its hostnames exactly (case-insensitive, never resolved). A target outside it is refused as `tier1_violation` before any connection to Kuma. A toolkit that allows `monitor_add_port` must set the field.
+- **Retries.** `monitor_add_http` and `monitor_add_port` take `maxretries` (0-10) and `retry_interval` (20-3600 s, sent as Kuma's `retryInterval`). The executor enforces these bounds itself, whatever the tool definition declares, and the catalog refuses a declaration that is wider. Defaults are maxretries 0 and retry_interval equal to the interval, as in Kuma's UI.
+- **`kuma_notification_ids` (Tier 1).** A kuma toolkit lists the Kuma notification IDs, for example `[1, 4]`. Each new monitor is attached to exactly these as `notificationIDList`, and an agent cannot choose others. Before each `add`, the IDs are checked against the `notificationList` that Kuma pushes on login. Only the IDs are read; the notification config, which holds tokens, is never copied. If an ID is unknown, or Kuma sends no list, the add is aborted before anything is written. At load time the IDs must be distinct positive integers.
+- **`fixed:` on kuma tools.** `fixed: {interval: 60, maxretries: 3, retry_interval: 60}` pins these values, so the caller does not send them. They are not in the input schema, and sending one is `param_unknown`. Each value is checked against the executor bounds at load and again at call time. A key that is both in `fixed` and in `parameters`, a key outside interval/maxretries/retry_interval, or one the operation does not read is a load error.
+- **Add answers name `monitor_id` and `active`.** Both add operations return `monitor_id` and `active`, which is read back with `getMonitor` (`null` if that read fails, since the monitor exists anyway). They also return the interval, retry settings and notification IDs that were applied.
+- `config/examples/kuma-tools.yaml` holds the example tool definitions `uptimekuma.monitor_add` and `uptimekuma.monitor_add_port`. They are documentation and a test fixture and are not loaded by default.
+
+### Unchanged limits
+
+- No editing or deleting of monitors, and no changes to settings or notification definitions. Pause and resume still only act on monitors whose description starts with "Managed by gatekeeper".
+
+### Risks / compatibility
+
+- `notificationIDList` uses the `{"<id>": true}` shape that Kuma 1.23 and 2.0 send from their own UI. The mocked tests cover this shape, but it has not been tried against a live Kuma.
+- The notification check relies on Kuma pushing `notificationList` after login, which 1.23 and 2.x do. A Kuma that does not push it makes every add with `kuma_notification_ids` fail closed after 5 s.
+
 ## 1.28.1
 
 GraphQL tools with an inline query load again, and a verify that cannot be sent no longer loses the result of the write before it.

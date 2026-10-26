@@ -367,6 +367,12 @@ pub fn resolve_parameters(tool: &ToolDef, arguments: &Map<String, Value>) -> Res
         let value = if param.ptype == "path" { resolve_path(param, &raw)? } else { raw };
         resolved.insert(name.clone(), value);
     }
+    // A kuma tool's `fixed:` values (1.29.0). The catalog refuses a key that
+    // is also a declared parameter, so the caller can never send one (it
+    // would be `Unknown parameter`), and nothing above can have set it.
+    for (name, value) in &tool.kuma_fixed {
+        resolved.insert(name.clone(), value.to_string());
+    }
     Ok(resolved)
 }
 
@@ -728,6 +734,10 @@ pub fn build_kuma_call(tool: &ToolDef, values: &Values, toolkit: &Toolkit) -> Re
         ));
     }
     crate::execute::kuma::check_values(&operation, values)?;
+    if operation == "monitor_add_port" {
+        let hostname = values.get("hostname").map(String::as_str).unwrap_or("");
+        crate::execute::kuma::check_monitor_target(toolkit, hostname)?;
+    }
     Ok(operation)
 }
 

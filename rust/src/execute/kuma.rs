@@ -15,16 +15,25 @@
 //! * `monitor_list` -- the monitor list Kuma pushes after login, projected
 //!   to a handful of fields. Kuma's own monitor objects carry basic-auth
 //!   passwords, request headers and bodies; none of those fields is copied.
-//! * `monitor_add_http` -- one `add` with type fixed to `http`, method GET,
-//!   no notifications. The caller supplies name, URL, interval and the
-//!   accepted status range, nothing else of the monitor object.
+//! * `monitor_add_http` -- one `add` with type fixed to `http`, method GET.
+//!   The caller supplies name, URL, interval, the accepted status range and
+//!   the retry settings, nothing else of the monitor object.
+//! * `monitor_add_port` (1.29.0) -- one `add` with type fixed to `port`: a
+//!   TCP connect to a hostname or IPv4 address and a port. The target must
+//!   be in the toolkit's `allowed_monitor_targets`, checked before anything
+//!   is sent.
+//! * Both add operations attach exactly the toolkit's
+//!   `kuma_notification_ids` (1.29.0), after checking against the
+//!   `notificationList` Kuma pushes on login that every one of them exists;
+//!   an unknown ID aborts before the `add`. The caller cannot name any.
 //! * `monitor_pause` / `monitor_resume` -- only for a monitor this executor
 //!   created. Ownership is the `description` it writes on `add`
 //!   ([`MANAGED_MARKER`]); a monitor somebody set up by hand is refused
 //!   before anything is sent for it.
 //!
-//! There is no delete, no edit, and nothing that touches notifications or
-//! settings: those events are simply never emitted by this module.
+//! There is no delete, no edit, and nothing that changes notifications or
+//! settings: those events are simply never emitted by this module. The
+//! notification list is only read, and only its IDs are looked at.
 //!
 //! What it keeps from the `http` executor, by reusing that module's
 //! helpers: the target lives only on the toolkit (`base_url`), the resolved
@@ -72,7 +81,11 @@ use crate::credentials::{CredentialStore, ResolvedCredential};
 use crate::errors::{ConfigError, DenialReason, Denied};
 use crate::pyfmt::{repr_list, repr_str, str_value};
 use crate::pyjson;
-use crate::tier1::{py_truthy, urlsplit, Toolkit, KUMA_INTERVAL_MAX, KUMA_INTERVAL_MIN, KUMA_STATUS_CODES};
+use crate::tier1::{
+    ip_network, is_monitor_hostname, py_truthy, urlsplit, Toolkit, KUMA_INTERVAL_MAX, KUMA_INTERVAL_MIN,
+    KUMA_MAXRETRIES_MAX, KUMA_MAXRETRIES_MIN, KUMA_PORT_MAX, KUMA_PORT_MIN, KUMA_RETRY_INTERVAL_MAX,
+    KUMA_RETRY_INTERVAL_MIN, KUMA_STATUS_CODES,
+};
 
 /// What `monitor_add_http` writes into a monitor's description, and what
 /// `monitor_pause`/`monitor_resume` require to find there. A prefix rather
@@ -86,12 +99,20 @@ pub const MANAGED_MARKER: &str = "Managed by gatekeeper";
 /// login; this only bounds a server that never does.
 const INFO_WAIT_SECONDS: f64 = 3.0;
 
+/// How long an add operation waits for Kuma's `notificationList` event
+/// (pushed right after login) when the toolkit names notification IDs.
+/// Without it the IDs cannot be checked, so nothing is added.
+const NOTIFICATION_WAIT_SECONDS: f64 = 5.0;
+
+/// The longest name `monitor_add_port` accepts (1.29.0).
+const PORT_NAME_MAX: usize = 60;
+
 /// The events that change something in Kuma. Once one is on the wire, a
 /// timeout no longer means "nothing happened" (FR-6.9).
 const WRITE_EVENTS: &[&str] = &["add", "pauseMonitor", "resumeMonitor"];
 
 /// The operations this module has code for (Python's `_OPERATIONS`).
-const OPERATIONS: &[&str] = &["monitor_list", "monitor_add_http", "monitor_pause", "monitor_resume"];
+const OPERATIONS: &[&str] = &["monitor_list", "monitor_add_http", "monitor_add_port", "monitor_pause", "monitor_resume"];
 
 /// How one exchange can end besides success -- Python's exception types.
 #[derive(Debug)]
@@ -519,31 +540,45 @@ fn major_version(info: Option<&[Value]>) -> u64 {
     1
 }
 
-/// The `add` payload: Kuma's own UI defaults for an HTTP(s) monitor, with
-/// only name, url, interval and the accepted status range taken from the
-/// call. Everything that could carry a secret or reach somewhere else
-/// (headers, body, auth, proxy, notifications) is left empty.
+/// What both add operations share (1.29.0): the check cadence, the retry
+/// settings and the notifications, all already bounded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MonitorSettings {
+    pub interval: i64,
+    pub maxretries: i64,
+    pub retry_interval: i64,
+    /// Exactly the toolkit's `kuma_notification_ids`.
+    pub notification_ids: Vec<u64>,
+}
+
+/// Kuma's `notificationIDList`: `{"<id>": true, ...}`, the shape its own UI
+/// sends and its `add` handler reads (it inserts one monitor_notification
+/// row per key whose value is true).
+fn notification_id_list(ids: &[u64]) -> Value {
+    Value::Object(ids.iter().map(|id| (id.to_string(), Value::Bool(true))).collect())
+}
+
+/// The fields every gatekeeper-made monitor carries, whatever its type:
+/// Kuma's own UI defaults, with the cadence, retries and notifications from
+/// `settings`. Everything that could carry a secret or reach somewhere else
+/// (headers, body, auth, proxy) is left out.
 ///
 /// Kuma's `add` handler JSON-encodes the Kafka fields on 1.23 and 2.0
 /// alike and additionally `conditions`/`rabbitmqNodes` on 2.0, whose
 /// database rejects them missing -- so those two are sent to a 2.x server
 /// only, where the column exists.
-pub fn http_monitor(name: &str, url: &str, interval: i64, expected_status: &str, toolkit: &str, major: u64) -> Value {
+fn base_monitor(typ: &str, name: &str, settings: &MonitorSettings, toolkit: &str, major: u64) -> Value {
+    let interval = settings.interval;
     let mut monitor = json!({
-        "type": "http",
+        "type": typ,
         "name": name,
-        "url": url,
-        "method": "GET",
         "interval": interval,
-        "retryInterval": interval,
+        "retryInterval": settings.retry_interval,
         "resendInterval": 0,
-        "maxretries": 0,
+        "maxretries": settings.maxretries,
         "timeout": 48.min((interval as f64 * 0.8) as i64),
-        "accepted_statuscodes": [expected_status],
-        "notificationIDList": {},
-        "ignoreTls": false,
+        "notificationIDList": notification_id_list(&settings.notification_ids),
         "upsideDown": false,
-        "maxredirects": 10,
         "expiryNotification": false,
         "description": format!("{MANAGED_MARKER} (toolkit {toolkit})"),
         "kafkaProducerBrokers": [],
@@ -553,6 +588,45 @@ pub fn http_monitor(name: &str, url: &str, interval: i64, expected_status: &str,
         monitor["conditions"] = json!([]);
         monitor["rabbitmqNodes"] = json!([]);
     }
+    monitor
+}
+
+/// The `add` payload for an HTTP(s) GET monitor: only name, url, the
+/// accepted status range and `settings` come from the call.
+pub fn http_monitor(
+    name: &str,
+    url: &str,
+    expected_status: &str,
+    settings: &MonitorSettings,
+    toolkit: &str,
+    major: u64,
+) -> Value {
+    let mut monitor = base_monitor("http", name, settings, toolkit, major);
+    monitor["url"] = json!(url);
+    monitor["method"] = json!("GET");
+    monitor["accepted_statuscodes"] = json!([expected_status]);
+    monitor["ignoreTls"] = json!(false);
+    monitor["maxredirects"] = json!(10);
+    monitor
+}
+
+/// The `add` payload for a TCP port monitor (1.29.0): hostname and port
+/// from the call. `url` and `accepted_statuscodes` carry the values Kuma's
+/// UI sends for every monitor type (a port check reads neither), because
+/// the `add` handler encodes `accepted_statuscodes` unconditionally.
+pub fn port_monitor(
+    name: &str,
+    hostname: &str,
+    port: u16,
+    settings: &MonitorSettings,
+    toolkit: &str,
+    major: u64,
+) -> Value {
+    let mut monitor = base_monitor("port", name, settings, toolkit, major);
+    monitor["hostname"] = json!(hostname);
+    monitor["port"] = json!(port);
+    monitor["url"] = json!("https://");
+    monitor["accepted_statuscodes"] = json!(["200-299"]);
     monitor
 }
 
@@ -597,26 +671,138 @@ fn get_or<'a>(values: &'a crate::validate::Values, key: &str, default: &'a str) 
     get(values, key).filter(|v| !v.is_empty()).unwrap_or(default)
 }
 
-async fn op_add_http(sio: &mut SocketIo, values: &crate::validate::Values, toolkit: &Toolkit) -> Result<Value, Fail> {
+/// The IDs in Kuma's `notificationList` event (an array of notification
+/// objects). Only `id` is read; a notification's `config` holds webhook
+/// URLs and tokens and is never copied anywhere.
+fn notification_ids_of(args: &[Value]) -> Vec<u64> {
+    match args.first() {
+        Some(Value::Array(items)) => items.iter().filter_map(|n| n.get("id").and_then(Value::as_u64)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Before an `add`: every ID in the toolkit's `kuma_notification_ids` must
+/// exist in this Kuma. A missing one (or a Kuma that sends no list) aborts
+/// the call before anything is written -- a monitor that silently alerts
+/// nobody is worse than no monitor.
+async fn check_notifications(sio: &mut SocketIo, toolkit: &Toolkit) -> Result<(), Fail> {
+    if toolkit.kuma_notification_ids.is_empty() {
+        return Ok(());
+    }
+    let Some(args) = sio.event("notificationList", Some(NOTIFICATION_WAIT_SECONDS), None).await? else {
+        return Err(kuma_error(
+            "Uptime Kuma sent no notification list, so the toolkit's kuma_notification_ids cannot be \
+             checked. Nothing was added.",
+        ));
+    };
+    let known = notification_ids_of(&args);
+    let missing: Vec<String> = toolkit
+        .kuma_notification_ids
+        .iter()
+        .filter(|id| !known.contains(id))
+        .map(|id| id.to_string())
+        .collect();
+    if !missing.is_empty() {
+        return Err(Fail::Denied(Denied::new(
+            DenialReason::Tier1Violation,
+            format!(
+                "Notification ID(s) {} of this toolkit's kuma_notification_ids do not exist in Uptime Kuma. \
+                 Nothing was added.",
+                missing.join(", ")
+            ),
+        )));
+    }
+    Ok(())
+}
+
+/// The bounded settings of one add call: the values (the tool's `fixed:`
+/// ones are already merged in), the defaults Kuma's UI uses, and the
+/// toolkit's notification IDs.
+fn settings_of(values: &crate::validate::Values, toolkit: &Toolkit) -> MonitorSettings {
+    let interval: i64 = get_or(values, "interval", "60").parse().unwrap_or(60);
+    let maxretries: i64 = get_or(values, "maxretries", "0").parse().unwrap_or(0);
+    let retry_interval: i64 = match get(values, "retry_interval").filter(|v| !v.is_empty()) {
+        Some(v) => v.parse().unwrap_or(interval),
+        None => interval,
+    };
+    MonitorSettings { interval, maxretries, retry_interval, notification_ids: toolkit.kuma_notification_ids.clone() }
+}
+
+/// Sends the `add`, then reads the new monitor back for its `active` flag.
+/// The read-back is a plain `getMonitor`; if it fails the monitor exists
+/// anyway, so the call still succeeds with `active: null`.
+async fn add_monitor(sio: &mut SocketIo, monitor: &Value) -> Result<(Value, Value), Fail> {
+    let answer = ack_ok(sio.call("add", vec![monitor.clone()]).await?, "the new monitor")?;
+    let monitor_id = answer.get("monitorID").cloned().unwrap_or(Value::Null);
+    let mut active = Value::Null;
+    if let Some(id) = monitor_id.as_u64() {
+        if let Ok(Value::Object(read)) = sio.call("getMonitor", vec![json!(id)]).await {
+            if read.get("ok").is_some_and(py_truthy) {
+                if let Some(flag) = read.get("monitor").and_then(|m| m.get("active")) {
+                    active = Value::Bool(py_truthy(flag));
+                }
+            }
+        }
+    }
+    Ok((monitor_id, active))
+}
+
+async fn kuma_major(sio: &mut SocketIo) -> Result<u64, Fail> {
     let accept: fn(&[Value]) -> bool = |args| version_of(args).is_some();
     let info = sio.event("info", Some(INFO_WAIT_SECONDS), Some(accept)).await?;
-    let major = major_version(info.as_deref());
-    let interval: i64 = get_or(values, "interval", "60").parse().unwrap_or(60);
+    Ok(major_version(info.as_deref()))
+}
+
+async fn op_add_http(sio: &mut SocketIo, values: &crate::validate::Values, toolkit: &Toolkit) -> Result<Value, Fail> {
+    let major = kuma_major(sio).await?;
+    check_notifications(sio, toolkit).await?;
+    let settings = settings_of(values, toolkit);
     let monitor = http_monitor(
         get(values, "name").unwrap_or(""),
         get(values, "url").unwrap_or(""),
-        interval,
         get_or(values, "expected_status", "200-299"),
+        &settings,
         &toolkit.name,
         major,
     );
-    let answer = ack_ok(sio.call("add", vec![monitor.clone()]).await?, "the new monitor")?;
+    let (monitor_id, active) = add_monitor(sio, &monitor).await?;
     Ok(json!({
-        "monitor_id": answer.get("monitorID").cloned().unwrap_or(Value::Null),
+        "monitor_id": monitor_id,
+        "active": active,
         "name": monitor["name"],
         "url": monitor["url"],
         "interval": monitor["interval"],
+        "maxretries": monitor["maxretries"],
+        "retry_interval": monitor["retryInterval"],
+        "notification_ids": settings.notification_ids,
         "accepted_statuscodes": monitor["accepted_statuscodes"],
+    }))
+}
+
+async fn op_add_port(sio: &mut SocketIo, values: &crate::validate::Values, toolkit: &Toolkit) -> Result<Value, Fail> {
+    let major = kuma_major(sio).await?;
+    check_notifications(sio, toolkit).await?;
+    let settings = settings_of(values, toolkit);
+    let port: u16 = get(values, "port").unwrap_or("").parse().unwrap_or(0);
+    let monitor = port_monitor(
+        get(values, "name").unwrap_or(""),
+        &get(values, "hostname").unwrap_or("").to_ascii_lowercase(),
+        port,
+        &settings,
+        &toolkit.name,
+        major,
+    );
+    let (monitor_id, active) = add_monitor(sio, &monitor).await?;
+    Ok(json!({
+        "monitor_id": monitor_id,
+        "active": active,
+        "name": monitor["name"],
+        "hostname": monitor["hostname"],
+        "port": monitor["port"],
+        "interval": monitor["interval"],
+        "maxretries": monitor["maxretries"],
+        "retry_interval": monitor["retryInterval"],
+        "notification_ids": settings.notification_ids,
     }))
 }
 
@@ -677,7 +863,36 @@ fn ascii_uint(s: &str) -> Option<u64> {
 /// regardless of what it declares.
 pub fn check_values(operation: &str, values: &crate::validate::Values) -> Result<(), Denied> {
     let invalid = |msg: String| Err(Denied::new(DenialReason::ParamInvalid, msg));
-    if operation == "monitor_add_http" {
+    if matches!(operation, "monitor_add_http" | "monitor_add_port") {
+        for (param, min, max, unit) in [
+            ("interval", KUMA_INTERVAL_MIN, KUMA_INTERVAL_MAX, " seconds"),
+            ("maxretries", KUMA_MAXRETRIES_MIN, KUMA_MAXRETRIES_MAX, ""),
+            ("retry_interval", KUMA_RETRY_INTERVAL_MIN, KUMA_RETRY_INTERVAL_MAX, " seconds"),
+        ] {
+            if let Some(v) = get(values, param) {
+                if !ascii_uint(v).is_some_and(|n| (min as u64..=max as u64).contains(&n)) {
+                    return invalid(format!("Parameter {} must be {min}-{max}{unit}.", repr_str(param)));
+                }
+            }
+        }
+    }
+    if operation == "monitor_add_port" {
+        let name = get(values, "name").unwrap_or("");
+        if name.trim_matches(py_isspace).is_empty() || name.chars().count() > PORT_NAME_MAX {
+            return invalid(format!("Parameter 'name' must be 1-{PORT_NAME_MAX} characters."));
+        }
+        let hostname = get(values, "hostname").unwrap_or("");
+        if !is_monitor_hostname(hostname) {
+            return invalid(
+                "Parameter 'hostname' must be a hostname or an IPv4 address -- no scheme, port, path or user."
+                    .into(),
+            );
+        }
+        let port = get(values, "port").unwrap_or("");
+        if !ascii_uint(port).is_some_and(|n| (KUMA_PORT_MIN as u64..=KUMA_PORT_MAX as u64).contains(&n)) {
+            return invalid(format!("Parameter 'port' must be {KUMA_PORT_MIN}-{KUMA_PORT_MAX}."));
+        }
+    } else if operation == "monitor_add_http" {
         let name = get(values, "name").unwrap_or("");
         if name.trim_matches(py_isspace).is_empty() || name.chars().count() > 150 {
             return invalid("Parameter 'name' must be 1-150 characters.".into());
@@ -697,15 +912,6 @@ pub fn check_values(operation: &str, values: &crate::validate::Values) -> Result
         if url.chars().any(py_isspace) {
             return invalid("Parameter 'url' must not contain whitespace.".into());
         }
-        if let Some(interval) = get(values, "interval") {
-            let ok = ascii_uint(interval)
-                .is_some_and(|n| (KUMA_INTERVAL_MIN as u64..=KUMA_INTERVAL_MAX as u64).contains(&n));
-            if !ok {
-                return invalid(format!(
-                    "Parameter 'interval' must be {KUMA_INTERVAL_MIN}-{KUMA_INTERVAL_MAX} seconds."
-                ));
-            }
-        }
         if let Some(status) = get(values, "expected_status") {
             if !KUMA_STATUS_CODES.contains(&status) {
                 return invalid(format!(
@@ -721,6 +927,36 @@ pub fn check_values(operation: &str, values: &crate::validate::Values) -> Result
         }
     }
     Ok(())
+}
+
+/// `monitor_add_port`'s target against the toolkit's
+/// `allowed_monitor_targets` (1.29.0), before anything is sent. An IPv4
+/// address must lie in one of its networks; a hostname must be one of its
+/// hostnames exactly (case-insensitive). A hostname is never resolved here:
+/// the monitor is Kuma's, and it resolves the name itself on every check,
+/// so a lookup now would prove nothing about the address Kuma will use.
+pub fn check_monitor_target(toolkit: &Toolkit, hostname: &str) -> Result<(), Denied> {
+    let refuse = || {
+        Err(Denied::new(
+            DenialReason::Tier1Violation,
+            format!(
+                "Monitor target {} is not in this toolkit's allowed_monitor_targets. Nothing was sent.",
+                repr_str(hostname)
+            ),
+        ))
+    };
+    if let Ok(v4) = hostname.parse::<std::net::Ipv4Addr>() {
+        let ip = std::net::IpAddr::V4(v4);
+        let inside = toolkit.allowed_monitor_targets.iter().any(|t| ip_network(t).is_ok_and(|net| net.contains(&ip)));
+        return if inside { Ok(()) } else { refuse() };
+    }
+    let name = hostname.to_ascii_lowercase();
+    let listed = toolkit.allowed_monitor_targets.iter().any(|t| ip_network(t).is_err() && *t == name);
+    if listed {
+        Ok(())
+    } else {
+        refuse()
+    }
 }
 
 /// The handshake failure, as websockets' exception text.
@@ -801,6 +1037,11 @@ pub async fn run(
     if let Err(denial) = check_values(operation, values) {
         return Ok(denied(denial, elapsed_ms(started)));
     }
+    if operation == "monitor_add_port" {
+        if let Err(denial) = check_monitor_target(toolkit, get(values, "hostname").unwrap_or("")) {
+            return Ok(denied(denial, elapsed_ms(started)));
+        }
+    }
 
     let name = toolkit.credential.as_deref().unwrap_or("");
     let (Some(store), false) = (credentials, name.is_empty()) else {
@@ -860,6 +1101,7 @@ pub async fn run(
         match operation {
             "monitor_list" => op_list(&mut sio).await,
             "monitor_add_http" => op_add_http(&mut sio, values, toolkit).await,
+            "monitor_add_port" => op_add_port(&mut sio, values, toolkit).await,
             "monitor_pause" => op_pause_resume(&mut sio, values, true).await,
             _ => op_pause_resume(&mut sio, values, false).await,
         }

@@ -23540,7 +23540,7 @@
      "dir": "/tmp/x"
     }
    },
-   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_list', 'monitor_pause', 'monitor_resume']"
+   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_add_port', 'monitor_list', 'monitor_pause', 'monitor_resume']"
   },
   {
    "name": "kuma_unknown_ops",
@@ -23709,7 +23709,7 @@
      "dir": "/tmp/x"
     }
    },
-   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['edit', 'monitor_delete'])"
+   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_add_port', 'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['edit', 'monitor_delete'])"
   },
   {
    "name": "kuma_ops_not_list",
@@ -38610,7 +38610,7 @@
     "max_output_bytes": 1024,
     "kuma_operation": "monitor_delete"
    },
-   "error": "tool 'kuma.x': kuma_operation 'monitor_delete' is unknown (known: ['monitor_add_http', 'monitor_list', 'monitor_pause', 'monitor_resume'])",
+   "error": "tool 'kuma.x': kuma_operation 'monitor_delete' is unknown (known: ['monitor_add_http', 'monitor_add_port', 'monitor_list', 'monitor_pause', 'monitor_resume'])",
    "tier1_violation": false
   },
   {
@@ -38853,7 +38853,7 @@
     "max_output_bytes": 1024,
     "kuma_operation": "monitor_add_http"
    },
-   "error": "tool 'kuma.x': kuma operation 'monitor_add_http' does not read ['method'] -- it reads ['expected_status', 'interval', 'name', 'url'].",
+   "error": "tool 'kuma.x': kuma operation 'monitor_add_http' does not read ['method'] -- it reads ['expected_status', 'interval', 'maxretries', 'name', 'retry_interval', 'url'].",
    "tier1_violation": false
   },
   {
