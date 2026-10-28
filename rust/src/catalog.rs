@@ -317,6 +317,15 @@ pub struct ToolDef {
     /// successful main request with the same toolkit and the same
     /// validated parameter values.
     pub verify: Option<HttpVerify>,
+    /// `follow_redirect: {max: 1, allowed_hosts: [...]}` (1.30.0): a GET
+    /// tool may follow exactly one redirect to one of these exact hosts,
+    /// without the credential. `None`: redirects are reported, never
+    /// followed (FR-8.8).
+    pub follow_redirect: Option<crate::validate::FollowRedirect>,
+    /// `output_tail_lines: N` (1.30.0): stream the body (up to
+    /// [`crate::execute::http::TAIL_READ_CAP`]) and return only its last
+    /// N lines; `max_output_bytes` applies to those.
+    pub output_tail_lines: Option<usize>,
 
     // -- `truenas` --
     pub rpc_method: Option<String>,
@@ -921,6 +930,23 @@ pub fn validate_against_tier1(tool: &ToolDef, toolkit: &Toolkit) -> ConfigResult
                     )));
                 }
             }
+            // `follow_redirect` (1.30.0) reaches a second host: every one
+            // must be in the toolkit's Tier 1 `redirect_allowed_hosts`.
+            if let Some(follow) = &tool.follow_redirect {
+                let outside: Vec<String> = follow
+                    .allowed_hosts
+                    .iter()
+                    .filter(|h| !toolkit.redirect_allowed_hosts.contains(h))
+                    .cloned()
+                    .collect();
+                if !outside.is_empty() {
+                    return Err(ConfigError::tier1(format!(
+                        "{where_}: follow_redirect hosts {} are not in the redirect_allowed_hosts {} of toolkit {tk_name}",
+                        repr_list(&outside),
+                        repr_list(&toolkit.redirect_allowed_hosts)
+                    )));
+                }
+            }
             // A body `from_file` reads the gatekeeper host's disk, so its
             // root is Tier 1's to allow (FR-4.10), as for a local tool.
             if tool.max_file_bytes.is_some() {
@@ -1505,7 +1531,17 @@ fn executor_tool_fields(executor: &str) -> &'static [&'static str] {
     match executor {
         "docker" | "local" => &["argv", "binary", "stdin"],
         "ssh" => &["argv", "binary"],
-        "http" => &["base_url", "body", "max_file_bytes", "method", "path", "query", "verify"],
+        "http" => &[
+            "base_url",
+            "body",
+            "follow_redirect",
+            "max_file_bytes",
+            "method",
+            "output_tail_lines",
+            "path",
+            "query",
+            "verify",
+        ],
         "truenas" => &["job", "method", "params"],
         "file" => &["delete", "file_operation", "mode", "operation", "run_as"],
         "google" => &["google_action", "google_args"],
@@ -1696,6 +1732,8 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         max_file_bytes: None,
         base_url: None,
         verify: None,
+        follow_redirect: None,
+        output_tail_lines: None,
         rpc_method: None,
         rpc_job: false,
         params_template: None,
@@ -1837,6 +1875,21 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
             }
             if let Some(raw_verify) = get_some(spec, "verify") {
                 tool.verify = Some(parse_verify(raw_verify, where_)?);
+            }
+            if let Some(raw) = get_some(spec, "follow_redirect") {
+                let follow = crate::validate::parse_follow_redirect(raw, where_)?;
+                // Only a read is ever repeated against a second host: a
+                // write method's redirect stays a report (FR-8.8).
+                if !method.eq_ignore_ascii_case("GET") {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: 'follow_redirect' is only allowed on a GET tool, not {}",
+                        repr_str(method)
+                    )));
+                }
+                tool.follow_redirect = Some(follow);
+            }
+            if let Some(raw) = get_some(spec, "output_tail_lines") {
+                tool.output_tail_lines = Some(crate::validate::parse_output_tail_lines(raw, where_)?);
             }
             // Every brace in an http path/query template must be exactly
             // `{<declared parameter>}` (1.27.0) -- before, `{name?}`,

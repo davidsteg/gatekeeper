@@ -292,6 +292,10 @@ pub struct Toolkit {
     /// private range for it. Empty (the default) keeps the pre-1.10.0
     /// behaviour exactly: `allowed_cidrs` alone decides.
     pub allowed_hosts: Vec<String>,
+    /// `http` only (1.30.0): the exact hosts any tool of this toolkit may
+    /// follow one redirect to (`follow_redirect`). Tier 1, so the
+    /// console can only pick from it. Empty: no tool may follow.
+    pub redirect_allowed_hosts: Vec<String>,
 
     // -- `truenas` executor only (FR-8.3a-f) --
     /// JSON-RPC 2.0 endpoint, e.g. `wss://truenas.lan/api/current`.
@@ -395,6 +399,7 @@ impl Default for Toolkit {
             allowed_path_prefixes: Vec::new(),
             allowed_cidrs: Vec::new(),
             allowed_hosts: Vec::new(),
+            redirect_allowed_hosts: Vec::new(),
             ws_url: None,
             tls_pin_sha256: Vec::new(),
             allowed_rpc_methods: Vec::new(),
@@ -1263,6 +1268,13 @@ fn is_host_label(label: &str) -> bool {
 /// belongs in `allowed_cidrs`, where it is not subject to the
 /// public-address floor a name gets.
 fn parse_allowed_hosts(value: Option<&Value>, where_: &str) -> ConfigResult<Vec<String>> {
+    parse_host_list(value, where_)
+}
+
+/// The rule [`parse_allowed_hosts`] applies, shared with
+/// `redirect_allowed_hosts` and a tool's `follow_redirect.allowed_hosts`
+/// (1.30.0): exact hostnames only.
+pub(crate) fn parse_host_list(value: Option<&Value>, where_: &str) -> ConfigResult<Vec<String>> {
     let hosts = str_tuple(value, where_)?;
     let mut out: Vec<String> = Vec::new();
     for raw in &hosts {
@@ -1821,6 +1833,14 @@ fn parse_toolkit(
                     "{where_}: 'follow_redirects' must be false -- gatekeeper \
                      never follows redirects on an http toolkit (FR-8.8)"
                 )));
+            }
+            // The ceiling for tools' `follow_redirect` (1.30.0): exact
+            // names, same rule as `allowed_hosts`.
+            if spec.get("redirect_allowed_hosts").is_some_and(|v| !v.is_null()) {
+                tk.redirect_allowed_hosts = parse_host_list(
+                    spec.get("redirect_allowed_hosts"),
+                    &format!("{where_}: redirect_allowed_hosts"),
+                )?;
             }
         }
         "truenas" => {

@@ -672,7 +672,12 @@ impl Service {
                             toolkit.base_url = Some(base_url.to_string());
                         }
                     }
-                    let main = execute::http::run(
+                    let options = execute::http::HttpOptions {
+                        follow_redirect: tool.follow_redirect.clone(),
+                        tail_lines: tool.output_tail_lines,
+                        mask_secrets: toolkit.redact_secrets,
+                    };
+                    let main = execute::http::run_with(
                         &req.method,
                         &req.path,
                         &req.query,
@@ -685,6 +690,7 @@ impl Service {
                         max_output_bytes,
                         tool.idempotent,
                         Some(&redact),
+                        &options,
                     )
                     .await?;
                     match verify {
@@ -931,6 +937,7 @@ impl Service {
             client: client.map(str::to_string),
             command,
             body_files: result.body_files.clone(),
+            redirect: result.redirect.clone(),
         })?;
         result.structured = toolkit.structured_content;
         Ok(result)

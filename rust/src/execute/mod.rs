@@ -59,6 +59,10 @@ pub struct ExecResult {
     /// Set from the toolkit's `structured_content` (1.25.0): the MCP
     /// result also carries the outcome as `structuredContent`.
     pub structured: bool,
+    /// An `http` tool's `follow_redirect` hop (1.30.0), for the audit
+    /// record: the first status, the target *host* and its status. Never
+    /// the URL.
+    pub redirect: Option<serde_json::Value>,
 }
 
 impl ExecResult {
@@ -82,6 +86,7 @@ impl ExecResult {
             denial_detail: None,
             body_files: Vec::new(),
             structured: false,
+            redirect: None,
         }
     }
 
