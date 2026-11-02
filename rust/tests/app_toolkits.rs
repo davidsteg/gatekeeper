@@ -391,7 +391,7 @@ fn protected_resources_stays_redeploy_only() {
         err.message,
         "Cannot propose changing ['limits', 'protected_resources'] -- only ['allowed_cidrs', 'allowed_hosts', \
          'allowed_methods', 'allowed_path_prefixes', 'binaries', 'denied_args', 'executor', 'max_output_bytes', \
-         'max_timeout_seconds', 'path_roots', 'run_as'] are writable via an update proposal. protected_resources \
+         'max_timeout_seconds', 'path_roots', 'redact_secrets', 'redirect_allowed_hosts', 'run_as'] are writable via an update proposal. protected_resources \
          has no proposal path -- edit toolkits.yaml and reload (SIGHUP or restart)."
     );
 }
@@ -408,7 +408,8 @@ fn update_writable_fields_is_exactly_these() {
         f,
         [
             "allowed_cidrs", "allowed_hosts", "allowed_methods", "allowed_path_prefixes", "binaries", "denied_args",
-            "executor", "max_output_bytes", "max_timeout_seconds", "path_roots", "run_as",
+            "executor", "max_output_bytes", "max_timeout_seconds", "path_roots", "redact_secrets",
+            "redirect_allowed_hosts", "run_as",
         ]
     );
 }
@@ -445,7 +446,7 @@ fn deploy_update_rejects_unknown_toolkit_and_rechecks_fields() {
         err.message,
         "Cannot change ['protected_resources'] at runtime -- only ['allowed_cidrs', 'allowed_hosts', \
          'allowed_methods', 'allowed_path_prefixes', 'binaries', 'denied_args', 'executor', 'max_output_bytes', \
-         'max_timeout_seconds', 'path_roots', 'run_as'] are writable via an update proposal."
+         'max_timeout_seconds', 'path_roots', 'redact_secrets', 'redirect_allowed_hosts', 'run_as'] are writable via an update proposal."
     );
     // A path_roots edited into the file is held to the same rules as one
     // proposed: "/" never deploys.

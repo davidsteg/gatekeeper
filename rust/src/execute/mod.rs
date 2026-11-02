@@ -16,6 +16,7 @@ pub mod artifact;
 pub mod bounded_delete;
 pub mod file;
 pub mod git;
+pub mod git_object;
 pub mod google;
 pub mod http;
 pub mod kuma;
@@ -56,6 +57,10 @@ pub struct ExecResult {
     /// The files an `http` body read (1.21.0): path and size, for the
     /// audit record. Never their content.
     pub body_files: Vec<(String, u64)>,
+    /// The git objects an `http` body read via `from_git_object` (FR
+    /// body-source, 1.31.0): repo, resolved commit, path and size, for
+    /// the audit record. Never their content.
+    pub body_git_objects: Vec<git_object::GitObjectMeta>,
     /// Set from the toolkit's `structured_content` (1.25.0): the MCP
     /// result also carries the outcome as `structuredContent`.
     pub structured: bool,
@@ -85,6 +90,7 @@ impl ExecResult {
             denial_reason: None,
             denial_detail: None,
             body_files: Vec::new(),
+            body_git_objects: Vec::new(),
             structured: false,
             redirect: None,
         }
@@ -107,6 +113,11 @@ impl ExecResult {
 
     pub fn read_files(mut self, body_files: Vec<(String, u64)>) -> Self {
         self.body_files = body_files;
+        self
+    }
+
+    pub fn read_git_objects(mut self, body_git_objects: Vec<git_object::GitObjectMeta>) -> Self {
+        self.body_git_objects = body_git_objects;
         self
     }
 }

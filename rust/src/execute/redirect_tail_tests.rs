@@ -317,21 +317,60 @@ async fn audit_record_carries_no_url_for_a_followed_redirect() {
 }
 
 #[tokio::test]
-async fn redact_secrets_false_on_the_toolkit_leaves_the_tail_unmasked() {
-    // m4 fix (140G): `call()` passes `mask_secrets: tk.redact_secrets`
-    // (not a hardcoded `true`) so this toggles the *toolkit* field through
-    // the same path `service.rs:678` uses, proving the wiring is real --
-    // a hardcoded `true` in `call()` would make every other test in this
-    // file pass regardless of what the toolkit says.
+async fn redact_secrets_false_on_the_toolkit_refuses_the_tool_at_load() {
+    // 140X (closing a 140V/140W gap): redact_secrets: false on a toolkit
+    // that still carries a follow_redirect/output_tail_lines tool must
+    // never load at all -- catalog::validate_against_tier1 is the mirror
+    // of toolkit_proposals::check_redact_secrets, closing the direction
+    // that gate cannot: a tool added after the toolkit already had
+    // redact_secrets=false (http's unset default). This replaces the
+    // old version of this test, which proved the tail stayed unmasked
+    // when redact_secrets was false -- that configuration is refused
+    // outright now, so there is nothing left to unmask.
     let e = env();
     e.store.create("demo_cred", "bearer", "tok-SECRET-1", None, None, None, "t", "").unwrap();
     install_dns(&[("api.github.com", &[&["20.250.119.72"]]), (BLOB, &[&["20.60.40.4"]])]);
     let t = tier1_opts(e.dir.path(), &format!("[\"{BLOB}\"]"), false);
-    server(GOOD.into(), log_body(5)).await;
-    let tool = parse_tool_spec(&spec(serde_json::json!({})), &t).unwrap();
+    let err = parse_tool_spec(&spec(serde_json::json!({})), &t).unwrap_err();
+    assert!(err.message.contains("github"), "{}", err.message);
+    assert!(err.message.contains("redact_secrets=false"), "{}", err.message);
+    assert!(err.message.contains("follow_redirect, output_tail_lines"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn redact_secrets_false_on_the_toolkit_leaves_a_plain_tool_unmasked() {
+    // M2 (140Z): the replacement for the old
+    // `redact_secrets_false_on_the_toolkit_leaves_the_tail_unmasked` test
+    // (see `redact_secrets_false_on_the_toolkit_refuses_the_tool_at_load`
+    // above) proves the *load-time* refusal for a tool that still carries
+    // `follow_redirect`/`output_tail_lines` on an unmasked toolkit, but
+    // lost the original test's proof that the HTTP executor's own wiring
+    // (`service.rs`'s `mask_secrets: tk.redact_secrets`, mirrored here by
+    // `call()`) actually honours `redact_secrets: false` rather than
+    // hardcoding `true`. Only the file executor still has that coverage
+    // (`app_service.rs::redact_secrets_false_returns_the_file_as_is`).
+    // This exercises a plain tool with neither feature: a toolkit with
+    // `redact_secrets: false` loads it fine, and its secret-shaped
+    // response body comes back unmasked.
+    let e = env();
+    e.store.create("demo_cred", "bearer", "tok-SECRET-1", None, None, None, "t", "").unwrap();
+    install_dns(&[("api.github.com", &[&["20.250.119.72"]]), (BLOB, &[&["20.60.40.4"]])]);
+    let t = tier1_opts(e.dir.path(), &format!("[\"{BLOB}\"]"), false);
+    let body = Arc::new(b"AWS_ACCESS_KEY_ID=AKIA1234567890\n".to_vec());
+    server(GOOD.into(), body).await;
+    let tool = parse_tool_spec(
+        &spec(serde_json::json!({
+            "path": "/repos/davidsteg/gatekeeper/contents/readme",
+            "follow_redirect": null,
+            "output_tail_lines": null,
+        })),
+        &t,
+    )
+    .unwrap();
     let r = call(&e, &t, &tool, "GET", 65536).await;
     assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
-    assert_eq!(r.stdout, "line 4\nline 5\nexport GH_TOKEN=ghp_notreal123\n", "redact_secrets: false must leave the tail unmasked");
+    assert!(r.stdout.contains("AKIA1234567890"), "expected the secret-shaped value unmasked: {:?}", r.stdout);
+    assert!(!r.stdout.contains("[redacted]"), "{:?}", r.stdout);
 }
 
 #[tokio::test]

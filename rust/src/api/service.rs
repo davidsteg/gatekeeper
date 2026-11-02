@@ -205,6 +205,11 @@ pub fn toolkit_summary(name: &str, tk: &Toolkit) -> Value {
         // values it replaces.
         "allowed_methods": tk.allowed_methods,
         "allowed_path_prefixes": tk.allowed_path_prefixes,
+        // `http` only (1.31.0): the hosts a tool's `follow_redirect` may
+        // land on, reported for the same reason as `allowed_hosts`.
+        "redirect_allowed_hosts": tk.redirect_allowed_hosts,
+        // Any executor (1.31.0): whether secret-shaped output is masked.
+        "redact_secrets": tk.redact_secrets,
     })
 }
 

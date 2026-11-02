@@ -657,40 +657,75 @@ pub fn read_body_file(path: &str, root: &str, max_bytes: u64) -> Result<Vec<u8>,
 
 /// Replaces every body file field (`validate::build_http_request`'s
 /// `{from_file, encoding, must_resolve_under, max_file_bytes}`) by the
-/// file's content, base64-encoded, and returns `(path, size)` per file.
-/// Runs before any connection, so a refused file means nothing was sent.
-pub fn fill_body_files(body: &mut Value) -> Result<Vec<(String, u64)>, Denied> {
-    fn walk(v: &mut Value, out: &mut Vec<(String, u64)>) -> Result<(), Denied> {
-        use base64::Engine as _;
-        match v {
-            Value::Object(m) if m.contains_key("from_file") => {
-                let text = |key: &str| m.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
-                let (path, root) = (text("from_file"), text("must_resolve_under"));
-                let max = m.get("max_file_bytes").and_then(Value::as_u64).unwrap_or(0);
-                if text("encoding") != "base64" || root.is_empty() {
-                    return Err(Denied::new(DenialReason::Tier1Violation, "Body file field without its limits."));
+/// file's content, base64-encoded, and every body git-object field
+/// (`{from_git_object:{repo,commit,path}, encoding, max_file_bytes}`,
+/// FR body-source 1.31.0) by the object's content, also base64-encoded,
+/// read straight out of the repository's object database
+/// ([`crate::execute::git_object::read_git_object`]). Returns the files
+/// read as `(path, size)` and the git objects read as their
+/// [`crate::execute::git_object::GitObjectMeta`], both for the audit
+/// record only -- never their content. Runs before any connection, so a
+/// refused file or object means nothing was sent.
+pub async fn fill_body_files(
+    body: &mut Value,
+) -> Result<(Vec<(String, u64)>, Vec<crate::execute::git_object::GitObjectMeta>), Denied> {
+    use base64::Engine as _;
+
+    fn walk<'a>(
+        v: &'a mut Value,
+        out_files: &'a mut Vec<(String, u64)>,
+        out_objects: &'a mut Vec<crate::execute::git_object::GitObjectMeta>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Denied>> + Send + 'a>> {
+        Box::pin(async move {
+            match v {
+                Value::Object(m) if m.contains_key("from_file") => {
+                    let text = |key: &str| m.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+                    let (path, root) = (text("from_file"), text("must_resolve_under"));
+                    let max = m.get("max_file_bytes").and_then(Value::as_u64).unwrap_or(0);
+                    if text("encoding") != "base64" || root.is_empty() {
+                        return Err(Denied::new(DenialReason::Tier1Violation, "Body file field without its limits."));
+                    }
+                    let content = read_body_file(&path, &root, max)?;
+                    out_files.push((path, content.len() as u64));
+                    *v = Value::String(base64::engine::general_purpose::STANDARD.encode(&content));
                 }
-                let content = read_body_file(&path, &root, max)?;
-                out.push((path, content.len() as u64));
-                *v = Value::String(base64::engine::general_purpose::STANDARD.encode(&content));
-            }
-            Value::Object(m) => {
-                for x in m.values_mut() {
-                    walk(x, out)?;
+                Value::Object(m) if m.contains_key("from_git_object") => {
+                    let Some(Value::Object(spec)) = m.get("from_git_object") else {
+                        return Err(Denied::new(
+                            DenialReason::Tier1Violation,
+                            "Body git-object field without its 'repo'/'commit'/'path' mapping.",
+                        ));
+                    };
+                    let text = |key: &str| spec.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+                    let (repo, commit, path) = (text("repo"), text("commit"), text("path"));
+                    let max = m.get("max_file_bytes").and_then(Value::as_u64).unwrap_or(0);
+                    let encoding = m.get("encoding").and_then(Value::as_str).unwrap_or_default().to_string();
+                    if encoding != "base64" || repo.is_empty() || commit.is_empty() || path.is_empty() || max == 0 {
+                        return Err(Denied::new(DenialReason::Tier1Violation, "Body git-object field without its limits."));
+                    }
+                    let (content, meta) = crate::execute::git_object::read_git_object(&repo, &commit, &path, max).await?;
+                    out_objects.push(meta);
+                    *v = Value::String(base64::engine::general_purpose::STANDARD.encode(&content));
                 }
-            }
-            Value::Array(a) => {
-                for x in a.iter_mut() {
-                    walk(x, out)?;
+                Value::Object(m) => {
+                    for x in m.values_mut() {
+                        walk(x, out_files, out_objects).await?;
+                    }
                 }
+                Value::Array(a) => {
+                    for x in a.iter_mut() {
+                        walk(x, out_files, out_objects).await?;
+                    }
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        Ok(())
+            Ok(())
+        })
     }
-    let mut out = Vec::new();
-    walk(body, &mut out)?;
-    Ok(out)
+    let mut out_files = Vec::new();
+    let mut out_objects = Vec::new();
+    walk(body, &mut out_files, &mut out_objects).await?;
+    Ok((out_files, out_objects))
 }
 
 /// Bodies `verify.require_body` treats as "nothing there" -- what APIs
@@ -904,9 +939,13 @@ pub async fn run_with(
         set_header(&mut headers, "Content-Type".into(), "application/json".into());
     }
     let mut body_files: Vec<(String, u64)> = Vec::new();
+    let mut body_git_objects: Vec<crate::execute::git_object::GitObjectMeta> = Vec::new();
     if let Some(b) = body.as_mut() {
-        match fill_body_files(b) {
-            Ok(files) => body_files = files,
+        match fill_body_files(b).await {
+            Ok((files, objects)) => {
+                body_files = files;
+                body_git_objects = objects;
+            }
             Err(denial) => return Ok(denied(denial)),
         }
     }
@@ -960,11 +999,13 @@ pub async fn run_with(
         )
         .untrusted(true)
         .read_files(body_files.clone())
+        .read_git_objects(body_git_objects.clone())
     };
     let failed_result = |exc: String, started: Instant| -> ExecResult {
         ExecResult::new(OUTCOME_FAILED, None, "", format!("Request failed: {exc}"), false, elapsed_ms(started))
             .untrusted(true)
             .read_files(body_files.clone())
+            .read_git_objects(body_git_objects.clone())
     };
 
     let request = Prepared { scheme: scheme.clone(), host: host.clone(), addr: resolved.addr, method, target, headers, content };
@@ -994,7 +1035,7 @@ pub async fn run_with(
                 Err(denial) => {
                     let mut r = denied(denial);
                     r.redirect = Some(serde_json::json!({"from_status": status, "followed": false}));
-                    return Ok(r.untrusted(true).read_files(body_files.clone()));
+                    return Ok(r.untrusted(true).read_files(body_files.clone()).read_git_objects(body_git_objects.clone()));
                 }
             };
             let hop_host = hop.host.clone();
@@ -1032,7 +1073,8 @@ pub async fn run_with(
                 elapsed_ms(started),
             )
             .untrusted(true)
-            .read_files(body_files.clone());
+            .read_files(body_files.clone())
+            .read_git_objects(body_git_objects.clone());
             result.redirect = redirect_note;
             return Ok(result);
         }
@@ -1126,7 +1168,8 @@ pub async fn run_with(
     }
     let mut result = ExecResult::new(outcome, Some(status as i64), stdout, stderr, truncated, elapsed_ms(started))
         .untrusted(true)
-        .read_files(body_files);
+        .read_files(body_files)
+        .read_git_objects(body_git_objects);
     result.redirect = redirect_note;
     Ok(result)
 }

@@ -937,6 +937,7 @@ impl Service {
             client: client.map(str::to_string),
             command,
             body_files: result.body_files.clone(),
+            body_git_objects: result.body_git_objects.clone(),
             redirect: result.redirect.clone(),
         })?;
         result.structured = toolkit.structured_content;
