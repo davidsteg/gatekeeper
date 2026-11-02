@@ -18,9 +18,14 @@
 //!    listing error aborts *before anything is removed*.
 //! 4. The root -> parent chain is re-walked and must still be the same
 //!    directories. Then exactly the listed entries go, bottom-up, each
-//!    re-checked by `(st_dev, st_ino, type, size, ctime)` right before its
+//!    re-checked by `(st_dev, st_ino, type, size, mtime)` right before its
 //!    `unlinkat`; the first extra, missing or replaced entry stops it and
-//!    the report says what was removed by then.
+//!    the report says what was removed by then. Renaming, swapping-in a
+//!    symlink, or a remove+recreate (same or a reused inode) all move
+//!    the recheck off what was listed and abort. A plain `chmod`/`chown`
+//!    on an entry, or an `unlink` of some *other* name sharing its inode
+//!    (a hard link), does not: both move `ctime` but not `mtime`/`size`,
+//!    so they are deliberately not treated as a replacement.
 //! 5. Proof: the target's name no longer exists in its parent.
 //!
 //! What a race can still do is remove a *name* inside the listed tree,
@@ -58,15 +63,21 @@ const NOFOLLOW_DIR_FLAGS: libc::c_int = DIR_FLAGS | libc::O_NOFOLLOW;
 /// half of the recheck that catches that case for non-directories.
 type Ident = (u64, u64, u32);
 
-/// `(size, ctime sec, ctime nsec)`, recorded alongside [`Ident`] so a
+/// `(size, mtime sec, mtime nsec)`, recorded alongside [`Ident`] so a
 /// recheck can also notice a remove+recreate that reuses the same
-/// `(dev, ino, type)`: such a recreate resets ctime to "now" and, short
+/// `(dev, ino, type)`: such a recreate resets mtime to "now" and, short
 /// of a content-identical replacement (not a race this check is meant to
-/// catch), changes size too. Not meaningful for directories: deleting
-/// this delete's own already-checked children legitimately bumps a
-/// directory's own ctime before its self-recheck runs, so directories are
-/// identified by [`Ident`] alone (their *contents* are instead verified
-/// by the exact-listing-match in `delete_dir`).
+/// catch), changes size too. This is `mtime`, not `ctime`: `ctime` also
+/// moves on a metadata-only change (`chmod`/`chown`) and, for any name
+/// that shares its inode with another (a hard link), on an `unlink` of
+/// that *other* name elsewhere in the tree -- neither is a content
+/// replacement this check should flag, and the second would otherwise
+/// turn deleting a hard-linked tree into a guaranteed abort. Not
+/// meaningful for directories: deleting this delete's own
+/// already-checked children legitimately bumps a directory's own mtime
+/// before its self-recheck runs, so directories are identified by
+/// [`Ident`] alone (their *contents* are instead verified by the
+/// exact-listing-match in `delete_dir`).
 type Content = (i64, i64, i64);
 
 struct Entry {
@@ -112,12 +123,13 @@ fn ident_of(st: &libc::stat) -> Ident {
 }
 
 fn content_of(st: &libc::stat) -> Content {
-    (st.st_size as i64, st.st_ctime as i64, st.st_ctime_nsec as i64)
+    (st.st_size, st.st_mtime, st.st_mtime_nsec)
 }
 
 /// `entry` is still what was listed: its `ident` always, and -- for
-/// anything but a directory -- its `content` too (see [`Content`] for
-/// why directories are exempt from the latter).
+/// anything but a directory -- its `content` too (size + mtime; see
+/// [`Content`] for why `mtime` and why directories are exempt from the
+/// latter).
 fn still_listed(entry: &Entry, st: &libc::stat) -> bool {
     ident_of(st) == entry.ident && (entry.is_dir || content_of(st) == entry.content)
 }
@@ -748,12 +760,12 @@ mod tests {
     }
 
     #[test]
-    fn a_file_with_a_reused_inode_but_different_size_and_ctime_is_detected_as_replaced() {
+    fn a_file_with_a_reused_inode_but_different_size_and_mtime_is_detected_as_replaced() {
         // A filesystem can hand a just-freed inode number straight back out to
         // the very next create, so (dev, ino, type) alone cannot tell a
         // remove+recreate from an untouched entry. Simulate the reuse
         // directly: stat a real file, then pretend a *prior* listing recorded
-        // the same (dev, ino, type) with a different size and an older ctime
+        // the same (dev, ino, type) with a different size and an older mtime
         // (nsec included), the way a pre-reuse listing would have.
         let (_d, root) = tmp();
         std::fs::write(format!("{root}/a"), "fresh, longer content").unwrap();
@@ -761,20 +773,58 @@ mod tests {
         let name = CString::new("a").unwrap();
         let real_st = stat_at(dir.as_raw_fd(), &name).unwrap();
         let real_ident = ident_of(&real_st);
-        let (size, ctime, ctime_nsec) = content_of(&real_st);
-        let stale_content: Content = (size + 1, ctime - 1, ctime_nsec);
+        let (size, mtime, mtime_nsec) = content_of(&real_st);
+        let stale_content: Content = (size + 1, mtime - 1, mtime_nsec);
         assert_ne!(stale_content, content_of(&real_st), "the fabricated stale content must differ");
 
         let entry =
             Entry { name: name.clone(), rel: "a".to_string(), is_dir: false, ident: real_ident, content: stale_content, children: Vec::new() };
-        assert!(!still_listed(&entry, &real_st), "same (dev, ino, type) with different size/ctime must not count as unchanged");
+        assert!(!still_listed(&entry, &real_st), "same (dev, ino, type) with different size/mtime must not count as unchanged");
         let err = check_entry(dir.as_raw_fd(), &entry, &root).unwrap_err();
         assert!(err.contains("'a' was replaced since it was listed"), "{}", err);
 
-        // Same (dev, ino, type, size, ctime): still recognised as unchanged.
+        // Same (dev, ino, type, size, mtime): still recognised as unchanged.
         let entry =
             Entry { name, rel: "a".to_string(), is_dir: false, ident: real_ident, content: content_of(&real_st), children: Vec::new() };
         assert!(check_entry(dir.as_raw_fd(), &entry, &root).is_ok());
+    }
+
+    #[test]
+    fn a_hardlinked_tree_is_deleted_whole_even_though_unlinking_one_name_bumps_the_shared_inodes_ctime() {
+        // `a` and `b` share one inode. Deleting `a` first (bottom-up, sorted)
+        // unlinks one of the inode's two names, which bumps *ctime* on the
+        // inode both still share -- but leaves *mtime* and size untouched.
+        // The recheck on `b` must survive that: it is no longer comparing
+        // ctime at all.
+        let (_d, root) = tmp();
+        let t = format!("{root}/t");
+        std::fs::create_dir(&t).unwrap();
+        std::fs::write(format!("{t}/a"), "shared content").unwrap();
+        std::fs::hard_link(format!("{t}/a"), format!("{t}/b")).unwrap();
+        // The pause lands between listing and delete, matching the race
+        // seam used elsewhere in this file (and in the review probe): give
+        // the filesystem clock room to tick so a ctime-only check (the bug
+        // this test guards against) could not pass by sheer luck.
+        let r = race(&t, &root, &|| std::thread::sleep(std::time::Duration::from_millis(20)));
+        assert_eq!(r.outcome, "ok", "{}", r.stderr);
+        assert!(!exists(&format!("{t}/a")));
+        assert!(!exists(&format!("{t}/b")));
+        assert!(!exists(&t));
+    }
+
+    #[test]
+    fn a_chmod_or_chown_between_listing_and_delete_does_not_abort_it() {
+        // chmod/chown moves ctime but not mtime/size: no longer treated as
+        // a replacement.
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, root) = tmp();
+        let t = tree(&root);
+        let a = format!("{t}/a");
+        let r = race(&t, &root, &|| {
+            std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o600)).unwrap();
+        });
+        assert_eq!(r.outcome, "ok", "{}", r.stderr);
+        assert!(!exists(&t));
     }
 
     #[test]
