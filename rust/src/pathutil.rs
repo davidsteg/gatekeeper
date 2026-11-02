@@ -187,6 +187,22 @@ pub fn exists(path: &str) -> bool {
     Path::new(path).exists()
 }
 
+/// True when `path` is a git repository's top level -- a normal checkout
+/// (a `.git` directory, or a `.git` *file* for a worktree/submodule) or a
+/// bare repository (`HEAD` plus `objects` and `refs`). Used to load-time
+/// validate a `from_git_object` tool's fixed `repo` (FR body-source,
+/// 1.31.0): the repository is read directly out of its object database,
+/// never checked out, so this is a filesystem shape check only -- no git
+/// binary is run here.
+pub fn is_git_repo_dir(path: &str) -> bool {
+    if Path::new(path).join(".git").exists() {
+        return true;
+    }
+    Path::new(path).join("HEAD").is_file()
+        && Path::new(path).join("objects").is_dir()
+        && Path::new(path).join("refs").is_dir()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

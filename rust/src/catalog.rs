@@ -311,6 +311,14 @@ pub struct ToolDef {
     /// The per-file ceiling for the body's `from_file` fields (1.21.0);
     /// set exactly when the body has one ([`body_file_params`]).
     pub max_file_bytes: Option<i64>,
+    /// The fixed repositories a body `from_git_object` field reads from
+    /// (FR body-source, 1.31.0), one per distinct `repo` the body names --
+    /// never a parameter, always literal in the definition. Checked
+    /// against the toolkit's `path_roots` and confirmed to be a git
+    /// repository at load time (and again on every reload); the executor
+    /// re-opens it by path, never trusting this list at call time beyond
+    /// that it was validated once.
+    pub git_object_repos: Vec<String>,
     /// Per-tool base_url override (0.45.5).
     pub base_url: Option<String>,
     /// Optional read-back request (`verify:`, 1.27.0), sent after a
@@ -930,6 +938,27 @@ pub fn validate_against_tier1(tool: &ToolDef, toolkit: &Toolkit) -> ConfigResult
                     )));
                 }
             }
+            // The reverse of `check_redact_secrets` in toolkit_proposals.rs:
+            // that gate refuses a *toolkit* update that would turn
+            // `redact_secrets` off while a tool still needs it. This gate
+            // closes the other direction -- a *tool* create/update that
+            // adds `follow_redirect` or `output_tail_lines` onto a
+            // toolkit whose effective `redact_secrets` is already
+            // `false` (including `http`'s default of `false`, unset).
+            // Without it, that toolkit's own flag could never be turned
+            // off, but a tool landing on it unmasked today needed no
+            // such flip at all.
+            if !toolkit.redact_secrets && (tool.follow_redirect.is_some() || tool.output_tail_lines.is_some()) {
+                let which = match (tool.follow_redirect.is_some(), tool.output_tail_lines.is_some()) {
+                    (true, true) => "follow_redirect, output_tail_lines",
+                    (true, false) => "follow_redirect",
+                    _ => "output_tail_lines",
+                };
+                return Err(ConfigError::tier1(format!(
+                    "{where_}: toolkit {tk_name} has redact_secrets=false, which would leave output from \
+                     {which} unmasked -- set redact_secrets=true on the toolkit first."
+                )));
+            }
             // `follow_redirect` (1.30.0) reaches a second host: every one
             // must be in the toolkit's Tier 1 `redirect_allowed_hosts`.
             if let Some(follow) = &tool.follow_redirect {
@@ -951,6 +980,20 @@ pub fn validate_against_tier1(tool: &ToolDef, toolkit: &Toolkit) -> ConfigResult
             // root is Tier 1's to allow (FR-4.10), as for a local tool.
             if tool.max_file_bytes.is_some() {
                 check_param_roots(tool, toolkit, where_)?;
+            }
+            // A body `from_git_object` reads a repository fixed in the
+            // definition, not a parameter: Tier 1's `path_roots` still
+            // govern it (FR-4.10), and it must actually be a git
+            // repository -- otherwise this tool does not load at all
+            // (FR body-source, 1.31.0).
+            for repo in &tool.git_object_repos {
+                toolkit.check_path_root(repo).map_err(|exc| ConfigError::tier1(format!("{where_}: {exc}")))?;
+                if !crate::pathutil::is_git_repo_dir(repo) {
+                    return Err(ConfigError::tier1(format!(
+                        "{where_}: from_git_object repo {} is not a git repository",
+                        repr_str(repo)
+                    )));
+                }
             }
             // A per-tool base_url override on a hostname toolkit names a
             // host too; one outside `allowed_hosts` could never connect, so
@@ -1466,6 +1509,127 @@ pub fn body_file_params(body: Option<&Value>, where_: &str) -> ConfigResult<Vec<
     Ok(out)
 }
 
+/// A `from_git_object` body field (FR body-source, 1.31.0): `repo` is
+/// literal -- fixed in the definition, never a parameter -- and `commit`
+/// and `path` each name a declared parameter via a single `{param}`
+/// placeholder, the same shape a path template uses. Unlike `from_file`'s
+/// path parameter, neither is checked against `must_resolve_under`: the
+/// object lives in the repository's object database, not on a filesystem
+/// path the tool declares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitObjectBodyField {
+    pub repo: String,
+    pub commit_param: String,
+    pub path_param: String,
+}
+
+/// The body's `from_git_object` fields, in order. `Err` names the first
+/// malformed one -- mirrors [`body_file_params`].
+pub fn body_git_object_params(body: Option<&Value>, where_: &str) -> ConfigResult<Vec<GitObjectBodyField>> {
+    fn placeholder_name(v: Option<&Value>) -> Option<&str> {
+        let Value::String(s) = v? else { return None };
+        let inner = s.strip_prefix('{')?.strip_suffix('}')?;
+        if inner.is_empty() || inner.contains(['{', '}']) {
+            return None;
+        }
+        Some(inner)
+    }
+    fn walk(v: &Value, at: &str, where_: &str, out: &mut Vec<GitObjectBodyField>) -> ConfigResult<()> {
+        match v {
+            Value::Object(m) if m.contains_key("from_git_object") => {
+                let mut unknown: Vec<&str> =
+                    m.keys().map(String::as_str).filter(|k| *k != "from_git_object" && *k != "encoding").collect();
+                unknown.sort();
+                if !unknown.is_empty() {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: '{at}' reads a git object and takes only 'from_git_object' and 'encoding' \
+                         -- unknown fields {}",
+                        repr_list(&unknown)
+                    )));
+                }
+                let Some(Value::Object(spec)) = m.get("from_git_object") else {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: '{at}.from_git_object' must be a mapping with 'repo', 'commit' and 'path'"
+                    )));
+                };
+                let mut unknown: Vec<&str> = spec
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|k| !["repo", "commit", "path"].contains(k))
+                    .collect();
+                unknown.sort();
+                if !unknown.is_empty() {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: '{at}.from_git_object' takes only 'repo', 'commit' and 'path' -- unknown \
+                         fields {}",
+                        repr_list(&unknown)
+                    )));
+                }
+                let repo = match spec.get("repo") {
+                    Some(Value::String(s)) if !s.is_empty() && !s.contains(['{', '}']) => s.clone(),
+                    other => {
+                        return Err(ConfigError::new(format!(
+                            "{where_}: '{at}.from_git_object.repo' must be a fixed, non-empty path, not {}",
+                            repr_value(other.unwrap_or(&Value::Null))
+                        )))
+                    }
+                };
+                let commit_param = match placeholder_name(spec.get("commit")) {
+                    Some(name) => name.to_string(),
+                    None => {
+                        return Err(ConfigError::new(format!(
+                            "{where_}: '{at}.from_git_object.commit' must be the single placeholder of a \
+                             declared parameter, e.g. '{{{{commit}}}}'"
+                        )))
+                    }
+                };
+                let path_param = match placeholder_name(spec.get("path")) {
+                    Some(name) => name.to_string(),
+                    None => {
+                        return Err(ConfigError::new(format!(
+                            "{where_}: '{at}.from_git_object.path' must be the single placeholder of a \
+                             declared parameter, e.g. '{{{{path}}}}'"
+                        )))
+                    }
+                };
+                if commit_param == path_param {
+                    return Err(ConfigError::new(format!(
+                        "{where_}: '{at}.from_git_object' needs two distinct parameters for 'commit' and 'path'"
+                    )));
+                }
+                match m.get("encoding") {
+                    Some(Value::String(e)) if BODY_FILE_ENCODINGS.contains(&e.as_str()) => {}
+                    other => {
+                        return Err(ConfigError::new(format!(
+                            "{where_}: '{at}.encoding' must be one of {}, not {}",
+                            repr_list(BODY_FILE_ENCODINGS),
+                            repr_value(other.unwrap_or(&Value::Null))
+                        )))
+                    }
+                }
+                out.push(GitObjectBodyField { repo, commit_param, path_param });
+            }
+            Value::Object(m) => {
+                for (k, x) in m {
+                    walk(x, &format!("{at}.{k}"), where_, out)?;
+                }
+            }
+            Value::Array(a) => {
+                for (i, x) in a.iter().enumerate() {
+                    walk(x, &format!("{at}[{i}]"), where_, out)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    if let Some(b) = body {
+        walk(b, "body", where_, &mut out)?;
+    }
+    Ok(out)
+}
+
 /// The fields any tool spec may carry, whatever its executor. `executor`
 /// is only a reminder for the reader; it has to name the toolkit's own.
 const COMMON_TOOL_FIELDS: &[&str] = &[
@@ -1730,6 +1894,7 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
         body_template: None,
         body_raw_param: None,
         max_file_bytes: None,
+        git_object_repos: Vec::new(),
         base_url: None,
         verify: None,
         follow_redirect: None,
@@ -1842,20 +2007,58 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
                     }
                 }
             }
-            match (file_params.is_empty(), get_some(spec, "max_file_bytes")) {
-                (true, None) => {}
-                (true, Some(_)) => {
+            // A body `from_git_object` field (FR body-source, 1.31.0): a
+            // fixed repository, and a `commit`/`path` pair of declared
+            // parameters -- neither a filesystem path, so neither takes
+            // `must_resolve_under`; the repository itself is checked
+            // against the toolkit's `path_roots` in
+            // `validate_against_tier1`, where the toolkit is known.
+            let git_object_fields = body_git_object_params(tool.body_template.as_ref(), where_)?;
+            for field in &git_object_fields {
+                for (role, name) in [("commit", &field.commit_param), ("path", &field.path_param)] {
+                    match parameters.get(name) {
+                        Some(p) if p.ptype == "string" => {}
+                        Some(p) => {
+                            return Err(ConfigError::new(format!(
+                                "{where_}: body reads 'from_git_object.{role}' {}, a parameter of type \
+                                 {}, not 'string'",
+                                repr_str(name),
+                                repr_str(&p.ptype)
+                            )))
+                        }
+                        None => {
+                            return Err(ConfigError::new(format!(
+                                "{where_}: body reads 'from_git_object.{role}' {}, which is not a \
+                                 declared parameter",
+                                repr_str(name)
+                            )))
+                        }
+                    }
+                }
+                if !tool.git_object_repos.iter().any(|r| r == &field.repo) {
+                    tool.git_object_repos.push(field.repo.clone());
+                }
+            }
+            // `max_file_bytes` is the ceiling for whichever body source
+            // reads bytes outside the request template -- `from_file` or
+            // `from_git_object`, never both declared without it, never
+            // present with neither.
+            let needs_file_limit = !file_params.is_empty() || !git_object_fields.is_empty();
+            match (needs_file_limit, get_some(spec, "max_file_bytes")) {
+                (false, None) => {}
+                (false, Some(_)) => {
                     return Err(ConfigError::new(format!(
-                        "{where_}: 'max_file_bytes' is only meaningful with a body 'from_file' field"
+                        "{where_}: 'max_file_bytes' is only meaningful with a body 'from_file' or \
+                         'from_git_object' field"
                     )))
                 }
-                (false, None) => {
+                (true, None) => {
                     return Err(ConfigError::new(format!(
-                        "{where_}: a body 'from_file' field needs 'max_file_bytes', the largest \
-                         file the tool may send"
+                        "{where_}: a body 'from_file' or 'from_git_object' field needs 'max_file_bytes', \
+                         the largest object the tool may send"
                     )))
                 }
-                (false, Some(raw)) => {
+                (true, Some(raw)) => {
                     let limit = py_int(raw)?;
                     if !(1..=MAX_FILE_BYTES_CEILING).contains(&limit) {
                         return Err(ConfigError::new(format!(
@@ -1864,6 +2067,14 @@ fn parse_tool(spec: &Value, tier1: &Tier1) -> ConfigResult<ToolDef> {
                     }
                     tool.max_file_bytes = Some(limit);
                 }
+            }
+            // A tool that uploads a repository's object content is never
+            // `read`, same reasoning as `from_file` just above.
+            if !git_object_fields.is_empty() && tool.category == "read" {
+                return Err(ConfigError::new(format!(
+                    "{where_}: a body 'from_git_object' field sends repository content to the target \
+                     -- its category cannot be 'read'"
+                )));
             }
             // A tool that sends a local file out is never `read`, which
             // `admin.tool_enable` applies without a human.

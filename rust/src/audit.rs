@@ -108,6 +108,9 @@ pub struct CallRecord {
     pub command: Option<String>,
     /// Files an `http` body sent (1.21.0): path and size, never content.
     pub body_files: Vec<(String, u64)>,
+    /// Git objects an `http` body sent via `from_git_object` (FR
+    /// body-source, 1.31.0): repo, commit, path and size, never content.
+    pub body_git_objects: Vec<crate::execute::git_object::GitObjectMeta>,
     /// An `http` tool's followed (or refused) redirect hop (1.30.0):
     /// statuses and host, never the URL.
     pub redirect: Option<Value>,
@@ -301,6 +304,20 @@ impl AuditLog {
                 .collect();
             event.insert("files".into(), Value::Array(files));
         }
+        // Absent when the call read no git object, for the same reason.
+        // Never the content, only `{repo, commit, path, bytes}`.
+        if !record.body_git_objects.is_empty() {
+            let git_objects: Vec<Value> = record
+                .body_git_objects
+                .into_iter()
+                .map(|meta| {
+                    serde_json::json!({
+                        "repo": meta.repo, "commit": meta.commit_full, "path": meta.path, "bytes": meta.bytes,
+                    })
+                })
+                .collect();
+            event.insert("git_objects".into(), Value::Array(git_objects));
+        }
         if let Some(redirect) = record.redirect {
             event.insert("redirect".into(), redirect);
         }
@@ -461,6 +478,39 @@ mod tests {
         assert!(!std::fs::read_to_string(log.path()).unwrap().contains("super-secret"));
         assert_eq!(seen.lock().unwrap()[0]["detail"], "leaked *** here");
         assert!(!format!("{redactor:?}").contains("super-secret"));
+    }
+
+    #[test]
+    fn call_record_reports_git_objects_never_content() {
+        // Acceptance 5 (141D, FR body-source from_git_object, 1.31.0):
+        // the audit event's "git_objects" array is {repo, commit, path,
+        // bytes} only -- the content never passes through `CallRecord`
+        // at all, so there is nothing here to leak.
+        let dir = tempfile::tempdir().unwrap();
+        let log = AuditLog::new(dir.path().to_str().unwrap()).unwrap();
+        log.call(CallRecord {
+            tool_id: "gh.blob_from_git_object".into(),
+            outcome: "ok".into(),
+            body_git_objects: vec![crate::execute::git_object::GitObjectMeta {
+                repo: "/srv/repo".into(),
+                commit_full: "a".repeat(40),
+                path: "secret.txt".into(),
+                bytes: 39,
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+        // A call that read no git object gets no "files"/"git_objects" key at all.
+        log.call(CallRecord { tool_id: "demo.show".into(), outcome: "ok".into(), ..Default::default() }).unwrap();
+        let all = lines(&log);
+        let first: Value = serde_json::from_str(&all[0]).unwrap();
+        assert_eq!(
+            first["git_objects"],
+            json!([{"repo": "/srv/repo", "commit": "a".repeat(40), "path": "secret.txt", "bytes": 39}])
+        );
+        assert!(!first.to_string().contains("ghp_"));
+        let second: Value = serde_json::from_str(&all[1]).unwrap();
+        assert!(second.as_object().unwrap().get("git_objects").is_none());
     }
 
     #[test]

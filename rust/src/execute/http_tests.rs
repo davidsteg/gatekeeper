@@ -13,6 +13,7 @@ use crate::tier1::{load_tier1, Tier1};
 use crate::validate::{build_http_request, HttpRequest, Values};
 use hyper::service::service_fn;
 use std::io::Write as _;
+use std::os::unix::fs::MetadataExt as _;
 
 /// What the loopback server saw: (path, lower-cased headers, body).
 type Seen = Arc<parking_lot::Mutex<Vec<(String, Vec<(String, String)>, Vec<u8>)>>>;
@@ -1077,4 +1078,322 @@ async fn from_file_reads_regular_files_only() {
         assert!(r.denial_detail.as_deref().unwrap().contains(expect), "{file}: {:?}", r.denial_detail);
     }
     assert!(seen.lock().is_empty());
+}
+
+// -- Body fields from a git object (FR body-source, 1.31.0) -----------------
+//
+// The byte-exact object-database reader and its own request-level
+// rejections (bad commit shape, `..`, tree/submodule/symlink, size over
+// the limit) are unit-tested directly in `execute::git_object`'s own
+// test module; what is new here is the *full* pipeline -- catalog-parsed
+// tool, `build_http_request`, `fill_body_files`, an actual loopback HTTP
+// send -- for the seven 141D acceptance tests.
+
+/// A real git repository with one commit holding a binary file and one
+/// holding a GitHub-token-shaped string, for the acceptance tests below.
+/// Returns `(repo path, head sha)`.
+fn git_object_fixture_repo(dir: &std::path::Path) -> (String, String) {
+    let repo = dir.join("gitobj-repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env_clear()
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("bin.dat"), [0x00u8, b'h', b'i', 0xff]).unwrap();
+    std::fs::write(repo.join("secret.txt"), b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0000\n").unwrap();
+    git(&["add", "bin.dat", "secret.txt"]);
+    git(&["commit", "-q", "-m", "c1"]);
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&repo)
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .output()
+        .unwrap();
+    let head = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    (repo.to_str().unwrap().to_string(), head)
+}
+
+/// A toolkit whose `path_roots` is the fixture repo itself, and a blob
+/// tool that sends `<commit>:<path>` of that repo as `content`.
+fn git_object_blob(dir: &std::path::Path, port: u16, repo: &str, max_file_bytes: i64) -> (Tier1, ToolDef) {
+    let tier1 = write_tier1(
+        dir,
+        "tk-git-object.yaml",
+        &format!(
+            "toolkits:\n  gh:\n    executor: http\n    base_url: \"http://127.0.0.1:{port}\"\n    allowed_methods: [\"POST\"]\n    allowed_path_prefixes: [\"/repos/\"]\n    allowed_cidrs: [\"127.0.0.1/32\"]\n    path_roots: [\"{repo}\"]\n    redact_secrets: true\n"
+        ),
+    );
+    let spec = serde_json::json!({
+        "id": "gh.blob_create_from_git_object", "toolkit": "gh", "version": 1,
+        "title": "Blob", "description": "d", "category": "write_external", "idempotent": true,
+        "enabled": true, "method": "POST", "path": "/repos/x/git/blobs",
+        "body": {
+            "content": {"from_git_object": {"repo": repo, "commit": "{commit}", "path": "{path}"}, "encoding": "base64"},
+            "encoding": "base64",
+        },
+        "max_file_bytes": max_file_bytes,
+        "parameters": {
+            "commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$", "required": true},
+            "path": {"type": "string", "pattern": "^[^\\x00]+$", "required": true},
+        },
+        "timeout_seconds": 5, "max_output_bytes": 65536,
+    });
+    let t = parse_tool_spec(&spec, &tier1).unwrap();
+    (tier1, t)
+}
+
+/// Validates `commit`/`path` the way `Service::call` does, builds the
+/// request (this is what the audit log's `command` describes), then runs
+/// it with the given `mask_secrets` option.
+async fn git_object_call(t: &ToolDef, tk: &Toolkit, commit: &str, path: &str, mask_secrets: bool) -> Result<ExecResult, Denied> {
+    let mut args = Map::new();
+    args.insert("commit".into(), Value::String(commit.into()));
+    args.insert("path".into(), Value::String(path.into()));
+    let values = crate::validate::resolve_parameters(t, &args)?;
+    let req = build_http_request(t, &values, tk)?;
+    let options = HttpOptions { mask_secrets, ..Default::default() };
+    Ok(run_with(&req.method, &req.path, &req.query, req.body.as_ref(), None, tk, None, 5.0, 65536, true, None, &options)
+        .await
+        .unwrap())
+}
+
+/// Acceptance 1 (141D): the uploaded body, decoded, is exactly
+/// `git cat-file blob <sha>:<path>`'s bytes, and the blob id
+/// (`git hash-object`) matches too -- at the full tool-call pipeline
+/// level (the reader itself is unit-tested in `execute::git_object`).
+#[tokio::test]
+async fn from_git_object_sends_exact_bytes_and_blob_sha_matches() {
+    use base64::Engine as _;
+    let e = env();
+    let (port, seen) = http_server().await;
+    let dir = e.dir.path();
+    let (repo, head) = git_object_fixture_repo(dir);
+    let (tier1, t) = git_object_blob(dir, port, &repo, 1 << 20);
+    let tk = tier1.toolkit("gh").unwrap();
+
+    let r = git_object_call(&t, tk, &head, "bin.dat", false).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
+    let sent = sent_json(&seen);
+    let decoded = base64::engine::general_purpose::STANDARD.decode(sent["content"].as_str().unwrap()).unwrap();
+    assert_eq!(decoded, vec![0x00, b'h', b'i', 0xff]);
+
+    let hash =
+        std::process::Command::new("git").args(["hash-object", "bin.dat"]).current_dir(&repo).output().unwrap();
+    let expected_sha = String::from_utf8(hash.stdout).unwrap().trim().to_string();
+    let cat =
+        std::process::Command::new("git").args(["cat-file", "blob", &expected_sha]).current_dir(&repo).output().unwrap();
+    assert_eq!(cat.stdout, decoded);
+    assert_eq!(r.body_git_objects, vec![crate::execute::git_object::GitObjectMeta {
+        repo: repo.clone(),
+        commit_full: head,
+        path: "bin.dat".into(),
+        bytes: 4,
+    }]);
+}
+
+/// Acceptance 2 (141D): a GitHub-token-shaped string inside the git
+/// object reaches the outgoing request unmasked, even though the
+/// toolkit's `redact_secrets` is `true` -- `from_git_object` content is
+/// never run through secret masking, unlike the response/audit path,
+/// which still masks (verified separately below).
+#[tokio::test]
+async fn from_git_object_content_reaches_the_request_unmasked_even_with_redact_secrets_true() {
+    use base64::Engine as _;
+    let e = env();
+    let (port, seen) = http_server().await;
+    let dir = e.dir.path();
+    let (repo, head) = git_object_fixture_repo(dir);
+    let (tier1, t) = git_object_blob(dir, port, &repo, 1 << 20);
+    let tk = tier1.toolkit("gh").unwrap();
+    assert!(tk.redact_secrets);
+
+    let r = git_object_call(&t, tk, &head, "secret.txt", true).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
+    let sent = sent_json(&seen);
+    let decoded = base64::engine::general_purpose::STANDARD.decode(sent["content"].as_str().unwrap()).unwrap();
+    // Exactly the original bytes -- not "***", not a truncated/altered copy.
+    assert_eq!(decoded, b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0000\n");
+}
+
+/// Acceptance 2 (141D), the other half: with the same `mask_secrets`
+/// option a response that *does* carry a known secret-shaped string is
+/// still masked -- `from_git_object` changes nothing about the existing
+/// response-masking contract.
+#[tokio::test]
+async fn from_git_object_response_is_still_masked_when_redact_secrets_is_true() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else { return };
+            tokio::spawn(async move {
+                let svc = service_fn(|_req: hyper::Request<Incoming>| async move {
+                    Ok::<_, std::convert::Infallible>(json_response(
+                        200,
+                        &serde_json::json!({"note": "AWS_ACCESS_KEY_ID=AKIA1234567890123456"}),
+                    ))
+                });
+                let _ = hyper::server::conn::http1::Builder::new().serve_connection(TokioIo::new(stream), svc).await;
+            });
+        }
+    });
+    let e = env();
+    let dir = e.dir.path();
+    let (repo, head) = git_object_fixture_repo(dir);
+    let (tier1, t) = git_object_blob(dir, port, &repo, 1 << 20);
+    let tk = tier1.toolkit("gh").unwrap();
+
+    let r = git_object_call(&t, tk, &head, "bin.dat", true).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
+    assert!(!r.stdout.contains("AKIA1234567890123456"), "{}", r.stdout);
+    assert!(r.stdout.contains("[redacted]"), "{}", r.stdout);
+}
+
+/// Acceptance 3 (141D), at the full pipeline (not just the reader):
+/// a handful of representative request-time rejections -- the rest of
+/// the shape space is exhaustively covered in `execute::git_object`'s
+/// own tests -- still refuse *before* any request leaves the process.
+#[tokio::test]
+async fn from_git_object_rejections_happen_before_any_request_is_sent() {
+    let e = env();
+    let (port, seen) = http_server().await;
+    let dir = e.dir.path();
+    let (repo, head) = git_object_fixture_repo(dir);
+    let (tier1, t) = git_object_blob(dir, port, &repo, 1 << 20);
+    let tk = tier1.toolkit("gh").unwrap();
+
+    for (commit, path, label) in [
+        (head.as_str(), "../etc/passwd", "dot-dot path"),
+        (head.as_str(), "/etc/passwd", "absolute path"),
+        (head.as_str(), "missing.txt", "missing path"),
+        ("0000000000000000000000000000000000000000", "bin.dat", "unknown commit"),
+    ] {
+        let r = git_object_call(&t, tk, commit, path, false).await.unwrap();
+        assert_eq!(r.outcome, OUTCOME_FAILED, "{label}: {:?}", r.stdout);
+        assert_eq!(r.denial_reason.as_deref(), Some("param_invalid"), "{label}");
+    }
+    // A commit shape that does not even match the tool's own declared
+    // parameter pattern is refused one layer further out, before
+    // `build_http_request` ever runs -- still before any request.
+    let denial = git_object_call(&t, tk, "not-hex!!", "bin.dat", false).await.unwrap_err();
+    assert_eq!(denial.reason, DenialReason::ParamInvalid);
+    // The 4-byte object, over a 1-byte ceiling.
+    let (tier1_small, t_small) = git_object_blob(dir, port, &repo, 1);
+    let tk_small = tier1_small.toolkit("gh").unwrap();
+    let r = git_object_call(&t_small, tk_small, &head, "bin.dat", false).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_FAILED, "{:?}", r.stdout);
+    assert_eq!(r.denial_reason.as_deref(), Some("param_invalid"));
+
+    assert!(seen.lock().is_empty(), "no refused call reached the server");
+}
+
+/// Acceptance 5 (141D): the request `build_http_request` describes (what
+/// the audit log's `command` is built from, same as `from_file`) names
+/// only `{repo, commit, path}`, never the content -- and the executor's
+/// own `body_git_objects` record is `{repo, commit, path, bytes}` only.
+#[tokio::test]
+async fn from_git_object_audit_never_sees_the_content() {
+    let e = env();
+    let (port, _) = http_server().await;
+    let dir = e.dir.path();
+    let (repo, head) = git_object_fixture_repo(dir);
+    let (tier1, t) = git_object_blob(dir, port, &repo, 1 << 20);
+    let tk = tier1.toolkit("gh").unwrap();
+
+    let mut args = Map::new();
+    args.insert("commit".into(), Value::String(head.clone()));
+    args.insert("path".into(), Value::String("secret.txt".into()));
+    let values = crate::validate::resolve_parameters(&t, &args).unwrap();
+    let req = build_http_request(&t, &values, tk).unwrap();
+    let body = req.body.clone().unwrap();
+    assert_eq!(body["content"]["from_git_object"]["repo"], repo);
+    assert_eq!(body["content"]["from_git_object"]["commit"], head);
+    assert_eq!(body["content"]["from_git_object"]["path"], "secret.txt");
+    assert_eq!(body["content"]["max_file_bytes"], 1 << 20);
+    assert!(!body.to_string().contains("ghp_"), "{body}");
+
+    let r = run_with(&req.method, &req.path, &req.query, req.body.as_ref(), None, tk, None, 5.0, 65536, true, None, &HttpOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
+    assert_eq!(r.body_git_objects.len(), 1);
+    let meta = &r.body_git_objects[0];
+    assert_eq!((meta.repo.as_str(), meta.commit_full.as_str(), meta.path.as_str(), meta.bytes), (repo.as_str(), head.as_str(), "secret.txt", 39));
+}
+
+/// Acceptance 6 (141D): the repository is read correctly when it is
+/// owned by a different uid than the process reading it, without this
+/// module changing ownership or permissions on it -- this is the
+/// `-c safe.directory=<repo>` guarantee `execute::git_object` documents.
+/// Representable only as root (chown to a foreign uid needs the
+/// privilege either way); skips cleanly otherwise, same convention as
+/// `rust/tests/privilege.rs`'s `needs_root`.
+#[tokio::test]
+async fn from_git_object_reads_a_repo_owned_by_a_different_uid_without_changing_it() {
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!(
+            "skipped: from_git_object_reads_a_repo_owned_by_a_different_uid_without_changing_it needs root \
+             to chown a fixture repo to a foreign uid (the same privilege either direction would need); \
+             this test container runs unprivileged. The mechanism under test (`-c safe.directory=<repo>`, \
+             process-local, never written to any config file) is exercised the same way regardless of \
+             which uid owns the repo -- see execute::git_object's module doc."
+        );
+        return;
+    }
+    let e = env();
+    let (port, seen) = http_server().await;
+    let dir = e.dir.path();
+    let (repo, head) = git_object_fixture_repo(dir);
+    // A uid that is not this (root) process's own, so git's ownership
+    // check actually has something to refuse without `safe.directory`.
+    const FOREIGN_UID: u32 = 65534; // nobody
+    let before = std::fs::metadata(&repo).unwrap().uid();
+    let chown = |p: &std::path::Path| {
+        std::os::unix::fs::chown(p, Some(FOREIGN_UID), None).unwrap();
+    };
+    for entry in walkdir_simple(std::path::Path::new(&repo)) {
+        chown(&entry);
+    }
+    let (tier1, t) = git_object_blob(dir, port, &repo, 1 << 20);
+    let tk = tier1.toolkit("gh").unwrap();
+
+    let r = git_object_call(&t, tk, &head, "bin.dat", false).await.unwrap();
+    assert_eq!(r.outcome, OUTCOME_OK, "{}", r.stderr);
+    let sent = sent_json(&seen);
+    use base64::Engine as _;
+    let decoded = base64::engine::general_purpose::STANDARD.decode(sent["content"].as_str().unwrap()).unwrap();
+    assert_eq!(decoded, vec![0x00, b'h', b'i', 0xff]);
+    // Still foreign-owned: this module never chowns anything itself.
+    assert_eq!(std::fs::metadata(&repo).unwrap().uid(), FOREIGN_UID);
+    assert_ne!(before, FOREIGN_UID);
+}
+
+#[cfg(test)]
+fn walkdir_simple(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = vec![root.to_path_buf()];
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            out.push(path.clone());
+            if path.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    out
 }

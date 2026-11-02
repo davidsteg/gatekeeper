@@ -556,7 +556,10 @@ pub fn build_http_request(tool: &ToolDef, values: &Values, toolkit: &Toolkit) ->
     }
 
     let body = match &tool.body_template {
-        Some(t) => Some(resolve_body_file_fields(resolve_body_template(t, values)?, tool, values)?),
+        Some(t) => {
+            let resolved = resolve_body_file_fields(resolve_body_template(t, values)?, tool, values)?;
+            Some(resolve_body_git_object_fields(resolved, tool)?)
+        }
         None => None,
     };
     Ok(HttpRequest { method, path, query, body })
@@ -614,6 +617,57 @@ fn resolve_body_file_fields(body: Value, tool: &ToolDef, values: &Values) -> Res
         }
         Value::Array(a) => {
             a.into_iter().map(|v| resolve_body_file_fields(v, tool, values)).collect::<Result<Vec<_>, _>>().map(Value::Array)
+        }
+        other => Ok(other),
+    }
+}
+
+/// The body's `{from_git_object:{repo,commit,path}, encoding}` fields
+/// (FR body-source, 1.31.0), pointed at the object the `execute::http`
+/// executor reads straight out of the repository's object database just
+/// before sending. `commit` and `path` are already resolved to literal
+/// values by the preceding [`resolve_body_template`] pass (each was a
+/// single `{param}` placeholder, checked at load time by
+/// `catalog::body_git_object_params`); `repo` is literal in the
+/// definition and never a parameter. This only re-shapes the already
+/// load-time-validated structure into the executor's marker -- it never
+/// reads the repository, and the content never passes through here.
+fn resolve_body_git_object_fields(body: Value, tool: &ToolDef) -> Result<Value, Denied> {
+    match body {
+        Value::Object(m) if m.contains_key("from_git_object") => {
+            let Some(Value::Object(spec)) = m.get("from_git_object") else {
+                return Err(denied(
+                    DenialReason::ParamInvalid,
+                    "Body git-object field without its 'repo'/'commit'/'path' mapping.".to_string(),
+                ));
+            };
+            let text = |key: &str| spec.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+            let (repo, commit, path) = (text("repo"), text("commit"), text("path"));
+            if repo.is_empty() || commit.is_empty() || path.is_empty() {
+                return Err(denied(
+                    DenialReason::ParamInvalid,
+                    "Body git-object field needs a non-empty 'repo', 'commit' and 'path'.".to_string(),
+                ));
+            }
+            let mut inner = Map::new();
+            inner.insert("repo".into(), Value::String(repo));
+            inner.insert("commit".into(), Value::String(commit));
+            inner.insert("path".into(), Value::String(path));
+            let mut marker = Map::new();
+            marker.insert("from_git_object".into(), Value::Object(inner));
+            marker.insert("encoding".into(), m.get("encoding").cloned().unwrap_or(Value::Null));
+            marker.insert("max_file_bytes".into(), tool.max_file_bytes.map(Value::from).unwrap_or(Value::Null));
+            Ok(Value::Object(marker))
+        }
+        Value::Object(m) => {
+            let mut out = Map::new();
+            for (k, v) in m {
+                out.insert(k, resolve_body_git_object_fields(v, tool)?);
+            }
+            Ok(Value::Object(out))
+        }
+        Value::Array(a) => {
+            a.into_iter().map(|v| resolve_body_git_object_fields(v, tool)).collect::<Result<Vec<_>, _>>().map(Value::Array)
         }
         other => Ok(other),
     }

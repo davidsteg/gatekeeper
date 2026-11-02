@@ -797,3 +797,131 @@ fn from_file_root_must_be_within_the_toolkit_path_roots() {
     let none = http_tier1(dir.path(), "[]");
     assert!(err_text(parse_tool_spec(&blob_spec(), &none)).contains("declares no path_roots"));
 }
+
+// -- Body fields from a git object (FR body-source, 1.31.0) -----------------
+
+/// A throwaway git repository with one commit, for the load-time checks
+/// below (`path_roots`, "is a git repository"). What the object actually
+/// contains is irrelevant here -- the byte-exact read is covered at the
+/// executor level (`execute::git_object` unit tests, `execute::http`
+/// integration tests); this file only exercises `parse_tool_spec`'s
+/// load-time shape and Tier 1 checks.
+fn git_fixture_repo(dir: &std::path::Path) -> String {
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env_clear()
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    git(&["add", "a.txt"]);
+    git(&["commit", "-q", "-m", "c1"]);
+    repo.to_str().unwrap().to_string()
+}
+
+fn git_object_spec(repo: &str) -> Value {
+    json!({
+        "id": "gh.blob_from_git_object", "toolkit": "gh", "title": "Blob", "description": "d",
+        "category": "write_external", "idempotent": true,
+        "method": "POST", "path": "/repos/x/git/blobs",
+        "body": {
+            "content": {"from_git_object": {"repo": repo, "commit": "{commit}", "path": "{path}"}, "encoding": "base64"},
+            "encoding": "base64",
+        },
+        "max_file_bytes": 1048576,
+        "parameters": {
+            "commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$", "required": true},
+            "path": {"type": "string", "pattern": "^[^\\x00]+$", "required": true},
+        },
+    })
+}
+
+#[test]
+fn from_git_object_spec_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git_fixture_repo(dir.path());
+    let tier1 = http_tier1(dir.path(), &format!("[\"{repo}\"]"));
+    let t = parse_tool_spec(&git_object_spec(&repo), &tier1).unwrap();
+    assert_eq!(t.max_file_bytes, Some(1048576));
+    assert_eq!(t.git_object_repos, vec![repo]);
+    // `commit`/`path` are declared parameters, so the agent sees both.
+    let required = t.input_schema()["required"].as_array().unwrap().clone();
+    assert!(required.contains(&json!("commit")) && required.contains(&json!("path")));
+}
+
+#[test]
+fn from_git_object_repo_must_be_within_the_toolkit_path_roots() {
+    // Acceptance 4 (141D): a repo outside path_roots refuses to load.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git_fixture_repo(dir.path());
+    let narrow = http_tier1(dir.path(), "[/srv/other]");
+    let err = parse_tool_spec(&git_object_spec(&repo), &narrow).unwrap_err();
+    assert!(err.is_tier1_violation(), "{}", err.message);
+    assert!(err.message.contains("lies outside the path_roots"), "{}", err.message);
+    let none = http_tier1(dir.path(), "[]");
+    assert!(err_text(parse_tool_spec(&git_object_spec(&repo), &none)).contains("declares no path_roots"));
+}
+
+#[test]
+fn from_git_object_repo_must_actually_be_a_git_repository() {
+    // Acceptance 4 (141D): a path_roots-permitted directory that is not a
+    // git repository (no checkout, nothing ever `git init`-ed there)
+    // refuses to load, before any request-time behaviour is reached.
+    let dir = tempfile::tempdir().unwrap();
+    let not_a_repo = dir.path().join("plain");
+    std::fs::create_dir_all(&not_a_repo).unwrap();
+    let repo = not_a_repo.to_str().unwrap().to_string();
+    let tier1 = http_tier1(dir.path(), &format!("[\"{repo}\"]"));
+    let err = parse_tool_spec(&git_object_spec(&repo), &tier1).unwrap_err();
+    assert!(err.is_tier1_violation(), "{}", err.message);
+    assert!(err.message.contains("is not a git repository"), "{}", err.message);
+    assert!(err.message.contains(&repo), "{}", err.message);
+}
+
+#[test]
+fn from_git_object_spec_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git_fixture_repo(dir.path());
+    let tier1 = http_tier1(dir.path(), &format!("[\"{repo}\"]"));
+    let refused = |edit: &dyn Fn(&mut Value)| {
+        let mut spec = git_object_spec(&repo);
+        edit(&mut spec);
+        err_text(parse_tool_spec(&spec, &tier1))
+    };
+    // Acceptance 7 (141D): category 'read' with from_git_object refused.
+    assert!(refused(&|s| s["category"] = json!("read")).contains("its category cannot be 'read'"));
+    // repo must be fixed, not a parameter.
+    assert!(refused(&|s| s["body"]["content"]["from_git_object"]["repo"] = json!("{repo}"))
+        .contains("must be a fixed, non-empty path"));
+    // commit/path must each be a single declared-parameter placeholder.
+    assert!(refused(&|s| s["body"]["content"]["from_git_object"]["commit"] = json!("literal"))
+        .contains("must be the single placeholder of a"));
+    assert!(refused(&|s| s["body"]["content"]["from_git_object"]["path"] = json!("{commit}"))
+        .contains("needs two distinct parameters"));
+    assert!(refused(&|s| {
+        s["parameters"]["commit"]["type"] = json!("path");
+        s["parameters"]["commit"]["must_resolve_under"] = json!("/tmp");
+        s["parameters"]["commit"]["derived"] = json!("/tmp/{commit}");
+    })
+    .contains("a parameter of type 'path', not 'string'"));
+    assert!(refused(&|s| { s["parameters"].as_object_mut().unwrap().remove("path"); })
+        .contains("which is not a declared parameter"));
+    assert!(refused(&|s| { s.as_object_mut().unwrap().remove("max_file_bytes"); })
+        .contains("needs 'max_file_bytes'"));
+    // Unknown field inside from_git_object.
+    assert!(refused(&|s| s["body"]["content"]["from_git_object"]["branch"] = json!("{commit}"))
+        .contains("takes only 'repo', 'commit' and 'path'"));
+    // Valid as-is.
+    assert!(parse_tool_spec(&git_object_spec(&repo), &tier1).is_ok());
+}

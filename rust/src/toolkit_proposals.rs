@@ -71,7 +71,16 @@ pub const BIND_FIELD: &str = "credential";
 /// ([`check_path_roots`], at submit and again at deploy). Not on an `ssh`
 /// toolkit, whose roots are on another host this container cannot check.
 /// `protected_resources` remains redeploy-only.
-pub const UPDATE_WRITABLE_FIELDS: [&str; 11] = [
+///
+/// 1.31.0 adds `redirect_allowed_hosts` (`http` only, [`check_redirect_allowed_hosts`]:
+/// exact hostnames, no wildcard, no IP literal, at most
+/// [`MAX_REDIRECT_ALLOWED_HOSTS`] entries) and `redact_secrets` (any
+/// executor, [`check_redact_secrets`]: refused at `false` while any
+/// non-deleted tool on the toolkit carries `follow_redirect` or
+/// `output_tail_lines`, which is exactly the output `redact_secrets`
+/// exists to mask). Both go through the same human-approved card as every
+/// other field here -- never applied on their own.
+pub const UPDATE_WRITABLE_FIELDS: [&str; 13] = [
     "executor",
     "binaries",
     "denied_args",
@@ -83,6 +92,8 @@ pub const UPDATE_WRITABLE_FIELDS: [&str; 11] = [
     "max_timeout_seconds",
     "max_output_bytes",
     "path_roots",
+    "redact_secrets",
+    "redirect_allowed_hosts",
 ];
 
 /// Executors whose `path_roots` are not paths in this container, so an
@@ -99,11 +110,12 @@ pub const NETWORK_FIELDS: [&str; 2] = ["allowed_cidrs", "allowed_hosts"];
 /// field outside its executors would be silently ignored by `load_tier1`
 /// (it parses only what an executor uses), so `deploy()` refuses it rather
 /// than writing a restriction that does not exist.
-pub const FIELD_EXECUTORS: [(&str, &[&str]); 4] = [
+pub const FIELD_EXECUTORS: [(&str, &[&str]); 5] = [
     ("allowed_cidrs", NETWORK_EXECUTORS),
     ("allowed_hosts", NETWORK_EXECUTORS),
     ("allowed_methods", &["http"]),
     ("allowed_path_prefixes", &["http"]),
+    ("redirect_allowed_hosts", &["http"]),
 ];
 
 /// The two ceilings (sorted). Positive integers; `load_tier1` enforces the
@@ -115,6 +127,11 @@ pub const LIMIT_FIELDS: [&str; 2] = ["max_output_bytes", "max_timeout_seconds"];
 /// proposal (FR-8.15).
 pub const BROAD_PREFIX_V4: u8 = 16;
 pub const BROAD_PREFIX_V6: u8 = 48;
+
+/// A proposed `redirect_allowed_hosts` longer than this is refused (FR
+/// safety rail -- a list this long is almost certainly a mistake, and
+/// `load_tier1` has no ceiling of its own for a toolkit written by hand).
+pub const MAX_REDIRECT_ALLOWED_HOSTS: usize = 500;
 
 fn propose_action_name(kind: &str) -> &'static str {
     match kind {
@@ -360,6 +377,197 @@ fn resolve_addresses(host: &str) -> Vec<IpAddr> {
 /// A network counts as public when both its ends are public addresses.
 fn network_is_public(network: &IpNet) -> bool {
     is_public_address(network.network()) && is_public_address(network.broadcast())
+}
+
+/// What a proposed `redirect_allowed_hosts` must meet beyond `load_tier1`'s
+/// own shape check ([`crate::tier1::parse_host_list`]: exact hostnames,
+/// no wildcard, no IP literal): no more than [`MAX_REDIRECT_ALLOWED_HOSTS`]
+/// entries. Checked at submit and again at deploy, like `check_path_roots`.
+fn check_redirect_allowed_hosts(name: &str, value: &Value) -> ConfigResult<Vec<String>> {
+    let where_ = format!("toolkit {}", repr_str(name));
+    let hosts = crate::tier1::parse_host_list(Some(value), &format!("{where_}: redirect_allowed_hosts"))
+        .map_err(|e| proposal_refused(format!("Cannot propose redirect_allowed_hosts for {where_}: {e}")))?;
+    if hosts.len() > MAX_REDIRECT_ALLOWED_HOSTS {
+        return Err(proposal_refused(format!(
+            "Cannot propose redirect_allowed_hosts for {where_}: {} entries exceeds the cap of \
+             {MAX_REDIRECT_ALLOWED_HOSTS}.",
+            hosts.len()
+        )));
+    }
+    Ok(hosts)
+}
+
+/// Refuses a `redirect_allowed_hosts` update that would shrink the
+/// toolkit's allowlist out from under a tool that still names one of the
+/// removed hosts in its own `follow_redirect.allowed_hosts` -- the
+/// mirror of `check_redact_secrets`, naming the tool(s) instead of
+/// silently letting `catalog::validate_against_tier1` reject them later
+/// at load.
+fn check_redirect_hosts_still_cover_tools(
+    name: &str,
+    new_hosts: &[String],
+    tools_path: &str,
+) -> ConfigResult<()> {
+    let losing = tools_outside_redirect_allowed_hosts(tools_path, name, new_hosts)?;
+    if losing.is_empty() {
+        return Ok(());
+    }
+    Err(proposal_refused(format!(
+        "Cannot propose redirect_allowed_hosts for toolkit {}: {} tool(s) use a follow_redirect host \
+         that would no longer be allowed: {}. Keep those hosts, or change/delete those tools first.",
+        repr_str(name),
+        losing.len(),
+        losing.join(", ")
+    )))
+}
+
+/// Per-host diff of a proposed `redirect_allowed_hosts` against the
+/// toolkit's current value -- `+host` for an addition, `-host` for a
+/// removal, additions before removals, each list in the order its own
+/// side names it. Lets a human reviewing the proposal (or reading the
+/// audit/UI summary) see exactly what changes without diffing two host
+/// lists by eye (FR, 140Z): the review surface for `redirect_allowed_hosts`
+/// otherwise only shows the proposed list in full, same as every other
+/// writable field, which hides a 140-host allowlist's actual change
+/// behind a wall of repeated text.
+fn redirect_hosts_diff_lines(current: &[String], new_hosts: &[String]) -> Vec<String> {
+    let mut lines: Vec<String> =
+        new_hosts.iter().filter(|h| !current.contains(h)).map(|h| format!("+{h}")).collect();
+    lines.extend(current.iter().filter(|h| !new_hosts.contains(h)).map(|h| format!("-{h}")));
+    lines
+}
+
+/// Tool ids on `toolkit_name` (current version, not soft-deleted) whose
+/// `follow_redirect.allowed_hosts` would land outside a proposed,
+/// narrower `new_hosts` -- each named with the host(s) it would lose.
+/// The mirror check to `tools_needing_redaction`, but for
+/// `redirect_allowed_hosts` instead of `redact_secrets`: a toolkit
+/// update may not quietly shrink the Tier 1 allowlist out from under a
+/// tool that still names one of the removed hosts.
+///
+/// A tool whose `follow_redirect.allowed_hosts` does not even parse as a
+/// host list is reported as affected too, not silently skipped: we
+/// cannot tell which hosts it would lose, so the safe answer is to name
+/// it and let a human look, the same way an unparseable value is refused
+/// elsewhere rather than ignored. Such a tool is rejected at catalog load
+/// time regardless of this proposal, but that is no reason for this
+/// check to pretend it is not there.
+fn tools_outside_redirect_allowed_hosts(
+    tools_path: &str,
+    toolkit_name: &str,
+    new_hosts: &[String],
+) -> ConfigResult<Vec<String>> {
+    if !std::path::Path::new(tools_path).exists() {
+        return Ok(Vec::new());
+    }
+    let raw = read_yaml_file(tools_path)?;
+    let Some(Value::Array(entries)) = raw.get("tools") else {
+        return Ok(Vec::new());
+    };
+    let mut blocked = Vec::new();
+    for entry in entries.iter().filter_map(Value::as_object) {
+        let Some((spec, _, _, deleted)) = current_version_spec(entry)? else { continue };
+        if deleted || entry.get("deleted").is_some_and(py_truthy) {
+            continue;
+        }
+        if spec.get("toolkit").and_then(Value::as_str) != Some(toolkit_name) {
+            continue;
+        }
+        let Some(follow) = spec.get("follow_redirect").filter(|v| !v.is_null()) else { continue };
+        let Some(Value::Object(follow)) = Some(follow) else { continue };
+        let id = repr_str(&str_value(spec.get("id").unwrap_or(&Value::Null)));
+        let tool_hosts = match crate::tier1::parse_host_list(follow.get("allowed_hosts"), "follow_redirect") {
+            Ok(hosts) => hosts,
+            Err(_) => {
+                blocked.push(format!("{id} (follow_redirect.allowed_hosts does not parse)"));
+                continue;
+            }
+        };
+        let losing: Vec<&str> =
+            tool_hosts.iter().filter(|h| !new_hosts.contains(h)).map(String::as_str).collect();
+        if losing.is_empty() {
+            continue;
+        }
+        blocked.push(format!("{id} ({})", losing.join(", ")));
+    }
+    Ok(blocked)
+}
+
+/// Tool ids on `toolkit_name` (current version, not soft-deleted) whose
+/// spec sets `follow_redirect` or `output_tail_lines` -- the two features
+/// `redact_secrets: false` would leave unmasked, each named with which.
+fn tools_needing_redaction(tools_path: &str, toolkit_name: &str) -> ConfigResult<Vec<String>> {
+    if !std::path::Path::new(tools_path).exists() {
+        return Ok(Vec::new());
+    }
+    let raw = read_yaml_file(tools_path)?;
+    let Some(Value::Array(entries)) = raw.get("tools") else {
+        return Ok(Vec::new());
+    };
+    let mut blocked = Vec::new();
+    for entry in entries.iter().filter_map(Value::as_object) {
+        let Some((spec, _, _, deleted)) = current_version_spec(entry)? else { continue };
+        if deleted || entry.get("deleted").is_some_and(py_truthy) {
+            continue;
+        }
+        if spec.get("toolkit").and_then(Value::as_str) != Some(toolkit_name) {
+            continue;
+        }
+        let has_follow = spec.get("follow_redirect").is_some_and(py_truthy);
+        let has_tail = spec.get("output_tail_lines").is_some_and(py_truthy);
+        if !has_follow && !has_tail {
+            continue;
+        }
+        let id = repr_str(&str_value(spec.get("id").unwrap_or(&Value::Null)));
+        let which = match (has_follow, has_tail) {
+            (true, true) => "follow_redirect, output_tail_lines",
+            (true, false) => "follow_redirect",
+            _ => "output_tail_lines",
+        };
+        blocked.push(format!("{id} ({which})"));
+    }
+    Ok(blocked)
+}
+
+/// `redact_secrets` must be a real boolean. `null` would otherwise fall
+/// straight through to `load_tier1`'s per-executor default (`false` for
+/// `http`), silently disabling masking without ever reaching
+/// [`check_redact_secrets`] below; a merely Python-truthy non-bool (e.g.
+/// the string `"false"`) would pass that same gate only to be refused
+/// later, at deploy, by `load_tier1`'s stricter type check. Refuse both
+/// up front instead, at propose time, like every other typed field.
+fn require_redact_secrets_bool(value: &Value) -> ConfigResult<()> {
+    if matches!(value, Value::Bool(_)) {
+        return Ok(());
+    }
+    Err(proposal_refused(format!(
+        "Cannot propose redact_secrets={}: it must be true or false.",
+        repr_value(value)
+    )))
+}
+
+/// Why `redact_secrets: false` is refused on a toolkit whose tools still
+/// need it: a `follow_redirect` tool can land on a body it did not
+/// choose, and `output_tail_lines` streams a log tail -- masking is what
+/// keeps a secret-shaped string in either from reaching the caller
+/// unmasked. Checked at submit and again at deploy, like `check_path_roots`.
+fn check_redact_secrets(name: &str, value: &Value, tools_path: &str) -> ConfigResult<()> {
+    if py_truthy(value) {
+        return Ok(());
+    }
+    let blocked = tools_needing_redaction(tools_path, name)?;
+    if blocked.is_empty() {
+        return Ok(());
+    }
+    Err(proposal_refused(format!(
+        "Cannot propose redact_secrets=false for toolkit {}: {} tool(s) use follow_redirect or \
+         output_tail_lines, whose output this masking protects from an unmasked secret-shaped \
+         string in a redirect body or a log tail: {}. Delete or change those tools first, or \
+         keep redact_secrets on.",
+        repr_str(name),
+        blocked.len(),
+        blocked.join(", ")
+    )))
 }
 
 /// The two rules a proposed `allowed_cidrs` must meet, beyond shape:
@@ -734,6 +942,7 @@ impl ToolkitProposalStore {
                 &destination_urls(&body, &live),
             )?;
         }
+        let mut redirect_hosts_diff: Option<Vec<String>> = None;
         if kind == "update" {
             if let Some(value) = spec.get("path_roots") {
                 let live = self.live_raw()?;
@@ -744,6 +953,25 @@ impl ToolkitProposalStore {
                 };
                 check_path_roots(name, value, field("executor"), field("run_as"), &self.tools_path)?;
             }
+            if spec.contains_key("redirect_allowed_hosts") {
+                let value = spec.get("redirect_allowed_hosts").unwrap();
+                let new_hosts =
+                    if value.is_null() { Vec::new() } else { check_redirect_allowed_hosts(name, value)? };
+                check_redirect_hosts_still_cover_tools(name, &new_hosts, &self.tools_path)?;
+                let current_hosts = self.live_redirect_allowed_hosts(name)?;
+                redirect_hosts_diff = Some(redirect_hosts_diff_lines(&current_hosts, &new_hosts));
+            }
+        }
+        // Unlike `path_roots` and `redirect_allowed_hosts` above, the
+        // `redact_secrets` type check and masking-coverage check apply to
+        // `create` as well as `update` -- a brand-new toolkit proposing
+        // `redact_secrets: 1` or `"false"` must be refused just as early
+        // as an update doing the same (verified by
+        // `redact_secrets_non_bool_is_refused_on_create_too`).
+        if (kind == "update" || kind == "create") && spec.contains_key("redact_secrets") {
+            let value = spec.get("redact_secrets").unwrap();
+            require_redact_secrets_bool(value)?;
+            check_redact_secrets(name, value, &self.tools_path)?;
         }
         if kind == "delete" && !spec.is_empty() {
             return Err(proposal_refused(
@@ -816,6 +1044,9 @@ impl ToolkitProposalStore {
         if confirm_broad_cidrs {
             event["confirm_broad_cidrs"] = json!(true);
         }
+        if let Some(diff) = &redirect_hosts_diff {
+            event["redirect_allowed_hosts_diff"] = json!(diff);
+        }
         self.audit_write(event)?;
         Ok(item)
     }
@@ -827,6 +1058,41 @@ impl ToolkitProposalStore {
         }
         let raw = read_yaml_file(&self.toolkits_path)?;
         Ok(if raw.is_object() { raw } else { Value::Object(Map::new()) })
+    }
+
+    /// `redirect_allowed_hosts` of `name` as `toolkits.yaml` on disk has it
+    /// right now (empty if the toolkit, or the field, is absent) --
+    /// normalized the same way [`check_redirect_allowed_hosts`] would, so
+    /// it compares cleanly against a freshly proposed list.
+    fn live_redirect_allowed_hosts(&self, name: &str) -> ConfigResult<Vec<String>> {
+        let live = self.live_raw()?;
+        match live.get("toolkits").and_then(|t| t.get(name)).and_then(|tk| tk.get("redirect_allowed_hosts")) {
+            Some(value) if !value.is_null() => {
+                crate::tier1::parse_host_list(Some(value), "redirect_allowed_hosts").or(Ok(Vec::new()))
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// For a pending `update` proposal that changes `redirect_allowed_hosts`,
+    /// the per-host diff ([`redirect_hosts_diff_lines`]) against the
+    /// toolkit's *current* live value -- `None` for any other proposal
+    /// (nothing to diff). Recomputed against the live file every call, so
+    /// it stays accurate even if the toolkit changed since the proposal
+    /// was queued, and is what the Proposal/Review listing and audit
+    /// summary show (FR, 140Z).
+    pub fn redirect_allowed_hosts_diff(&self, item: &ToolkitProposal) -> ConfigResult<Option<Vec<String>>> {
+        if item.kind != "update" {
+            return Ok(None);
+        }
+        let Some(value) = item.spec.get("redirect_allowed_hosts") else { return Ok(None) };
+        let new_hosts = if value.is_null() {
+            Vec::new()
+        } else {
+            crate::tier1::parse_host_list(Some(value), "redirect_allowed_hosts").unwrap_or_default()
+        };
+        let current = self.live_redirect_allowed_hosts(&item.name)?;
+        Ok(Some(redirect_hosts_diff_lines(&current, &new_hosts)))
     }
 
     /// Toolkit names in toolkits.yaml as `deploy()` will see them (the
@@ -1036,6 +1302,19 @@ impl ToolkitProposalStore {
                     // a directory may be gone, a tool added since submit.
                     let run_as = body.get("run_as").and_then(Value::as_str);
                     check_path_roots(&item.name, value, executor.as_str(), run_as, &self.tools_path)?;
+                }
+                if item.spec.contains_key("redirect_allowed_hosts") {
+                    let value = item.spec.get("redirect_allowed_hosts").unwrap();
+                    let new_hosts = if value.is_null() {
+                        Vec::new()
+                    } else {
+                        check_redirect_allowed_hosts(&item.name, value)?
+                    };
+                    check_redirect_hosts_still_cover_tools(&item.name, &new_hosts, &self.tools_path)?;
+                }
+                if let Some(value) = item.spec.get("redact_secrets") {
+                    require_redact_secrets_bool(value)?;
+                    check_redact_secrets(&item.name, value, &self.tools_path)?;
                 }
                 // A null network field removes the key, so the remaining
                 // one alone decides -- load_tier1 then refuses the toolkit

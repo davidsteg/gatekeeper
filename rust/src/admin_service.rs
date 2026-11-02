@@ -420,7 +420,24 @@ impl AdminService {
         if let Some(kind) = kind.and_then(Value::as_str) {
             items.retain(|i| i.kind == kind);
         }
-        Ok(json!({ "proposals": items.iter().map(|i| i.to_spec()).collect::<Vec<_>>() }))
+        // FR (140Z): a `redirect_allowed_hosts` update's review card shows
+        // the per-host diff against the toolkit's current live value --
+        // `+host`/`-host` -- next to the proposed list, the same way the
+        // card already shows other fields' current value next to the
+        // proposed one.
+        let out: Vec<Value> = items
+            .iter()
+            .map(|i| {
+                let mut v = i.to_spec();
+                if let (Value::Object(m), Ok(Some(diff))) =
+                    (&mut v, self.toolkit_proposals.redirect_allowed_hosts_diff(i))
+                {
+                    m.insert("redirect_allowed_hosts_diff".into(), json!(diff));
+                }
+                v
+            })
+            .collect();
+        Ok(json!({ "proposals": out }))
     }
 
     /// Lists live Tier 1 toolkits + destinations. Read-only.
@@ -625,8 +642,9 @@ impl AdminService {
 
     /// Proposes changing a toolkit's executor, binaries, denied_args,
     /// run_as, an http/opencode/kuma toolkit's allowed_hosts/allowed_cidrs, an
-    /// http toolkit's allowed_methods/allowed_path_prefixes, path_roots and
-    /// the two limits (`toolkit_proposals::UPDATE_WRITABLE_FIELDS`).
+    /// http toolkit's allowed_methods/allowed_path_prefixes/redirect_allowed_hosts,
+    /// path_roots, redact_secrets and the two limits
+    /// (`toolkit_proposals::UPDATE_WRITABLE_FIELDS`).
     pub fn toolkit_update(&self, actor: &str, args: &Args) -> ConfigResult<Value> {
         let name = require_str(args, "name")?;
         let updates = require_dict(args, "updates")?.clone();
