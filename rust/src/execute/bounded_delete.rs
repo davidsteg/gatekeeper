@@ -18,9 +18,14 @@
 //!    listing error aborts *before anything is removed*.
 //! 4. The root -> parent chain is re-walked and must still be the same
 //!    directories. Then exactly the listed entries go, bottom-up, each
-//!    re-checked by `(st_dev, st_ino, type)` right before its
+//!    re-checked by `(st_dev, st_ino, type, size, mtime)` right before its
 //!    `unlinkat`; the first extra, missing or replaced entry stops it and
-//!    the report says what was removed by then.
+//!    the report says what was removed by then. Renaming, swapping-in a
+//!    symlink, or a remove+recreate (same or a reused inode) all move
+//!    the recheck off what was listed and abort. A plain `chmod`/`chown`
+//!    on an entry, or an `unlink` of some *other* name sharing its inode
+//!    (a hard link), does not: both move `ctime` but not `mtime`/`size`,
+//!    so they are deliberately not treated as a replacement.
 //! 5. Proof: the target's name no longer exists in its parent.
 //!
 //! What a race can still do is remove a *name* inside the listed tree,
@@ -51,8 +56,29 @@ pub const MAX_DELETE_ENTRIES: i64 = 100_000;
 const DIR_FLAGS: libc::c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
 const NOFOLLOW_DIR_FLAGS: libc::c_int = DIR_FLAGS | libc::O_NOFOLLOW;
 
-/// `(st_dev, st_ino, file type)`: what an entry must still be when it goes.
+/// `(st_dev, st_ino, file type)`: what an entry must still be when it
+/// goes. On its own this cannot tell a remove+recreate from an untouched
+/// entry if the filesystem hands the freed inode number straight back
+/// out to the very next create -- see [`Entry::content`] for the other
+/// half of the recheck that catches that case for non-directories.
 type Ident = (u64, u64, u32);
+
+/// `(size, mtime sec, mtime nsec)`, recorded alongside [`Ident`] so a
+/// recheck can also notice a remove+recreate that reuses the same
+/// `(dev, ino, type)`: such a recreate resets mtime to "now" and, short
+/// of a content-identical replacement (not a race this check is meant to
+/// catch), changes size too. This is `mtime`, not `ctime`: `ctime` also
+/// moves on a metadata-only change (`chmod`/`chown`) and, for any name
+/// that shares its inode with another (a hard link), on an `unlink` of
+/// that *other* name elsewhere in the tree -- neither is a content
+/// replacement this check should flag, and the second would otherwise
+/// turn deleting a hard-linked tree into a guaranteed abort. Not
+/// meaningful for directories: deleting this delete's own
+/// already-checked children legitimately bumps a directory's own mtime
+/// before its self-recheck runs, so directories are identified by
+/// [`Ident`] alone (their *contents* are instead verified by the
+/// exact-listing-match in `delete_dir`).
+type Content = (i64, i64, i64);
 
 struct Entry {
     name: CString,
@@ -60,6 +86,7 @@ struct Entry {
     rel: String,
     is_dir: bool,
     ident: Ident,
+    content: Content,
     children: Vec<Entry>,
 }
 
@@ -93,6 +120,18 @@ fn open_at(dir: Option<RawFd>, name: &CStr, flags: libc::c_int) -> Result<OwnedF
 
 fn ident_of(st: &libc::stat) -> Ident {
     (st.st_dev as u64, st.st_ino as u64, (st.st_mode & libc::S_IFMT) as u32)
+}
+
+fn content_of(st: &libc::stat) -> Content {
+    (st.st_size, st.st_mtime, st.st_mtime_nsec)
+}
+
+/// `entry` is still what was listed: its `ident` always, and -- for
+/// anything but a directory -- its `content` too (size + mtime; see
+/// [`Content`] for why `mtime` and why directories are exempt from the
+/// latter).
+fn still_listed(entry: &Entry, st: &libc::stat) -> bool {
+    ident_of(st) == entry.ident && (entry.is_dir || content_of(st) == entry.content)
 }
 
 /// `fstatat(dir, name, AT_SYMLINK_NOFOLLOW)`.
@@ -220,7 +259,7 @@ fn open_dir_checked(parent: RawFd, entry: &Entry, target: &str) -> Result<OwnedF
         _ => format!("cannot open directory {} ({})", repr_str(&at), strerror(err)),
     })?;
     match fstat(fd.as_raw_fd()) {
-        Ok(st) if ident_of(&st) == entry.ident => Ok(fd),
+        Ok(st) if still_listed(entry, &st) => Ok(fd),
         Ok(_) => Err(format!("directory {} changed since it was listed", repr_str(&at))),
         Err(err) => Err(format!("cannot stat directory {} ({})", repr_str(&at), strerror(err))),
     }
@@ -252,7 +291,7 @@ fn list_tree(fd: RawFd, node: &mut Entry, limits: &Limits, lines: &mut Vec<Strin
         if lines.len() > limits.max_entries {
             return Err(format!("{} has more than {} entries (max_entries)", limits.target, limits.max_entries));
         }
-        let mut child = Entry { name, rel, is_dir, ident: ident_of(&st), children: Vec::new() };
+        let mut child = Entry { name, rel, is_dir, ident: ident_of(&st), content: content_of(&st), children: Vec::new() };
         if is_dir {
             if depth + 1 > MAX_DELETE_DEPTH {
                 return Err(format!(
@@ -272,7 +311,7 @@ fn list_tree(fd: RawFd, node: &mut Entry, limits: &Limits, lines: &mut Vec<Strin
 fn check_entry(dir: RawFd, entry: &Entry, target: &str) -> Result<(), String> {
     let at = if entry.rel.is_empty() { target.to_string() } else { entry.rel.clone() };
     match stat_at(dir, &entry.name) {
-        Ok(st) if ident_of(&st) == entry.ident => Ok(()),
+        Ok(st) if still_listed(entry, &st) => Ok(()),
         Ok(_) => Err(format!("{} was replaced since it was listed", repr_str(&at))),
         Err(libc::ENOENT) => Err(format!("{} vanished since it was listed", repr_str(&at))),
         Err(err) => Err(format!("cannot stat {} ({})", repr_str(&at), strerror(err))),
@@ -439,7 +478,8 @@ pub(crate) fn delete_with(
 
     // Phase 1: list everything, delete nothing.
     let is_dir = is_dir_mode(&top_st);
-    let mut top = Entry { name: final_name.clone(), rel: String::new(), is_dir, ident: ident_of(&top_st), children: Vec::new() };
+    let mut top =
+        Entry { name: final_name.clone(), rel: String::new(), is_dir, ident: ident_of(&top_st), content: content_of(&top_st), children: Vec::new() };
     let mut lines: Vec<String> = Vec::new();
     if is_dir {
         let limits = Limits { target: path, protected, max_entries: max_entries as usize, files_only };
@@ -717,6 +757,74 @@ mod tests {
         assert_eq!(r.outcome, "failed");
         assert!(r.stderr.contains("'a' was replaced since it was listed"), "{}", r.stderr);
         assert_eq!(std::fs::read_to_string(&a).unwrap(), "replaced");
+    }
+
+    #[test]
+    fn a_file_with_a_reused_inode_but_different_size_and_mtime_is_detected_as_replaced() {
+        // A filesystem can hand a just-freed inode number straight back out to
+        // the very next create, so (dev, ino, type) alone cannot tell a
+        // remove+recreate from an untouched entry. Simulate the reuse
+        // directly: stat a real file, then pretend a *prior* listing recorded
+        // the same (dev, ino, type) with a different size and an older mtime
+        // (nsec included), the way a pre-reuse listing would have.
+        let (_d, root) = tmp();
+        std::fs::write(format!("{root}/a"), "fresh, longer content").unwrap();
+        let dir = open_at(None, &CString::new(root.clone()).unwrap(), DIR_FLAGS).unwrap();
+        let name = CString::new("a").unwrap();
+        let real_st = stat_at(dir.as_raw_fd(), &name).unwrap();
+        let real_ident = ident_of(&real_st);
+        let (size, mtime, mtime_nsec) = content_of(&real_st);
+        let stale_content: Content = (size + 1, mtime - 1, mtime_nsec);
+        assert_ne!(stale_content, content_of(&real_st), "the fabricated stale content must differ");
+
+        let entry =
+            Entry { name: name.clone(), rel: "a".to_string(), is_dir: false, ident: real_ident, content: stale_content, children: Vec::new() };
+        assert!(!still_listed(&entry, &real_st), "same (dev, ino, type) with different size/mtime must not count as unchanged");
+        let err = check_entry(dir.as_raw_fd(), &entry, &root).unwrap_err();
+        assert!(err.contains("'a' was replaced since it was listed"), "{}", err);
+
+        // Same (dev, ino, type, size, mtime): still recognised as unchanged.
+        let entry =
+            Entry { name, rel: "a".to_string(), is_dir: false, ident: real_ident, content: content_of(&real_st), children: Vec::new() };
+        assert!(check_entry(dir.as_raw_fd(), &entry, &root).is_ok());
+    }
+
+    #[test]
+    fn a_hardlinked_tree_is_deleted_whole_even_though_unlinking_one_name_bumps_the_shared_inodes_ctime() {
+        // `a` and `b` share one inode. Deleting `a` first (bottom-up, sorted)
+        // unlinks one of the inode's two names, which bumps *ctime* on the
+        // inode both still share -- but leaves *mtime* and size untouched.
+        // The recheck on `b` must survive that: it is no longer comparing
+        // ctime at all.
+        let (_d, root) = tmp();
+        let t = format!("{root}/t");
+        std::fs::create_dir(&t).unwrap();
+        std::fs::write(format!("{t}/a"), "shared content").unwrap();
+        std::fs::hard_link(format!("{t}/a"), format!("{t}/b")).unwrap();
+        // The pause lands between listing and delete, matching the race
+        // seam used elsewhere in this file (and in the review probe): give
+        // the filesystem clock room to tick so a ctime-only check (the bug
+        // this test guards against) could not pass by sheer luck.
+        let r = race(&t, &root, &|| std::thread::sleep(std::time::Duration::from_millis(20)));
+        assert_eq!(r.outcome, "ok", "{}", r.stderr);
+        assert!(!exists(&format!("{t}/a")));
+        assert!(!exists(&format!("{t}/b")));
+        assert!(!exists(&t));
+    }
+
+    #[test]
+    fn a_chmod_or_chown_between_listing_and_delete_does_not_abort_it() {
+        // chmod/chown moves ctime but not mtime/size: no longer treated as
+        // a replacement.
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, root) = tmp();
+        let t = tree(&root);
+        let a = format!("{t}/a");
+        let r = race(&t, &root, &|| {
+            std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o600)).unwrap();
+        });
+        assert_eq!(r.outcome, "ok", "{}", r.stderr);
+        assert!(!exists(&t));
     }
 
     #[test]
