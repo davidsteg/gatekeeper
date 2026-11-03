@@ -1,3 +1,12 @@
+## 1.31.1
+
+`bounded_delete` now also catches a remove+recreate that reuses the same inode number between listing and delete, without aborting on hard links or a plain chmod/chown.
+
+### Fixed
+
+- **Inode-reuse replacement is detected.** The recheck right before each `unlinkat` compared only `(dev, ino, type)`. A filesystem that hands a just-freed inode number straight back to the next create could let a remove+recreate between listing and delete pass as the same entry. Non-directory entries now also record `(size, mtime sec, mtime nsec)` at listing time and must still match on recheck; a mismatch aborts the delete as "replaced". Directories stay exempt (deleting their own children legitimately moves their timestamps); their contents are covered by the exact-listing match in `delete_dir`.
+- mtime, not ctime, is the recheck key: ctime also moves on chmod/chown and, for a hard-linked file, when any *other* name of the same inode is unlinked. A tree with hard links is deleted completely again, and a chmod/chown between listing and delete no longer aborts it.
+
 ## 1.31.0
 
 `admin.toolkit_update` can now propose `redact_secrets` and `redirect_allowed_hosts` on an `http` toolkit, through the same human-approved proposal/deploy flow as every other writable field (`UPDATE_WRITABLE_FIELDS`) -- previously the only way to change either was a direct file edit plus SIGHUP.
