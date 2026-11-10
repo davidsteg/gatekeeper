@@ -198,7 +198,9 @@
     "pool.dataset.query",
     "pool.dataset.create",
     "zfs.snapshot.query",
-    "zfs.snapshot.delete"
+    "zfs.snapshot.delete",
+    "alertservice.query",
+    "alertservice.update"
    ],
    "destinations": [],
    "docker_host": null,
@@ -641,7 +643,8 @@
     "monitor_list",
     "monitor_add_http",
     "monitor_pause",
-    "monitor_resume"
+    "monitor_resume",
+    "monitor_edit"
    ],
    "allowed_git_operations": [],
    "git_binary": null,
@@ -3690,6 +3693,63 @@
      },
      "agent_description": "Resumes a paused monitor gatekeeper created. Any other monitor is refused."
     },
+    "kuma.monitor_edit": {
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Set a monitor's notifications and retries",
+     "description": "Edits one existing monitor, hand-made ones included: its notifications become exactly the toolkit's kuma_notification_ids, and maxretries changes if given. No other field of the monitor can be changed.",
+     "category": "write",
+     "enabled": false,
+     "idempotent": true,
+     "ssh_dispatch": false,
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096,
+     "binary": null,
+     "argv": [],
+     "http_method": null,
+     "path_template": null,
+     "query_template": {},
+     "body_template": null,
+     "body_raw_param": null,
+     "max_file_bytes": null,
+     "base_url": null,
+     "rpc_method": null,
+     "params_template": null,
+     "file_operation": null,
+     "google_action": null,
+     "google_args": null,
+     "microsoft_action": null,
+     "microsoft_args": null,
+     "opencode_operation": null,
+     "agent_operation": null,
+     "artifact_operation": null,
+     "kuma_operation": "monitor_edit",
+     "git_operation": null,
+     "run_as": null,
+     "destination": null,
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "monitor_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "The monitor's id from kuma.monitor_list."
+       },
+       "maxretries": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 10,
+        "description": "Failed checks Kuma retries before marking the monitor down."
+       }
+      },
+      "required": [
+       "monitor_id"
+      ],
+      "additionalProperties": false
+     },
+     "agent_description": "Edits one existing monitor, hand-made ones included: its notifications become exactly the toolkit's kuma_notification_ids, and maxretries changes if given. No other field of the monitor can be changed."
+    },
     "gkrepo.push": {
      "toolkit": "gkrepo",
      "version": 1,
@@ -3752,7 +3812,7 @@
    },
    "disabled_by_tier1": [],
    "rejected": [],
-   "raw_count": 44,
+   "raw_count": 45,
    "flat_specs": {
     "docker.compose_ps": {
      "id": "docker.compose_ps",
@@ -5067,6 +5127,34 @@
      "timeout_seconds": 20,
      "max_output_bytes": 4096
     },
+    "kuma.monitor_edit": {
+     "id": "kuma.monitor_edit",
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Set a monitor's notifications and retries",
+     "description": "Edits one existing monitor, hand-made ones included: its notifications become exactly the toolkit's kuma_notification_ids, and maxretries changes if given. No other field of the monitor can be changed.",
+     "category": "write",
+     "idempotent": true,
+     "enabled": false,
+     "kuma_operation": "monitor_edit",
+     "parameters": {
+      "monitor_id": {
+       "type": "integer",
+       "required": true,
+       "minimum": 1,
+       "description": "The monitor's id from kuma.monitor_list."
+      },
+      "maxretries": {
+       "type": "integer",
+       "minimum": 0,
+       "maximum": 10,
+       "description": "Failed checks Kuma retries before marking the monitor down."
+      }
+     },
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096
+    },
     "gkrepo.push": {
      "id": "gkrepo.push",
      "toolkit": "gkrepo",
@@ -5233,6 +5321,9 @@
     ],
     "kuma.monitor_resume": [
      "kuma.monitor_resume"
+    ],
+    "kuma.monitor_edit": [
+     "kuma.monitor_edit"
     ],
     "gkrepo.push": [
      "gkrepo.push"

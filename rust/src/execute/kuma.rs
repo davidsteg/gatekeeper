@@ -31,9 +31,18 @@
 //!   ([`MANAGED_MARKER`]); a monitor somebody set up by hand is refused
 //!   before anything is sent for it.
 //!
-//! There is no delete, no edit, and nothing that changes notifications or
-//! settings: those events are simply never emitted by this module. The
-//! notification list is only read, and only its IDs are looked at.
+//! * `monitor_edit` (1.32.0) -- one `editMonitor` for an existing monitor,
+//!   hand-made ones included. The monitor object Kuma returns for
+//!   `getMonitor` is sent back with exactly two fields replaced:
+//!   `notificationIDList` becomes the toolkit's `kuma_notification_ids`
+//!   (checked against `notificationList` first, like the adds) and, if
+//!   given, `maxretries` (bounded like the adds). Every other field goes
+//!   back as Kuma sent it; the caller cannot name any of them.
+//!
+//! There is no delete, and nothing that changes a notification or a
+//! setting object itself: those events are simply never emitted by this
+//! module. The notification list is only read, and only its IDs are
+//! looked at.
 //!
 //! What it keeps from the `http` executor, by reusing that module's
 //! helpers: the target lives only on the toolkit (`base_url`), the resolved
@@ -109,10 +118,14 @@ const PORT_NAME_MAX: usize = 60;
 
 /// The events that change something in Kuma. Once one is on the wire, a
 /// timeout no longer means "nothing happened" (FR-6.9).
-const WRITE_EVENTS: &[&str] = &["add", "pauseMonitor", "resumeMonitor"];
+const WRITE_EVENTS: &[&str] = &["add", "editMonitor", "pauseMonitor", "resumeMonitor"];
 
 /// The operations this module has code for (Python's `_OPERATIONS`).
-const OPERATIONS: &[&str] = &["monitor_list", "monitor_add_http", "monitor_add_port", "monitor_pause", "monitor_resume"];
+const OPERATIONS: &[&str] =
+    &["monitor_list", "monitor_add_http", "monitor_add_port", "monitor_edit", "monitor_pause", "monitor_resume"];
+
+/// The only fields of a monitor object `monitor_edit` changes (1.32.0).
+pub const KUMA_EDIT_FIELDS: &[&str] = &["maxretries", "notificationIDList"];
 
 /// How one exchange can end besides success -- Python's exception types.
 #[derive(Debug)]
@@ -806,15 +819,50 @@ async fn op_add_port(sio: &mut SocketIo, values: &crate::validate::Values, toolk
     }))
 }
 
-async fn owned_monitor(sio: &mut SocketIo, monitor_id: u64) -> Result<Map<String, Value>, Fail> {
+async fn existing_monitor(sio: &mut SocketIo, monitor_id: u64) -> Result<Map<String, Value>, Fail> {
     let answer = sio.call("getMonitor", vec![json!(monitor_id)]).await?;
     let monitor = match &answer {
         Value::Object(a) if a.get("ok").is_some_and(py_truthy) => a.get("monitor").cloned(),
         _ => None,
     };
-    let Some(Value::Object(monitor)) = monitor else {
-        return Err(kuma_error(format!("Monitor {monitor_id} does not exist.")));
-    };
+    match monitor {
+        Some(Value::Object(monitor)) => Ok(monitor),
+        _ => Err(kuma_error(format!("Monitor {monitor_id} does not exist."))),
+    }
+}
+
+/// `monitor`, as Kuma sent it, with only [`KUMA_EDIT_FIELDS`] replaced:
+/// the notifications become exactly `notification_ids`, and `maxretries`
+/// changes only when given. The `id` stays Kuma's own.
+pub fn edited_monitor(mut monitor: Map<String, Value>, notification_ids: &[u64], maxretries: Option<i64>) -> Value {
+    monitor.insert("notificationIDList".into(), notification_id_list(notification_ids));
+    if let Some(n) = maxretries {
+        monitor.insert("maxretries".into(), json!(n));
+    }
+    Value::Object(monitor)
+}
+
+async fn op_edit(sio: &mut SocketIo, values: &crate::validate::Values, toolkit: &Toolkit) -> Result<Value, Fail> {
+    let monitor_id: u64 = get(values, "monitor_id").unwrap_or("").parse().unwrap_or(0);
+    let maxretries: Option<i64> = get(values, "maxretries").filter(|v| !v.is_empty()).and_then(|v| v.parse().ok());
+    let monitor = existing_monitor(sio, monitor_id).await?;
+    if monitor.get("id").and_then(Value::as_u64).is_some_and(|id| id != monitor_id) {
+        return Err(kuma_error(format!("Uptime Kuma answered getMonitor {monitor_id} with a different monitor.")));
+    }
+    check_notifications(sio, toolkit).await?;
+    let name = monitor.get("name").cloned().unwrap_or(Value::Null);
+    let edited = edited_monitor(monitor, &toolkit.kuma_notification_ids, maxretries);
+    ack_ok(sio.call("editMonitor", vec![edited.clone()]).await?, &format!("editing monitor {monitor_id}"))?;
+    Ok(json!({
+        "monitor_id": monitor_id,
+        "name": name,
+        "maxretries": edited.get("maxretries").cloned().unwrap_or(Value::Null),
+        "notification_ids": toolkit.kuma_notification_ids,
+    }))
+}
+
+async fn owned_monitor(sio: &mut SocketIo, monitor_id: u64) -> Result<Map<String, Value>, Fail> {
+    let monitor = existing_monitor(sio, monitor_id).await?;
     if !is_managed(&Value::Object(monitor.clone())) {
         return Err(Fail::Denied(Denied::new(
             DenialReason::Tier1Violation,
@@ -863,7 +911,7 @@ fn ascii_uint(s: &str) -> Option<u64> {
 /// regardless of what it declares.
 pub fn check_values(operation: &str, values: &crate::validate::Values) -> Result<(), Denied> {
     let invalid = |msg: String| Err(Denied::new(DenialReason::ParamInvalid, msg));
-    if matches!(operation, "monitor_add_http" | "monitor_add_port") {
+    if matches!(operation, "monitor_add_http" | "monitor_add_port" | "monitor_edit") {
         for (param, min, max, unit) in [
             ("interval", KUMA_INTERVAL_MIN, KUMA_INTERVAL_MAX, " seconds"),
             ("maxretries", KUMA_MAXRETRIES_MIN, KUMA_MAXRETRIES_MAX, ""),
@@ -920,7 +968,8 @@ pub fn check_values(operation: &str, values: &crate::validate::Values) -> Result
                 ));
             }
         }
-    } else if matches!(operation, "monitor_pause" | "monitor_resume") {
+    }
+    if matches!(operation, "monitor_pause" | "monitor_resume" | "monitor_edit") {
         let monitor_id = get(values, "monitor_id").unwrap_or("");
         if ascii_uint(monitor_id).is_none_or(|n| n < 1) {
             return invalid("Parameter 'monitor_id' must be a positive integer.".into());
@@ -1102,6 +1151,7 @@ pub async fn run(
             "monitor_list" => op_list(&mut sio).await,
             "monitor_add_http" => op_add_http(&mut sio, values, toolkit).await,
             "monitor_add_port" => op_add_port(&mut sio, values, toolkit).await,
+            "monitor_edit" => op_edit(&mut sio, values, toolkit).await,
             "monitor_pause" => op_pause_resume(&mut sio, values, true).await,
             _ => op_pause_resume(&mut sio, values, false).await,
         }

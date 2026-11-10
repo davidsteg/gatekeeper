@@ -523,6 +523,68 @@ fn nested_rpc_params_substitute_leaves_and_type_whole_placeholders() {
     assert!(err_text(parse_tool_spec(&unknown, &tier1)).contains("unknown parameter 'nope'"));
 }
 
+fn alertservice_tool(tier1: &Tier1, params: Value) -> ToolDef {
+    let spec = json!({
+        "id": "demo_truenas.alertservice_level", "toolkit": "demo_truenas", "version": 1,
+        "title": "x", "description": "x", "category": "write", "enabled": true,
+        "method": "alertservice.update", "params": params,
+        "parameters": {
+            "id": {"type": "integer", "required": true},
+            "level": {"type": "string", "pattern": "^[A-Z]+$", "required": true},
+        },
+        "required_scopes": [], "timeout_seconds": 10, "max_output_bytes": 4096,
+    });
+    parse_tool_spec(&spec, tier1).unwrap()
+}
+
+#[test]
+fn alertservice_update_may_only_change_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let tier1 = truenas_tier1(dir.path(), &["alertservice.query", "alertservice.update"]);
+    let tk = tier1.toolkit("demo_truenas").unwrap();
+    let good = alertservice_tool(&tier1, json!({"id": "{id}", "data": {"level": "{level}"}}));
+    let resolved = resolve(&good, json!({"id": 3, "level": "WARNING"})).unwrap();
+    let (method, params) = build_rpc_call(&good, &resolved, tk).unwrap();
+    assert_eq!(method, "alertservice.update");
+    assert_eq!(params.values().cloned().collect::<Vec<_>>(), vec![json!(3), json!({"level": "WARNING"})]);
+
+    // A level outside TrueNAS's enum is refused.
+    let bad_level = resolve(&good, json!({"id": 3, "level": "LOUD"})).unwrap();
+    let err = build_rpc_call(&good, &bad_level, tk).unwrap_err();
+    assert_eq!(err.reason, DenialReason::RpcMethodDenied);
+    // A non-positive id is refused.
+    let zero = resolve(&good, json!({"id": 0, "level": "INFO"})).unwrap();
+    assert_eq!(build_rpc_call(&good, &zero, tk).unwrap_err().reason, DenialReason::RpcMethodDenied);
+
+    // Any field besides `level` is refused, fixed or templated.
+    for params in [
+        json!({"id": "{id}", "data": {"level": "{level}", "enabled": false}}),
+        json!({"id": "{id}", "data": {"level": "{level}", "attributes": {"url": "x"}}}),
+        json!({"id": "{id}", "data": {"type": "{level}"}}),
+        json!({"id": "{id}", "data": "{level}"}),
+        json!({"id": "{id}", "data": {"level": "{level}"}, "extra": 1}),
+        json!({"data": {"level": "{level}"}}),
+    ] {
+        let t = alertservice_tool(&tier1, params.clone());
+        let resolved = resolve(&t, json!({"id": 3, "level": "INFO"})).unwrap();
+        let err = build_rpc_call(&t, &resolved, tk).unwrap_err();
+        assert_eq!(err.reason, DenialReason::RpcMethodDenied, "{params}");
+        assert!(err.detail.contains("may only change 'level'"), "{}", err.detail);
+    }
+
+    // alertservice.query is a plain whitelisted read, no shape limit.
+    let spec = json!({
+        "id": "demo_truenas.alertservices", "toolkit": "demo_truenas", "version": 1,
+        "title": "x", "description": "x", "category": "read", "enabled": true,
+        "method": "alertservice.query", "params": {}, "parameters": {},
+        "required_scopes": [], "timeout_seconds": 10, "max_output_bytes": 4096,
+    });
+    let q = parse_tool_spec(&spec, &tier1).unwrap();
+    let (method, params) = build_rpc_call(&q, &resolve(&q, json!({})).unwrap(), tk).unwrap();
+    assert_eq!(method, "alertservice.query");
+    assert!(params.is_empty());
+}
+
 #[test]
 fn a_job_tool_needs_core_get_jobs_in_the_allowlist() {
     let dir = tempfile::tempdir().unwrap();

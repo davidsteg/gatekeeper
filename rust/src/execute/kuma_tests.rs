@@ -166,6 +166,18 @@ async fn handler(stream: tokio::net::TcpStream, state: Shared) {
                     Some(m) => json!({"ok": true, "monitor": m}),
                     None => json!({"ok": false, "msg": "Cannot read properties of null"}),
                 },
+                "editMonitor" => {
+                    // Kuma's own handler: looks the monitor up by the
+                    // object's `id`, overwrites the row with the object.
+                    let edited = rest[0].clone();
+                    match edited["id"].as_i64().filter(|id| s.monitors.contains_key(id)) {
+                        Some(id) => {
+                            s.monitors.insert(id, edited);
+                            json!({"ok": true, "msg": "Saved.", "monitorID": id})
+                        }
+                        None => json!({"ok": false, "msg": "Monitor not found"}),
+                    }
+                }
                 "pauseMonitor" | "resumeMonitor" => {
                     let id = rest[0].as_i64().unwrap();
                     let m = s.monitors.get_mut(&id).unwrap();
@@ -195,7 +207,8 @@ async fn kuma() -> Kuma {
     Kuma { port, state }
 }
 
-const ALL_OPS: [&str; 5] = ["monitor_list", "monitor_add_http", "monitor_add_port", "monitor_pause", "monitor_resume"];
+const ALL_OPS: [&str; 6] =
+    ["monitor_list", "monitor_add_http", "monitor_add_port", "monitor_edit", "monitor_pause", "monitor_resume"];
 
 fn try_tier1(dir: &std::path::Path, port: u16, overrides: Value) -> ConfigResult<Tier1> {
     let mut spec = json!({
@@ -637,7 +650,7 @@ fn tier1_refuses_an_incomplete_kuma_toolkit() {
     assert_eq!(
         err.message,
         "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', \
-         'monitor_add_port', 'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['monitor_delete'])"
+         'monitor_add_port', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['monitor_delete'])"
     );
     let err = try_tier1(e.dir.path(), 3001, json!({"credential": ""})).unwrap_err();
     assert_eq!(
@@ -771,7 +784,7 @@ fn catalog_messages_match_python() {
     assert_eq!(
         parse(json!({"kuma_operation": "monitor_delete"})),
         "tool 'kuma.monitor_add_http': kuma_operation 'monitor_delete' is unknown (known: ['monitor_add_http', \
-         'monitor_add_port', 'monitor_list', 'monitor_pause', 'monitor_resume'])"
+         'monitor_add_port', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume'])"
     );
     assert_eq!(parse(json!({"kuma_operation": null})), "tool 'kuma.monitor_add_http': field 'kuma_operation' is missing");
     let mut spec = tools()[2].clone();
@@ -814,7 +827,10 @@ fn shipped_example_toolkit_and_tools_load() {
     let catalog = make_catalog(e.dir.path(), &t, &tools).unwrap();
     let mut ids: Vec<&String> = catalog.tools.keys().collect();
     ids.sort();
-    assert_eq!(ids, ["kuma.monitor_add_http", "kuma.monitor_list", "kuma.monitor_pause", "kuma.monitor_resume"]);
+    assert_eq!(
+        ids,
+        ["kuma.monitor_add_http", "kuma.monitor_edit", "kuma.monitor_list", "kuma.monitor_pause", "kuma.monitor_resume"]
+    );
 }
 
 // -- Through the service, with audit ------------------------------------------
@@ -1211,4 +1227,135 @@ async fn example_port_tool_end_to_end() {
     let out: Value = serde_json::from_str(&result.stdout).unwrap();
     assert_eq!(out["monitor_id"], 3);
     assert_eq!(out["active"], true);
+}
+
+// -- monitor_edit (1.32.0) ----------------------------------------------------
+
+/// The acceptance case: a hand-made monitor (not gatekeeper-managed) gets
+/// exactly the toolkit's notifications and the given maxretries; every
+/// other field goes back to Kuma byte for byte as `getMonitor` returned it.
+#[tokio::test]
+async fn edit_changes_only_notifications_and_maxretries_of_any_monitor() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, notify_overrides());
+    let before = k.state.lock().monitors[&1].clone();
+    let result =
+        run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_edit", &[("monitor_id", "1"), ("maxretries", "3")]).await;
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    let out: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(out, json!({"monitor_id": 1, "name": "Router", "maxretries": 3, "notification_ids": [1, 4]}));
+    assert!(!result.stdout.contains(FOREIGN_SECRET));
+
+    let sent = k.received_args("editMonitor");
+    assert_eq!(sent.len(), 1);
+    let sent = sent[0].as_object().unwrap();
+    let before = before.as_object().unwrap();
+    let mut changed: Vec<&str> = sent
+        .keys()
+        .chain(before.keys())
+        .filter(|key| sent.get(*key) != before.get(*key))
+        .map(String::as_str)
+        .collect();
+    changed.sort();
+    changed.dedup();
+    assert_eq!(changed, KUMA_EDIT_FIELDS);
+    assert_eq!(sent["notificationIDList"], json!({"1": true, "4": true}));
+    assert_eq!(sent["maxretries"], 3);
+    assert_eq!(k.events(), vec!["login", "getMonitor", "editMonitor"]);
+    assert_eq!(k.active(1), 1);
+}
+
+#[tokio::test]
+async fn edit_without_maxretries_changes_only_notifications() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, notify_overrides());
+    let before = k.state.lock().monitors[&2].clone();
+    let result = run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_edit", &[("monitor_id", "2")]).await;
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    let mut expected = before.clone();
+    expected["notificationIDList"] = json!({"1": true, "4": true});
+    assert_eq!(k.received_args("editMonitor"), vec![expected]);
+}
+
+#[tokio::test]
+async fn edit_with_an_unknown_notification_id_sends_nothing() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, json!({"kuma_notification_ids": [1, 7]}));
+    let before = k.state.lock().monitors[&1].clone();
+    let result =
+        run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_edit", &[("monitor_id", "1"), ("maxretries", "2")]).await;
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert_eq!(result.denial_reason.as_deref(), Some("tier1_violation"));
+    assert!(result.stderr.contains("Notification ID(s) 7 "), "{}", result.stderr);
+    assert!(k.received_args("editMonitor").is_empty());
+    assert_eq!(k.state.lock().monitors[&1], before);
+}
+
+#[tokio::test]
+async fn edit_of_a_missing_monitor_sends_nothing() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, notify_overrides());
+    let result = run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_edit", &[("monitor_id", "99")]).await;
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert_eq!(result.stderr, "Monitor 99 does not exist.");
+    assert!(k.received_args("editMonitor").is_empty());
+}
+
+#[tokio::test]
+async fn edit_values_are_bounded_and_other_fields_never_reach_kuma() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, notify_overrides());
+    for bad in [&[("monitor_id", "0")][..], &[("monitor_id", "1"), ("maxretries", "11")], &[("monitor_id", "x")]] {
+        let result = run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_edit", bad).await;
+        assert_eq!(result.outcome, OUTCOME_FAILED, "{bad:?}");
+        assert_eq!(result.denial_reason.as_deref(), Some("param_invalid"), "{bad:?}");
+    }
+    assert!(k.events().is_empty(), "{:?}", k.events());
+    // A smuggled value the executor does not read is simply not applied.
+    let before = k.state.lock().monitors[&1].clone();
+    let result = run_op(
+        t.toolkit("kuma").unwrap(),
+        &e.store,
+        "monitor_edit",
+        &[("monitor_id", "1"), ("url", "https://evil.example/"), ("interval", "30"), ("name", "x")],
+    )
+    .await;
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    let sent = &k.received_args("editMonitor")[0];
+    assert_eq!(sent["url"], before["url"]);
+    assert_eq!(sent["interval"], before["interval"]);
+    assert_eq!(sent["name"], before["name"]);
+}
+
+#[test]
+fn edit_tool_definition_takes_only_monitor_id_and_maxretries() {
+    let e = env();
+    let t = tier1(e.dir.path(), 3001, json!({}));
+    let spec = |params: Value, category: &str| {
+        json!({"toolkit": "kuma", "version": 1, "enabled": true, "required_scopes": [],
+               "timeout_seconds": 20, "max_output_bytes": 4096, "description": "kuma",
+               "id": "kuma.monitor_edit", "title": "Edit", "category": category, "idempotent": true,
+               "kuma_operation": "monitor_edit", "parameters": params})
+    };
+    let ok = json!({"monitor_id": {"type": "integer", "required": true, "minimum": 1, "description": "id"},
+                    "maxretries": {"type": "integer", "minimum": 0, "maximum": 10, "description": "n"}});
+    crate::catalog::parse_tool_spec(&spec(ok.clone(), "write"), &t).unwrap();
+    let err = crate::catalog::parse_tool_spec(&spec(ok.clone(), "read"), &t).unwrap_err().message;
+    assert!(err.contains("changes monitors"), "{err}");
+    let mut wide = ok.clone();
+    wide["maxretries"]["maximum"] = json!(50);
+    assert!(crate::catalog::parse_tool_spec(&spec(wide, "write"), &t).is_err());
+    let mut extra = ok;
+    extra["url"] = json!({"type": "string", "pattern": "^.*$", "description": "u"});
+    assert!(crate::catalog::parse_tool_spec(&spec(extra, "write"), &t).is_err());
 }

@@ -71,8 +71,10 @@ item.
   fields only, no secrets), `monitor_add_http` (type, method and
   notifications fixed; name, URL, interval 30–3600 s and accepted status
   from a fixed set), `monitor_pause`/`monitor_resume` (only monitors
-  gatekeeper created, recognised by their description). No delete, edit,
-  notification or settings change exists in the module. Login is a `basic`
+  gatekeeper created, recognised by their description), `monitor_edit`
+  (1.32.0; any monitor, only `notificationIDList` = toolkit
+  `kuma_notification_ids` and `maxretries`). No delete, and no change to a
+  notification or settings object, exists in the module. Login is a `basic`
   credential in the store; the target check is `execute/http.rs`'s.
 - `agent` executor — a mailbox between gatekeeper identities
   (`execute/agent.rs`, `messages.rs`). `agent.send_message` addresses

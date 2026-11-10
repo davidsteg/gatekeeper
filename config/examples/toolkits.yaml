@@ -134,6 +134,11 @@ toolkits:
       - pool.dataset.create
       - zfs.snapshot.query
       - zfs.snapshot.delete
+      # alertservice.update is shape-limited in code (validate.rs
+      # check_rpc_params): it may only change `level` of an existing
+      # alert service -- params exactly [id, {level: <enum>}].
+      - alertservice.query
+      - alertservice.update
     credential: truenas
     max_timeout_seconds: 30
     max_output_bytes: 65536
@@ -405,6 +410,7 @@ toolkits:
       - monitor_add_http
       - monitor_pause
       - monitor_resume
+      - monitor_edit
     credential: kuma
     max_timeout_seconds: 30
     max_output_bytes: 131072

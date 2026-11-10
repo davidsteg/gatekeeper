@@ -274,7 +274,11 @@ What the agent can and cannot do:
   starts with `Managed by gatekeeper`. Any other monitor is refused before
   anything is sent. To let gatekeeper manage a hand-made monitor, put that
   text at the start of its description yourself.
-- There is no delete and no edit. Remove a monitor in Kuma's UI.
+- `monitor_edit` (1.32.0) works on any existing monitor, hand-made ones
+  included, and changes exactly two fields: its notifications become the
+  toolkit's `kuma_notification_ids` (each checked to exist first) and, if
+  given, `maxretries` (0–10). Every other field is sent back unchanged.
+- There is no delete. Remove a monitor in Kuma's UI.
 - A timeout after an add or pause was sent is `unknown`: check with
   `kuma.monitor_list` before trying again, or the monitor may exist twice.
 
