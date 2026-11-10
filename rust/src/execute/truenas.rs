@@ -404,6 +404,9 @@ pub async fn run_call(
             format!("RPC method {} is not allowed for this toolkit.", repr_str(method)),
         )));
     }
+    if let Err(denial) = crate::validate::check_rpc_params(method, params) {
+        return Ok(denied(denial));
+    }
 
     let mut credential: Option<ResolvedCredential> = None;
     if let Some(name) = toolkit.credential.as_deref().filter(|n| !n.is_empty()) {

@@ -1,3 +1,12 @@
+## 1.32.0
+
+New bounded `kuma` operation `monitor_edit`, and `alertservice.query`/`alertservice.update` in the example `truenas` toolkit with `update` limited to an alert service's `level`.
+
+### Added
+
+- **`kuma` operation `monitor_edit`.** Edits one *existing* monitor -- hand-made ones included, there is no managed-marker check -- and changes exactly two fields: `notificationIDList` becomes the toolkit's `kuma_notification_ids` (never a parameter; each ID is checked against Kuma's `notificationList` first, an unknown one aborts before anything is sent, same as the add operations) and, if given, `maxretries` (0-10, the add operations' bounds). The executor reads the monitor with `getMonitor`, replaces only those two keys and sends the object back with `editMonitor`; every other field goes back exactly as Kuma returned it, and the tool definition can declare no other parameter (`monitor_id` required, `maxretries` optional). `editMonitor` counts as a write event, so a timeout after it is `unknown`. Category must be `write`. New example tool `kuma.monitor_edit` (disabled) and `monitor_edit` in the example toolkit's `allowed_kuma_operations`.
+- **`alertservice.update` is shape-limited in code.** Whatever a tool's `params` template says, a call to `alertservice.update` is refused (`rpc_method_denied`) unless its resolved params are exactly `[<positive integer id>, {"level": <INFO|NOTICE|WARNING|ERROR|CRITICAL|ALERT|EMERGENCY>}]` -- any other key (`type`, `attributes`, `enabled`, `name`, ...) never reaches TrueNAS. Checked when the call is built and again in the executor. The example `truenas` toolkit now lists `alertservice.query` and `alertservice.update` in `allowed_rpc_methods`.
+
 ## 1.31.1
 
 `bounded_delete` now also catches a remove+recreate that reuses the same inode number between listing and delete, without aborting on hard links or a plain chmod/chown.

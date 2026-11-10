@@ -70,11 +70,14 @@ pub const AGENT_OPERATIONS: &[&str] = &["mailbox_status", "read_messages", "send
 pub const ARTIFACT_OPERATIONS: &[&str] = &["info", "list", "read", "transfer"];
 
 /// The `kuma` executor's vocabulary (`execute::kuma`): Uptime Kuma
-/// monitors over Socket.IO. Read is `monitor_list`; the other three write.
-/// There is no delete, no edit and nothing for notifications or settings --
+/// monitors over Socket.IO. Read is `monitor_list`; the others write.
+/// `monitor_edit` (1.32.0) changes exactly two fields of an existing
+/// monitor -- its notifications (set to the toolkit's
+/// `kuma_notification_ids`) and `maxretries` -- and nothing else. There is
+/// no delete and nothing for notification or settings objects themselves --
 /// not as a denied operation, but as one this executor has no code for.
 pub const KUMA_OPERATIONS: &[&str] =
-    &["monitor_add_http", "monitor_add_port", "monitor_list", "monitor_pause", "monitor_resume"];
+    &["monitor_add_http", "monitor_add_port", "monitor_edit", "monitor_list", "monitor_pause", "monitor_resume"];
 
 /// Bounds of `monitor_add_http`'s `interval`, in seconds. Kuma itself
 /// accepts 20 s to 24 days; this is the narrower range a gatekeeper-made

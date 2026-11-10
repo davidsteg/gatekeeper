@@ -693,7 +693,46 @@ pub fn build_rpc_call(
             params.insert(key.clone(), resolve_rpc_template(template, key, tool, values)?);
         }
     }
+    check_rpc_params(&method, &params)?;
     Ok((method, params))
+}
+
+/// TrueNAS alert levels `alertservice.update` may set.
+pub const ALERTSERVICE_LEVELS: &[&str] = &["INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "ALERT", "EMERGENCY"];
+
+/// Method-specific shape limits on resolved RPC params. Today only
+/// `alertservice.update`: it may change the `level` of one existing alert
+/// service and nothing else, so its params must be exactly
+/// `[<id: positive integer>, {"level": <ALERTSERVICE_LEVELS>}]`. Any other
+/// key (`type`, `attributes`, `enabled`, `name`, ...) is refused before a
+/// request goes out. Every other method passes unchanged.
+pub fn check_rpc_params(method: &str, params: &IndexMap<String, Value>) -> Result<(), Denied> {
+    if method != "alertservice.update" {
+        return Ok(());
+    }
+    let refuse = |why: &str| {
+        Err(denied(
+            DenialReason::RpcMethodDenied,
+            format!("RPC method 'alertservice.update' may only change 'level' of an existing alert service: {why}."),
+        ))
+    };
+    let values: Vec<&Value> = params.values().collect();
+    if values.len() != 2 {
+        return refuse("params must be exactly [id, {\"level\": ...}]");
+    }
+    if !values[0].as_u64().is_some_and(|id| id > 0) {
+        return refuse("the id must be a positive integer");
+    }
+    let Some(update) = values[1].as_object() else {
+        return refuse("the update must be an object");
+    };
+    if update.len() != 1 || !update.contains_key("level") {
+        return refuse("the update must contain only 'level'");
+    }
+    match update.get("level").and_then(Value::as_str) {
+        Some(level) if ALERTSERVICE_LEVELS.contains(&level) => Ok(()),
+        _ => refuse(&format!("'level' must be one of {}", repr_list(ALERTSERVICE_LEVELS))),
+    }
 }
 
 /// One RPC argument: leaf strings get `{param}` substitution, other leaves

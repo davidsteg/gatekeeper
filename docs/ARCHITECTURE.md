@@ -243,7 +243,11 @@ as for `http`: resolved once, checked, and the WebSocket opened to the checked
 address with the name kept for `Host` and SNI, never through a proxy),
 `credential` (required, kind `basic`, `username:password` of a Kuma account
 without 2FA) and `allowed_kuma_operations`, a subset of `monitor_list`,
-`monitor_add_http`, `monitor_pause`, `monitor_resume`. Kuma creates and pauses
+`monitor_add_http`, `monitor_add_port`, `monitor_pause`, `monitor_resume`,
+`monitor_edit` (1.32.0: on any existing monitor, sends Kuma's own `getMonitor`
+object back via `editMonitor` with only `notificationIDList` -- set to the
+toolkit's `kuma_notification_ids` -- and optionally `maxretries` 0–10
+replaced). Kuma creates and pauses
 monitors only over Socket.IO, so `execute/kuma.rs` carries a minimal Engine.IO
 v4/Socket.IO client on `websockets` and does one fixed exchange per operation:
 log in with Kuma's `login` event, then read the pushed `monitorList`, or send

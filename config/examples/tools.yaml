@@ -1257,6 +1257,34 @@ tools:
     timeout_seconds: 20
     max_output_bytes: 4096
 
+  - id: kuma.monitor_edit
+    toolkit: kuma
+    version: 1
+    title: Set a monitor's notifications and retries
+    description: >-
+      Edits one existing monitor, hand-made ones included: its
+      notifications become exactly the toolkit's kuma_notification_ids,
+      and maxretries changes if given. No other field of the monitor can
+      be changed.
+    category: write
+    idempotent: true
+    enabled: false
+    kuma_operation: monitor_edit
+    parameters:
+      monitor_id:
+        type: integer
+        required: true
+        minimum: 1
+        description: The monitor's id from kuma.monitor_list.
+      maxretries:
+        type: integer
+        minimum: 0
+        maximum: 10
+        description: Failed checks Kuma retries before marking the monitor down.
+    required_scopes: []
+    timeout_seconds: 20
+    max_output_bytes: 4096
+
   # -- git (push feat/* branches) ------------------------------------------
   #
   # 'git_operation' is the fixed exchange; 'repo' and 'branch' are the only
