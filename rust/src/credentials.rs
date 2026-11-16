@@ -99,6 +99,31 @@ fn refused(message: impl Into<String>) -> ConfigError {
     ConfigError::credential_refused(message)
 }
 
+/// Refuses a value whose shape the kind cannot use, before it is encrypted
+/// (the stored value can never be read back to fix it later). Only `basic`
+/// has a checkable shape: `username:password` with a non-empty username --
+/// what `execute::kuma::split_basic`, `execute::git` and `execute::http`
+/// split on the first ':'. The password part may be empty or contain ':'.
+/// Other kinds are not checked here.
+pub fn check_value_shape(kind: &str, value: &str) -> ConfigResult<()> {
+    if kind == "basic" {
+        match value.split_once(':') {
+            Some((username, _)) if !username.is_empty() => {}
+            Some(_) => {
+                return Err(refused(
+                    "kind 'basic' needs the value 'username:password'; the username before ':' is empty.",
+                ))
+            }
+            None => {
+                return Err(refused(
+                    "kind 'basic' needs the value 'username:password'; the value has no ':'.",
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validates an `api_key_header` slot's optional header value format and
 /// returns it normalized (`None` for empty), or a `WriteRefused`.
 pub fn check_header_format(kind: &str, header_format: Option<&str>) -> ConfigResult<Option<String>> {
@@ -531,6 +556,7 @@ impl CredentialStore {
         if value.is_empty() {
             return Err(refused("A credential needs a value"));
         }
+        check_value_shape(kind, value)?;
         let probe_url = probe_url.map(str::trim).filter(|u| !u.is_empty());
         if let Some(url) = probe_url {
             if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -589,6 +615,8 @@ impl CredentialStore {
             let Some(existing) = section.get(name).cloned() else {
                 return Err(refused(format!("No credential named {}.", repr_str(name))));
             };
+            // The stored kind decides the shape; rotate cannot change it.
+            check_value_shape(&str_or(&existing, "kind", ""), value)?;
             let mut updated = existing.as_object().cloned().unwrap_or_default();
             let previous_ciphertext = if overlap_seconds > 0 {
                 // PORT NOTE: Python raised KeyError for a slot without
@@ -990,6 +1018,52 @@ pub(crate) mod tests {
         assert_eq!(err.message, "probe_url must be an http(s) URL");
         let err = e.store.create("x", "bearer", "v", None, None, Some("T {value}"), "x", "").unwrap_err();
         assert_eq!(err.message, "A header format only applies to kind 'api_key_header', not 'bearer'.");
+    }
+
+    #[test]
+    fn create_basic_checks_the_value_shape() {
+        let e = env();
+        let err = e.store.create("k", "basic", "no-colon", None, None, None, "x", "").unwrap_err();
+        assert!(err.is_write_refused());
+        assert_eq!(err.message, "kind 'basic' needs the value 'username:password'; the value has no ':'.");
+        let err = e.store.create("k", "basic", ":pw", None, None, None, "x", "").unwrap_err();
+        assert!(err.is_write_refused());
+        assert_eq!(err.message, "kind 'basic' needs the value 'username:password'; the username before ':' is empty.");
+        // Nothing was stored by the refusals.
+        assert!(e.store.names(None).unwrap().is_empty());
+        e.store.create("k", "basic", "user:p:w", None, None, None, "x", "").unwrap();
+        assert_eq!(e.store.resolve("k").unwrap().unwrap().value, "user:p:w");
+        e.store.create("k2", "basic", "user:", None, None, None, "x", "").unwrap();
+    }
+
+    #[test]
+    fn create_other_kinds_take_any_value_shape() {
+        let e = env();
+        for (i, kind) in ["bearer", "url_path", "ws_api_key", "ssh_password"].into_iter().enumerate() {
+            e.store.create(&format!("n{i}"), kind, "no-colon", None, None, None, "x", "").unwrap();
+            e.store.create(&format!("c{i}"), kind, ":leading", None, None, None, "x", "").unwrap();
+        }
+        e.store.create("h", "api_key_header", "no-colon", Some("X-Api-Key"), None, None, "x", "").unwrap();
+    }
+
+    #[test]
+    fn rotate_basic_checks_the_stored_kind() {
+        let e = env();
+        e.store.create("k", "basic", "user:old", None, None, None, "x", "").unwrap();
+        let err = e.store.rotate("k", "no-colon", 0, "x", &e.store.revision()).unwrap_err();
+        assert!(err.is_write_refused());
+        assert_eq!(err.message, "kind 'basic' needs the value 'username:password'; the value has no ':'.");
+        let err = e.store.rotate("k", ":pw", 0, "x", &e.store.revision()).unwrap_err();
+        assert_eq!(err.message, "kind 'basic' needs the value 'username:password'; the username before ':' is empty.");
+        // The refused rotations left the old value in place.
+        assert_eq!(e.store.resolve("k").unwrap().unwrap().value, "user:old");
+        e.store.rotate("k", "user:new", 0, "x", &e.store.revision()).unwrap();
+        assert_eq!(e.store.resolve("k").unwrap().unwrap().value, "user:new");
+        // Another kind rotates to any shape.
+        create_sonarr(&e.store, "old");
+        e.store.rotate("sonarr", "no-colon", 0, "x", &e.store.revision()).unwrap();
+        e.store.rotate("sonarr", ":x", 0, "x", &e.store.revision()).unwrap();
+        assert_eq!(e.store.resolve("sonarr").unwrap().unwrap().value, ":x");
     }
 
     #[test]

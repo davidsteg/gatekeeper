@@ -300,6 +300,53 @@ describe("writes", () => {
     expect(body).toMatchObject({ name: "demo-key", kind: "bearer", header: null, probe_url: null });
     expect(screen.queryByText("sk-123")).toBeNull();
   });
+
+  it("hints the username:password format for kind basic only", async () => {
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/credentials") && !init.method) {
+        return json(200, { configured: true, dangling: [], credentials: [] }, { ETag: '"0"' });
+      }
+      return undefined;
+    });
+    renderAt("/credentials");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New credential" }));
+    const value = screen.getByLabelText(/^Value/);
+    expect(value).not.toHaveAttribute("placeholder");
+    expect(screen.queryByText(/^Format: username:password/)).toBeNull();
+    await user.selectOptions(screen.getByLabelText("Kind"), "basic");
+    const basic = screen.getByLabelText(/^Value/);
+    expect(basic).toHaveAttribute("placeholder", "username:password");
+    expect(basic).toHaveAccessibleDescription(/^Format: username:password/);
+  });
+
+  it("hints the username:password format when rotating a basic credential", async () => {
+    const meta = (name: string, kind: string) => ({
+      name, kind, header: null, created_at: "2026-10-10T10:00:00+0000", rotated_at: null, in_overlap: false,
+      used_by: [], probe_url: null, probe_status: "no_probe_url", probe_checked_at: null,
+      suspect_status: null, suspect_at: null, warnings: [],
+    });
+    serve((url, init) => {
+      if (url.endsWith("/session")) return json(200, ADMIN);
+      if (url.endsWith("/credentials") && !init.method) {
+        return json(200, { configured: true, dangling: [], credentials: [meta("kuma", "basic"), meta("tok", "bearer")] }, { ETag: '"0"' });
+      }
+      return undefined;
+    });
+    renderAt("/credentials");
+    const user = userEvent.setup();
+    const rotates = await screen.findAllByRole("button", { name: "Rotate" });
+    expect(rotates).toHaveLength(2);
+    await user.click(rotates[1]!);
+    expect(screen.getByLabelText("New value")).not.toHaveAttribute("placeholder");
+    expect(screen.queryByText(/^Format: username:password/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click((await screen.findAllByRole("button", { name: "Rotate" }))[0]!);
+    const field = screen.getByLabelText("New value");
+    expect(field).toHaveAttribute("placeholder", "username:password");
+    expect(field).toHaveAccessibleDescription(/^Format: username:password/);
+  });
 });
 
 const PENDING = {

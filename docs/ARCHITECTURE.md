@@ -475,6 +475,10 @@ executor — the matching public key must already be in the remote host's
 `authorized_keys`; gatekeeper is a credential *consumer*, it never pushes
 one).
 
+A `basic` value must be `username:password` with a non-empty username;
+create and rotate refuse anything else before encrypting it (1.32.1; rotate
+checks the slot's stored kind). No other kind's value shape is checked.
+
 Probe: a slot with a `probe_url` is tested right after it is created or
 rotated with one `GET`. For the kinds an `http` tool sends
 (`api_key_header` with its `header_format`, `bearer`, `basic`,
