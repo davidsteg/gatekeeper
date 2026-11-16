@@ -1,3 +1,12 @@
+## 1.32.1
+
+A `basic` credential is refused at create and rotate unless its value is `username:password` with a non-empty username; the console says so on the field.
+
+### Fixed
+
+- **`basic` values are shape-checked before they are stored.** `credentials.create` and `credentials.rotate` (console, admin MCP and CLI all go through them) now refuse a `basic` value without a `:` or with an empty username before it is encrypted, with a `credential_refused` error like the store's other refusals. Before, such a value was stored silently and only failed at call time -- for `kuma` as `credential_unavailable` from the login (`split_basic`). Rotate checks the slot's *stored* kind. The password part is not checked (it may be empty or contain `:`; executors split at the first `:`). Other kinds are unchanged. Values already in the store are not touched or re-checked.
+- **Console: format hint for `basic`.** On `/app/credentials`, the value field of *New credential* (with kind `basic` selected) and the *Rotate* field of a `basic` credential show the placeholder `username:password` and a one-line format hint.
+
 ## 1.32.0
 
 New bounded `kuma` operation `monitor_edit`, and `alertservice.query`/`alertservice.update` in the example `truenas` toolkit with `update` limited to an alert service's `level`.

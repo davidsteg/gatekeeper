@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, Plus } from "lucide-react";
@@ -30,6 +30,18 @@ const KINDS = [
   "ssh_private_key", "url_path", "url_query", "ws_api_key",
 ] as const;
 const NEEDS_HEADER = new Set(["api_key_header", "url_query"]);
+
+/** kind=basic stores `username:password` in one value (`credentials.check_value_shape`
+ * refuses anything else). Placeholder and hint for the create and rotate fields. */
+const BASIC_PLACEHOLDER = "username:password";
+const BASIC_HINT = "Format: username:password -- one value, split at the first ':'. The username must not be empty.";
+
+/** Shown under the value field (outside its label, so the field's name stays
+ * the label text) and tied to it with aria-describedby. */
+function ValueHint({ id, kind }: { id: string; kind: string }) {
+  if (kind !== "basic") return null;
+  return <p id={id} className="text-xs text-muted-foreground">{BASIC_HINT}</p>;
+}
 
 export function Credentials() {
   const canWrite = useCanWrite();
@@ -111,6 +123,7 @@ function CredentialForm({ dangling, onDone, onReload }: {
   const [header, setHeader] = useState("");
   const [value, setValue] = useState("");
   const [probeUrl, setProbeUrl] = useState("");
+  const hintId = useId();
   const save = useWrite(
     () => apiSend("POST", LIST, {
       body: {
@@ -145,8 +158,13 @@ function CredentialForm({ dangling, onDone, onReload }: {
             </Label>
           )}
           <Label text="Value (write-only: it is encrypted and never shown again)">
-            <Input type="password" value={value} onChange={(e) => setValue(e.target.value)} required autoComplete="off" />
+            <Input
+              type="password" value={value} onChange={(e) => setValue(e.target.value)} required autoComplete="off"
+              placeholder={kind === "basic" ? BASIC_PLACEHOLDER : undefined}
+              aria-describedby={kind === "basic" ? hintId : undefined}
+            />
           </Label>
+          <ValueHint id={hintId} kind={kind} />
           <Label text="Probe URL (optional, checked in the background after saving)">
             <Input type="url" value={probeUrl} onChange={(e) => setProbeUrl(e.target.value)} autoComplete="off" />
           </Label>
@@ -165,6 +183,7 @@ function CredentialActions({ meta, onReload }: { meta: Schemas["CredentialMeta"]
   const [rotating, setRotating] = useState(false);
   const [value, setValue] = useState("");
   const [overlap, setOverlap] = useState("0");
+  const hintId = useId();
   const rotate = useWrite(
     () => apiSend("POST", `${self}/rotate`, {
       body: { value, overlap_seconds: Number(overlap) || 0 }, ifMatchOf: LIST,
@@ -179,12 +198,17 @@ function CredentialActions({ meta, onReload }: { meta: Schemas["CredentialMeta"]
         <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); rotate.mutate(undefined); }}>
           <div className="grid gap-3 sm:grid-cols-[1fr_12rem]">
             <Label text="New value">
-              <Input type="password" value={value} onChange={(e) => setValue(e.target.value)} required autoComplete="off" />
+              <Input
+                type="password" value={value} onChange={(e) => setValue(e.target.value)} required autoComplete="off"
+                placeholder={meta.kind === "basic" ? BASIC_PLACEHOLDER : undefined}
+                aria-describedby={meta.kind === "basic" ? hintId : undefined}
+              />
             </Label>
             <Label text="Old value keeps working (seconds)">
               <Input type="number" min={0} value={overlap} onChange={(e) => setOverlap(e.target.value)} />
             </Label>
           </div>
+          <ValueHint id={hintId} kind={meta.kind} />
           <div className="flex gap-2">
             <Button size="sm" type="submit" busy={rotate.isPending} busyLabel="Rotating…">Rotate</Button>
             <Button size="sm" type="button" variant="ghost" onClick={() => setRotating(false)}>Cancel</Button>
