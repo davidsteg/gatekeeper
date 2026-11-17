@@ -189,7 +189,52 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Audit dependencies (npm audit)
-        run: npm audit --audit-level=high
+        # Same gate as `npm audit --audit-level=high`, over ALL dependencies
+        # (dev included), with one narrow escape hatch: advisories listed by
+        # GHSA id in frontend/audit-allowlist.json are skipped. Any other
+        # high/critical advisory fails the step, and so does an allowlist
+        # entry past its review_by date. No extra npm dependency: plain node.
+        # Current exception: GHSA-fc5q-39xc-vjpf (picomatch ReDoS, dev/build
+        # tooling only, no patched release). It is removed as soon as
+        # picomatch ships a fix -- delete the entry and bump the lockfile.
+        run: |
+          npm audit --json > "$RUNNER_TEMP/audit.json" || true
+          node -e '
+            const fs = require("fs");
+            const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (!report.vulnerabilities) {
+              console.error("npm audit gave no report:", JSON.stringify(report.error || report));
+              process.exit(1);
+            }
+            const list = JSON.parse(fs.readFileSync("audit-allowlist.json", "utf8")).advisories;
+            const today = new Date().toISOString().slice(0, 10);
+            const allowed = new Set();
+            let bad = 0;
+            for (const a of list) {
+              if (!/^GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/.test(a.ghsa) || !a.reason || !a.review_by) {
+                console.error("malformed allowlist entry:", JSON.stringify(a)); bad++; continue;
+              }
+              if (a.review_by < today) {
+                console.error(`allowlist entry ${a.ghsa} expired (review_by ${a.review_by})`); bad++; continue;
+              }
+              allowed.add(a.ghsa);
+            }
+            const seen = new Map();
+            for (const v of Object.values(report.vulnerabilities))
+              for (const via of v.via)
+                if (typeof via === "object" && ["high", "critical"].includes(via.severity))
+                  seen.set(via.url, via);
+            for (const [url, via] of seen) {
+              const ghsa = (url.match(/GHSA-[a-z0-9-]+/) || [url])[0];
+              if (allowed.has(ghsa)) {
+                console.log(`allowed: ${ghsa} ${via.name} (${via.severity}) ${via.title}`);
+              } else {
+                console.error(`FAIL: ${ghsa} ${via.name} (${via.severity}) ${via.title} ${url}`); bad++;
+              }
+            }
+            if (bad) process.exit(1);
+            console.log(`npm audit: no high/critical advisories outside the allowlist (${seen.size} seen, ${allowed.size} allowed)`);
+          ' "$RUNNER_TEMP/audit.json"
 
       - name: Generated API types are current
         # openapi.json is the committed schema, edited together with the

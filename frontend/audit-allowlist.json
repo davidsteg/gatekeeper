@@ -1,0 +1,11 @@
+{
+  "_comment": "Advisories exempted from the CI 'Audit dependencies' gate (.github/workflows/build.yml). Only high/critical advisories listed here by GHSA id are skipped; every other high/critical finding still fails the build. An entry past its review_by date fails the build too. Remove an entry as soon as a patched release exists.",
+  "advisories": [
+    {
+      "ghsa": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "reason": "ReDoS in picomatch <=4.0.7, no patched release yet. Reached only through dev/build tooling (vite, vitest, tinyglobby, fdir); `npm audit --omit=dev` reports nothing, so the shipped console bundle is unaffected.",
+      "review_by": "2026-12-17"
+    }
+  ]
+}

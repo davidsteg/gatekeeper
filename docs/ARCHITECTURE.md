@@ -250,7 +250,9 @@ toolkit's `kuma_notification_ids` -- and optionally `maxretries` 0–10
 replaced). Kuma creates and pauses
 monitors only over Socket.IO, so `execute/kuma.rs` carries a minimal Engine.IO
 v4/Socket.IO client on `websockets` and does one fixed exchange per operation:
-log in with Kuma's `login` event, then read the pushed `monitorList`, or send
+log in with Kuma's `login` event (1.32.2: only after Kuma's `loginRequired`,
+skipped on `autoLogin`, sent anyway after 5s without either for 1.x; the ack
+has its own 10s limit), then read the pushed `monitorList`, or send
 one `add` (type `http`, method GET, no notifications, no headers, body or auth;
 only `name`, `url`, `interval` 30–3600 s and `expected_status` from a fixed set
 come from the call), or `pauseMonitor`/`resumeMonitor`. There is no event for

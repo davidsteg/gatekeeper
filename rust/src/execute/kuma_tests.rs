@@ -20,8 +20,26 @@ use crate::tier1::{load_tier1, Tier1};
 const PASSWORD: &str = "kuma-secret-pw-123";
 const FOREIGN_SECRET: &str = "hand-made-basic-auth-secret";
 
+/// What the fake says after the Socket.IO connect, and when its `login`
+/// handler exists (1.32.2).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Readiness {
+    /// `loginRequired` right after the connect ack, handler already there.
+    Immediate,
+    /// Kuma 2.x: `loginRequired` only after `delay_ms`, and every event
+    /// before it is dropped without an ack (no handler registered yet).
+    Delayed { delay_ms: u64 },
+    /// Auth disabled: the socket is logged in, then `autoLogin`.
+    AutoLogin,
+    /// Kuma 1.x: no readiness event at all, handler there from the start.
+    Silent,
+}
+
 /// Kuma's socket API as far as this executor uses it.
 struct FakeKuma {
+    readiness: Readiness,
+    /// Events that arrived before the `login` handler existed.
+    dropped: Vec<String>,
     version: String,
     two_factor: bool,
     stall: Option<String>,
@@ -57,6 +75,8 @@ impl FakeKuma {
             {"id": 4, "name": "Mail", "active": 1, "config": "{}"},
         ]));
         FakeKuma {
+            readiness: Readiness::Immediate,
+            dropped: Vec::new(),
             version: "1.23.16".into(),
             two_factor: false,
             stall: None,
@@ -86,6 +106,20 @@ impl Kuma {
     }
 }
 
+/// What Kuma pushes once a socket is logged in (`afterLogin`).
+async fn push_after_login(ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, state: &Shared) {
+    let (monitors, version, notifications) = {
+        let s = state.lock();
+        let monitors: Map<String, Value> = s.monitors.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+        (monitors, s.version.clone(), s.notifications.clone())
+    };
+    let _ = ws.send(Message::text(format!("42{}", json!(["monitorList", monitors])))).await;
+    let _ = ws.send(Message::text(format!("42{}", json!(["info", {"version": version}])))).await;
+    if let Some(list) = notifications {
+        let _ = ws.send(Message::text(format!("42{}", json!(["notificationList", list])))).await;
+    }
+}
+
 async fn handler(stream: tokio::net::TcpStream, state: Shared) {
     let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { return };
     let send = |text: String| Message::text(text);
@@ -99,7 +133,21 @@ async fn handler(stream: tokio::net::TcpStream, state: Shared) {
         return;
     }
     let mut logged_in = false;
-    while let Some(Ok(msg)) = ws.next().await {
+    // When a `Delayed` fake's `login` handler comes to exist.
+    let mut ready_at: Option<tokio::time::Instant> = None;
+    loop {
+        let msg = match ready_at {
+            Some(at) => tokio::select! {
+                msg = ws.next() => msg,
+                () = tokio::time::sleep_until(at) => {
+                    ready_at = None;
+                    let _ = ws.send(send(r#"42["loginRequired"]"#.into())).await;
+                    continue;
+                }
+            },
+            None => ws.next().await,
+        };
+        let Some(Ok(msg)) = msg else { break };
         let Message::Text(frame) = msg else { continue };
         let frame = frame.as_str().to_string();
         if frame == "40" {
@@ -107,6 +155,21 @@ async fn handler(stream: tokio::net::TcpStream, state: Shared) {
             let _ = ws.send(send(r#"42["info",{"primaryBaseURL":null}]"#.into())).await;
             // A server ping mid-session must be answered, not mistaken for data.
             let _ = ws.send(send("2".into())).await;
+            let readiness = state.lock().readiness;
+            match readiness {
+                Readiness::Immediate => {
+                    let _ = ws.send(send(r#"42["loginRequired"]"#.into())).await;
+                }
+                Readiness::Delayed { delay_ms } => {
+                    ready_at = Some(tokio::time::Instant::now() + std::time::Duration::from_millis(delay_ms));
+                }
+                Readiness::AutoLogin => {
+                    logged_in = true;
+                    push_after_login(&mut ws, &state).await;
+                    let _ = ws.send(send(r#"42["autoLogin"]"#.into())).await;
+                }
+                Readiness::Silent => {}
+            }
             continue;
         }
         if frame == "3" || !frame.starts_with("42") {
@@ -118,10 +181,15 @@ async fn handler(stream: tokio::net::TcpStream, state: Shared) {
         let args: Vec<Value> = serde_json::from_str(&body[digits..]).unwrap();
         let event = args[0].as_str().unwrap().to_string();
         let rest = args[1..].to_vec();
-        let (stall, version, two_factor) = {
+        if ready_at.is_some() {
+            // Kuma 2.x: no listener yet -- socket.io drops it, no ack, no log.
+            state.lock().dropped.push(event);
+            continue;
+        }
+        let (stall, two_factor) = {
             let mut s = state.lock();
             s.received.push((event.clone(), rest.clone()));
-            (s.stall.clone(), s.version.clone(), s.two_factor)
+            (s.stall.clone(), s.two_factor)
         };
         if stall.as_deref() == Some(event.as_str()) {
             // Never answers; keeps reading so a close is still answered.
@@ -139,14 +207,7 @@ async fn handler(stream: tokio::net::TcpStream, state: Shared) {
             };
             let _ = ws.send(send(format!("43{ack}{}", json!([answer])))).await;
             if logged_in {
-                let monitors: Map<String, Value> =
-                    state.lock().monitors.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
-                let _ = ws.send(send(format!("42{}", json!(["monitorList", monitors])))).await;
-                let _ = ws.send(send(format!("42{}", json!(["info", {"version": version}])))).await;
-                let notifications = state.lock().notifications.clone();
-                if let Some(list) = notifications {
-                    let _ = ws.send(send(format!("42{}", json!(["notificationList", list])))).await;
-                }
+                push_after_login(&mut ws, &state).await;
             }
             continue;
         } else if !logged_in {
@@ -619,6 +680,86 @@ async fn timeout_before_any_write_is_a_plain_failure() {
         run_with(t.toolkit("kuma").unwrap(), &e.store, "monitor_pause", &[("monitor_id", "2")], 1.0, None).await;
     assert_eq!(result.outcome, OUTCOME_FAILED);
     assert_eq!(result.stderr, "Timeout of 1s exceeded.");
+}
+
+// -- Readiness before login (1.32.2, Kuma 2.x race) --------------------------
+
+/// The pre-1.32.2 sequence: `login` right after the connect ack. Against a
+/// Kuma 2.x that registers its handler late, the event is dropped and the
+/// ack never comes -- the 30s hang seen live.
+#[tokio::test]
+async fn kuma2_drops_a_login_sent_before_login_required() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    k.state.lock().readiness = Readiness::Delayed { delay_ms: 1500 };
+    let url = format!("ws://127.0.0.1:{}/socket.io/?EIO=4&transport=websocket", k.port);
+    let (ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    let mut sio = SocketIo::new(ws, Instant::now() + Duration::from_millis(800));
+    sio.open().await.unwrap();
+    let credential = e.store.resolve("kuma").unwrap().unwrap();
+    let outcome = login(&mut sio, &credential, Ready::Silent).await;
+    assert!(matches!(outcome, Err(Fail::Timeout)), "{outcome:?}");
+    assert_eq!(k.state.lock().dropped, vec!["login".to_string()]);
+    assert!(k.events().is_empty());
+}
+
+#[tokio::test]
+async fn login_waits_for_login_required_from_kuma_2() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    k.state.lock().readiness = Readiness::Delayed { delay_ms: 400 };
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let result = run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_list", &[]).await;
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    assert!(k.state.lock().dropped.is_empty());
+    assert_eq!(k.events(), vec!["login"]);
+}
+
+#[tokio::test]
+async fn auto_login_skips_the_login() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    k.state.lock().readiness = Readiness::AutoLogin;
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let result = run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_list", &[]).await;
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    let payload: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(payload["count"], 2);
+    assert!(!k.events().contains(&"login".to_string()));
+}
+
+/// Kuma 1.x never sends `loginRequired`: after the bounded wait the login
+/// goes out anyway.
+#[tokio::test]
+async fn kuma_1_without_login_required_still_logs_in() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    k.state.lock().readiness = Readiness::Silent;
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let started = Instant::now();
+    let result = run_with(t.toolkit("kuma").unwrap(), &e.store, "monitor_list", &[], 15.0, None).await;
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    assert!(started.elapsed() >= seconds(READY_WAIT_SECONDS));
+    assert_eq!(k.events(), vec!["login"]);
+}
+
+#[tokio::test]
+async fn unanswered_login_has_its_own_timeout() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    k.state.lock().stall = Some("login".into());
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let started = Instant::now();
+    let result = run_with(t.toolkit("kuma").unwrap(), &e.store, "monitor_list", &[], 30.0, None).await;
+    assert!(started.elapsed() < Duration::from_secs(20));
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert_eq!(result.stderr, "Uptime Kuma did not answer the login within 10s after it sent loginRequired.");
+    assert!(!result.stderr.contains(PASSWORD));
 }
 
 #[tokio::test]

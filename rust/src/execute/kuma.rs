@@ -108,6 +108,19 @@ pub const MANAGED_MARKER: &str = "Managed by gatekeeper";
 /// login; this only bounds a server that never does.
 const INFO_WAIT_SECONDS: f64 = 3.0;
 
+/// How long a call waits after the Socket.IO connect for Kuma to say it is
+/// ready for a login (1.32.2). Kuma 2.x registers its `login` handler only
+/// after an awaited database read in its connection handler, then emits
+/// `loginRequired` (or `autoLogin` with auth disabled); a `login` sent
+/// before that is dropped without an ack. Kuma 1.x registers the handler
+/// synchronously and never emits `loginRequired`, so after this wait the
+/// login is sent anyway.
+const READY_WAIT_SECONDS: f64 = 5.0;
+
+/// How long the `login` event waits for its ack (1.32.2), instead of the
+/// call's whole budget: a login that is never answered is named as such.
+const LOGIN_ACK_SECONDS: f64 = 10.0;
+
 /// How long an add operation waits for Kuma's `notificationList` event
 /// (pushed right after login) when the toolkit names notification IDs.
 /// Without it the IDs cannot be checked, so nothing is added.
@@ -148,6 +161,17 @@ impl From<WsError> for Fail {
 
 fn kuma_error(message: impl Into<String>) -> Fail {
     Fail::Kuma(message.into())
+}
+
+/// What Kuma signalled after the connect (see [`READY_WAIT_SECONDS`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ready {
+    /// `loginRequired` (Kuma 2.x): its `login` handler is registered.
+    LoginRequired,
+    /// `autoLogin`: auth is disabled and the socket is already logged in.
+    AutoLogin,
+    /// Neither within the wait -- Kuma 1.x, which never sends `loginRequired`.
+    Silent,
 }
 
 /// Engine.IO v4 + Socket.IO v4, default namespace, WebSocket only.
@@ -272,6 +296,12 @@ impl SocketIo {
 
     /// Emits `event` with an ack id and returns the ack's first value.
     async fn call(&mut self, event: &str, args: Vec<Value>) -> Result<Value, Fail> {
+        self.call_until(event, args, None).await
+    }
+
+    /// [`Self::call`], giving up on the ack at `until` (`Fail::Timeout`)
+    /// if that comes before the call's deadline.
+    async fn call_until(&mut self, event: &str, args: Vec<Value>, until: Option<Instant>) -> Result<Value, Fail> {
         let ack_id = self.next_id;
         self.next_id += 1;
         if WRITE_EVENTS.contains(&event) {
@@ -283,10 +313,30 @@ impl SocketIo {
         self.send(format!("42{ack_id}{text}")).await?;
         let key = u128::from(ack_id);
         while !self.acks.contains_key(&key) {
-            self.pump(None).await?;
+            self.pump(until).await?;
         }
         let values = self.acks.remove(&key).unwrap_or_default();
         Ok(values.into_iter().next().unwrap_or(Value::Null))
+    }
+
+    /// Waits up to [`READY_WAIT_SECONDS`] for `loginRequired` or
+    /// `autoLogin`. Running out of that wait is [`Ready::Silent`]; running
+    /// out of the call's own budget is still a timeout.
+    async fn ready(&mut self) -> Result<Ready, Fail> {
+        let until = Instant::now() + seconds(READY_WAIT_SECONDS);
+        loop {
+            if self.events.contains_key("autoLogin") {
+                return Ok(Ready::AutoLogin);
+            }
+            if self.events.contains_key("loginRequired") {
+                return Ok(Ready::LoginRequired);
+            }
+            match self.pump(Some(until)).await {
+                Ok(_) => {}
+                Err(Fail::Timeout) if Instant::now() < self.deadline => return Ok(Ready::Silent),
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// The args of the last `name` event, waiting for it if needed.
@@ -448,9 +498,26 @@ fn split_basic(credential: &ResolvedCredential) -> Result<(String, String), Deni
     }
 }
 
-async fn login(sio: &mut SocketIo, credential: &ResolvedCredential) -> Result<(), Fail> {
+async fn login(sio: &mut SocketIo, credential: &ResolvedCredential, ready: Ready) -> Result<(), Fail> {
     let (username, password) = split_basic(credential).map_err(Fail::Denied)?;
-    let answer = sio.call("login", vec![json!({"username": username, "password": password, "token": ""})]).await?;
+    let until = Instant::now() + seconds(LOGIN_ACK_SECONDS);
+    let args = vec![json!({"username": username, "password": password, "token": ""})];
+    let answer = match sio.call_until("login", args, Some(until)).await {
+        Err(Fail::Timeout) if Instant::now() < sio.deadline => {
+            let signal = match ready {
+                Ready::LoginRequired => "after it sent loginRequired".to_string(),
+                _ => format!(
+                    "(it sent neither loginRequired nor autoLogin within {}s)",
+                    fmt_seconds(READY_WAIT_SECONDS)
+                ),
+            };
+            return Err(kuma_error(format!(
+                "Uptime Kuma did not answer the login within {}s {signal}.",
+                fmt_seconds(LOGIN_ACK_SECONDS)
+            )));
+        }
+        other => other?,
+    };
     let Value::Object(answer) = answer else {
         return Err(Fail::Denied(Denied::new(
             DenialReason::CredentialUnavailable,
@@ -1146,7 +1213,12 @@ pub async fn run(
     let mut sio = SocketIo::new(ws, deadline);
     let outcome = async {
         sio.open().await?;
-        login(&mut sio, &credential).await?;
+        // Kuma 2.x drops a `login` that arrives before its handler exists;
+        // wait for it to say so (1.32.2).
+        let ready = sio.ready().await?;
+        if ready != Ready::AutoLogin {
+            login(&mut sio, &credential, ready).await?;
+        }
         match operation {
             "monitor_list" => op_list(&mut sio).await,
             "monitor_add_http" => op_add_http(&mut sio, values, toolkit).await,
