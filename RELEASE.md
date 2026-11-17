@@ -1,3 +1,12 @@
+## 1.32.2
+
+`kuma` calls no longer hang for the whole timeout against Uptime Kuma 2.x: the executor waits for Kuma's `loginRequired`/`autoLogin` before logging in, and an unanswered login fails after 10s with its own message.
+
+### Fixed
+
+- **Login race with Uptime Kuma 2.x.** Kuma 2.x registers its socket `login` handler only after an awaited database read in its connection handler, while socket.io has already acknowledged the connect. The executor sent `login` right after that ack, so on 2.x the event was dropped without an ack and every `kuma` call ran into `Timeout of 30s exceeded.` After the connect the executor now waits up to 5s for Kuma's readiness event: on `loginRequired` it logs in, on `autoLogin` (auth disabled) it skips the login, and if neither comes -- Kuma 1.x never sends `loginRequired` -- it logs in anyway, as before.
+- **The login has its own timeout.** The `login` ack is waited for at most 10s (within the call's budget) and a missing answer fails as `Uptime Kuma did not answer the login within 10s ...` naming whether Kuma had signalled readiness, instead of the generic call timeout. No write has been sent at that point, so the outcome is `failed`, not `unknown`. The password never appears in the text.
+
 ## 1.32.1
 
 A `basic` credential is refused at create and rotate unless its value is `username:password` with a non-empty username; the console says so on the field.
