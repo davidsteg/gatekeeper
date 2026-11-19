@@ -270,10 +270,14 @@ What the agent can and cannot do:
   `interval` (30–3600 s) and `expected_status`. No notifications are
   attached; add them in Kuma's UI. The monitor's description is set to
   `Managed by gatekeeper (toolkit <name>)`.
-- `monitor_pause`/`monitor_resume` work only on monitors whose description
-  starts with `Managed by gatekeeper`. Any other monitor is refused before
-  anything is sent. To let gatekeeper manage a hand-made monitor, put that
-  text at the start of its description yourself.
+- `monitor_pause`/`monitor_resume` work on exactly one existing monitor by
+  its numeric ID, hand-made ones included (1.33.0; before, only monitors
+  whose description started with `Managed by gatekeeper`).
+- `monitor_delete` (1.33.0) deletes exactly one existing monitor by its
+  numeric ID, with its heartbeat history; a `group` monitor is refused
+  before anything is sent. Its tools must be category `write_external`, so
+  they need an explicit grant and enabling one always waits for a human at
+  `/app/requests`.
 - `monitor_edit` (1.32.0) works on any existing monitor, hand-made ones
   included, and changes exactly two fields: its notifications become the
   toolkit's `kuma_notification_ids` (each checked to exist first) and, if

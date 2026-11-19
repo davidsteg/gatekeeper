@@ -26,10 +26,17 @@
 //!   `kuma_notification_ids` (1.29.0), after checking against the
 //!   `notificationList` Kuma pushes on login that every one of them exists;
 //!   an unknown ID aborts before the `add`. The caller cannot name any.
-//! * `monitor_pause` / `monitor_resume` -- only for a monitor this executor
-//!   created. Ownership is the `description` it writes on `add`
-//!   ([`MANAGED_MARKER`]); a monitor somebody set up by hand is refused
-//!   before anything is sent for it.
+//! * `monitor_pause` / `monitor_resume` -- one `pauseMonitor` /
+//!   `resumeMonitor` for exactly one existing monitor, named by its numeric
+//!   ID. Since 1.33.0 that includes hand-made monitors: the ownership check
+//!   on [`MANAGED_MARKER`] is gone, the monitor only has to exist.
+//! * `monitor_delete` (1.33.0) -- one `deleteMonitor` for exactly one
+//!   existing monitor, by its numeric ID. A `group` monitor is refused
+//!   before anything is sent: deleting a group either cascades to its
+//!   children or rewires them, and neither is one monitor. The event goes
+//!   out with the ID only, so Kuma 2.x reads `deleteChildren` as false.
+//!   Its tools are `write_external` (catalog check): an explicit grant,
+//!   and enabling one always waits for a human.
 //!
 //! * `monitor_edit` (1.32.0) -- one `editMonitor` for an existing monitor,
 //!   hand-made ones included. The monitor object Kuma returns for
@@ -39,8 +46,8 @@
 //!   given, `maxretries` (bounded like the adds). Every other field goes
 //!   back as Kuma sent it; the caller cannot name any of them.
 //!
-//! There is no delete, and nothing that changes a notification or a
-//! setting object itself: those events are simply never emitted by this
+//! There is no bulk or wildcard form of any operation, and nothing that
+//! changes a notification or a setting object itself: those events are simply never emitted by this
 //! module. The notification list is only read, and only its IDs are
 //! looked at.
 //!
@@ -96,8 +103,9 @@ use crate::tier1::{
     KUMA_RETRY_INTERVAL_MIN, KUMA_STATUS_CODES,
 };
 
-/// What `monitor_add_http` writes into a monitor's description, and what
-/// `monitor_pause`/`monitor_resume` require to find there. A prefix rather
+/// What the add operations write into a monitor's description, and what
+/// `monitor_list` reports as `managed`. Until 1.33.0 `monitor_pause`/
+/// `monitor_resume` also required it; they no longer do. A prefix rather
 /// than an exact string so the toolkit name after it is information for
 /// the human reading Kuma's UI, not a second key that a toolkit rename
 /// would silently orphan.
@@ -131,11 +139,18 @@ const PORT_NAME_MAX: usize = 60;
 
 /// The events that change something in Kuma. Once one is on the wire, a
 /// timeout no longer means "nothing happened" (FR-6.9).
-const WRITE_EVENTS: &[&str] = &["add", "editMonitor", "pauseMonitor", "resumeMonitor"];
+const WRITE_EVENTS: &[&str] = &["add", "deleteMonitor", "editMonitor", "pauseMonitor", "resumeMonitor"];
 
 /// The operations this module has code for (Python's `_OPERATIONS`).
-const OPERATIONS: &[&str] =
-    &["monitor_list", "monitor_add_http", "monitor_add_port", "monitor_edit", "monitor_pause", "monitor_resume"];
+const OPERATIONS: &[&str] = &[
+    "monitor_list",
+    "monitor_add_http",
+    "monitor_add_port",
+    "monitor_edit",
+    "monitor_pause",
+    "monitor_resume",
+    "monitor_delete",
+];
 
 /// The only fields of a monitor object `monitor_edit` changes (1.32.0).
 pub const KUMA_EDIT_FIELDS: &[&str] = &["maxretries", "notificationIDList"];
@@ -928,23 +943,19 @@ async fn op_edit(sio: &mut SocketIo, values: &crate::validate::Values, toolkit: 
     }))
 }
 
-async fn owned_monitor(sio: &mut SocketIo, monitor_id: u64) -> Result<Map<String, Value>, Fail> {
+/// The one monitor a pause, resume or delete acts on: it must exist, and
+/// Kuma must have answered with that very monitor.
+async fn target_monitor(sio: &mut SocketIo, monitor_id: u64) -> Result<Map<String, Value>, Fail> {
     let monitor = existing_monitor(sio, monitor_id).await?;
-    if !is_managed(&Value::Object(monitor.clone())) {
-        return Err(Fail::Denied(Denied::new(
-            DenialReason::Tier1Violation,
-            format!(
-                "Monitor {monitor_id} was not created through gatekeeper; this toolkit \
-                 only pauses and resumes its own monitors."
-            ),
-        )));
+    if monitor.get("id").and_then(Value::as_u64).is_some_and(|id| id != monitor_id) {
+        return Err(kuma_error(format!("Uptime Kuma answered getMonitor {monitor_id} with a different monitor.")));
     }
     Ok(monitor)
 }
 
 async fn op_pause_resume(sio: &mut SocketIo, values: &crate::validate::Values, pause: bool) -> Result<Value, Fail> {
     let monitor_id: u64 = get(values, "monitor_id").unwrap_or("").parse().unwrap_or(0);
-    let monitor = owned_monitor(sio, monitor_id).await?;
+    let monitor = target_monitor(sio, monitor_id).await?;
     let (event, what) = if pause {
         ("pauseMonitor", format!("pausing monitor {monitor_id}"))
     } else {
@@ -955,6 +966,29 @@ async fn op_pause_resume(sio: &mut SocketIo, values: &crate::validate::Values, p
         "monitor_id": monitor_id,
         "name": monitor.get("name").cloned().unwrap_or(Value::Null),
         "active": !pause,
+    }))
+}
+
+/// `monitor_delete` (1.33.0): exactly one non-group monitor.
+async fn op_delete(sio: &mut SocketIo, values: &crate::validate::Values) -> Result<Value, Fail> {
+    let monitor_id: u64 = get(values, "monitor_id").unwrap_or("").parse().unwrap_or(0);
+    let monitor = target_monitor(sio, monitor_id).await?;
+    if monitor.get("type").and_then(Value::as_str) == Some("group") {
+        return Err(Fail::Denied(Denied::new(
+            DenialReason::Tier1Violation,
+            format!(
+                "Monitor {monitor_id} is a group; deleting it would also delete or rewire its \
+                 children. monitor_delete removes exactly one monitor. Nothing was sent."
+            ),
+        )));
+    }
+    // The ID only: Kuma 1.x takes (id, callback), Kuma 2.x reads a missing
+    // `deleteChildren` as false.
+    ack_ok(sio.call("deleteMonitor", vec![json!(monitor_id)]).await?, &format!("deleting monitor {monitor_id}"))?;
+    Ok(json!({
+        "monitor_id": monitor_id,
+        "name": monitor.get("name").cloned().unwrap_or(Value::Null),
+        "deleted": true,
     }))
 }
 
@@ -1036,7 +1070,7 @@ pub fn check_values(operation: &str, values: &crate::validate::Values) -> Result
             }
         }
     }
-    if matches!(operation, "monitor_pause" | "monitor_resume" | "monitor_edit") {
+    if matches!(operation, "monitor_pause" | "monitor_resume" | "monitor_edit" | "monitor_delete") {
         let monitor_id = get(values, "monitor_id").unwrap_or("");
         if ascii_uint(monitor_id).is_none_or(|n| n < 1) {
             return invalid("Parameter 'monitor_id' must be a positive integer.".into());
@@ -1225,6 +1259,7 @@ pub async fn run(
             "monitor_add_port" => op_add_port(&mut sio, values, toolkit).await,
             "monitor_edit" => op_edit(&mut sio, values, toolkit).await,
             "monitor_pause" => op_pause_resume(&mut sio, values, true).await,
+            "monitor_delete" => op_delete(&mut sio, values).await,
             _ => op_pause_resume(&mut sio, values, false).await,
         }
     }

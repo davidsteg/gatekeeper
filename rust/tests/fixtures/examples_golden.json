@@ -644,7 +644,8 @@
     "monitor_add_http",
     "monitor_pause",
     "monitor_resume",
-    "monitor_edit"
+    "monitor_edit",
+    "monitor_delete"
    ],
    "allowed_git_operations": [],
    "git_binary": null,
@@ -3595,7 +3596,7 @@
      "toolkit": "kuma",
      "version": 1,
      "title": "Pause a monitor",
-     "description": "Pauses a monitor gatekeeper created. Any other monitor is refused.",
+     "description": "Pauses exactly one existing monitor, hand-made ones included, by its numeric id.",
      "category": "write",
      "enabled": false,
      "idempotent": true,
@@ -3640,13 +3641,13 @@
       ],
       "additionalProperties": false
      },
-     "agent_description": "Pauses a monitor gatekeeper created. Any other monitor is refused."
+     "agent_description": "Pauses exactly one existing monitor, hand-made ones included, by its numeric id."
     },
     "kuma.monitor_resume": {
      "toolkit": "kuma",
      "version": 1,
      "title": "Resume a monitor",
-     "description": "Resumes a paused monitor gatekeeper created. Any other monitor is refused.",
+     "description": "Resumes exactly one paused monitor, hand-made ones included, by its numeric id.",
      "category": "write",
      "enabled": false,
      "idempotent": true,
@@ -3691,7 +3692,58 @@
       ],
       "additionalProperties": false
      },
-     "agent_description": "Resumes a paused monitor gatekeeper created. Any other monitor is refused."
+     "agent_description": "Resumes exactly one paused monitor, hand-made ones included, by its numeric id."
+    },
+    "kuma.monitor_delete": {
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Delete a monitor",
+     "description": "Deletes exactly one existing monitor, hand-made ones included, by its numeric id, together with its heartbeat history. A group monitor is refused. There is no bulk form.",
+     "category": "write_external",
+     "enabled": false,
+     "idempotent": false,
+     "ssh_dispatch": false,
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096,
+     "binary": null,
+     "argv": [],
+     "http_method": null,
+     "path_template": null,
+     "query_template": {},
+     "body_template": null,
+     "body_raw_param": null,
+     "max_file_bytes": null,
+     "base_url": null,
+     "rpc_method": null,
+     "params_template": null,
+     "file_operation": null,
+     "google_action": null,
+     "google_args": null,
+     "microsoft_action": null,
+     "microsoft_args": null,
+     "opencode_operation": null,
+     "agent_operation": null,
+     "artifact_operation": null,
+     "kuma_operation": "monitor_delete",
+     "git_operation": null,
+     "run_as": null,
+     "destination": null,
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "monitor_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "The monitor's id from kuma.monitor_list."
+       }
+      },
+      "required": [
+       "monitor_id"
+      ],
+      "additionalProperties": false
+     },
+     "agent_description": "Deletes exactly one existing monitor, hand-made ones included, by its numeric id, together with its heartbeat history. A group monitor is refused. There is no bulk form. NOT IDEMPOTENT: calling again repeats the effect. After a timeout the outcome is unknown -- do not retry without checking the state first. Has externally visible effects and cannot be undone."
     },
     "kuma.monitor_edit": {
      "toolkit": "kuma",
@@ -3812,7 +3864,7 @@
    },
    "disabled_by_tier1": [],
    "rejected": [],
-   "raw_count": 45,
+   "raw_count": 46,
    "flat_specs": {
     "docker.compose_ps": {
      "id": "docker.compose_ps",
@@ -5088,7 +5140,7 @@
      "toolkit": "kuma",
      "version": 1,
      "title": "Pause a monitor",
-     "description": "Pauses a monitor gatekeeper created. Any other monitor is refused.",
+     "description": "Pauses exactly one existing monitor, hand-made ones included, by its numeric id.",
      "category": "write",
      "idempotent": true,
      "enabled": false,
@@ -5110,11 +5162,33 @@
      "toolkit": "kuma",
      "version": 1,
      "title": "Resume a monitor",
-     "description": "Resumes a paused monitor gatekeeper created. Any other monitor is refused.",
+     "description": "Resumes exactly one paused monitor, hand-made ones included, by its numeric id.",
      "category": "write",
      "idempotent": true,
      "enabled": false,
      "kuma_operation": "monitor_resume",
+     "parameters": {
+      "monitor_id": {
+       "type": "integer",
+       "required": true,
+       "minimum": 1,
+       "description": "The monitor's id from kuma.monitor_list."
+      }
+     },
+     "required_scopes": [],
+     "timeout_seconds": 20,
+     "max_output_bytes": 4096
+    },
+    "kuma.monitor_delete": {
+     "id": "kuma.monitor_delete",
+     "toolkit": "kuma",
+     "version": 1,
+     "title": "Delete a monitor",
+     "description": "Deletes exactly one existing monitor, hand-made ones included, by its numeric id, together with its heartbeat history. A group monitor is refused. There is no bulk form.",
+     "category": "write_external",
+     "idempotent": false,
+     "enabled": false,
+     "kuma_operation": "monitor_delete",
      "parameters": {
       "monitor_id": {
        "type": "integer",
@@ -5321,6 +5395,9 @@
     ],
     "kuma.monitor_resume": [
      "kuma.monitor_resume"
+    ],
+    "kuma.monitor_delete": [
+     "kuma.monitor_delete"
     ],
     "kuma.monitor_edit": [
      "kuma.monitor_edit"

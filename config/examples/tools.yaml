@@ -1221,7 +1221,8 @@ tools:
     version: 1
     title: Pause a monitor
     description: >-
-      Pauses a monitor gatekeeper created. Any other monitor is refused.
+      Pauses exactly one existing monitor, hand-made ones included, by its
+      numeric id.
     category: write
     idempotent: true
     enabled: false
@@ -1241,12 +1242,34 @@ tools:
     version: 1
     title: Resume a monitor
     description: >-
-      Resumes a paused monitor gatekeeper created. Any other monitor is
-      refused.
+      Resumes exactly one paused monitor, hand-made ones included, by its
+      numeric id.
     category: write
     idempotent: true
     enabled: false
     kuma_operation: monitor_resume
+    parameters:
+      monitor_id:
+        type: integer
+        required: true
+        minimum: 1
+        description: The monitor's id from kuma.monitor_list.
+    required_scopes: []
+    timeout_seconds: 20
+    max_output_bytes: 4096
+
+  - id: kuma.monitor_delete
+    toolkit: kuma
+    version: 1
+    title: Delete a monitor
+    description: >-
+      Deletes exactly one existing monitor, hand-made ones included, by its
+      numeric id, together with its heartbeat history. A group monitor is
+      refused. There is no bulk form.
+    category: write_external
+    idempotent: false
+    enabled: false
+    kuma_operation: monitor_delete
     parameters:
       monitor_id:
         type: integer

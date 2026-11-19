@@ -23540,7 +23540,7 @@
      "dir": "/tmp/x"
     }
    },
-   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_add_port', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume']"
+   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_add_port', 'monitor_delete', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume']"
   },
   {
    "name": "kuma_unknown_ops",
@@ -23678,7 +23678,7 @@
       "credential": "kuma",
       "allowed_kuma_operations": [
        "monitor_list",
-       "monitor_delete",
+       "monitor_purge",
        "edit"
       ]
      },
@@ -23709,7 +23709,7 @@
      "dir": "/tmp/x"
     }
    },
-   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_add_port', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['edit', 'monitor_delete'])"
+   "error": "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', 'monitor_add_port', 'monitor_delete', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['edit', 'monitor_purge'])"
   },
   {
    "name": "kuma_ops_not_list",
@@ -38608,9 +38608,9 @@
     "required_scopes": [],
     "timeout_seconds": 5,
     "max_output_bytes": 1024,
-    "kuma_operation": "monitor_delete"
+    "kuma_operation": "monitor_purge"
    },
-   "error": "tool 'kuma.x': kuma_operation 'monitor_delete' is unknown (known: ['monitor_add_http', 'monitor_add_port', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume'])",
+   "error": "tool 'kuma.x': kuma_operation 'monitor_purge' is unknown (known: ['monitor_add_http', 'monitor_add_port', 'monitor_delete', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume'])",
    "tier1_violation": false
   },
   {
