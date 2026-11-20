@@ -110,6 +110,8 @@ pub const KUMA_OPERATION_PARAMS: &[(&str, OpParams)] = &[
     ("monitor_add_port", (&["name", "hostname", "port"], &["interval", "maxretries", "retry_interval"])),
     ("monitor_pause", (&["monitor_id"], &[])),
     ("monitor_resume", (&["monitor_id"], &[])),
+    // 1.33.0: exactly one monitor, by its numeric ID.
+    ("monitor_delete", (&["monitor_id"], &[])),
     // 1.32.0: notifications are the toolkit's `kuma_notification_ids`,
     // like the adds; `maxretries` is the only caller-supplied setting.
     ("monitor_edit", (&["monitor_id"], &["maxretries"])),
@@ -119,7 +121,13 @@ pub const KUMA_OPERATION_PARAMS: &[(&str, OpParams)] = &[
 /// never category `read`: `read` is what `admin.tool_create` applies
 /// without a human, and these must go through approval.
 pub const KUMA_WRITE_OPERATIONS: &[&str] =
-    &["monitor_add_http", "monitor_add_port", "monitor_edit", "monitor_pause", "monitor_resume"];
+    &["monitor_add_http", "monitor_add_port", "monitor_delete", "monitor_edit", "monitor_pause", "monitor_resume"];
+
+/// The `kuma` operations that cannot be undone (1.33.0). A tool for one of
+/// them must be category `write_external`, like every other destructive
+/// tool: it then needs an explicit grant (never a category rule) and
+/// enabling it always waits for a human at `/app/requests`.
+pub const KUMA_DESTRUCTIVE_OPERATIONS: &[&str] = &["monitor_delete"];
 
 /// `git` executor: `push` reads the repository's key in the toolkit's
 /// `repos:` and the branch. There is no parameter for a path, a remote, a
@@ -703,6 +711,13 @@ fn validate_kuma_params(
         return Err(ConfigError::new(format!(
             "{where_}: kuma operation {} changes monitors -- its category must be 'write', not 'read'",
             repr_str(operation)
+        )));
+    }
+    if KUMA_DESTRUCTIVE_OPERATIONS.contains(&operation) && category != "write_external" {
+        return Err(ConfigError::new(format!(
+            "{where_}: kuma operation {} cannot be undone -- its category must be 'write_external', not {}",
+            repr_str(operation),
+            repr_str(category)
         )));
     }
     let below = |b: &Option<Value>, limit: i64| match b {

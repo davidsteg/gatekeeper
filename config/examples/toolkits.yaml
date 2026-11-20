@@ -411,6 +411,7 @@ toolkits:
       - monitor_pause
       - monitor_resume
       - monitor_edit
+      - monitor_delete
     credential: kuma
     max_timeout_seconds: 30
     max_output_bytes: 131072

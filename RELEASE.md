@@ -1,3 +1,15 @@
+## 1.33.0
+
+New bounded `kuma` operation `monitor_delete`; `monitor_pause`/`monitor_resume` now work on any existing monitor, hand-made ones included.
+
+### Added
+
+- **`kuma` operation `monitor_delete`.** Deletes exactly one existing monitor, named by its numeric `monitor_id` (the only parameter a tool may declare; `^[0-9]+$`, at least 1 -- a list, range or wildcard is refused as `param_invalid` before a socket is opened). The executor reads the monitor with `getMonitor` first: a missing one fails with `Monitor <id> does not exist.`, a `group` monitor is refused (`tier1_violation`) because deleting a group would also delete or rewire its children; in both cases nothing is sent. Otherwise it sends `deleteMonitor` with the bare ID -- Kuma 2.x reads the missing `deleteChildren` as false. `deleteMonitor` counts as a write event, so a timeout after it is `unknown`. A tool for it must be category `write_external` (catalog check): it needs an explicit grant, is never co-granted by a category rule, and `admin.tool_enable` always queues it for a human at `/app/requests`. New example tool `kuma.monitor_delete` (disabled, `write_external`) and `monitor_delete` in the example toolkit's `allowed_kuma_operations`.
+
+### Changed
+
+- **`monitor_pause`/`monitor_resume` no longer require the managed marker.** Until 1.32.2 they refused any monitor whose description did not start with `Managed by gatekeeper`. They now pause/resume exactly one existing monitor by its numeric ID, like `monitor_edit`. `monitor_list` still reports `managed`. The tools stay category `write`.
+
 ## 1.32.2
 
 `kuma` calls no longer hang for the whole timeout against Uptime Kuma 2.x: the executor waits for Kuma's `loginRequired`/`autoLogin` before logging in, and an unanswered login fails after 10s with its own message.

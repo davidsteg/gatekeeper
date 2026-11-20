@@ -239,6 +239,10 @@ async fn handler(stream: tokio::net::TcpStream, state: Shared) {
                         None => json!({"ok": false, "msg": "Monitor not found"}),
                     }
                 }
+                "deleteMonitor" => match rest[0].as_i64().and_then(|id| s.monitors.remove(&id)) {
+                    Some(_) => json!({"ok": true, "msg": "Deleted Successfully."}),
+                    None => json!({"ok": false, "msg": "Monitor not found"}),
+                },
                 "pauseMonitor" | "resumeMonitor" => {
                     let id = rest[0].as_i64().unwrap();
                     let m = s.monitors.get_mut(&id).unwrap();
@@ -268,8 +272,15 @@ async fn kuma() -> Kuma {
     Kuma { port, state }
 }
 
-const ALL_OPS: [&str; 6] =
-    ["monitor_list", "monitor_add_http", "monitor_add_port", "monitor_edit", "monitor_pause", "monitor_resume"];
+const ALL_OPS: [&str; 7] = [
+    "monitor_list",
+    "monitor_add_http",
+    "monitor_add_port",
+    "monitor_edit",
+    "monitor_pause",
+    "monitor_resume",
+    "monitor_delete",
+];
 
 fn try_tier1(dir: &std::path::Path, port: u16, overrides: Value) -> ConfigResult<Tier1> {
     let mut spec = json!({
@@ -413,21 +424,171 @@ async fn pause_and_resume_a_managed_monitor() {
     assert_eq!(k.active(2), 1);
 }
 
+/// 1.33.0: the managed-marker check is gone -- a hand-made monitor is
+/// paused and resumed like any other, by its one numeric ID.
 #[tokio::test]
-async fn a_foreign_monitor_is_refused_before_anything_is_sent() {
-    for operation in ["monitor_pause", "monitor_resume"] {
-        let e = env();
-        create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
-        let k = kuma().await;
-        let t = tier1(e.dir.path(), k.port, json!({}));
-        let result = run_op(t.toolkit("kuma").unwrap(), &e.store, operation, &[("monitor_id", "1")]).await;
-        assert_eq!(result.outcome, OUTCOME_FAILED);
-        assert_eq!(result.denial_reason.as_deref(), Some("tier1_violation"));
-        assert!(result.stderr.contains("not created through gatekeeper"), "{}", result.stderr);
-        assert_eq!(k.events(), vec!["login", "getMonitor"]);
-        assert_eq!(k.active(1), 1);
-        assert!(!result.stderr.contains(FOREIGN_SECRET));
+async fn a_hand_made_monitor_is_paused_and_resumed() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let tk = t.toolkit("kuma").unwrap();
+    let paused = run_op(tk, &e.store, "monitor_pause", &[("monitor_id", "1")]).await;
+    assert_eq!(paused.outcome, OUTCOME_OK, "{}", paused.stderr);
+    assert_eq!(k.active(1), 0);
+    assert_eq!(k.events(), vec!["login", "getMonitor", "pauseMonitor"]);
+    assert_eq!(k.received_args("pauseMonitor"), vec![json!(1)]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&paused.stdout).unwrap(),
+        json!({"monitor_id": 1, "name": "Router", "active": false})
+    );
+    assert!(!paused.stdout.contains(FOREIGN_SECRET));
+    let resumed = run_op(tk, &e.store, "monitor_resume", &[("monitor_id", "1")]).await;
+    assert_eq!(resumed.outcome, OUTCOME_OK, "{}", resumed.stderr);
+    assert_eq!(k.active(1), 1);
+    assert_eq!(k.received_args("resumeMonitor"), vec![json!(1)]);
+    // The other monitor was never touched.
+    assert_eq!(k.active(2), 1);
+}
+
+// -- 1.33.0: monitor_delete -----------------------------------------------------
+
+#[tokio::test]
+async fn delete_removes_exactly_one_monitor_by_id() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let result = run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_delete", &[("monitor_id", "1")]).await;
+    assert_eq!(result.outcome, OUTCOME_OK, "{}", result.stderr);
+    assert_eq!(k.events(), vec!["login", "getMonitor", "deleteMonitor"]);
+    // The payload is the bare numeric ID, nothing else (no deleteChildren).
+    let sent: Vec<Vec<Value>> =
+        k.state.lock().received.iter().filter(|(n, _)| n == "deleteMonitor").map(|(_, a)| a.clone()).collect();
+    assert_eq!(sent, vec![vec![json!(1)]]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.stdout).unwrap(),
+        json!({"monitor_id": 1, "name": "Router", "deleted": true})
+    );
+    assert!(!result.stdout.contains(FOREIGN_SECRET));
+    let left: Vec<i64> = k.state.lock().monitors.keys().copied().collect();
+    assert_eq!(left, vec![2]);
+}
+
+#[tokio::test]
+async fn delete_of_a_missing_monitor_sends_nothing() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let result = run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_delete", &[("monitor_id", "99")]).await;
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert_eq!(result.stderr, "Monitor 99 does not exist.");
+    assert!(!k.events().contains(&"deleteMonitor".to_string()));
+    assert_eq!(k.state.lock().monitors.len(), 2);
+}
+
+#[tokio::test]
+async fn delete_refuses_a_group_monitor_before_anything_is_sent() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    k.state.lock().monitors.insert(3, json!({"id": 3, "name": "Group", "type": "group", "active": 1}));
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let result = run_op(t.toolkit("kuma").unwrap(), &e.store, "monitor_delete", &[("monitor_id", "3")]).await;
+    assert_eq!(result.outcome, OUTCOME_FAILED);
+    assert_eq!(result.denial_reason.as_deref(), Some("tier1_violation"));
+    assert!(result.stderr.contains("is a group"), "{}", result.stderr);
+    assert_eq!(k.events(), vec!["login", "getMonitor"]);
+    assert_eq!(k.state.lock().monitors.len(), 3);
+}
+
+#[tokio::test]
+async fn delete_after_the_event_was_sent_is_unknown_on_timeout() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    k.state.lock().stall = Some("deleteMonitor".into());
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    let result =
+        run_with(t.toolkit("kuma").unwrap(), &e.store, "monitor_delete", &[("monitor_id", "1")], 1.5, Some(false)).await;
+    assert_eq!(result.outcome, OUTCOME_UNKNOWN, "{}", result.stderr);
+}
+
+/// One numeric ID per call: lists, wildcards, ranges and anything else that
+/// is not a single positive integer is refused before a socket is opened.
+#[test]
+fn every_monitor_id_operation_refuses_bulk_and_wildcards() {
+    for operation in ["monitor_pause", "monitor_resume", "monitor_delete", "monitor_edit"] {
+        for id in ["0", "-1", "", "x", "*", "all", "1,2", "1 2", "1-3", "[1,2]", "1;2", " 1", "1.0", "%"] {
+            assert_eq!(
+                check_values(operation, &vals(&[("monitor_id", id)])).map_err(|d| d.detail),
+                Err("Parameter 'monitor_id' must be a positive integer.".into()),
+                "{operation} {id:?}"
+            );
+        }
+        assert_eq!(check_values(operation, &vals(&[("monitor_id", "91")])), Ok(()));
     }
+}
+
+#[tokio::test]
+async fn bulk_monitor_id_never_reaches_kuma() {
+    let e = env();
+    create_login(&e.store, "basic", &format!("gk:{PASSWORD}"));
+    let k = kuma().await;
+    let t = tier1(e.dir.path(), k.port, json!({}));
+    for operation in ["monitor_pause", "monitor_resume", "monitor_delete"] {
+        let result = run_op(t.toolkit("kuma").unwrap(), &e.store, operation, &[("monitor_id", "1,2")]).await;
+        assert_eq!(result.outcome, OUTCOME_FAILED, "{operation}");
+        assert_eq!(result.denial_reason.as_deref(), Some("param_invalid"), "{operation}");
+    }
+    assert!(k.events().is_empty(), "{:?}", k.events());
+    assert_eq!(k.state.lock().monitors.len(), 2);
+}
+
+fn delete_tool(category: &str) -> Value {
+    json!({"toolkit": "kuma", "version": 1, "enabled": true, "required_scopes": [],
+           "timeout_seconds": 20, "max_output_bytes": 4096, "description": "kuma",
+           "id": "kuma.monitor_delete", "title": "Delete", "category": category, "idempotent": false,
+           "kuma_operation": "monitor_delete",
+           "parameters": {"monitor_id": {"type": "integer", "required": true, "minimum": 1, "description": "id"}}})
+}
+
+/// Delete is destructive: its tool must be `write_external`, which needs an
+/// explicit grant and is never enabled without a human.
+#[test]
+fn delete_tool_must_be_write_external() {
+    let e = env();
+    let t = tier1(e.dir.path(), 3001, json!({}));
+    for category in ["read", "write"] {
+        let err = crate::catalog::parse_tool_spec(&delete_tool(category), &t).unwrap_err().message;
+        assert!(err.contains("must be 'write_external'") || err.contains("must be 'write'"), "{category}: {err}");
+    }
+    assert_eq!(
+        crate::catalog::parse_tool_spec(&delete_tool("write"), &t).unwrap_err().message,
+        "tool 'kuma.monitor_delete': kuma operation 'monitor_delete' cannot be undone -- its category must be \
+         'write_external', not 'write'"
+    );
+    let tool = crate::catalog::parse_tool_spec(&delete_tool("write_external"), &t).unwrap();
+    assert!(!crate::admin_service::applies_unreviewed(&tool, &t));
+    assert!(tool.agent_description().contains("cannot be undone"));
+    // The pause/resume tools stay plain `write`.
+    let mut pause = delete_tool("write");
+    pause["kuma_operation"] = json!("monitor_pause");
+    pause["id"] = json!("kuma.monitor_pause");
+    assert!(crate::catalog::parse_tool_spec(&pause, &t).is_ok());
+}
+
+#[test]
+fn delete_tool_takes_no_other_parameter() {
+    let e = env();
+    let t = tier1(e.dir.path(), 3001, json!({}));
+    let mut spec = delete_tool("write_external");
+    spec["parameters"]["monitor_ids"] = json!({"type": "string", "pattern": "^.*$", "description": "bulk"});
+    assert!(crate::catalog::parse_tool_spec(&spec, &t).is_err());
+    let mut spec = delete_tool("write_external");
+    spec["parameters"]["monitor_id"]["minimum"] = json!(0);
+    assert!(crate::catalog::parse_tool_spec(&spec, &t).is_err());
 }
 
 #[tokio::test]
@@ -778,7 +939,7 @@ fn tier1_refuses_an_incomplete_kuma_toolkit() {
     let e = env();
     let cases = [
         (json!({"credential": null}), "needs 'credential'"),
-        (json!({"allowed_kuma_operations": ["monitor_delete"]}), "unknown: ['monitor_delete']"),
+        (json!({"allowed_kuma_operations": ["monitor_purge"]}), "unknown: ['monitor_purge']"),
         (json!({"allowed_kuma_operations": []}), "non-empty subset"),
         (json!({"allowed_cidrs": null}), "allowed_cidrs"),
         (json!({"base_url": "ws://127.0.0.1:3001"}), "base_url"),
@@ -787,11 +948,12 @@ fn tier1_refuses_an_incomplete_kuma_toolkit() {
         let err = try_tier1(e.dir.path(), 3001, overrides).unwrap_err();
         assert!(err.message.contains(fragment), "{fragment}: {}", err.message);
     }
-    let err = try_tier1(e.dir.path(), 3001, json!({"allowed_kuma_operations": ["monitor_delete"]})).unwrap_err();
+    let err = try_tier1(e.dir.path(), 3001, json!({"allowed_kuma_operations": ["monitor_purge"]})).unwrap_err();
     assert_eq!(
         err.message,
         "toolkit 'kuma': allowed_kuma_operations must be a non-empty subset of ['monitor_add_http', \
-         'monitor_add_port', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume'] (unknown: ['monitor_delete'])"
+         'monitor_add_port', 'monitor_delete', 'monitor_edit', 'monitor_list', 'monitor_pause', \
+         'monitor_resume'] (unknown: ['monitor_purge'])"
     );
     let err = try_tier1(e.dir.path(), 3001, json!({"credential": ""})).unwrap_err();
     assert_eq!(
@@ -876,7 +1038,7 @@ fn catalog_refuses_a_definition_wider_than_the_executor() {
         (json!({"parameters": bad_status}), "expected_status"),
         (json!({"parameters": extra}), "does not read ['type']"),
         (json!({"parameters": only_url}), "'name'"),
-        (json!({"kuma_operation": "monitor_delete"}), "unknown"),
+        (json!({"kuma_operation": "monitor_purge"}), "unknown"),
     ];
     let e = env();
     let t = tier1(e.dir.path(), 3001, json!({}));
@@ -923,9 +1085,9 @@ fn catalog_messages_match_python() {
     p["url"] = json!({"type": "enum", "values": ["https://x.org/"], "required": true, "description": "u"});
     assert_eq!(parse(json!({"parameters": p})), "tool 'kuma.monitor_add_http': parameter 'url' must be a string with a pattern");
     assert_eq!(
-        parse(json!({"kuma_operation": "monitor_delete"})),
-        "tool 'kuma.monitor_add_http': kuma_operation 'monitor_delete' is unknown (known: ['monitor_add_http', \
-         'monitor_add_port', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume'])"
+        parse(json!({"kuma_operation": "monitor_purge"})),
+        "tool 'kuma.monitor_add_http': kuma_operation 'monitor_purge' is unknown (known: ['monitor_add_http', \
+         'monitor_add_port', 'monitor_delete', 'monitor_edit', 'monitor_list', 'monitor_pause', 'monitor_resume'])"
     );
     assert_eq!(parse(json!({"kuma_operation": null})), "tool 'kuma.monitor_add_http': field 'kuma_operation' is missing");
     let mut spec = tools()[2].clone();
@@ -970,7 +1132,14 @@ fn shipped_example_toolkit_and_tools_load() {
     ids.sort();
     assert_eq!(
         ids,
-        ["kuma.monitor_add_http", "kuma.monitor_edit", "kuma.monitor_list", "kuma.monitor_pause", "kuma.monitor_resume"]
+        [
+            "kuma.monitor_add_http",
+            "kuma.monitor_delete",
+            "kuma.monitor_edit",
+            "kuma.monitor_list",
+            "kuma.monitor_pause",
+            "kuma.monitor_resume"
+        ]
     );
 }
 

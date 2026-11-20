@@ -244,6 +244,8 @@ address with the name kept for `Host` and SNI, never through a proxy),
 `credential` (required, kind `basic`, `username:password` of a Kuma account
 without 2FA) and `allowed_kuma_operations`, a subset of `monitor_list`,
 `monitor_add_http`, `monitor_add_port`, `monitor_pause`, `monitor_resume`,
+`monitor_delete` (1.33.0: exactly one non-group monitor by numeric ID, tool
+category must be `write_external`),
 `monitor_edit` (1.32.0: on any existing monitor, sends Kuma's own `getMonitor`
 object back via `editMonitor` with only `notificationIDList` -- set to the
 toolkit's `kuma_notification_ids` -- and optionally `maxretries` 0–10

@@ -70,11 +70,13 @@ item.
   operations, whitelisted by name per toolkit: `monitor_list` (projected
   fields only, no secrets), `monitor_add_http` (type, method and
   notifications fixed; name, URL, interval 30–3600 s and accepted status
-  from a fixed set), `monitor_pause`/`monitor_resume` (only monitors
-  gatekeeper created, recognised by their description), `monitor_edit`
+  from a fixed set), `monitor_pause`/`monitor_resume` (one monitor
+  by numeric ID; since 1.33.0 hand-made ones too), `monitor_edit`
   (1.32.0; any monitor, only `notificationIDList` = toolkit
-  `kuma_notification_ids` and `maxretries`). No delete, and no change to a
-  notification or settings object, exists in the module. Login is a `basic`
+  `kuma_notification_ids` and `maxretries`), `monitor_delete` (1.33.0; one
+  non-group monitor by numeric ID, tools must be `write_external`). No bulk
+  operation, and no change to a notification or settings object, exists in
+  the module. Login is a `basic`
   credential in the store; the target check is `execute/http.rs`'s.
 - `agent` executor — a mailbox between gatekeeper identities
   (`execute/agent.rs`, `messages.rs`). `agent.send_message` addresses
